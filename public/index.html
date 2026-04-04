@@ -1382,7 +1382,160 @@ async function renderMFPage(){
       html+='</div>';
       html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">All '+catFunds.length+' funds &middot; scroll right for all 55 columns &middot; source: Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
-      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2400px;width:100%">';
+      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2800px;width:100%">';
+      // Column groups
+      var colGroups = [
+        {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
+        {label:"RETURNS",cols:["1Y%","3M%","6M%","3Y CAGR","5Y CAGR","10Y CAGR","Roll 3Y"]},
+        {label:"vs CATEGORY",cols:["vs Cat 1Y","vs Cat 3Y","vs Cat 5Y","vs Cat 10Y"]},
+        {label:"RISK",cols:["Sharpe","Sortino","Volatility","Cat StdDev","Max DD","From ATH"]},
+        {label:"PORTFOLIO",cols:["PE","Cat PE","Equity%","LgCap%","MidCap%","SmCap%","Cash%","Debt%"]},
+        {label:"CONCENTRATION",cols:["Top3%","Top5%","Top10%"]},
+        {label:"SCORE",cols:["SEBI","Score"]},
+      ];
+
+      var groupEndIdx = {};
+      var colIdx = 0;
+      colGroups.forEach(function(g){
+        colIdx += g.cols.length;
+        groupEndIdx[colIdx-1] = true;
+      });
+      var allCols = colGroups.map(function(g){return g.cols;}).reduce(function(a,b){return a.concat(b);});
+
+      // Group header row
+      html+='<thead>';
+      html+='<tr>';
+      colGroups.forEach(function(g){
+        var grpColor = g.label==="RETURNS"?"var(--green)":g.label==="RISK"?"var(--red)":g.label==="vs CATEGORY"?"#2dd4bf":g.label==="SCORE"?"var(--blue)":"var(--text3)";
+        var isIdentity = g.label==="IDENTITY";
+        html+='<th colspan="'+g.cols.length+'" style="background:var(--bg3);color:'+grpColor+';font-size:9px;letter-spacing:.8px;text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border3);'+(isIdentity?'position:sticky;left:0;z-index:10;':'')+' ">'+g.label+'</th>';
+      });
+      html+='</tr>';
+
+      // Column header row — # sticky at left:0, Fund sticky at left:44px
+      html+='<tr>';
+      allCols.forEach(function(h,i){
+        var isHash = i===0, isFund = i===1;
+        var stickyStyle = isHash ? 'position:sticky;left:0;z-index:5;' : isFund ? 'position:sticky;left:44px;z-index:5;' : '';
+        var widthStyle = isHash ? 'min-width:44px;width:44px;' : isFund ? 'min-width:200px;' : 'min-width:78px;';
+        var borderRight = groupEndIdx[i] ? 'border-right:2px solid var(--border3);' : '';
+        html+='<th style="padding:5px 8px;text-align:'+(i<2?"left":"right")+';background:var(--bg2);color:var(--text3);font-weight:600;font-size:10px;border-bottom:2px solid var(--border3);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
+      });
+      html+='</tr></thead><tbody>';
+
+      // Data rows
+      catFunds.forEach(function(f,i){
+        var isTop = i<5;
+        var rowTopBg = isTop ? cfg.color+'0f' : 'var(--bg)';
+
+        function rv(v,dec){ 
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          var n=parseFloat(v);
+          if(isNaN(n)) return '<span style="color:var(--text4)">—</span>';
+          return n.toFixed(dec!=null?dec:1); 
+        }
+        function rc(v){ 
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          var n=parseFloat(v);
+          if(isNaN(n)) return '<span style="color:var(--text4)">—</span>';
+          return '<span style="color:'+(n>=0?'var(--green)':'var(--red)')+'">'+(n>=0?'+':'')+n.toFixed(1)+'%</span>'; 
+        }
+        function rsh(v){ 
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          var n=parseFloat(v);
+          if(isNaN(n)) return '<span style="color:var(--text4)">—</span>';
+          return '<span style="color:'+(n>0?'var(--green)':n>-0.3?'var(--amber)':'var(--red)')+';font-weight:600">'+n.toFixed(3)+'</span>'; 
+        }
+        function rpct(v){ 
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          var n=parseFloat(v);
+          if(isNaN(n)) return '<span style="color:var(--text4)">—</span>';
+          if(n===0) return '<span style="color:var(--text4)">0%</span>';
+          return n.toFixed(1)+'%'; 
+        }
+        function rvc(v){ 
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          var n=parseFloat(v);
+          if(isNaN(n)||n===0) return '<span style="color:var(--text4)">—</span>';
+          return '<span style="color:'+(n>=1?'var(--green)':'var(--red)')+'">'+n.toFixed(2)+'x</span>'; 
+        }
+
+        var sebiIcon = f.amc_sebi==='probe'?'🔴':f.amc_sebi==='action'?'⚠️':f.amc_sebi==='minor'?'🟡':'✅';
+        var rankBadge = isTop ? ' <span style="background:'+cfg.color+';color:#fff;border-radius:3px;padding:0 4px;font-size:9px">#'+(i+1)+'</span>' : '';
+        var exp = parseFloat(f.expense_ratio)||0;
+        var pe = parseFloat(f.pe_ratio)||0, catPE = parseFloat(f.category_pe)||30;
+        var cash = parseFloat(f.pct_cash)||0;
+        var top10 = parseFloat(f.top10_conc)||0;
+        var ath = parseFloat(f.pct_from_ath)||0;
+
+        var cells = [
+          // # — sticky col 1
+          {s:'position:sticky;left:0;z-index:3;background:'+rowTopBg+';border-right:1px solid var(--border2);min-width:44px;width:44px;', v:'<span style="color:var(--text3);font-weight:600">'+(i+1)+'</span>'+rankBadge},
+          // Fund — sticky col 2
+          {s:'position:sticky;left:44px;z-index:3;background:'+rowTopBg+';border-right:2px solid var(--border3);font-weight:'+(isTop?600:400)+';max-width:200px;min-width:200px;overflow:hidden;text-overflow:ellipsis;', v:f.name},
+          // AMC
+          {s:'color:var(--text2);', v:(f.amc||'').split(' ')[0]},
+          // NAV
+          {s:'text-align:right;font-family:monospace;', v:f.navFormatted||'—'},
+          // AUM
+          {s:'text-align:right;', v:f.aum_cr?Math.round(f.aum_cr).toLocaleString('en-IN'):'—'},
+          // Expense
+          {s:'text-align:right;color:'+(exp<0.5?'var(--green)':exp>1?'var(--red)':'var(--text)')+';', v:exp?exp.toFixed(2)+'%':'—'},
+          // Min Lumpsum
+          {s:'text-align:right;', v:f.min_lumpsum?'₹'+Math.round(f.min_lumpsum).toLocaleString('en-IN'):'—'},
+          // Min SIP
+          {s:'text-align:right;', v:f.min_sip&&f.min_sip>0?'₹'+Math.round(f.min_sip):'—'},
+          // Exit Load
+          {s:'text-align:right;', v:rv(f.exit_load,0)+'%'},
+          // Inception
+          {s:'text-align:right;', v:f.months_inception?Math.round(f.months_inception)+' mo':'—'},
+          // Fund Manager — border-right to end IDENTITY group
+          {s:'color:var(--text2);font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;border-right:2px solid var(--border3);', v:f.fund_manager||'—'},
+          // RETURNS
+          {s:'text-align:right;', v:rc(f.ret_1y)},
+          {s:'text-align:right;', v:rc(f.ret_3m)},
+          {s:'text-align:right;', v:rc(f.ret_6m)},
+          {s:'text-align:right;', v:rc(f.cagr_3y)},
+          {s:'text-align:right;', v:rc(f.cagr_5y)},
+          {s:'text-align:right;', v:rc(f.cagr_10y)},
+          {s:'text-align:right;font-weight:600;border-right:2px solid var(--border3);', v:rc(f.rolling_3y)},
+          // vs CATEGORY
+          {s:'text-align:right;', v:rvc(f.vs_cat_1y)},
+          {s:'text-align:right;', v:rvc(f.vs_cat_3y)},
+          {s:'text-align:right;', v:rvc(f.vs_cat_5y)},
+          {s:'text-align:right;border-right:2px solid var(--border3);', v:rvc(f.vs_cat_10y)},
+          // RISK
+          {s:'text-align:right;', v:rsh(f.sharpe)},
+          {s:'text-align:right;', v:rsh(f.sortino)},
+          {s:'text-align:right;', v:rv(f.volatility,2)+'%'},
+          {s:'text-align:right;color:var(--text3);', v:rv(f.category_stddev,2)+'%'},
+          {s:'text-align:right;color:var(--red);', v:rv(f.maxDD||f.max_drawdown,1)+'%'},
+          {s:'text-align:right;color:'+(ath<10?'var(--green)':ath<20?'var(--amber)':'var(--red)')+';border-right:2px solid var(--border3);', v:rv(ath,1)+'%'},
+          // PORTFOLIO
+          {s:'text-align:right;color:'+(pe>0&&pe<catPE*0.9?'var(--green)':pe>catPE*1.1?'var(--red)':'var(--text)')+';', v:pe?pe.toFixed(1):'—'},
+          {s:'text-align:right;color:var(--text3);', v:rv(f.category_pe,1)},
+          {s:'text-align:right;', v:rpct(f.pct_equity)},
+          {s:'text-align:right;', v:rpct(f.pct_largecap)},
+          {s:'text-align:right;', v:rpct(f.pct_midcap)},
+          {s:'text-align:right;', v:rpct(f.pct_smallcap)},
+          {s:'text-align:right;color:'+(cash>=3&&cash<=10?'var(--green)':cash>15?'var(--red)':'var(--text)')+';', v:rpct(cash)},
+          {s:'text-align:right;border-right:2px solid var(--border3);', v:rpct(f.pct_debt)},
+          // CONCENTRATION
+          {s:'text-align:right;', v:rv(f.top3_conc,1)+'%'},
+          {s:'text-align:right;', v:rv(f.top5_conc,1)+'%'},
+          {s:'text-align:right;color:'+(top10<45?'var(--green)':top10>65?'var(--red)':'var(--amber)')+';border-right:2px solid var(--border3);', v:rv(top10,1)+'%'},
+          // SCORE
+          {s:'text-align:center;font-size:14px;', v:sebiIcon},
+          {s:'text-align:right;font-weight:700;font-size:13px;color:'+cfg.color+';', v:f.score||0},
+        ];
+
+        html+='<tr style="border-bottom:1px solid var(--border2);">';
+        cells.forEach(function(c){
+          html+='<td style="padding:5px 8px;'+c.s+'">'+c.v+'</td>';
+        });
+        html+='</tr>';
+      });
+      html+='</tbody></table></div></div>';
       // Column groups
       var colGroups = [
         {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
@@ -1571,20 +1724,24 @@ function mfCard(f,rank,cfg,maxS){
   function rc(v){ return v!=null?'<span style="color:'+(v>=0?"var(--green)":"var(--red)")+'">'+( v>=0?"+":"")+v+"%</span>":"<span style='color:var(--text3)'>—</span>"; }
   function safe(v,sfx){ return v!=null?v+(sfx||""):"—"; }
 
-  var rets=[["1Y",f.ret1y],["3Y p.a.",f.cagr3y],["5Y p.a.",f.cagr5y],["10Y p.a.",f.cagr10y]];
+  var rets=[["1Y",f.ret_1y],["3Y p.a.",f.cagr_3y],["5Y p.a.",f.cagr_5y],["10Y p.a.",f.cagr_10y]];
   var retHtml=rets.map(function(r){
     return '<div style="background:var(--bg3);border-radius:6px;padding:6px 7px;text-align:center">'
       +'<div style="font-size:9px;color:var(--text3);margin-bottom:2px">'+r[0]+'</div>'
       +'<div style="font-weight:600;font-size:12px">'+rc(r[1])+'</div></div>';
   }).join("");
 
-  var aum=f.aum_cr!=null?'₹'+Math.round(f.aum_cr/10000000)/100+'K Cr':"—";
+  var aum = f.aum_cr!=null && f.aum_cr>0
+    ? (f.aum_cr>=1000 ? '₹'+Math.round(f.aum_cr/1000).toLocaleString('en-IN')+'K Cr' : '₹'+Math.round(f.aum_cr).toLocaleString('en-IN')+' Cr')
+    : '—';
+  var mdd = f.maxDD!=null?f.maxDD:(f.max_drawdown!=null?f.max_drawdown:null);
+  var vol = f.stdDev!=null?f.stdDev:(f.volatility!=null?f.volatility:null);
   var mets=[
-    ["Sharpe",    f.sharpe!=null?'<span style="color:'+(f.sharpe>0?"var(--green)":"var(--red)")+'">'+f.sharpe+"</span>":"—"],
-    ["Sortino",   f.sortino!=null?'<span style="color:'+(f.sortino>0?"var(--green)":"var(--red)")+'">'+f.sortino+"</span>":"—"],
-    ["Max DD",    f.maxDD!=null?'<span style="color:var(--red)">'+f.maxDD+"%</span>":"—"],
-    ["Volatility",safe(f.stdDev||f.stdDev_api,"%")],
-    ["Expense",   f.expense_ratio?f.expense_ratio+"%":"—"],
+    ["Sharpe",    f.sharpe!=null?'<span style="color:'+(f.sharpe>0?"var(--green)":f.sharpe>-0.3?"var(--amber)":"var(--red)")+'">'+parseFloat(f.sharpe).toFixed(3)+"</span>":"—"],
+    ["Sortino",   f.sortino!=null?'<span style="color:'+(f.sortino>0?"var(--green)":"var(--red)")+'">'+parseFloat(f.sortino).toFixed(4)+"</span>":"—"],
+    ["Max DD",    mdd!=null?'<span style="color:var(--red)">'+parseFloat(mdd).toFixed(1)+"%</span>":"—"],
+    ["Volatility",vol!=null?parseFloat(vol).toFixed(2)+"%":"—"],
+    ["Expense",   f.expense_ratio!=null?parseFloat(f.expense_ratio).toFixed(2)+"%":"—"],
     ["AUM",       aum],
   ];
   var metHtml=mets.map(function(m){
@@ -1610,9 +1767,8 @@ function mfCard(f,rank,cfg,maxS){
   var sebiColor = f.amc_sebi==="probe"?"var(--red)":f.amc_sebi==="action"?"var(--red)":f.amc_sebi==="minor"?"var(--amber)":"var(--green)";
   var sebiLabel = f.amc_sebi==="probe"?"🔴 Under Investigation":f.amc_sebi==="action"?"⚠️ Past Action":f.amc_sebi==="minor"?"⚠️ Minor Fine":"✅ SEBI Clean";
   var warningHtml = f.amc_warning ? '<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5">'+f.amc_warning+'</div>' : "";
-  var stars = f.morningstar ? '★'.repeat(Math.min(5,f.morningstar)) : "";
-  var starsHtml = stars ? '<span style="color:var(--amber);font-size:12px">'+stars+'</span>' : "";
-  var rollHtml = f.rollConsistency!=null ? '<span style="font-size:10px;color:var(--text3)">'+f.rollConsistency+'% rolling consistency</span>' : "";
+  var roll = f.rolling_3y!=null ? parseFloat(f.rolling_3y) : (f.rollConsistency!=null ? parseFloat(f.rollConsistency) : null);
+  var rollHtml = roll!=null && roll>0 ? '<span style="font-size:10px;color:var(--text3)">Roll 3Y: <span style="color:var(--green);font-weight:600">+'+roll.toFixed(1)+'%</span></span>' : "";
 
   return '<div style="background:var(--bg2);border:'+border+';border-radius:12px;padding:14px;position:relative">'+badge
     +warningHtml
@@ -1621,7 +1777,7 @@ function mfCard(f,rank,cfg,maxS){
     +'<div style="flex:1;min-width:0">'
     +'<div style="font-weight:600;font-size:13px;line-height:1.4">'+f.name+'</div>'
     +'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+f.amc+' &middot; '+(f.navFormatted||"—")+' &middot; '+aum+'</div>'
-    +'<div style="margin-top:3px;display:flex;align-items:center;gap:8px">'+starsHtml+rollHtml+'</div>'
+    +'<div style="margin-top:3px;display:flex;align-items:center;gap:8px">'+rollHtml+'</div>'
     +'</div>'
     +'<div style="text-align:right;flex-shrink:0">'
     +'<div style="font-size:24px;font-weight:700;color:'+cfg.color+';line-height:1">'+(f.score||0)+'</div>'
