@@ -200,7 +200,6 @@ const UNIVERSE = [
   {sym:"SHRIRAMFIN", n:"Shriram Finance",           grp:"NIFTY50"},
   {sym:"ZOMATO",     n:"Zomato Ltd",                grp:"NIFTY50"},
   {sym:"BAJAJ-AUTO", n:"Bajaj Auto",                grp:"NIFTY50"},
-
   // ── NIFTY NEXT 50 ──
   {sym:"DMART",       n:"Avenue Supermarts",        grp:"NEXT50"},
   {sym:"PIDILITIND",  n:"Pidilite Industries",      grp:"NEXT50"},
@@ -1047,17 +1046,11 @@ app.get("/api/instruments", (req,res) => res.json(validTokens));
 
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get("/api/crypto-prices", async(req,res)=>{
-  try {
-    const CRYPTO_SYMS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","MATICUSDT","DOTUSDT","LINKUSDT","UNIUSDT","ATOMUSDT","LTCUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT"];
-    const syms = JSON.stringify(CRYPTO_SYMS);
-    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`);
-    if(!r.ok) return res.status(502).json({error:"Binance unavailable"});
-    const data = await r.json();
-    // Convert to object keyed by symbol
-    const result = {};
-    data.forEach(t=>{result[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
-    res.json(result);
-  } catch(e) { res.status(500).json({error:e.message}); }
+  // Return cached prices updated by background poller every 60s
+  if(Object.keys(cryptoPrices).length > 0) return res.json(cryptoPrices);
+  // No cache yet — fetch fresh
+  await fetchCryptoPricesREST();
+  res.json(cryptoPrices);
 });
 
 app.get("/health", (req,res)=>res.json({
@@ -1213,45 +1206,112 @@ const CRYPTO_UNIVERSE = [
   {sym:"SUIUSDT",  name:"Sui",            base:"SUI"},
 ];
 
-const cryptoPrices   = {};
-const cryptoCandles  = {};
-let cryptoWSActive   = false;
-
-// Fetch candles via REST (more reliable than WebSocket on Railway)
+// Fetch candles — try multiple endpoints
 async function fetchCryptoCandles(sym) {
+  const endpoints = [
+    `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+    `https://api1.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+    `https://api2.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+    `https://api3.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const r = await fetch(url, {
+        headers:{"User-Agent":"Mozilla/5.0 (compatible; ProTrader/1.0)"},
+        signal:AbortSignal.timeout(8000)
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (!Array.isArray(data) || data.length < 30) continue;
+      cryptoCandles[sym] = data.map(c=>({open:+c[1],high:+c[2],low:+c[3],close:+c[4],volume:+c[5]}));
+      return true;
+    } catch(e) { continue; }
+  }
+  // Last resort: use CoinGecko (free, no restrictions)
   try {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
-      {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(8000)});
+    const coinMap = {
+      BTCUSDT:"bitcoin",ETHUSDT:"ethereum",BNBUSDT:"binancecoin",SOLUSDT:"solana",
+      XRPUSDT:"ripple",ADAUSDT:"cardano",DOGEUSDT:"dogecoin",AVAXUSDT:"avalanche-2",
+      MATICUSDT:"matic-network",DOTUSDT:"polkadot",LINKUSDT:"chainlink",UNIUSDT:"uniswap",
+      ATOMUSDT:"cosmos",LTCUSDT:"litecoin",NEARUSDT:"near",APTUSDT:"aptos",
+      ARBUSDT:"arbitrum",OPUSDT:"optimism",INJUSDT:"injective-protocol",SUIUSDT:"sui"
+    };
+    const id = coinMap[sym];
+    if (!id) return false;
+    const r = await fetch(
+      `https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=7`,
+      {headers:{"User-Agent":"ProTrader/1.0"},signal:AbortSignal.timeout(10000)}
+    );
     if (!r.ok) return false;
     const data = await r.json();
-    if (!Array.isArray(data)) return false;
-    cryptoCandles[sym] = data.map(c=>({open:+c[1],high:+c[2],low:+c[3],close:+c[4],volume:+c[5]}));
+    if (!Array.isArray(data) || data.length < 30) return false;
+    cryptoCandles[sym] = data.map(c=>({
+      open:+c[1], high:+c[2], low:+c[3], close:+c[4], volume:0
+    }));
+    console.log(`  ₿ ${sym}: using CoinGecko data (${data.length} candles)`);
     return true;
-  } catch(e) { console.log(`  ₿ candles ${sym}: ${e.message}`); return false; }
+  } catch(e) { return false; }
 }
 
-// Fetch live prices via REST polling (replaces broken WebSocket)
+// Fetch live prices — try multiple Binance endpoints
 async function fetchCryptoPricesREST() {
+  const syms = JSON.stringify(CRYPTO_UNIVERSE.map(c=>c.sym));
+  const endpoints = [
+    `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+    `https://api1.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+    `https://api2.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+    `https://api3.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const r = await fetch(url, {
+        headers:{"User-Agent":"Mozilla/5.0 (compatible; ProTrader/1.0)"},
+        signal:AbortSignal.timeout(8000)
+      });
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (!Array.isArray(data)) continue;
+      data.forEach(t=>{
+        cryptoPrices[t.symbol]={
+          price:+t.lastPrice, change24h:+t.priceChangePercent,
+          high:+t.highPrice, low:+t.lowPrice,
+          volume:+t.volume, quoteVolume:+t.quoteVolume
+        };
+        if(cryptoCandles[t.symbol]?.length)
+          cryptoCandles[t.symbol][cryptoCandles[t.symbol].length-1].close=+t.lastPrice;
+      });
+      cryptoWSActive = true;
+      broadcast({type:"crypto_tick", prices:cryptoPrices});
+      console.log(`₿ Prices updated — ${data.length} pairs`);
+      return;
+    } catch(e) { continue; }
+  }
+  // CoinGecko fallback for prices
   try {
-    const syms = JSON.stringify(CRYPTO_UNIVERSE.map(c=>c.sym));
-    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
-      {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(8000)});
-    if (!r.ok) return;
-    const data = await r.json();
-    if (!Array.isArray(data)) return;
-    data.forEach(t=>{
-      cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};
-      // Also update last candle close
-      if(cryptoCandles[t.symbol]?.length) cryptoCandles[t.symbol][cryptoCandles[t.symbol].length-1].close=+t.lastPrice;
+    const ids="bitcoin,ethereum,binancecoin,solana,ripple,cardano,dogecoin,avalanche-2,matic-network,polkadot,chainlink,uniswap,cosmos,litecoin,near,aptos,arbitrum,optimism,injective-protocol,sui";
+    const r=await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+      {headers:{"User-Agent":"ProTrader/1.0"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok) return;
+    const data=await r.json();
+    const symToId={BTCUSDT:"bitcoin",ETHUSDT:"ethereum",BNBUSDT:"binancecoin",SOLUSDT:"solana",
+      XRPUSDT:"ripple",ADAUSDT:"cardano",DOGEUSDT:"dogecoin",AVAXUSDT:"avalanche-2",
+      MATICUSDT:"matic-network",DOTUSDT:"polkadot",LINKUSDT:"chainlink",UNIUSDT:"uniswap",
+      ATOMUSDT:"cosmos",LTCUSDT:"litecoin",NEARUSDT:"near",APTUSDT:"aptos",
+      ARBUSDT:"arbitrum",OPUSDT:"optimism",INJUSDT:"injective-protocol",SUIUSDT:"sui"};
+    Object.entries(symToId).forEach(([sym,id])=>{
+      if(data[id]) cryptoPrices[sym]={
+        price:data[id].usd, change24h:data[id].usd_24h_change||0,
+        high:data[id].usd, low:data[id].usd, volume:0, quoteVolume:0
+      };
     });
-    cryptoWSActive = true;
-    broadcast({type:"crypto_tick", prices:cryptoPrices});
-  } catch(e) { cryptoWSActive=false; console.log("₿ Price fetch error:", e.message); }
+    cryptoWSActive=true;
+    broadcast({type:"crypto_tick",prices:cryptoPrices});
+    console.log("₿ Prices from CoinGecko fallback");
+  } catch(e){ console.log("₿ All price sources failed:", e.message); }
 }
 
-// No WebSocket — use REST polling every 60s instead
 function startCryptoTicker() {
-  console.log("₿ Starting crypto REST price polling (every 60s)...");
+  console.log("₿ Starting crypto price polling (60s interval)...");
   fetchCryptoPricesREST();
   setInterval(fetchCryptoPricesREST, 60000);
 }
