@@ -655,7 +655,81 @@ async function scanAndTrade() {
 
 // ── REST API ──────────────────────────────────────────────────────────────────
 
-app.get("/",       (req,res)=>res.redirect("/health"));
+const path = require("path");
+
+app.use(express.static(path.join(__dirname,"public")));
+app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+
+// ── Free News via RSS feeds ───────────────────────────────────────────────────
+app.get("/api/news", async(req,res)=>{
+  const sym = (req.query.sym||"RELIANCE").toUpperCase();
+  const name = req.query.name||sym;
+
+  // Free RSS feeds — no API key needed
+  const feeds = [
+    {url:"https://economictimes.indiatimes.com/markets/stocks/rss.cms",         source:"Economic Times"},
+    {url:"https://www.moneycontrol.com/rss/MCtopnews.xml",                       source:"Moneycontrol"},
+    {url:"https://www.business-standard.com/rss/markets-106.rss",               source:"Business Standard"},
+    {url:"https://www.livemint.com/rss/markets",                                 source:"Mint"},
+    {url:"https://www.nseindia.com/api/cmsContent?url=/Regulations/corporateAction/corporateActionRss",source:"NSE India"},
+  ];
+
+  const allItems = [];
+
+  await Promise.allSettled(feeds.map(async({url,source})=>{
+    try {
+      const r = await fetch(url, {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(5000)});
+      if(!r.ok) return;
+      const xml = await r.text();
+      // Parse RSS items
+      const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+      items.forEach(match=>{
+        const item = match[1];
+        const title   = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/)?.[1]||item.match(/<title>(.*?)<\/title>/)?.[1]||"").trim();
+        const link    = (item.match(/<link>(.*?)<\/link>/)?.[1]||"").trim();
+        const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]||"").trim();
+        const desc    = (item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/)?.[1]||item.match(/<description>(.*?)<\/description>/)?.[1]||"").replace(/<[^>]+>/g,"").trim().slice(0,200);
+
+        if(!title) return;
+
+        // Check if relevant to this stock
+        const text = (title+" "+desc).toUpperCase();
+        const isRelevant = text.includes(sym) || text.includes(name.toUpperCase()) ||
+                           ["NIFTY","SENSEX","NSE","BSE","MARKET","STOCK"].some(k=>text.includes(k));
+        if(!isRelevant) return;
+
+        // Simple sentiment scoring
+        const bull = ["rise","rises","surges","jumps","gains","rallies","up","positive","buy","bullish","growth","profit","strong","record","high","outperform"].some(w=>text.includes(w.toUpperCase()));
+        const bear = ["fall","falls","drops","decline","declines","slips","down","negative","sell","bearish","loss","weak","low","underperform","crash","cut"].some(w=>text.includes(w.toUpperCase()));
+        const sentiment = bull&&!bear?"bullish":bear&&!bull?"bearish":"neutral";
+
+        // Time ago
+        let timeAgo = "recently";
+        if(pubDate){
+          const mins = Math.round((Date.now()-new Date(pubDate))/60000);
+          timeAgo = mins<60?`${mins}m ago`:mins<1440?`${Math.round(mins/60)}h ago`:`${Math.round(mins/1440)}d ago`;
+        }
+
+        allItems.push({headline:title, sentiment, impact:desc||"", source, timeAgo, pubDate, link});
+      });
+    } catch(e){ /* skip failed feed */ }
+  }));
+
+  // Sort by date, deduplicate by headline similarity, limit to 15
+  const seen = new Set();
+  const unique = allItems
+    .filter(item=>{ const key=item.headline.slice(0,40); if(seen.has(key))return false; seen.add(key); return true; })
+    .sort((a,b)=>new Date(b.pubDate||0)-new Date(a.pubDate||0))
+    .slice(0,15);
+
+  // If no stock-specific news found, return general market news
+  if(unique.length===0){
+    res.json([{headline:`No recent news found for ${sym}. Showing general market news.`,sentiment:"neutral",impact:"Try checking Moneycontrol or Economic Times directly.",source:"ProTrader",timeAgo:""}]);
+    return;
+  }
+
+  res.json(unique);
+});
 app.get("/health", (req,res)=>res.json({
   status:"ok", ticker:tickerOn?"connected":"not connected",
   hasToken:!!process.env.KITE_ACCESS_TOKEN, marketOpen:isMarketOpen(),
