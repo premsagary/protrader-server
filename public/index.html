@@ -769,7 +769,15 @@ function loadChart(){
   const container=document.getElementById("tv-widget");
   if(!container)return;
   container.innerHTML="";
-  const load=()=>{new window.TradingView.widget({container_id:"tv-widget",symbol:`NSE:${sym}`,interval:"5",timezone:"Asia/Kolkata",theme:"light",style:"1",locale:"en",width:"100%",height:480,studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],hide_side_toolbar:false,allow_symbol_change:true});};
+  // User has BSE subscription on TradingView — use BSE: prefix for Indian stocks
+  const tvSym = `BSE:${sym}`;
+  const load=()=>{new window.TradingView.widget({
+    container_id:"tv-widget",symbol:tvSym,interval:"5",
+    timezone:"Asia/Kolkata",theme:"light",style:"1",locale:"en",
+    width:"100%",height:480,
+    studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
+    hide_side_toolbar:false,allow_symbol_change:true,autosize:true,
+  });};
   if(window.TradingView)load();
   else{const s=document.createElement("script");s.src="https://s3.tradingview.com/tv.js";s.async=true;s.onload=load;document.head.appendChild(s);}
   const trades=S.nseTrades.filter(t=>t.symbol===sym);
