@@ -273,7 +273,8 @@ async function fetchCryptoPrices(){
     if(!r.ok) return;
     const data = await r.json();
     data.forEach(t=>{S.cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
-    if(S.mode==="crypto") render();
+    // Re-render if on crypto market or overview tab
+    if(S.mode==="crypto" && (S.cryptoTab==="market"||S.cryptoTab==="overview"||S.cryptoTab==="positions")) render();
   } catch(e){}
 }
 
@@ -312,9 +313,6 @@ function setTab(tab){
   else S.cryptoTab = tab;
   renderSubTabs();
   render();
-  if(tab==="news" && S.mode==="stocks") fetchNSENews();
-  if(tab==="news" && S.mode==="crypto") fetchCryptoNews();
-  if(tab==="chart") loadChart();
 }
 
 function renderSubTabs(){
