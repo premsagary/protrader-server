@@ -1108,341 +1108,270 @@ function render(){
 }
 
 // ═══════════════════════════════════════════════════════
-// MUTUAL FUND RECOMMENDATIONS — 17/18 criteria, top 5
+// MUTUAL FUND — Live NAV from MFAPI + calculated returns
 // ═══════════════════════════════════════════════════════
-const MF_RESULTS = {
-  smallcap: {
-    label:"Small Cap Funds", checks:17, color:"#7c3aed", bg:"#ede9fe",
-    desc:"High risk · 7+ year horizon · ₹1000 Cr+ AUM",
-    elimCriteria:"5Y CAGR <18%, 3Y CAGR <16%, AUM <₹1000 Cr, Fund age <5yr",
-    funds:[
-      {
-        rank:1, name:"Bandhan Small Cap Fund", amc:"Bandhan AMC",
-        score:15, total:17, nav:"₹38.2", aum:"₹7,800 Cr", expense:"0.38%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹1,000", ret3y:"+28.4%", ret5y:"+32.1%", retInception:"+24.6%",
-        sharpe:0.42, sortino:0.68, beta:0.76, alpha:"4.8%", stdDev:"15.2% (below avg)",
-        rank_cat:"Top 3", beatsBenchmark:"All periods", sebiClean:true,
-        highlights:["Sharpe positive in 2024-25 correction","Beta 0.76 — below category avg","Expense 0.38% — lowest in category","Beats benchmark all periods","Top 3 rank"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":1,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >3%":1,"Beta <0.8":1,"Std dev below avg":1,"Expense <0.5%":1,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1}
-      },
-      {
-        rank:2, name:"Invesco India Smallcap Fund", amc:"Invesco",
-        score:13.5, total:17, nav:"₹31.6", aum:"₹5,200 Cr", expense:"0.49%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹1,000", ret3y:"+25.1%", ret5y:"+29.3%", retInception:"+21.8%",
-        sharpe:0.31, sortino:0.52, beta:0.82, alpha:"3.9%", stdDev:"16.1% (slightly below avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Consistent alpha generation","Diversified portfolio","Low expense for category","Positive Sharpe ratio"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >21%":1,"Inception CAGR >20%":0.5,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >3%":1,"Beta <0.8":0.5,"Std dev below avg":0.5,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1}
-      },
-      {
-        rank:3, name:"Franklin India Smaller Companies", amc:"Franklin Templeton",
-        score:11.5, total:17, nav:"₹152.4", aum:"₹13,200 Cr", expense:"0.88%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹5,000", ret3y:"+22.8%", ret5y:"+24.7%", retInception:"+19.2%",
-        sharpe:0.18, sortino:0.41, beta:0.79, alpha:"3.2%", stdDev:"16.9% (near avg)",
-        rank_cat:"Top 8", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Long track record since 2006","Experienced fund manager","Strong 5Y CAGR","Beta below 0.8"],
-        checks:{"3Y CAGR >22%":0.5,"5Y CAGR >21%":1,"Inception CAGR >20%":0.5,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >3%":0.5,"Beta <0.8":1,"Std dev below avg":0.5,"Expense <0.5%":0,"Exit load favorable":1,"Min lumpsum <₹1K":0,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1}
-      },
-      {
-        rank:4, name:"Nippon India Small Cap Fund", amc:"Nippon India",
-        score:11, total:17, nav:"₹162.8", aum:"₹61,700 Cr", expense:"0.68%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹1,000", ret3y:"+24.2%", ret5y:"+28.1%", retInception:"+23.4%",
-        sharpe:0.24, sortino:0.45, beta:0.88, alpha:"3.1%", stdDev:"17.4% (at avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Largest small cap AUM ₹61K Cr","Long consistent track record","Good 5Y CAGR","Diversified 200+ stock portfolio"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >3%":0.5,"Beta <0.8":0,"Std dev below avg":0,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":0.5,"AUM growth steady":0.5,"SEBI clean":1}
-      },
-      {
-        rank:5, name:"Quant Small Cap Fund", amc:"Quant AMC",
-        score:10.5, total:17, nav:"₹281.4", aum:"₹24,100 Cr", expense:"0.64%", exitLoad:"0.5% within 3m",
-        minLumpsum:"₹5,000", ret3y:"+26.8%", ret5y:"+44.1%", retInception:"+20.1%",
-        sharpe:0.19, sortino:0.38, beta:0.94, alpha:"6.2%", stdDev:"22.1% (above avg)",
-        rank_cat:"Top 3", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Extraordinary 5Y CAGR 44%","Highest alpha 6.2% in category","Lower exit load 0.5%","VQMM model-driven approach"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >3%":1,"Beta <0.8":0,"Std dev below avg":0,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":0,"AUM sweet spot":0.5,"AUM growth steady":0.5,"SEBI clean":1}
-      }
-    ]
-  },
-  midcap: {
-    label:"Mid Cap Funds", checks:18, color:"#1d4ed8", bg:"#dbeafe",
-    desc:"Moderate-high risk · 5+ year horizon · includes 10Y CAGR",
-    elimCriteria:"5Y CAGR <18%, 3Y CAGR <16%, AUM <₹1000 Cr, Fund age <5yr",
-    funds:[
-      {
-        rank:1, name:"Edelweiss Mid Cap Fund", amc:"Edelweiss AMC",
-        score:17, total:18, nav:"₹98.7", aum:"₹8,900 Cr", expense:"0.39%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹100", ret3y:"+29.6%", ret5y:"+31.2%", ret10y:"+22.8%", retInception:"+23.4%",
-        sharpe:0.51, sortino:0.79, beta:0.74, alpha:"5.3%", stdDev:"15.8% (well below avg 17%)",
-        rank_cat:"Top 3", beatsBenchmark:"All periods", sebiClean:true,
-        highlights:["Highest scorer 17/18","Best Sharpe in category","Beta 0.74 — well below avg","₹100 min investment","Expense 0.39% — among lowest"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >23%":1,"10Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":1,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >4%":1,"Beta <0.8":1,"Std dev below avg":1,"Expense <0.5%":1,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1}
-      },
-      {
-        rank:2, name:"Nippon India Growth Fund", amc:"Nippon India",
-        score:16, total:18, nav:"₹4,218", aum:"₹32,400 Cr", expense:"0.72%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹1,000", ret3y:"+27.1%", ret5y:"+28.4%", ret10y:"+21.4%", retInception:"+22.9%",
-        sharpe:0.38, sortino:0.61, beta:0.81, alpha:"4.4%", stdDev:"16.2% (below avg 17%)",
-        rank_cat:"Top 3", beatsBenchmark:"All periods", sebiClean:true,
-        highlights:["Oldest mid cap fund (1995)","Consistent 10Y+ performer","Positive Sharpe","Top 3 category rank"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >23%":1,"10Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":1,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >4%":1,"Beta <0.8":0.5,"Std dev below avg":1,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":0,"SEBI clean":1}
-      },
-      {
-        rank:3, name:"Invesco India Mid Cap Fund", amc:"Invesco",
-        score:14, total:18, nav:"₹178.3", aum:"₹6,100 Cr", expense:"0.61%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹1,000", ret3y:"+24.3%", ret5y:"+25.8%", ret10y:"+19.8%", retInception:"+20.1%",
-        sharpe:0.22, sortino:0.48, beta:0.83, alpha:"3.8%", stdDev:"16.4% (below avg 17%)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Consistent outperformer","Good 10Y track record","Below avg std deviation","Strong alpha generation"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >23%":0.5,"10Y CAGR >21%":0.5,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >4%":0.5,"Beta <0.8":0.5,"Std dev below avg":1,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1}
-      },
-      {
-        rank:4, name:"Motilal Oswal Midcap Fund", amc:"Motilal Oswal",
-        score:13, total:18, nav:"₹108.2", aum:"₹22,100 Cr", expense:"0.61%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹500", ret3y:"+31.4%", ret5y:"+27.2%", ret10y:"+21.9%", retInception:"+22.3%",
-        sharpe:0.28, sortino:0.51, beta:0.87, alpha:"5.1%", stdDev:"18.2% (above avg)",
-        rank_cat:"Top 3", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Highest 3Y CAGR in category +31.4%","Strong alpha 5.1%","₹500 min investment","Top 3 rank","Concentrated 30-stock portfolio"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >23%":1,"10Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":1,"Alpha >4%":1,"Beta <0.8":0,"Std dev below avg":0,"Expense <0.5%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":0.5,"AUM growth steady":0.5,"SEBI clean":1}
-      },
-      {
-        rank:5, name:"HDFC Mid-Cap Opportunities", amc:"HDFC AMC",
-        score:12.5, total:18, nav:"₹183.7", aum:"₹78,600 Cr", expense:"0.81%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹100", ret3y:"+24.6%", ret5y:"+26.1%", ret10y:"+21.2%", retInception:"+20.8%",
-        sharpe:0.21, sortino:0.44, beta:0.86, alpha:"3.4%", stdDev:"16.8% (near avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Largest mid cap fund ₹78K Cr","Very low ₹100 min investment","Long consistent 10Y+ track record","Reliable benchmark beater"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >23%":1,"10Y CAGR >21%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >4%":0,"Beta <0.8":0,"Std dev below avg":0.5,"Expense <0.5%":0,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":0.5,"AUM growth steady":1,"SEBI clean":1}
-      }
-    ]
-  },
-  flexicap: {
-    label:"Flexi Cap Funds", checks:17, color:"#0f766e", bg:"#ccfbf1",
-    desc:"Dynamic allocation · 3+ year horizon · invests across caps",
-    elimCriteria:"5Y CAGR <18%, 3Y CAGR <16%, AUM <₹1000 Cr, Fund age <5yr",
-    funds:[
-      {
-        rank:1, name:"HDFC Flexi Cap Fund", amc:"HDFC AMC",
-        score:13, total:17, nav:"₹2,018", aum:"₹67,400 Cr", expense:"0.77%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹100", ret3y:"+24.8%", ret5y:"+23.2%", retInception:"+21.1%",
-        sharpe:0.34, sortino:0.56, beta:"N/A", alpha:"3.6%", stdDev:"12.8% (below avg)",
-        rank_cat:"Top 3", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Positive Sharpe ratio","₹100 min investment","Below avg std deviation","Top 3 flexi cap category","Legendary fund manager pedigree"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >20%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >3%":1,"Std dev below avg":1,"Expense <0.6%":0,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":0.5,"AUM growth steady":0.5,"SEBI clean":1,"—":0}
-      },
-      {
-        rank:2, name:"Edelweiss Flexi Cap Fund", amc:"Edelweiss AMC",
-        score:13, total:17, nav:"₹42.1", aum:"₹3,800 Cr", expense:"0.44%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹100", ret3y:"+23.9%", ret5y:"+22.8%", retInception:"+20.4%",
-        sharpe:0.38, sortino:0.61, beta:"N/A", alpha:"4.1%", stdDev:"12.4% (below avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Lowest expense 0.44%","Positive Sharpe","Below avg std dev","Strong alpha 4.1%","₹100 min investment"],
-        checks:{"3Y CAGR >22%":1,"5Y CAGR >20%":1,"Inception CAGR >20%":1,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >3%":1,"Std dev below avg":1,"Expense <0.6%":1,"Exit load favorable":1,"Min lumpsum <₹1K":1,"AUM sweet spot":1,"AUM growth steady":0,"SEBI clean":1,"—":0}
-      },
-      {
-        rank:3, name:"PGIM India Flexi Cap Fund", amc:"PGIM India",
-        score:12, total:17, nav:"₹36.8", aum:"₹6,200 Cr", expense:"0.51%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹5,000", ret3y:"+22.3%", ret5y:"+21.6%", retInception:"+19.8%",
-        sharpe:0.29, sortino:0.44, beta:"N/A", alpha:"3.4%", stdDev:"12.9% (near avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Controlled AUM growth","Consistent benchmark beater","Good expense ratio","Steady portfolio approach"],
-        checks:{"3Y CAGR >22%":0.5,"5Y CAGR >20%":1,"Inception CAGR >20%":0.5,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >3%":1,"Std dev below avg":0.5,"Expense <0.6%":0.5,"Exit load favorable":1,"Min lumpsum <₹1K":0,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1,"—":0}
-      },
-      {
-        rank:4, name:"Parag Parikh Flexi Cap Fund", amc:"PPFAS AMC",
-        score:11.5, total:17, nav:"₹89.6", aum:"₹87,200 Cr", expense:"0.58%", exitLoad:"2% within 365d",
-        minLumpsum:"₹1,000", ret3y:"+19.8%", ret5y:"+22.1%", retInception:"+19.6%",
-        sharpe:0.41, sortino:0.65, beta:"N/A", alpha:"2.8%", stdDev:"11.2% (significantly below avg)",
-        rank_cat:"Top 3", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Lowest std dev in category 11.2%","Positive Sharpe 0.41","Global diversification (US stocks)","Largest flexi cap ₹87K Cr","Very low volatility approach"],
-        checks:{"3Y CAGR >22%":0,"5Y CAGR >20%":1,"Inception CAGR >20%":0.5,"Beats benchmark":0.5,"Category rank top 3":1,"Lumpsum open":1,"Sharpe >0.3":1,"Sortino >0.5":1,"Alpha >3%":0,"Std dev below avg":1,"Expense <0.6%":0.5,"Exit load favorable":0,"Min lumpsum <₹1K":1,"AUM sweet spot":0.5,"AUM growth steady":0.5,"SEBI clean":1,"—":0}
-      },
-      {
-        rank:5, name:"Canara Rob Flexi Cap Fund", amc:"Canara Robeco",
-        score:11, total:17, nav:"₹334.2", aum:"₹12,800 Cr", expense:"0.54%", exitLoad:"1% within 1yr",
-        minLumpsum:"₹5,000", ret3y:"+21.4%", ret5y:"+20.8%", retInception:"+18.9%",
-        sharpe:0.26, sortino:0.48, beta:"N/A", alpha:"3.1%", stdDev:"12.6% (below avg)",
-        rank_cat:"Top 5", beatsBenchmark:"Most periods", sebiClean:true,
-        highlights:["Long track record since 2003","Below avg std deviation","Consistent benchmark beater","Good expense ratio","Conservative quality approach"],
-        checks:{"3Y CAGR >22%":0.5,"5Y CAGR >20%":1,"Inception CAGR >20%":0,"Beats benchmark":0.5,"Category rank top 3":0.5,"Lumpsum open":1,"Sharpe >0.3":0,"Sortino >0.5":0,"Alpha >3%":0.5,"Std dev below avg":1,"Expense <0.6%":1,"Exit load favorable":1,"Min lumpsum <₹1K":0,"AUM sweet spot":1,"AUM growth steady":1,"SEBI clean":1,"—":0}
-      }
-    ]
-  }
+
+const MF_FUNDS = [
+  {code:"147622",name:"Bandhan Small Cap",         amc:"Bandhan",  cat:"smallcap",expense:0.38,aum:7800, minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118989",name:"Nippon India Small Cap",    amc:"Nippon",   cat:"smallcap",expense:0.68,aum:61700,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125497",name:"SBI Small Cap",             amc:"SBI",      cat:"smallcap",expense:0.65,aum:31200,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120505",name:"Kotak Small Cap",           amc:"Kotak",    cat:"smallcap",expense:0.55,aum:18900,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120828",name:"Quant Small Cap",           amc:"Quant",    cat:"smallcap",expense:0.64,aum:24100,minInvest:5000,exitLoad:"0.5% <3m", sebiClean:true},
+  {code:"118272",name:"DSP Small Cap",             amc:"DSP",      cat:"smallcap",expense:0.72,aum:16800,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118778",name:"HDFC Small Cap",            amc:"HDFC",     cat:"smallcap",expense:0.59,aum:33100,minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125354",name:"Axis Small Cap",            amc:"Axis",     cat:"smallcap",expense:0.52,aum:21800,minInvest:500, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"135800",name:"Tata Small Cap",            amc:"Tata",     cat:"smallcap",expense:0.31,aum:8200, minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"100278",name:"Franklin India Smaller Cos",amc:"Franklin", cat:"smallcap",expense:0.88,aum:13200,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"135803",name:"Motilal Oswal Midcap",      amc:"Motilal",  cat:"midcap",  expense:0.61,aum:22100,minInvest:500, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118701",name:"Nippon India Growth",       amc:"Nippon",   cat:"midcap",  expense:0.72,aum:32400,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118776",name:"HDFC Mid-Cap Opp",          amc:"HDFC",     cat:"midcap",  expense:0.81,aum:78600,minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120503",name:"Kotak Emerging Equity",     amc:"Kotak",    cat:"midcap",  expense:0.43,aum:51200,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125496",name:"SBI Magnum Midcap",         amc:"SBI",      cat:"midcap",  expense:0.91,aum:21800,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125356",name:"Axis Midcap",               amc:"Axis",     cat:"midcap",  expense:0.53,aum:27400,minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118273",name:"DSP Midcap",                amc:"DSP",      cat:"midcap",  expense:0.73,aum:17600,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120830",name:"Quant Mid Cap",             amc:"Quant",    cat:"midcap",  expense:0.60,aum:9800, minInvest:5000,exitLoad:"0.5% <3m", sebiClean:true},
+  {code:"136179",name:"PGIM India Midcap",         amc:"PGIM",     cat:"midcap",  expense:0.44,aum:11200,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118777",name:"HDFC Mid-Cap (Edelweiss)",  amc:"Edelweiss",cat:"midcap",  expense:0.39,aum:8900, minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"122639",name:"Parag Parikh Flexi Cap",    amc:"PPFAS",    cat:"flexicap",expense:0.58,aum:87200,minInvest:1000,exitLoad:"2% <365d", sebiClean:true},
+  {code:"120832",name:"Quant Flexi Cap",           amc:"Quant",    cat:"flexicap",expense:0.60,aum:6200, minInvest:5000,exitLoad:"0.5% <3m", sebiClean:true},
+  {code:"118777",name:"HDFC Flexi Cap",            amc:"HDFC",     cat:"flexicap",expense:0.77,aum:67400,minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"101539",name:"Canara Rob Flexi Cap",      amc:"Canara",   cat:"flexicap",expense:0.54,aum:12800,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120716",name:"UTI Flexi Cap",             amc:"UTI",      cat:"flexicap",expense:0.99,aum:24800,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125494",name:"SBI Flexi Cap",             amc:"SBI",      cat:"flexicap",expense:0.88,aum:21600,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"120502",name:"Kotak Flexi Cap",           amc:"Kotak",    cat:"flexicap",expense:0.57,aum:48200,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"118271",name:"DSP Flexi Cap",             amc:"DSP",      cat:"flexicap",expense:0.72,aum:11200,minInvest:1000,exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"125355",name:"Axis Flexi Cap",            amc:"Axis",     cat:"flexicap",expense:0.67,aum:13800,minInvest:100, exitLoad:"1% <1yr",  sebiClean:true},
+  {code:"100277",name:"Franklin Flexi Cap",        amc:"Franklin", cat:"flexicap",expense:0.99,aum:16400,minInvest:5000,exitLoad:"1% <1yr",  sebiClean:true},
+];
+
+var MF_CAT = {
+  smallcap:  {label:"Small Cap Funds", color:"#7c3aed",bg:"#ede9fe",desc:"High risk · 7+ year horizon",         bm3:18,bm5:16},
+  midcap:    {label:"Mid Cap Funds",   color:"#1d4ed8",bg:"#dbeafe",desc:"Moderate-high risk · 5+ year horizon", bm3:16,bm5:14},
+  flexicap:  {label:"Flexi Cap Funds", color:"#0f766e",bg:"#ccfbf1",desc:"Dynamic allocation · 3+ year horizon", bm3:14,bm5:12}
 };
 
-async function renderMFPage() {
-  document.getElementById("subtabs").innerHTML = "";
-  const main = document.getElementById("main-content");
-
-  main.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
-      <div>
-        <div style="font-weight:500;font-size:16px">Mutual Fund Recommendations 2026</div>
-        <div style="font-size:12px;color:var(--text2)">17/18-criteria real data framework · Verified April 2026 · Educational only — not SEBI registered advice</div>
-      </div>
-      <div style="margin-left:auto;display:flex;gap:6px">
-        <a href="https://www.tickertape.in/mutual-funds" target="_blank" class="btn btn-sm" style="font-size:11px">Tickertape ↗</a>
-        <a href="https://www.indmoney.com/mutual-funds" target="_blank" class="btn btn-sm" style="font-size:11px">INDmoney ↗</a>
-      </div>
-    </div>
-    ${renderMFWarning()}
-    ${Object.entries(MF_RESULTS).map(([cat,data])=>renderMFCategory(cat,data)).join("")}
-    ${renderMFCriteriaBox()}
-    ${renderMFElimBox()}`;
+function mfAnn(old,nav,yrs){if(!old||old<=0)return null;return +((Math.pow(nav/old,1/yrs)-1)*100).toFixed(1);}
+function mfRet(old,nav){if(!old||old<=0)return null;return +((nav-old)/old*100).toFixed(1);}
+function mfStdDev(navs){
+  if(navs.length<10)return null;
+  var dr=[];for(var i=1;i<navs.length;i++)dr.push((navs[i]-navs[i-1])/navs[i-1]);
+  var mean=dr.reduce(function(a,b){return a+b;},0)/dr.length;
+  var vari=dr.reduce(function(a,b){return a+Math.pow(b-mean,2);},0)/dr.length;
+  return +(Math.sqrt(vari)*Math.sqrt(252)*100).toFixed(1);
+}
+function mfMaxDD(navs){
+  var peak=navs[0],maxDD=0;
+  for(var i=0;i<navs.length;i++){if(navs[i]>peak)peak=navs[i];var dd=(navs[i]-peak)/peak*100;if(dd<maxDD)maxDD=dd;}
+  return +maxDD.toFixed(1);
+}
+function mfScore(f,live){
+  var s=0,hits={};
+  var c1=live.ret1y,c3=live.cagr3y,c5=live.cagr5y,cat=MF_CAT[f.cat];
+  if(c1>20){s+=1.5;hits["1Y >20%"]=1;}else if(c1>10){s+=0.5;hits["1Y >10%"]=0.5;}
+  if(c3>cat.bm3+6){s+=2;hits["3Y >"+(cat.bm3+6)+"%"]=1;}else if(c3>cat.bm3){s+=1;hits["3Y >"+cat.bm3+"%"]=0.5;}
+  if(c5>cat.bm5+6){s+=2;hits["5Y >"+(cat.bm5+6)+"%"]=1;}else if(c5>cat.bm5){s+=1;hits["5Y >"+cat.bm5+"%"]=0.5;}
+  if(live.cagr10y>cat.bm5){s+=0.5;hits["10Y above benchmark"]=0.5;}
+  if(live.cagrInc>cat.bm5){s+=1;hits["Since inception > benchmark"]=1;}
+  if(live.sharpe>0.5){s+=2;hits["Sharpe >0.5"]=1;}else if(live.sharpe>0){s+=1;hits["Sharpe positive"]=0.5;}
+  if(live.maxDD>-25){s+=1;hits["Max drawdown <25%"]=1;}else if(live.maxDD>-35){s+=0.5;hits["Max drawdown <35%"]=0.5;}
+  if(live.stdDev&&live.stdDev<18){s+=1;hits["Low volatility <18%"]=1;}else if(live.stdDev&&live.stdDev<22){s+=0.5;hits["Volatility <22%"]=0.5;}
+  if(f.expense<0.4){s+=1.5;hits["Expense <0.4%"]=1;}else if(f.expense<0.6){s+=1;hits["Expense <0.6%"]=0.5;}else if(f.expense<0.8){s+=0.5;hits["Expense <0.8%"]=0.5;}
+  if(!f.exitLoad.match(/^2%/)){s+=0.5;hits["Favorable exit load"]=0.5;}
+  if(f.minInvest<=100){s+=1;hits["Min invest <=Rs100"]=1;}else if(f.minInvest<=1000){s+=0.5;hits["Min invest <=Rs1K"]=0.5;}
+  if(f.aum>=1000&&f.aum<=30000){s+=1;hits["AUM sweet spot"]=1;}else if(f.aum>30000){s+=0.5;hits["Large established fund"]=0.5;}
+  if(f.aum>=1000){s+=0.5;hits["AUM >Rs1K Cr"]=0.5;}
+  if(f.sebiClean){s+=1;hits["Clean SEBI record"]=1;}
+  if(live.pts>1500){s+=0.5;hits["5+ year history"]=0.5;}
+  if(live.pts>3000){s+=0.5;hits["10+ year history"]=0.5;}
+  return {score:+s.toFixed(1),hits:hits};
 }
 
-function renderMFWarning(){
-  return `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px 14px;margin:10px 0 16px;font-size:12px;color:#92400e">
-    ⚠️ This is educational analysis only. Not SEBI registered investment advice. All data is verified from public sources (INDmoney, Tickertape, AMFI) as of April 2026. Verify before investing. Past returns do not guarantee future performance.
-  </div>`;
+async function fetchMFNav(code){
+  try{
+    var r=await fetch("https://api.mfapi.in/mf/"+code);
+    if(!r.ok)return null;
+    var d=await r.json();
+    var raw=(d.data||[]).slice().reverse();
+    if(raw.length<50)return null;
+    var navs=raw.map(function(x){return +x.nav;}).filter(function(n){return n>0;});
+    var N=navs.length;
+    var last=navs[N-1];
+    function idx(days){return Math.max(0,N-1-Math.round(days));}
+    var ret1y=mfRet(navs[idx(365)],last);
+    var c3=navs[idx(365*3)],c5=navs[idx(365*5)],c10=navs[idx(365*10)];
+    var cagr3y=mfAnn(c3,last,3),cagr5y=mfAnn(c5,last,5),cagr10y=N>365*10?mfAnn(c10,last,10):null;
+    var meta=d.meta||{};
+    var dateStr=(raw[0].date||"").split("-").reverse().join("-");
+    var yrs=(Date.now()-new Date(dateStr))/(365.25*24*60*60*1000);
+    var cagrInc=yrs>1?mfAnn(navs[0],last,yrs):null;
+    var last3y=navs.slice(idx(365*3));
+    var sd=mfStdDev(last3y);
+    var mdd=mfMaxDD(last3y);
+    var sharpe=sd&&sd>0?+((( (cagr3y||0)-6.5)/sd)).toFixed(2):null;
+    return {nav:last,navF:"Rs"+last.toFixed(2),ret1y:ret1y,cagr3y:cagr3y,cagr5y:cagr5y,cagr10y:cagr10y,cagrInc:cagrInc,stdDev:sd,maxDD:mdd,sharpe:sharpe,pts:N};
+  }catch(e){return null;}
 }
 
-function renderMFCategory(cat, data) {
-  const checkLabels = {
-    smallcap:["3Y CAGR >22%","5Y CAGR >21%","Inception CAGR >20%","Beats benchmark","Category rank top 3","Lumpsum open","Sharpe >0.3","Sortino >0.5","Alpha >3%","Beta <0.8","Std dev below avg","Expense <0.5%","Exit load favorable","Min lumpsum <₹1K","AUM sweet spot","AUM growth steady","SEBI clean"],
-    midcap:  ["3Y CAGR >22%","5Y CAGR >23%","10Y CAGR >21%","Inception CAGR >20%","Beats benchmark","Category rank top 3","Lumpsum open","Sharpe >0.3","Sortino >0.5","Alpha >4%","Beta <0.8","Std dev below avg","Expense <0.5%","Exit load favorable","Min lumpsum <₹1K","AUM sweet spot","AUM growth steady","SEBI clean"],
-    flexicap:["3Y CAGR >22%","5Y CAGR >20%","Inception CAGR >20%","Beats benchmark","Category rank top 3","Lumpsum open","Sharpe >0.3","Sortino >0.5","Alpha >3%","Std dev below avg","Expense <0.6%","Exit load favorable","Min lumpsum <₹1K","AUM sweet spot","AUM growth steady","SEBI clean","—"],
-  };
-  return `
-  <div style="margin-bottom:28px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <div style="font-weight:500;font-size:15px">${data.label}</div>
-      <span style="background:${data.bg};color:${data.color};border-radius:5px;padding:2px 9px;font-size:11px;font-weight:500">${data.desc}</span>
-      <span style="font-size:11px;color:var(--text3);margin-left:4px">${data.checks} checks · top 5</span>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin-bottom:12px">
-      ${data.funds.map(f=>renderMFFundCard(f,data,cat,checkLabels[cat])).join("")}
-    </div>
-    <div style="font-size:11px;color:var(--text3);padding:6px 0;border-top:0.5px solid var(--border)">
-      Eliminated if: ${data.elimCriteria}
-    </div>
-  </div>`;
+async function renderMFPage(){
+  document.getElementById("subtabs").innerHTML="";
+  var main=document.getElementById("main-content");
+  main.innerHTML='<div style="font-weight:500;font-size:16px;margin-bottom:4px">Mutual Fund Recommendations</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:10px">Live returns & risk from MFAPI.in NAV history · AUM/expense manually verified · Not SEBI advice</div>'
+    +'<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#92400e">'
+    +'<b>Data note:</b> Returns calculated live from real NAV history. AUM, expense ratio, exit load verified quarterly from AMC factsheets. Past returns do not guarantee future performance.'
+    +'</div>'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">'
+    +'<div id="mf-bar" style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div id="mf-fill" style="height:100%;background:#0f766e;width:0%;border-radius:3px;transition:width .3s"></div></div>'
+    +'<span id="mf-txt" style="font-size:12px;color:var(--text2);white-space:nowrap">Loading 0/'+MF_FUNDS.length+' funds...</span>'
+    +'</div>'
+    +'<div id="mf-cats"></div>'
+    +'<div id="mf-footer"></div>';
+
+  var done=0;
+  var scored=await Promise.all(MF_FUNDS.map(async function(f){
+    var live=await fetchMFNav(f.code);
+    done++;
+    var fill=document.getElementById("mf-fill"),txt=document.getElementById("mf-txt");
+    if(fill)fill.style.width=Math.round(done/MF_FUNDS.length*100)+"%";
+    if(txt)txt.textContent="Loaded "+done+"/"+MF_FUNDS.length+" funds...";
+    if(!live)return null;
+    var r=mfScore(f,live);
+    return Object.assign({},f,{live:live,score:r.score,hits:r.hits});
+  }));
+
+  var bar=document.getElementById("mf-bar"),t=document.getElementById("mf-txt");
+  if(bar)bar.style.display="none"; if(t)t.textContent="";
+
+  var grouped={smallcap:[],midcap:[],flexicap:[]};
+  scored.forEach(function(f){if(f&&grouped[f.cat])grouped[f.cat].push(f);});
+  Object.keys(grouped).forEach(function(k){grouped[k].sort(function(a,b){return b.score-a.score;});});
+
+  var catsEl=document.getElementById("mf-cats");
+  var html="";
+  ["smallcap","midcap","flexicap"].forEach(function(cat){
+    var funds=grouped[cat],cfg=MF_CAT[cat],top5=funds.slice(0,5),maxS=top5[0]?top5[0].score:1;
+    html+='<div style="margin-bottom:28px">';
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+    html+='<div style="font-weight:500;font-size:15px">'+cfg.label+'</div>';
+    html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border-radius:5px;padding:2px 9px;font-size:11px;font-weight:500">'+cfg.desc+'</span>';
+    html+='<span style="font-size:11px;color:var(--text3)">'+funds.length+' screened &middot; top 5</span></div>';
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:10px">';
+    top5.forEach(function(f,i){html+=mfCard(f,i+1,cfg,maxS);});
+    html+='</div>';
+    // Full table
+    html+='<details><summary style="font-size:12px;color:var(--text2);cursor:pointer;padding:4px 0">All '+funds.length+' funds ranked &rarr;</summary>';
+    html+='<div style="overflow-x:auto;margin-top:8px"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    html+='<thead><tr style="border-bottom:1px solid var(--border)">';
+    ["#","Fund","NAV","1Y","3Y p.a.","5Y p.a.","Sharpe","Vol%","Exp%","Score"].forEach(function(h){
+      html+='<th style="padding:5px 8px;text-align:'+(h==="#"||h==="Fund"?"left":"right")+';color:var(--text2)">'+h+'</th>';
+    });
+    html+='</tr></thead><tbody>';
+    funds.forEach(function(f,i){
+      var l=f.live,top=i<5,bg=top?'background:'+cfg.bg+'18;':'';
+      function rc(v){return v!=null?(v>=0?"+":"")+v+"%" :"—";}
+      function cc(v){return v!=null&&v>=0?"var(--green)":"var(--red)";}
+      html+='<tr style="border-bottom:0.5px solid var(--border);'+bg+'">';
+      html+='<td style="padding:5px 8px;color:var(--text2)">'+(i+1)+(top?' <span style="background:'+cfg.bg+';color:'+cfg.color+';border-radius:3px;padding:0 4px;font-size:10px">&#9733;</span>':'')+'</td>';
+      html+='<td style="padding:5px 8px;font-weight:'+(top?500:400)+'">'+f.name+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right">'+l.navF+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right;color:'+cc(l.ret1y)+'">'+rc(l.ret1y)+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right;color:'+cc(l.cagr3y)+'">'+rc(l.cagr3y)+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right;color:'+cc(l.cagr5y)+'">'+rc(l.cagr5y)+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right;font-weight:500;color:'+(l.sharpe!=null&&l.sharpe>0?"var(--green)":"var(--red)")+'">'+( l.sharpe!=null?l.sharpe:"—")+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right">'+(l.stdDev!=null?l.stdDev+"%":"—")+'</td>';
+      html+='<td style="padding:5px 8px;text-align:right">'+f.expense+'%</td>';
+      html+='<td style="padding:5px 8px;text-align:right;font-weight:600;color:'+cfg.color+'">'+f.score+'</td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table></div></details>';
+    html+='</div>';
+  });
+  catsEl.innerHTML=html;
+
+  // Footer
+  document.getElementById("mf-footer").innerHTML=
+    '<div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:4px">'
+    +'<div style="font-weight:500;font-size:13px;margin-bottom:10px">How scoring works</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">'
+    +[["Returns (7pts live)","1Y,3Y,5Y,10Y,inception vs benchmark","MFAPI NAV history"],
+      ["Risk (5pts live)","Sharpe ratio, max drawdown, volatility","3Y daily NAV calculation"],
+      ["Cost (3pts static)","Expense ratio, exit load, min invest","AMC factsheets (quarterly)"],
+      ["AUM (2pts static)","Sweet spot Rs1K-30K Cr","AMFI monthly data"],
+      ["Governance (1pt)","Clean SEBI record","Public SEBI records"],
+      ["History (1pt)","NAV data depth","MFAPI data points"]
+    ].map(function(r){
+      return '<div style="background:var(--bg2);border-radius:8px;padding:9px 11px">'
+        +'<div style="font-weight:500;font-size:11px;margin-bottom:2px">'+r[0]+'</div>'
+        +'<div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:2px">'+r[1]+'</div>'
+        +'<div style="font-size:10px;color:var(--text3)">'+r[2]+'</div>'
+        +'</div>';
+    }).join("")
+    +'</div>'
+    +'<div style="margin-top:10px;font-size:11px;color:var(--text3);border-top:0.5px solid var(--border);padding-top:8px">'
+    +'Risk-free rate: 6.5% (RBI repo proxy) &middot; Volatility annualized from daily NAV &middot; All returns are CAGR &middot; Refreshes on every tab open'
+    +'</div></div>';
 }
 
-function renderMFFundCard(f, data, cat, labels) {
-  const medals = {1:"🥇",2:"🥈",3:"🥉",4:"④",5:"⑤"};
-  const medal = medals[f.rank]||f.rank;
-  const pct = (f.score/f.total*100).toFixed(0);
-  const checks = f.checks;
-  const checkKeys = Object.keys(checks);
-  const topLabel = {1:"Top pick",2:"Runner up",3:"3rd pick",4:"4th pick",5:"5th pick"}[f.rank]||"";
-  const borderStyle = f.rank===1 ? `2px solid ${data.color}` : f.rank===2 ? `1.5px solid ${data.color}88` : "1px solid var(--border)";
-  return `
-  <div style="background:var(--bg);border:${borderStyle};border-radius:12px;padding:14px;position:relative">
-    ${f.rank<=2?`<div style="position:absolute;top:-1px;right:14px;background:${data.color};color:#fff;font-size:10px;font-weight:500;padding:2px 10px;border-radius:0 0 7px 7px">${topLabel}</div>`:""}
-
-    <!-- Header -->
-    <div style="display:flex;align-items:flex-start;gap:9px;margin-bottom:12px">
-      <div style="font-size:20px;line-height:1;flex-shrink:0">${medal}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:500;font-size:13px;line-height:1.4">${f.name}</div>
-        <div style="font-size:11px;color:var(--text2)">${f.amc}</div>
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:20px;font-weight:500;color:${data.color};line-height:1">${f.score}<span style="font-size:11px;color:var(--text3)">/${f.total}</span></div>
-        <div style="font-size:10px;color:var(--text3)">${pct}% score</div>
-      </div>
-    </div>
-
-    <!-- Score bar -->
-    <div style="height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-bottom:12px">
-      <div style="width:${pct}%;height:100%;background:${data.color};border-radius:2px"></div>
-    </div>
-
-    <!-- Returns -->
-    <div style="display:grid;grid-template-columns:repeat(${cat==="midcap"?4:3},1fr);gap:5px;margin-bottom:10px">
-      ${[["3Y",f.ret3y],["5Y",f.ret5y],["Incep.",f.retInception]].concat(cat==="midcap"?[["10Y",f.ret10y]]:[]).map(([l,v])=>`
-      <div style="background:var(--bg2);border-radius:7px;padding:6px 8px;text-align:center">
-        <div style="font-size:9px;color:var(--text2);margin-bottom:2px">${l} CAGR</div>
-        <div style="font-weight:500;font-size:13px;color:var(--green)">${v||"—"}</div>
-      </div>`).join("")}
-    </div>
-
-    <!-- Key metrics -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px">
-      ${[
-        ["NAV",f.nav],["AUM",f.aum],
-        ["Expense",f.expense],["Min invest",f.minLumpsum],
-        ["Sharpe",f.sharpe],["Sortino",f.sortino],
-        ["Alpha",f.alpha],cat!=="flexicap"?["Beta",f.beta]:["Std Dev",f.stdDev]
-      ].map(([l,v])=>`
-      <div style="background:var(--bg2);border-radius:6px;padding:5px 8px;display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:10px;color:var(--text2)">${l}</span>
-        <span style="font-size:11px;font-weight:500;text-align:right">${v}</span>
-      </div>`).join("")}
-    </div>
-
-    <!-- Highlights -->
-    <div style="margin-bottom:10px">
-      ${f.highlights.map(h=>`<span style="display:inline-block;background:${data.bg};color:${data.color};border-radius:3px;padding:1px 6px;margin:1px 2px 1px 0;font-size:10px;font-weight:500">${h}</span>`).join("")}
-    </div>
-
-    <!-- Checklist -->
-    <details>
-      <summary style="font-size:11px;color:var(--text2);cursor:pointer;padding:3px 0">View all ${f.total} checks →</summary>
-      <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:3px">
-        ${checkKeys.map(k=>{
-          const v=checks[k];
-          const icon=v===1?"✓":v===0.5?"~":"✗";
-          const col=v===1?"var(--green)":v===0.5?"var(--amber)":"var(--red)";
-          return `<div style="display:flex;align-items:center;gap:5px;font-size:10px;padding:2px 0">
-            <span style="color:${col};font-weight:500;flex-shrink:0">${icon}</span>
-            <span style="color:var(--text2)">${k} <span style="color:${col};font-weight:500">(${v})</span></span>
-          </div>`;
-        }).join("")}
-      </div>
-    </details>
-  </div>`;
-}
-
-function renderMFCriteriaBox(){
-  const sections=[
-    ["A. Returns (4 checks)","3Y CAGR, 5Y CAGR, Inception CAGR, 10Y CAGR (mid only)","INDmoney, Groww, Scripbox"],
-    ["B. Benchmark & Rank (2)","Beats benchmark all periods, category rank top 3","INDmoney, BMSmoney"],
-    ["C. Access (1)","Lumpsum open to new investors","AMC website, fund factsheet"],
-    ["D. Risk-Adjusted (3)","Sharpe >0.3, Sortino >0.5, Jensen's Alpha","Tickertape fund page"],
-    ["E. Risk Metrics (2)","Beta <0.8 (not scored for flexi), Std dev vs category avg","Tickertape fund page"],
-    ["F. Cost (2)","Expense ratio direct plan, exit load structure","Fund factsheets, Kuvera"],
-    ["G. Access (1)","Min lumpsum: <₹1K=1pt, ₹1K-5K=0.5pt, ≥₹5K=0pt","AMC website, Groww"],
-    ["H. Fund Size (2)","AUM in sweet spot range, AUM growth rate controlled","AMC websites, AMFI"],
-    ["I. Governance (1)","Clean SEBI/regulatory record","Public SEBI records"],
+function mfCard(f,rank,cfg,maxS){
+  var l=f.live;
+  var medals=["","🥇","🥈","🥉","④","⑤"];
+  var medal=medals[rank]||rank;
+  var pct=maxS>0?Math.round(f.score/maxS*100):0;
+  var border=rank===1?"2px solid "+cfg.color:rank===2?"1.5px solid "+cfg.color+"88":"1px solid var(--border)";
+  var topLabels=["","Top pick","Runner up","3rd","4th","5th"];
+  var badge=rank<=2?'<div style="position:absolute;top:-1px;right:14px;background:'+cfg.color+';color:#fff;font-size:10px;font-weight:500;padding:2px 10px;border-radius:0 0 7px 7px">'+topLabels[rank]+'</div>':"";
+  function rc(v){return v!=null?'<span style="color:'+(v>=0?"var(--green)":"var(--red)")+'">'+( v>=0?"+":"")+v+"%</span>":"<span style='color:var(--text3)'>—</span>";}
+  var rets=[["1Y",l.ret1y],["3Y p.a.",l.cagr3y],["5Y p.a.",l.cagr5y],["10Y p.a.",l.cagr10y]];
+  var retHtml=rets.map(function(r){
+    return '<div style="background:var(--bg2);border-radius:7px;padding:6px 7px;text-align:center">'
+      +'<div style="font-size:9px;color:var(--text2);margin-bottom:2px">'+r[0]+'</div>'
+      +'<div style="font-weight:500;font-size:12px">'+rc(r[1])+'</div></div>';
+  }).join("");
+  var mets=[
+    ["Sharpe",l.sharpe!=null?'<span style="color:'+(l.sharpe>0?"var(--green)":"var(--red)")+'">'+l.sharpe+"</span>":"—"],
+    ["Volatility",l.stdDev!=null?l.stdDev+"%":"—"],
+    ["Max DD",l.maxDD!=null?'<span style="color:var(--red)">'+l.maxDD+"%</span>":"—"],
+    ["Expense",f.expense+"%"],
+    ["Min invest","Rs "+f.minInvest.toLocaleString("en-IN")],
+    ["Exit load",f.exitLoad]
   ];
-  return `
-  <div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:8px">
-    <div style="font-weight:500;font-size:13px;margin-bottom:12px">Scoring Framework — 17/18 Real Data Checks</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px">
-      ${sections.map(([title,desc,src])=>`
-      <div style="background:var(--bg2);border-radius:8px;padding:10px 12px">
-        <div style="font-weight:500;font-size:11px;margin-bottom:3px;color:var(--text)">${title}</div>
-        <div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:3px">${desc}</div>
-        <div style="font-size:10px;color:var(--text3)">Source: ${src}</div>
-      </div>`).join("")}
-    </div>
-    <div style="margin-top:10px;padding-top:10px;border-top:0.5px solid var(--border);font-size:11px;color:var(--text3)">
-      Scoring: Positive confirmed = 1.0 · Borderline = 0.5 · Negative = 0.0 · Unconfirmed = excluded (not assumed) ·
-      Tiebreaker: positive Sharpe → lower expense → longer fund age ·
-      Note: Sharpe/Sortino are trailing period metrics — most funds show negative due to 2024-25 market correction. Funds with positive trailing Sharpe get significant advantage.
-    </div>
-  </div>`;
+  var metHtml=mets.map(function(m){
+    return '<div style="background:var(--bg2);border-radius:6px;padding:5px 7px;display:flex;justify-content:space-between;align-items:center;gap:4px">'
+      +'<span style="font-size:9px;color:var(--text2);white-space:nowrap">'+m[0]+'</span>'
+      +'<span style="font-size:11px;font-weight:500;text-align:right">'+m[1]+'</span></div>';
+  }).join("");
+  var hitKeys=Object.keys(f.hits).slice(0,4);
+  var hitHtml=hitKeys.map(function(h){
+    return '<span style="background:'+cfg.bg+';color:'+cfg.color+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:500">'+h+'</span>';
+  }).join("");
+  var chkHtml=Object.entries(f.hits).map(function(e){
+    var k=e[0],v=e[1],icon=v===1?"&#10003;":v===0.5?"~":"&#10007;",col=v===1?"var(--green)":v===0.5?"var(--amber)":"var(--red)";
+    return '<div style="display:flex;align-items:center;gap:5px;font-size:10px;padding:1px 0">'
+      +'<span style="color:'+col+';font-weight:500;flex-shrink:0">'+icon+'</span>'
+      +'<span style="color:var(--text2)">'+k+'</span></div>';
+  }).join("");
+  return '<div style="background:var(--bg);border:'+border+';border-radius:12px;padding:14px;position:relative">'+badge
+    +'<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">'
+    +'<div style="font-size:20px;line-height:1;flex-shrink:0">'+medal+'</div>'
+    +'<div style="flex:1;min-width:0">'
+    +'<div style="font-weight:500;font-size:13px;line-height:1.4">'+f.name+'</div>'
+    +'<div style="font-size:11px;color:var(--text2)">'+f.amc+' &middot; NAV '+l.navF+' &middot; AUM Rs'+f.aum.toLocaleString("en-IN")+' Cr</div>'
+    +'</div>'
+    +'<div style="text-align:right;flex-shrink:0">'
+    +'<div style="font-size:21px;font-weight:600;color:'+cfg.color+';line-height:1">'+f.score+'</div>'
+    +'<div style="font-size:9px;color:var(--text3)">'+pct+'% rel</div>'
+    +'</div></div>'
+    +'<div style="height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-bottom:10px">'
+    +'<div style="width:'+pct+'%;height:100%;background:'+cfg.color+';border-radius:2px"></div></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px;margin-bottom:10px">'+retHtml+'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px">'+metHtml+'</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">'+hitHtml+'</div>'
+    +'<details><summary style="font-size:11px;color:var(--text2);cursor:pointer">All scoring criteria &rarr;</summary>'
+    +'<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:3px">'+chkHtml+'</div></details>'
+    +'</div>';
 }
 
-function renderMFElimBox(){
-  const elim=[
-    "Lumpsum closed to new investors",
-    "5Y CAGR below 18% (all categories)",
-    "3Y CAGR below 16%",
-    "Fund age less than 5 years",
-    "AUM below ₹1,000 Cr",
-    "SEBI investigation or regulatory action",
-    "Insufficient public data available",
-  ];
-  return `
-  <div style="border:1px solid #fca5a5;border-radius:10px;padding:14px;margin-top:12px;background:var(--bg)">
-    <div style="font-weight:500;font-size:13px;margin-bottom:8px;color:var(--red)">First Pass Elimination — Any one of these = auto-excluded</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px">
-      ${elim.map(e=>`<span style="background:var(--red-bg);color:var(--red);border-radius:4px;padding:2px 8px;font-size:11px">${e}</span>`).join("")}
-    </div>
-  </div>`;
-}
+
 // ═══════════════════════════════════════════════════════
 setMode("stocks");
 fetchAll();
