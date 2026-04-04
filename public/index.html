@@ -1308,55 +1308,81 @@ async function renderMFPage(){
     +'<a href="https://www.tickertape.in/mutual-funds" target="_blank" class="btn btn-sm">Tickertape ↗</a>'
     +'</div></div>'
     +'<div id="mf-loading" style="text-align:center;padding:60px 0">'
-    +'<div style="font-size:13px;color:var(--text2);margin-bottom:8px">Fetching live data from 3 sources...</div>'
-    +'<div style="font-size:11px;color:var(--text3)">mfdata.in · Kuvera · MFAPI · first load may take ~30s</div>'
+    +'<div style="font-size:28px;margin-bottom:12px">📊</div>'
+    +'<div style="font-size:13px;color:var(--text2);margin-bottom:6px" id="mf-status">Fetching live data...</div>'
+    +'<div style="font-size:11px;color:var(--text3)" id="mf-substatus">mfdata.in · Kuvera · MFAPI · may take up to 60s on first load</div>'
     +'<div style="margin-top:16px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:300px;margin-left:auto;margin-right:auto">'
-    +'<div id="mf-bar" style="height:100%;background:var(--green);width:0%;border-radius:2px;transition:width .5s;animation:mfpulse 2s infinite"></div></div>'
-    +'<style>@keyframes mfpulse{0%,100%{opacity:.5}50%{opacity:1}}</style>'
+    +'<div style="height:100%;background:var(--green);border-radius:2px;width:100%;opacity:.6;animation:mfpulse 1.5s ease-in-out infinite"></div></div>'
+    +'<style>@keyframes mfpulse{0%,100%{opacity:.3}50%{opacity:.9}}</style>'
     +'</div>'
     +'<div id="mf-cats" style="display:none"></div>'
     +'<div id="mf-footer" style="display:none"></div>';
 
   try {
-    var r=await fetch("/api/mf/funds");
-    if(!r.ok) throw new Error("Server error "+r.status);
-    var data=await r.json();
-    var funds=data.funds||[];
+    var statusEl = document.getElementById("mf-status");
+    var subEl = document.getElementById("mf-substatus");
+
+    // Poll until we get real data (server may still be loading)
+    var data = null;
+    var attempts = 0;
+    while (attempts < 12) {
+      attempts++;
+      if(statusEl) statusEl.textContent = "Fetching live data... (attempt "+attempts+"/12)";
+      var r = await fetch("/api/mf/funds");
+      if (!r.ok) throw new Error("Server error "+r.status);
+      data = await r.json();
+      if (data.funds && data.funds.length > 0) break;
+      // No data yet — wait 5s and retry
+      if(subEl) subEl.textContent = "Server is loading fund data... "+Math.round(attempts*5)+"s elapsed";
+      await new Promise(res=>setTimeout(res,5000));
+    }
+
+    if (!data || !data.funds || data.funds.length === 0) {
+      throw new Error("No fund data returned after "+Math.round(attempts*5)+"s. Check Railway logs.");
+    }
 
     document.getElementById("mf-loading").style.display="none";
     document.getElementById("mf-cats").style.display="block";
     document.getElementById("mf-footer").style.display="block";
 
     var updEl=document.getElementById("mf-updated");
-    if(updEl&&data.cached_at){
-      var mins=Math.round((Date.now()-data.cached_at)/60000);
-      updEl.textContent=mins<2?"Just updated":mins+"m ago";
+    if(updEl) {
+      var mins = data.cached_at ? Math.round((Date.now()-data.cached_at)/60000) : 0;
+      updEl.textContent = (mins<2?"Just updated":mins+"m ago")+" · "+data.funds.length+" funds";
     }
 
     var grouped={smallcap:[],midcap:[],flexicap:[]};
-    funds.forEach(function(f){if(f&&grouped[f.cat])grouped[f.cat].push(f);});
-    Object.keys(grouped).forEach(function(k){grouped[k].sort(function(a,b){return b.score-a.score;});});
+    data.funds.forEach(function(f){if(f&&f.cat&&grouped[f.cat])grouped[f.cat].push(f);});
+    Object.keys(grouped).forEach(function(k){grouped[k].sort(function(a,b){return (b.score||0)-(a.score||0);});});
+
+    // Debug — show if any category is empty
+    var emptyCats = Object.keys(grouped).filter(function(k){return grouped[k].length===0;});
+    if(emptyCats.length>0) console.warn("Empty categories:", emptyCats, "Sample fund:", data.funds[0]);
 
     var catsEl=document.getElementById("mf-cats");
     var html="";
     ["smallcap","midcap","flexicap"].forEach(function(cat){
-      var catFunds=grouped[cat],cfg=MF_CAT[cat],top5=catFunds.slice(0,5),maxS=top5[0]?top5[0].score:1;
+      var catFunds=grouped[cat],cfg=MF_CAT[cat];
+      if(!catFunds||catFunds.length===0){
+        html+='<div style="margin-bottom:24px;padding:16px;background:var(--bg2);border-radius:var(--radius-lg);border:1px solid var(--border)">';
+        html+='<div style="font-weight:600">'+cfg.label+'</div>';
+        html+='<div style="font-size:12px;color:var(--text3);margin-top:6px">No data loaded — check Railway logs for fetch errors</div></div>';
+        return;
+      }
+      var top5=catFunds.slice(0,5),maxS=top5[0]?top5[0].score:1;
       html+='<div style="margin-bottom:36px">';
       html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">';
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
-      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto">'+catFunds.length+' funds screened &middot; top 5 shown &middot; max 100 pts</span></div>';
-      // Top 5 cards
+      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto">'+catFunds.length+' funds &middot; top 5 &middot; max 100 pts</span></div>';
       html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px">';
       top5.forEach(function(f,i){html+=mfCard(f,i+1,cfg,maxS);});
       html+='</div>';
-      // Full table
       html+='<div class="section-label" style="margin-bottom:8px">All '+catFunds.length+' funds ranked</div>';
       html+='<div class="tw"><table>';
       html+='<thead><tr>';
-      var cols=["#","Fund","NAV","AUM (Cr)","Expense","1Y","3Y","5Y","Sharpe","Beta","Alpha","Vol%","Max DD","Stars","Score"];
-      cols.forEach(function(h,i){
+      ["#","Fund","NAV","AUM Cr","Exp%","1Y","3Y","5Y","Sharpe","Beta","Alpha","Vol%","Max DD","Stars","Score"].forEach(function(h,i){
         html+='<th style="text-align:'+(i<2?"left":"right")+'">'+h+'</th>';
       });
       html+='</tr></thead><tbody>';
@@ -1364,12 +1390,12 @@ async function renderMFPage(){
         var isTop=i<5;
         function rc(v){return v!=null?(v>=0?'+':'')+v+'%':'—';}
         function cc(v){return v!=null&&v>=0?'var(--green)':'var(--red)';}
-        var stars=f.morningstar?'★'.repeat(f.morningstar):'—';
+        var stars=f.morningstar?'★'.repeat(Math.min(5,f.morningstar)):'—';
         html+='<tr style="'+(isTop?'background:'+cfg.color+'0d;':'')+'">';
         html+='<td style="color:var(--text3);font-weight:600">'+(i+1)
           +(isTop?' <span style="background:'+cfg.color+';color:#fff;border-radius:3px;padding:0 4px;font-size:10px">#'+(i+1)+'</span>':'')+'</td>';
         html+='<td style="font-weight:'+(isTop?600:400)+'">'+f.name+'</td>';
-        html+='<td style="text-align:right;font-family:monospace;font-size:11px">'+(f.navFormatted||'—')+'</td>';
+        html+='<td style="text-align:right;font-size:11px">'+(f.navFormatted||'—')+'</td>';
         html+='<td style="text-align:right">'+(f.aum_cr?Math.round(f.aum_cr).toLocaleString("en-IN"):'—')+'</td>';
         html+='<td style="text-align:right">'+(f.expense_ratio?f.expense_ratio+'%':'—')+'</td>';
         html+='<td style="text-align:right;color:'+cc(f.ret1y)+'">'+rc(f.ret1y)+'</td>';
@@ -1380,54 +1406,55 @@ async function renderMFPage(){
         html+='<td style="text-align:right;color:'+(f.alpha>0?'var(--green)':'var(--red)')+'">'+(f.alpha!=null?f.alpha+'%':'—')+'</td>';
         html+='<td style="text-align:right">'+(f.stdDev!=null?f.stdDev+'%':f.stdDev_api?f.stdDev_api+'%':'—')+'</td>';
         html+='<td style="text-align:right;color:var(--red)">'+(f.maxDD!=null?f.maxDD+'%':'—')+'</td>';
-        html+='<td style="text-align:right;color:var(--amber);font-size:11px">'+stars+'</td>';
-        html+='<td style="text-align:right;font-weight:700;color:'+cfg.color+';font-size:13px">'+f.score+'</td>';
+        html+='<td style="text-align:right;color:var(--amber);letter-spacing:-1px">'+stars+'</td>';
+        html+='<td style="text-align:right;font-weight:700;color:'+cfg.color+';font-size:13px">'+(f.score||0)+'</td>';
         html+='</tr>';
       });
-      html+='</tbody></table></div>';
-      html+='</div>';
+      html+='</tbody></table></div></div>';
     });
     catsEl.innerHTML=html;
 
-    // Footer
     document.getElementById("mf-footer").innerHTML=
       '<div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;background:var(--bg2);margin-top:4px">'
       +'<div style="font-weight:600;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">100-Point Scoring System</div>'
       +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">'
-      +[
-        ["Returns","25 pts","1M 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y inception vs benchmark","MFAPI NAV history"],
+      +[["Returns","25 pts","1M 3M 6M 1Y 3Y 5Y 7Y 10Y inception vs benchmark","MFAPI NAV history"],
         ["Risk-Adjusted","20 pts","Sharpe, Sortino, Calmar, rolling 1Y consistency","mfdata.in + calculated"],
-        ["Risk","15 pts","Volatility vs avg, Beta, Alpha, P/E, P/B","mfdata.in"],
+        ["Risk","15 pts","Volatility, Beta, Alpha, P/E, P/B","mfdata.in"],
         ["Cost","10 pts","Expense ratio, exit load, min lumpsum, min SIP","Kuvera + mfdata.in"],
-        ["AUM & Access","10 pts","AUM sweet spot, lumpsum open to investors","Kuvera + mfdata.in"],
-        ["Quality","10 pts","Morningstar stars, CRISIL, manager tenure, history","mfdata.in + Kuvera"]
+        ["AUM & Access","10 pts","AUM sweet spot, lumpsum open","Kuvera + mfdata.in"],
+        ["Quality","10 pts","Morningstar stars, CRISIL, manager tenure","mfdata.in + Kuvera"]
       ].map(function(r){
         return '<div style="background:var(--bg3);border-radius:var(--radius);padding:9px 11px;border:1px solid var(--border)">'
           +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">'
           +'<span style="font-weight:600;font-size:11px;color:var(--text)">'+r[0]+'</span>'
-          +'<span style="font-size:11px;font-weight:700;color:var(--blue)">'+r[1]+'</span>'
-          +'</div>'
+          +'<span style="font-size:11px;font-weight:700;color:var(--blue)">'+r[1]+'</span></div>'
           +'<div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:2px">'+r[2]+'</div>'
-          +'<div style="font-size:10px;color:var(--text3)">'+r[3]+'</div>'
-          +'</div>';
+          +'<div style="font-size:10px;color:var(--text3)">'+r[3]+'</div></div>';
       }).join("")
       +'</div>'
       +'<div style="margin-top:10px;font-size:10px;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">'
-      +'Data: mfdata.in (ratios, AUM, expense, Morningstar) + Kuvera/mf.captnemo.in (min invest, exit load, CRISIL) + MFAPI (NAV history for calculated metrics)'
-      +'&nbsp;&middot;&nbsp;Refreshes daily at 6 AM IST &nbsp;&middot;&nbsp;Not SEBI registered advice'
+      +'Sources: mfdata.in (ratios, AUM, Morningstar) &middot; Kuvera (min invest, exit load, CRISIL) &middot; MFAPI (NAV history) &middot; Refreshes daily 6 AM IST'
       +'</div></div>';
 
   } catch(e) {
-    document.getElementById("mf-loading").innerHTML=
-      '<div style="color:var(--red);font-size:13px">Error loading MF data: '+e.message+'</div>'
-      +'<div style="font-size:11px;color:var(--text3);margin-top:6px">Server may be starting up — try refreshing in 30 seconds</div>'
-      +'<button class="btn" onclick="renderMFPage()" style="margin-top:12px">Retry</button>';
+    var loadEl = document.getElementById("mf-loading");
+    if(loadEl) loadEl.innerHTML=
+      '<div style="color:var(--red);font-size:13px;margin-bottom:8px">'+e.message+'</div>'
+      +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Check Railway logs → look for MF refresh errors</div>'
+      +'<button class="btn" onclick="renderMFPage()">↻ Retry</button>';
   }
 }
 
 async function mfForceRefresh(){
+  var btn=event.target;
+  btn.textContent="Refreshing...";
+  btn.disabled=true;
   await fetch("/api/mf/refresh",{method:"POST"});
-  setTimeout(renderMFPage, 2000);
+  await new Promise(r=>setTimeout(r,3000));
+  btn.textContent="↻ Refresh";
+  btn.disabled=false;
+  renderMFPage();
 }
 
 function mfCard(f,rank,cfg,maxS){
