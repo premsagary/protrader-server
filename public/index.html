@@ -1435,9 +1435,9 @@ async function renderMFPage(){
           return n.toFixed(dec!=null?dec:1); 
         }
         function rc(v){ 
-          if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
+          if(v==null||v===undefined) return '<span style="color:var(--text4);font-size:10px">no data</span>';
           var n=parseFloat(v);
-          if(isNaN(n)) return '<span style="color:var(--text4)">—</span>';
+          if(isNaN(n)) return '<span style="color:var(--text4);font-size:10px">no data</span>';
           return '<span style="color:'+(n>=0?'var(--green)':'var(--red)')+'">'+(n>=0?'+':'')+n.toFixed(1)+'%</span>'; 
         }
         function rsh(v){ 
@@ -1724,7 +1724,7 @@ function mfCard(f,rank,cfg,maxS){
   var topLabels=["","Top pick","Runner up","3rd","4th","5th"];
   var badge=rank<=2?'<div style="position:absolute;top:-1px;right:14px;background:'+cfg.color+';color:#fff;font-size:10px;font-weight:500;padding:2px 10px;border-radius:0 0 7px 7px">'+topLabels[rank]+'</div>':"";
 
-  function rc(v){ return v!=null?'<span style="color:'+(v>=0?"var(--green)":"var(--red)")+'">'+( v>=0?"+":"")+v+"%</span>":"<span style='color:var(--text3)'>—</span>"; }
+  function rc(v){ var n=parseFloat(v); return v!=null&&!isNaN(n)?'<span style="color:'+(n>=0?"var(--green)":"var(--red)")+'">'+(n>=0?"+":"")+n.toFixed(1)+"%</span>":'<span style="color:var(--text4);font-size:10px">no data</span>'; }
   function safe(v,sfx){ return v!=null?v+(sfx||""):"—"; }
 
   var rets=[["1Y",f.ret_1y],["3Y p.a.",f.cagr_3y],["5Y p.a.",f.cagr_5y],["10Y p.a.",f.cagr_10y]];
@@ -1754,22 +1754,25 @@ function mfCard(f,rank,cfg,maxS){
   }).join("");
 
   var hits=f.hits||{};
-  var hitKeys=Object.keys(hits).slice(0,5);
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  var hitKeys=Object.keys(hits).filter(function(h){return hits[h]>0;}).slice(0,5);
   var hitHtml=hitKeys.map(function(h){
-    return '<span style="background:'+cfg.bg+';color:'+cfg.color+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:500">'+h+'</span>';
+    return '<span style="background:'+cfg.bg+';color:'+cfg.color+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:500">'+esc(h)+'</span>';
   }).join("");
 
   var chkHtml=Object.entries(hits).map(function(e){
-    var k=e[0],v=e[1],icon=v>=1?"✓":v>=0.5?"~":"✗",col=v>=1?"var(--green)":v>=0.5?"var(--amber)":"var(--red)";
+    var k=e[0],v=e[1];
+    var icon=v>0?'✓':v===0?'⚠':'✗';
+    var col=v>0?'var(--green)':v===0?'var(--amber)':'var(--red)';
     return '<div style="display:flex;align-items:center;gap:5px;font-size:10px;padding:1px 0">'
       +'<span style="color:'+col+';font-weight:600;flex-shrink:0">'+icon+'</span>'
-      +'<span style="color:var(--text2)">'+k+'</span>'
-      +'<span style="color:var(--text3);margin-left:auto">'+v+'</span></div>';
+      +'<span style="color:var(--text2);overflow:hidden;text-overflow:ellipsis">'+esc(k)+'</span>'
+      +'<span style="color:var(--text3);margin-left:auto;flex-shrink:0">'+v+'</span></div>';
   }).join("");
 
   var sebiColor = f.amc_sebi==="probe"?"var(--red)":f.amc_sebi==="action"?"var(--red)":f.amc_sebi==="minor"?"var(--amber)":"var(--green)";
   var sebiLabel = f.amc_sebi==="probe"?"🔴 Under Investigation":f.amc_sebi==="action"?"⚠️ Past Action":f.amc_sebi==="minor"?"⚠️ Minor Fine":"✅ SEBI Clean";
-  var warningHtml = f.amc_warning ? '<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5">'+f.amc_warning+'</div>' : "";
+  var warningHtml = f.amc_warning ? '<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5">'+esc(f.amc_warning)+'</div>' : "";
   var roll = f.rolling_3y!=null ? parseFloat(f.rolling_3y) : (f.rollConsistency!=null ? parseFloat(f.rollConsistency) : null);
   var rollHtml = roll!=null && roll>0 ? '<span style="font-size:10px;color:var(--text3)">Roll 3Y: <span style="color:var(--green);font-weight:600">+'+roll.toFixed(1)+'%</span></span>' : "";
 
@@ -1791,7 +1794,7 @@ function mfCard(f,rank,cfg,maxS){
     +'<div style="width:'+pct+'%;height:100%;background:'+cfg.color+';border-radius:2px"></div></div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px;margin-bottom:8px">'+retHtml+'</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px">'+metHtml+'</div>'
-    +(f.amc_note?'<div style="font-size:10px;color:var(--text3);margin-bottom:6px;line-height:1.5;border-left:2px solid var(--border2);padding-left:7px">'+f.amc_note+'</div>':"")
+    +(f.amc_note?'<div style="font-size:10px;color:var(--text3);margin-bottom:6px;line-height:1.5;border-left:2px solid var(--border2);padding-left:7px">'+esc(f.amc_note)+'</div>':"")
     +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">'+hitHtml+'</div>'
     +'<details><summary style="font-size:11px;color:var(--text2);cursor:pointer;padding:2px 0">All scoring reasons &rarr;</summary>'
     +'<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:2px">'+chkHtml+'</div></details>'
