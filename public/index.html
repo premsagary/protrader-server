@@ -1387,7 +1387,7 @@ async function renderMFPage(){
       var colGroups = [
         {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
         {label:"RETURNS",cols:["1Y%","3M%","6M%","3Y CAGR","5Y CAGR","10Y CAGR","Roll 3Y"]},
-        {label:"vs CATEGORY",cols:["vs Cat 1Y","vs Cat 3Y","vs Cat 5Y","vs Cat 10Y"]},
+        {label:"vs CATEGORY",cols:["vs Cat 1Y%","vs Cat 3Y×","vs Cat 5Y×","vs Cat 10Y×"]},
         {label:"RISK",cols:["Sharpe","Sortino","Volatility","Cat StdDev","Max DD","From ATH"]},
         {label:"PORTFOLIO",cols:["PE","Cat PE","Equity%","LgCap%","MidCap%","SmCap%","Cash%","Debt%"]},
         {label:"CONCENTRATION",cols:["Top3%","Top5%","Top10%"]},
@@ -1625,8 +1625,11 @@ async function renderMFPage(){
           '<td style="padding:5px 8px;text-align:right">'+rc(f.cagr_5y)+'</td>',
           '<td style="padding:5px 8px;text-align:right">'+rc(f.cagr_10y)+'</td>',
           '<td style="padding:5px 8px;text-align:right;font-weight:600;border-right:2px solid var(--border)">'+rc(f.rolling_3y)+'</td>',
-          // vs CATEGORY
-          '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_1y)+'</td>',
+          // vs CATEGORY — 1Y is absolute excess %, 3Y/5Y/10Y are ratios (>1x = above median)
+          '<td style="padding:5px 8px;text-align:right">'+
+            (f.vs_cat_1y!=null?'<span style="color:'+(parseFloat(f.vs_cat_1y)>=0?'var(--green)':'var(--red)')+'">'+
+            (parseFloat(f.vs_cat_1y)>=0?'+':'')+parseFloat(f.vs_cat_1y).toFixed(1)+'%</span>':'<span style="color:var(--text4)">—</span>')+
+          '</td>',
           '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_3y)+'</td>',
           '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_5y)+'</td>',
           '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border)">'+rvc(f.vs_cat_10y)+'</td>',
