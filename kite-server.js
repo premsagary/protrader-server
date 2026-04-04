@@ -1021,6 +1021,22 @@ app.get("/api/news", async(req,res)=>{
 
   res.json(unique);
 });
+
+// ── Crypto prices proxy (avoids browser CORS issues) ─────────────────────────
+app.get("/api/crypto-prices", async(req,res)=>{
+  try {
+    const CRYPTO_SYMS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","MATICUSDT","DOTUSDT","LINKUSDT","UNIUSDT","ATOMUSDT","LTCUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT"];
+    const syms = JSON.stringify(CRYPTO_SYMS);
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`);
+    if(!r.ok) return res.status(502).json({error:"Binance unavailable"});
+    const data = await r.json();
+    // Convert to object keyed by symbol
+    const result = {};
+    data.forEach(t=>{result[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
+    res.json(result);
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 app.get("/health", (req,res)=>res.json({
   status:"ok", ticker:tickerOn?"connected":"not connected",
   hasToken:!!process.env.KITE_ACCESS_TOKEN, marketOpen:isMarketOpen(),
