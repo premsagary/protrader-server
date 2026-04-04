@@ -1052,41 +1052,135 @@ app.get("/api/instruments", (req,res) => res.json(validTokens));
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Fund universe — AMFI scheme codes (direct growth plans)
-const MF_UNIVERSE_SERVER = [
+// Fund universe — auto-discovered from MFAPI, populated on startup
+let MF_UNIVERSE_SERVER = [];
+
+// Known correct codes as seed (verified working)
+const MF_SEED = [
   // SMALL CAP
-  {code:"147622",isin:"INF204KB14I2",name:"Bandhan Small Cap",          amc:"Bandhan",  cat:"smallcap"},
-  {code:"118989",isin:"INF204K01U16",name:"Nippon India Small Cap",     amc:"Nippon",   cat:"smallcap"},
-  {code:"125497",isin:"INF200K01T51",name:"SBI Small Cap",              amc:"SBI",      cat:"smallcap"},
-  {code:"120505",isin:"INF174KA1994",name:"Kotak Small Cap",            amc:"Kotak",    cat:"smallcap"},
-  {code:"120828",isin:"INF966L01051",name:"Quant Small Cap",            amc:"Quant",    cat:"smallcap"},
-  {code:"118272",isin:"INF740K01UD2",name:"DSP Small Cap",              amc:"DSP",      cat:"smallcap"},
-  {code:"118778",isin:"INF179KB1HF9",name:"HDFC Small Cap",             amc:"HDFC",     cat:"smallcap"},
-  {code:"125354",isin:"INF846K01EW2",name:"Axis Small Cap",             amc:"Axis",     cat:"smallcap"},
-  {code:"135800",isin:"INF277K01Z26",name:"Tata Small Cap",             amc:"Tata",     cat:"smallcap"},
-  {code:"100278",isin:"INF090I01239",name:"Franklin India Smaller Cos", amc:"Franklin", cat:"smallcap"},
+  {code:"147622",name:"Bandhan Small Cap",               amc:"Bandhan",    cat:"smallcap"},
+  {code:"118989",name:"Nippon India Small Cap",          amc:"Nippon",     cat:"smallcap"},
+  {code:"125497",name:"SBI Small Cap",                   amc:"SBI",        cat:"smallcap"},
+  {code:"120505",name:"Kotak Small Cap",                 amc:"Kotak",      cat:"smallcap"},
+  {code:"120828",name:"Quant Small Cap",                 amc:"Quant",      cat:"smallcap"},
+  {code:"118272",name:"DSP Small Cap",                   amc:"DSP",        cat:"smallcap"},
+  {code:"118778",name:"HDFC Small Cap",                  amc:"HDFC",       cat:"smallcap"},
+  {code:"125354",name:"Axis Small Cap",                  amc:"Axis",       cat:"smallcap"},
+  {code:"135800",name:"Tata Small Cap",                  amc:"Tata",       cat:"smallcap"},
+  {code:"100278",name:"Franklin India Smaller Cos",      amc:"Franklin",   cat:"smallcap"},
+  {code:"120586",name:"Invesco India Smallcap",          amc:"Invesco",    cat:"smallcap"},
+  {code:"120197",name:"ICICI Pru Smallcap",              amc:"ICICI Pru",  cat:"smallcap"},
+  {code:"135798",name:"Aditya Birla SL Small Cap",       amc:"ABSL",       cat:"smallcap"},
+  {code:"149469",name:"Mirae Asset Small Cap",           amc:"Mirae",      cat:"smallcap"},
+  {code:"148931",name:"Mahindra Manulife Small Cap",     amc:"Mahindra",   cat:"smallcap"},
   // MID CAP
-  {code:"135803",isin:"INF247L01EF9",name:"Motilal Oswal Midcap",      amc:"Motilal",  cat:"midcap"},
-  {code:"145552",isin:"INF754K01XO6",name:"Edelweiss Mid Cap",          amc:"Edelweiss",cat:"midcap"},
-  {code:"118388",isin:"INF204K01158",name:"Nippon India Growth",        amc:"Nippon",   cat:"midcap"},
-  {code:"118776",isin:"INF179KB1GN6",name:"HDFC Mid-Cap Opp",           amc:"HDFC",     cat:"midcap"},
-  {code:"120503",isin:"INF174K01AL5",name:"Kotak Emerging Equity",      amc:"Kotak",    cat:"midcap"},
-  {code:"125496",isin:"INF200K01LS2",name:"SBI Magnum Midcap",          amc:"SBI",      cat:"midcap"},
-  {code:"120847",isin:"INF846K01EY8",name:"Axis Midcap",                amc:"Axis",     cat:"midcap"},
-  {code:"118273",isin:"INF740K01RV7",name:"DSP Midcap",                 amc:"DSP",      cat:"midcap"},
-  {code:"120830",isin:"INF966L01119",name:"Quant Mid Cap",              amc:"Quant",    cat:"midcap"},
-  {code:"120600",isin:"INF663L01AN3",name:"PGIM India Midcap",          amc:"PGIM",     cat:"midcap"},
+  {code:"135803",name:"Motilal Oswal Midcap",            amc:"Motilal",    cat:"midcap"},
+  {code:"145552",name:"Edelweiss Mid Cap",                amc:"Edelweiss",  cat:"midcap"},
+  {code:"118388",name:"Nippon India Growth",             amc:"Nippon",     cat:"midcap"},
+  {code:"118776",name:"HDFC Mid-Cap Opp",                amc:"HDFC",       cat:"midcap"},
+  {code:"120503",name:"Kotak Emerging Equity",           amc:"Kotak",      cat:"midcap"},
+  {code:"125496",name:"SBI Magnum Midcap",               amc:"SBI",        cat:"midcap"},
+  {code:"120847",name:"Axis Midcap",                     amc:"Axis",       cat:"midcap"},
+  {code:"118273",name:"DSP Midcap",                      amc:"DSP",        cat:"midcap"},
+  {code:"120830",name:"Quant Mid Cap",                   amc:"Quant",      cat:"midcap"},
+  {code:"120600",name:"PGIM India Midcap",               amc:"PGIM",       cat:"midcap"},
+  {code:"119026",name:"ICICI Pru Midcap",                amc:"ICICI Pru",  cat:"midcap"},
+  {code:"100270",name:"Franklin India Prima",            amc:"Franklin",   cat:"midcap"},
+  {code:"119247",name:"UTI Mid Cap",                     amc:"UTI",        cat:"midcap"},
+  {code:"119061",name:"Sundaram Mid Cap",                amc:"Sundaram",   cat:"midcap"},
+  {code:"148910",name:"Mirae Asset Midcap",              amc:"Mirae",      cat:"midcap"},
   // FLEXI CAP
-  {code:"122639",isin:"INF879O01019",name:"Parag Parikh Flexi Cap",     amc:"PPFAS",    cat:"flexicap"},
-  {code:"120832",isin:"INF966L01135",name:"Quant Flexi Cap",            amc:"Quant",    cat:"flexicap"},
-  {code:"118777",isin:"INF179KB1GQ9",name:"HDFC Flexi Cap",             amc:"HDFC",     cat:"flexicap"},
-  {code:"101539",isin:"INF760K01DP3",name:"Canara Rob Flexi Cap",       amc:"Canara",   cat:"flexicap"},
-  {code:"120716",isin:"INF789F01VN2",name:"UTI Flexi Cap",              amc:"UTI",      cat:"flexicap"},
-  {code:"125494",isin:"INF200K01LW4",name:"SBI Flexi Cap",              amc:"SBI",      cat:"flexicap"},
-  {code:"120502",isin:"INF174K01AK7",name:"Kotak Flexi Cap",            amc:"Kotak",    cat:"flexicap"},
-  {code:"118271",isin:"INF740K01RU9",name:"DSP Flexi Cap",              amc:"DSP",      cat:"flexicap"},
-  {code:"125355",isin:"INF846K01EV4",name:"Axis Flexi Cap",             amc:"Axis",     cat:"flexicap"},
-  {code:"100277",isin:"INF090I01213",name:"Franklin Flexi Cap",         amc:"Franklin", cat:"flexicap"},
+  {code:"122639",name:"Parag Parikh Flexi Cap",          amc:"PPFAS",      cat:"flexicap"},
+  {code:"120832",name:"Quant Flexi Cap",                 amc:"Quant",      cat:"flexicap"},
+  {code:"118777",name:"HDFC Flexi Cap",                  amc:"HDFC",       cat:"flexicap"},
+  {code:"101539",name:"Canara Rob Flexi Cap",            amc:"Canara",     cat:"flexicap"},
+  {code:"120716",name:"UTI Flexi Cap",                   amc:"UTI",        cat:"flexicap"},
+  {code:"125494",name:"SBI Flexi Cap",                   amc:"SBI",        cat:"flexicap"},
+  {code:"120502",name:"Kotak Flexi Cap",                 amc:"Kotak",      cat:"flexicap"},
+  {code:"118271",name:"DSP Flexi Cap",                   amc:"DSP",        cat:"flexicap"},
+  {code:"125355",name:"Axis Flexi Cap",                  amc:"Axis",       cat:"flexicap"},
+  {code:"100277",name:"Franklin Flexi Cap",              amc:"Franklin",   cat:"flexicap"},
+  {code:"122639",name:"Parag Parikh Flexi Cap",          amc:"PPFAS",      cat:"flexicap"},
+  {code:"148697",name:"Aditya Birla SL Flexi Cap",       amc:"ABSL",       cat:"flexicap"},
+  {code:"148462",name:"Mirae Asset Flexi Cap",           amc:"Mirae",      cat:"flexicap"},
+  {code:"148514",name:"Tata Flexi Cap",                  amc:"Tata",       cat:"flexicap"},
+  {code:"150091",name:"Groww Nifty India Defence ETF FoF",amc:"Groww",     cat:"flexicap"},
 ];
+
+// Auto-discover all small/mid/flexicap direct growth funds from MFAPI scheme list
+async function discoverMFUniverse() {
+  try {
+    console.log("📋 Discovering MF universe from MFAPI...");
+    const r = await fetchT("https://api.mfapi.in/mf", {headers:{"User-Agent":"Mozilla/5.0"}}, 15000);
+    if (!r.ok) throw new Error("MFAPI scheme list unavailable");
+    const all = await r.json();
+
+    const catKeywords = {
+      smallcap: ["small cap","small-cap","smaller companies","smallcap"],
+      midcap:   ["mid cap","mid-cap","midcap","growth fund","emerging equity","prima fund"],
+      flexicap: ["flexi cap","flexi-cap","flexicap","flexible"],
+    };
+    // Only direct + growth plans
+    const isDirect = (name) => /direct/i.test(name);
+    const isGrowth = (name) => /growth/i.test(name) && !/dividend|idcw|bonus/i.test(name);
+
+    const discovered = {smallcap:[], midcap:[], flexicap:[]};
+    for (const scheme of all) {
+      const name = (scheme.schemeName || "").toLowerCase();
+      if (!isDirect(name) || !isGrowth(name)) continue;
+      for (const [cat, keywords] of Object.entries(catKeywords)) {
+        if (keywords.some(kw => name.includes(kw))) {
+          // Dedupe by code
+          if (!discovered[cat].find(f => f.code === String(scheme.schemeCode))) {
+            discovered[cat].push({
+              code: String(scheme.schemeCode),
+              name: scheme.schemeName.replace(/ - Direct Plan - Growth/i,"").replace(/ Direct Growth/i,"").replace(/ Direct Plan$/i,"").trim(),
+              amc: extractAMC(scheme.schemeName),
+              cat,
+            });
+          }
+          break;
+        }
+      }
+    }
+
+    const total = Object.values(discovered).reduce((s,a)=>s+a.length,0);
+    console.log(`✅ Discovered ${total} funds: ${discovered.smallcap.length} small + ${discovered.midcap.length} mid + ${discovered.flexicap.length} flexi`);
+
+    // Use discovered if we got reasonable counts, else fall back to seed
+    if (discovered.smallcap.length >= 10 && discovered.midcap.length >= 10 && discovered.flexicap.length >= 10) {
+      MF_UNIVERSE_SERVER = [...discovered.smallcap, ...discovered.midcap, ...discovered.flexicap];
+    } else {
+      console.log("⚠️ Discovery returned low counts, using seed list");
+      MF_UNIVERSE_SERVER = dedupeSeed();
+    }
+  } catch(e) {
+    console.log("⚠️ Universe discovery failed:", e.message, "— using seed list");
+    MF_UNIVERSE_SERVER = dedupeSeed();
+  }
+}
+
+function dedupeSeed() {
+  const seen = new Set();
+  return MF_SEED.filter(f => { if(seen.has(f.code)) return false; seen.add(f.code); return true; });
+}
+
+function extractAMC(name) {
+  const amcMap = [
+    ["Aditya Birla","ABSL"],["Axis","Axis"],["Bandhan","Bandhan"],["Baroda","Baroda BNP"],
+    ["Canara","Canara"],["DSP","DSP"],["Edelweiss","Edelweiss"],["Franklin","Franklin"],
+    ["HDFC","HDFC"],["ICICI","ICICI Pru"],["Invesco","Invesco"],["ITI","ITI"],
+    ["JM","JM"],["Kotak","Kotak"],["LIC","LIC"],["Mahindra","Mahindra"],
+    ["Mirae","Mirae"],["Motilal","Motilal"],["Navi","Navi"],["Nippon","Nippon"],
+    ["PGIM","PGIM"],["PPFAS","PPFAS"],["Parag Parikh","PPFAS"],["Quant","Quant"],
+    ["SBI","SBI"],["Sundaram","Sundaram"],["Tata","Tata"],["Union","Union"],
+    ["UTI","UTI"],["WhiteOak","WhiteOak"],["360 ONE","360 ONE"],["Groww","Groww"],
+  ];
+  for (const [key,short] of amcMap) {
+    if (name.includes(key)) return short;
+  }
+  return name.split(" ")[0];
+}
 
 // In-memory cache
 let mfCache = {};           // code -> enriched fund object
@@ -1444,9 +1538,9 @@ app.post("/api/mf/refresh", async(req,res) => {
 });
 
 // Refresh MF data daily at 6 AM IST
-cron.schedule("0 6 * * *", ()=>refreshMFData(), {timezone:"Asia/Kolkata"});
-// Also refresh on startup after 30s (let server start first)
-setTimeout(refreshMFData, 30000);
+cron.schedule("0 6 * * *", async()=>{ await discoverMFUniverse(); refreshMFData(); }, {timezone:"Asia/Kolkata"});
+// Startup — discover universe then load data after 30s
+setTimeout(async()=>{ await discoverMFUniverse(); refreshMFData(); }, 30000);
 
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get("/api/crypto-prices", async(req,res)=>{
