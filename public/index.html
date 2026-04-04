@@ -1505,27 +1505,32 @@ function mfCard(f,rank,cfg,maxS){
       +'<span style="color:var(--text3);margin-left:auto">'+v+'</span></div>';
   }).join("");
 
-  var stars=f.morningstar?'<span style="color:var(--amber)">'+'★'.repeat(Math.min(5,f.morningstar))+'</span>':"";
-  var consistency=f.rollConsistency!=null?'<span style="color:var(--text2);font-size:10px">'+f.rollConsistency+'% consistent</span>':"";
-  var datasrc=f.dataSource?'<span style="font-size:9px;color:var(--text3)">'+f.dataSource+'</span>':"";
+  var sebiColor = f.amc_sebi==="probe"?"var(--red)":f.amc_sebi==="action"?"var(--red)":f.amc_sebi==="minor"?"var(--amber)":"var(--green)";
+  var sebiLabel = f.amc_sebi==="probe"?"🔴 Under Investigation":f.amc_sebi==="action"?"⚠️ Past Action":f.amc_sebi==="minor"?"⚠️ Minor Fine":"✅ SEBI Clean";
+  var warningHtml = f.amc_warning ? '<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5">'+f.amc_warning+'</div>' : "";
+  var stars = f.morningstar ? '★'.repeat(Math.min(5,f.morningstar)) : "";
+  var starsHtml = stars ? '<span style="color:var(--amber);font-size:12px">'+stars+'</span>' : "";
+  var rollHtml = f.rollConsistency!=null ? '<span style="font-size:10px;color:var(--text3)">'+f.rollConsistency+'% rolling consistency</span>' : "";
 
   return '<div style="background:var(--bg2);border:'+border+';border-radius:12px;padding:14px;position:relative">'+badge
+    +warningHtml
     +'<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">'
     +'<div style="font-size:20px;line-height:1;flex-shrink:0">'+medal+'</div>'
     +'<div style="flex:1;min-width:0">'
     +'<div style="font-weight:600;font-size:13px;line-height:1.4">'+f.name+'</div>'
     +'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+f.amc+' &middot; '+(f.navFormatted||"—")+' &middot; '+aum+'</div>'
-    +'<div style="margin-top:3px">'+stars+' '+consistency+'</div>'
+    +'<div style="margin-top:3px;display:flex;align-items:center;gap:8px">'+starsHtml+rollHtml+'</div>'
     +'</div>'
     +'<div style="text-align:right;flex-shrink:0">'
     +'<div style="font-size:24px;font-weight:700;color:'+cfg.color+';line-height:1">'+(f.score||0)+'</div>'
     +'<div style="font-size:9px;color:var(--text3)">/ 100 pts</div>'
-    +'<div style="margin-top:2px">'+datasrc+'</div>'
+    +'<div style="margin-top:2px;font-size:10px;font-weight:600;color:'+sebiColor+'">'+sebiLabel+'</div>'
     +'</div></div>'
     +'<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;margin-bottom:10px">'
     +'<div style="width:'+pct+'%;height:100%;background:'+cfg.color+';border-radius:2px"></div></div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px;margin-bottom:8px">'+retHtml+'</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px">'+metHtml+'</div>'
+    +(f.amc_note?'<div style="font-size:10px;color:var(--text3);margin-bottom:6px;line-height:1.5;border-left:2px solid var(--border2);padding-left:7px">'+f.amc_note+'</div>':"")
     +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px">'+hitHtml+'</div>'
     +'<details><summary style="font-size:11px;color:var(--text2);cursor:pointer;padding:2px 0">All scoring reasons &rarr;</summary>'
     +'<div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:2px">'+chkHtml+'</div></details>'
