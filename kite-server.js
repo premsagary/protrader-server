@@ -1067,14 +1067,14 @@ const MF_UNIVERSE_SERVER = [
   // MID CAP
   {code:"135803",isin:"INF247L01EF9",name:"Motilal Oswal Midcap",      amc:"Motilal",  cat:"midcap"},
   {code:"145552",isin:"INF754K01XO6",name:"Edelweiss Mid Cap",          amc:"Edelweiss",cat:"midcap"},
-  {code:"118701",isin:"INF204K01158",name:"Nippon India Growth",        amc:"Nippon",   cat:"midcap"},
+  {code:"118388",isin:"INF204K01158",name:"Nippon India Growth",        amc:"Nippon",   cat:"midcap"},
   {code:"118776",isin:"INF179KB1GN6",name:"HDFC Mid-Cap Opp",           amc:"HDFC",     cat:"midcap"},
   {code:"120503",isin:"INF174K01AL5",name:"Kotak Emerging Equity",      amc:"Kotak",    cat:"midcap"},
   {code:"125496",isin:"INF200K01LS2",name:"SBI Magnum Midcap",          amc:"SBI",      cat:"midcap"},
-  {code:"125356",isin:"INF846K01EW2",name:"Axis Midcap",                amc:"Axis",     cat:"midcap"},
+  {code:"120847",isin:"INF846K01EY8",name:"Axis Midcap",                amc:"Axis",     cat:"midcap"},
   {code:"118273",isin:"INF740K01RV7",name:"DSP Midcap",                 amc:"DSP",      cat:"midcap"},
   {code:"120830",isin:"INF966L01119",name:"Quant Mid Cap",              amc:"Quant",    cat:"midcap"},
-  {code:"136179",isin:"INF663L01AN3",name:"PGIM India Midcap",          amc:"PGIM",     cat:"midcap"},
+  {code:"120600",isin:"INF663L01AN3",name:"PGIM India Midcap",          amc:"PGIM",     cat:"midcap"},
   // FLEXI CAP
   {code:"122639",isin:"INF879O01019",name:"Parag Parikh Flexi Cap",     amc:"PPFAS",    cat:"flexicap"},
   {code:"120832",isin:"INF966L01135",name:"Quant Flexi Cap",            amc:"Quant",    cat:"flexicap"},
