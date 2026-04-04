@@ -17,43 +17,50 @@
   --purple:#7c3aed;--purple-bg:#ede9fe;
 }
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-/* Layout */
-.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:100}
-.logo{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px}
-.logo-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:pulse-dot 2s infinite}
-@keyframes pulse-dot{0%,100%{box-shadow:0 0 0 0 #22c55e40}70%{box-shadow:0 0 0 6px transparent}}
+
+/* TOP BAR */
+.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:8px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:200}
+.logo{font-weight:700;font-size:16px;display:flex;align-items:center;gap:7px}
+.logo-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:pdot 2s infinite}
+@keyframes pdot{0%,100%{box-shadow:0 0 0 0 #22c55e40}70%{box-shadow:0 0 0 5px transparent}}
 .hstat{text-align:right}
 .hstat .l{font-size:9px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
-.hstat .v{font-weight:600;font-size:14px}
-.tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);padding:0 20px;background:var(--bg);gap:0;white-space:nowrap;position:sticky;top:49px;z-index:99}
-.tab{padding:10px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;font-family:inherit;transition:.15s}
-.tab:hover{color:var(--text)}.tab.active{color:var(--text);border-bottom-color:var(--text);font-weight:500}
+.hstat .v{font-weight:600;font-size:13px}
+
+/* MODE TABS — Stocks vs Crypto */
+.mode-tabs{display:flex;gap:0;background:var(--bg2);border-radius:8px;padding:3px;border:1px solid var(--border)}
+.mode-tab{padding:5px 14px;border:none;background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--text2);border-radius:6px;font-family:inherit;transition:.15s}
+.mode-tab.active{background:var(--bg);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.mode-tab.stocks.active{color:#1d4ed8}
+.mode-tab.crypto.active{color:#7c3aed}
+
+/* SUB TABS */
+.subtabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);padding:0 20px;background:var(--bg);gap:0;white-space:nowrap;position:sticky;top:47px;z-index:199}
+.stab{padding:9px 14px;border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;font-family:inherit;transition:.15s}
+.stab:hover{color:var(--text)}
+.stab.active{color:var(--text);font-weight:500}
+.stab.stocks-active{border-bottom-color:#1d4ed8;color:#1d4ed8}
+.stab.crypto-active{border-bottom-color:#7c3aed;color:#7c3aed}
+
+/* MAIN */
 .main{padding:16px 20px}
 
-/* Two-column split */
-.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:900px){.split{grid-template-columns:1fr}}
-.panel{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px}
-.panel-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
-.panel-title{font-weight:600;font-size:14px}
-.panel-sub{font-size:11px;color:var(--text3);margin-left:auto}
+/* STAT CARDS */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}
+.sc{background:var(--bg2);border-radius:10px;padding:11px 14px}
+.sc .l{font-size:11px;color:var(--text2);margin-bottom:4px}
+.sc .v{font-weight:600;font-size:19px}
+.sc .s{font-size:11px;color:var(--text3);margin-top:2px}
 
-/* Stats */
-.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-bottom:12px}
-.stat{background:var(--bg2);border-radius:8px;padding:9px 12px}
-.stat .l{font-size:10px;color:var(--text2);margin-bottom:3px}
-.stat .v{font-weight:600;font-size:17px}
-.stat .s{font-size:10px;color:var(--text3);margin-top:2px}
-
-/* Tables */
-.tbl-wrap{overflow-x:auto}
+/* TABLES */
+.tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
-th{padding:7px 9px;text-align:left;font-size:11px;font-weight:500;color:var(--text2);border-bottom:1px solid var(--border);white-space:nowrap;user-select:none;cursor:pointer}
+th{padding:7px 10px;text-align:left;font-size:11px;font-weight:500;color:var(--text2);border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
 th:hover{color:var(--text)}
-td{padding:8px 9px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+td{padding:8px 10px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:hover td{background:var(--bg2)}
 
-/* Pills */
+/* PILLS */
 .pill{display:inline-block;border-radius:5px;padding:2px 7px;font-size:11px;font-weight:500;white-space:nowrap}
 .pg{background:var(--green-bg);color:var(--green)}
 .pr{background:var(--red-bg);color:var(--red)}
@@ -62,41 +69,37 @@ tr:hover td{background:var(--bg2)}
 .pp{background:var(--purple-bg);color:var(--purple)}
 .pgr{background:var(--bg3);color:var(--text2)}
 
-/* Position cards */
-.pos-card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px}
+/* POSITION CARDS */
+.pos-card{border:1px solid var(--border);border-radius:10px;padding:13px;margin-bottom:10px}
 .pos-card.up{border-color:#86efac}.pos-card.down{border-color:#fca5a5}
+.pos-mini-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px;margin:9px 0}
+.pos-cell{background:var(--bg2);border-radius:6px;padding:6px 9px}
+.pos-cell .l{font-size:9px;color:var(--text2);margin-bottom:2px;text-transform:uppercase;letter-spacing:.4px}
+.pos-cell .v{font-weight:500;font-size:12px}
 .prog-bar{height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;margin:6px 0 3px}
-.prog-fill{height:100%;background:linear-gradient(90deg,#ef4444,#fbbf24 50%,#22c55e);border-radius:3px}
+.prog-fill{height:100%;background:linear-gradient(90deg,#ef4444,#fbbf24 50%,#22c55e);border-radius:3px;transition:width .5s}
 
-/* News */
-.news-card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px}
-.news-card.bull{border-color:#86efac}.news-card.bear{border-color:#fca5a5}
-
-/* Buttons */
+/* BUTTONS & INPUTS */
 .btn{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--text)}
 .btn:hover{background:var(--bg3)}.btn-sm{padding:3px 8px;font-size:11px}
 input,select{background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:6px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none}
-input:focus,select:focus{border-color:#999}
+input:focus,select:focus{border-color:#888}
 
-/* Filter */
-.filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+/* FILTER ROW */
+.fr{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .fpill{border-radius:20px;padding:3px 10px;font-size:11px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--text2);font-family:inherit}
 .fpill.active{background:var(--text);color:var(--bg);border-color:var(--text)}
 
-/* Section label */
-.sec-label{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;margin-bottom:10px;margin-top:4px}
-.sec-badge{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
-.stocks-badge{background:#dbeafe;color:#1d4ed8}
-.crypto-badge{background:#ede9fe;color:#7c3aed}
+/* NEWS CARDS */
+.news-card{border:1px solid var(--border);border-radius:10px;padding:13px;margin-bottom:9px}
+.news-card.bull{border-color:#86efac}.news-card.bear{border-color:#fca5a5}
 
-/* Shimmer */
-@keyframes sh{0%,100%{opacity:.4}50%{opacity:.9}}
-.sh{animation:sh 1.5s infinite;background:var(--bg2);border-radius:8px}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.pulsing{animation:pulse 1.5s infinite}
-
-.empty{text-align:center;padding:30px 0;color:var(--text2);font-size:13px}
-.green{color:var(--green)}.red{color:var(--red)}.muted{color:var(--text2)}
+/* MISC */
+.sec-title{font-weight:500;font-size:14px;margin-bottom:10px}
+.empty{text-align:center;padding:40px 0;color:var(--text2);font-size:13px}
+@keyframes sh{0%,100%{opacity:.4}50%{opacity:.9}}.sh{animation:sh 1.5s infinite;background:var(--bg2);border-radius:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}.pulsing{animation:pulse 1.5s infinite}
+.chart-wrap{position:relative;height:180px;margin-bottom:16px}
 </style>
 </head>
 <body>
@@ -104,207 +107,27 @@ input:focus,select:focus{border-color:#999}
 <!-- TOP BAR -->
 <div class="topbar">
   <div class="logo"><span class="logo-dot"></span>ProTrader</div>
-  <span id="market-badge" class="pill pb" style="display:none;font-size:11px">NSE Open</span>
-  <span id="crypto-badge" class="pill pp" style="font-size:11px">₿ 24/7</span>
-  <span id="scan-info" style="font-size:11px;color:var(--text3)"></span>
-  <div style="margin-left:auto;display:flex;gap:16px;flex-wrap:wrap">
-    <div class="hstat"><div class="l">NSE P&L</div><div class="v" id="h-nse-pnl">—</div></div>
-    <div class="hstat"><div class="l">Crypto P&L</div><div class="v" id="h-crypto-pnl">—</div></div>
-    <div class="hstat"><div class="l">NSE Positions</div><div class="v" id="h-nse-pos">—</div></div>
-    <div class="hstat"><div class="l">Crypto Positions</div><div class="v" id="h-crypto-pos">—</div></div>
-    <div class="hstat"><div class="l">Cash</div><div class="v" id="h-cash">—</div></div>
+  <span id="market-badge" class="pill pb" style="display:none;font-size:11px">Market Open</span>
+  <!-- Mode tabs -->
+  <div class="mode-tabs">
+    <button class="mode-tab stocks active" onclick="setMode('stocks')" id="mode-stocks">📈 Stocks</button>
+    <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">₿ Crypto</button>
   </div>
+  <!-- Header stats -->
+  <div style="margin-left:auto;display:flex;gap:16px;flex-wrap:wrap" id="topbar-stats"></div>
 </div>
 
-<!-- TABS -->
-<div class="tabs">
-  <button class="tab active" onclick="showTab('overview')"  id="tab-overview">◎ Overview</button>
-  <button class="tab"        onclick="showTab('positions')" id="tab-positions">⬡ Positions</button>
-  <button class="tab"        onclick="showTab('trades')"    id="tab-trades">⇅ Trades</button>
-  <button class="tab"        onclick="showTab('market')"    id="tab-market">▦ Live Market</button>
-  <button class="tab"        onclick="showTab('chart')"     id="tab-chart">↗ Chart</button>
-  <button class="tab"        onclick="showTab('news')"      id="tab-news">◈ News</button>
-  <button class="tab"        onclick="showTab('portfolio')" id="tab-portfolio">◻ Portfolio</button>
-  <button class="tab"        onclick="showTab('scanlog')"   id="tab-scanlog">⌾ Scan Log</button>
-</div>
+<!-- SUB TABS — rendered by JS -->
+<div class="subtabs" id="subtabs"></div>
 
-<div class="main">
-
-  <!-- OVERVIEW -->
-  <div id="page-overview">
-    <div class="split">
-      <!-- NSE -->
-      <div>
-        <div class="sec-label">📈 Stocks <span class="sec-badge stocks-badge">NSE · 9:15–15:30</span></div>
-        <div class="stat-row" id="nse-stats"></div>
-        <div style="font-size:12px;font-weight:500;margin-bottom:8px">Recent trades</div>
-        <div id="nse-recent"></div>
-      </div>
-      <!-- Crypto -->
-      <div>
-        <div class="sec-label">₿ Crypto <span class="sec-badge crypto-badge">Binance · 24/7 · Free</span></div>
-        <div class="stat-row" id="crypto-stats"></div>
-        <div style="font-size:12px;font-weight:500;margin-bottom:8px">Recent trades</div>
-        <div id="crypto-recent"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- POSITIONS -->
-  <div id="page-positions" style="display:none">
-    <div class="split">
-      <div>
-        <div class="sec-label">📈 NSE Positions <span class="sec-badge stocks-badge" id="nse-pos-count">0 open</span></div>
-        <div id="nse-positions-list"></div>
-      </div>
-      <div>
-        <div class="sec-label">₿ Crypto Positions <span class="sec-badge crypto-badge" id="crypto-pos-count">0 open</span></div>
-        <div id="crypto-positions-list"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- TRADES -->
-  <div id="page-trades" style="display:none">
-    <div class="split">
-      <div>
-        <div class="sec-label">📈 NSE Trade History <span class="sec-badge stocks-badge" id="nse-trade-count"></span></div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry time</th><th>P&L</th><th>Return</th><th>Strategy</th><th>Result</th></tr></thead>
-          <tbody id="nse-trades-body"></tbody></table>
-        </div>
-        <div id="nse-trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:14px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>
-      </div>
-      <div>
-        <div class="sec-label">₿ Crypto Trade History <span class="sec-badge crypto-badge" id="crypto-trade-count"></span></div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Coin</th><th>Qty</th><th>Entry $</th><th>Exit $</th><th>Entry time</th><th>P&L</th><th>Return</th><th>Result</th></tr></thead>
-          <tbody id="crypto-trades-body"></tbody></table>
-        </div>
-        <div id="crypto-trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:14px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- LIVE MARKET -->
-  <div id="page-market" style="display:none">
-    <div class="split">
-      <!-- NSE -->
-      <div>
-        <div class="sec-label">📈 NSE Stocks <span class="sec-badge stocks-badge" id="nse-mkt-count"></span></div>
-        <div class="filter-row">
-          <input id="nse-search" placeholder="Search..." oninput="renderNSEMarket()" style="width:140px"/>
-          <div id="nse-sector-pills" style="display:flex;gap:4px;flex-wrap:wrap"></div>
-        </div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Symbol</th><th>Name</th><th>Group</th><th>Price</th><th>Chg%</th><th>High</th><th>Low</th><th></th></tr></thead>
-          <tbody id="nse-mkt-body"></tbody></table>
-        </div>
-      </div>
-      <!-- Crypto -->
-      <div>
-        <div class="sec-label">₿ Crypto Prices <span class="sec-badge crypto-badge" id="crypto-mkt-status">live</span></div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Coin</th><th>Name</th><th>Price (USDT)</th><th>24h Chg</th><th>24h High</th><th>24h Low</th><th>Vol</th><th></th></tr></thead>
-          <tbody id="crypto-mkt-body"></tbody></table>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CHART -->
-  <div id="page-chart" style="display:none">
-    <div class="filter-row">
-      <select id="chart-type" onchange="renderChartSelectors()" style="width:110px">
-        <option value="nse">📈 NSE</option>
-        <option value="crypto">₿ Crypto</option>
-      </select>
-      <select id="chart-sym" onchange="loadChart()" style="min-width:200px"></select>
-      <span id="chart-price" style="font-weight:600;font-size:15px"></span>
-      <span style="font-size:11px;color:var(--text2)">TradingView · EMA + RSI + MACD</span>
-    </div>
-    <div id="tv-frame" style="border-radius:10px;overflow:hidden;border:1px solid var(--border)">
-      <div id="tv-widget" style="height:480px"></div>
-    </div>
-    <div id="chart-trades" style="margin-top:14px"></div>
-  </div>
-
-  <!-- NEWS -->
-  <div id="page-news" style="display:none">
-    <div class="split">
-      <!-- NSE News -->
-      <div>
-        <div class="sec-label">📈 NSE Stock News <span class="sec-badge stocks-badge">RSS feeds · free</span></div>
-        <div class="filter-row">
-          <select id="news-nse-sym" onchange="fetchNSENews()" style="min-width:180px"></select>
-          <span id="nse-news-status" style="font-size:11px;color:var(--text3)"></span>
-          <button class="btn btn-sm" onclick="fetchNSENews()" style="margin-left:auto">↻</button>
-        </div>
-        <div id="nse-news-sentiment"></div>
-        <div id="nse-news-list"></div>
-      </div>
-      <!-- Crypto News -->
-      <div>
-        <div class="sec-label">₿ Crypto News <span class="sec-badge crypto-badge">RSS feeds · free</span></div>
-        <div class="filter-row">
-          <select id="news-crypto-sym" onchange="fetchCryptoNews()" style="min-width:180px"></select>
-          <span id="crypto-news-status" style="font-size:11px;color:var(--text3)"></span>
-          <button class="btn btn-sm" onclick="fetchCryptoNews()" style="margin-left:auto">↻</button>
-        </div>
-        <div id="crypto-news-sentiment"></div>
-        <div id="crypto-news-list"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- PORTFOLIO -->
-  <div id="page-portfolio" style="display:none">
-    <div class="split">
-      <div>
-        <div class="sec-label">📈 NSE Holdings</div>
-        <div class="stat-row" id="port-stats"></div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>LTP</th><th>Invested</th><th>Current</th><th>P&L</th><th>Return</th></tr></thead>
-          <tbody id="holdings-body"></tbody></table>
-        </div>
-      </div>
-      <div>
-        <div class="sec-label">₿ Crypto Summary</div>
-        <div class="stat-row" id="crypto-port-stats"></div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Coin</th><th>Open Qty</th><th>Entry $</th><th>Live $</th><th>Capital</th><th>Live P&L</th></tr></thead>
-          <tbody id="crypto-port-body"></tbody></table>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- SCAN LOG -->
-  <div id="page-scanlog" style="display:none">
-    <div class="split">
-      <div>
-        <div class="sec-label">📈 NSE Scan Log</div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Message</th></tr></thead>
-          <tbody id="nse-scanlog-body"></tbody></table>
-        </div>
-      </div>
-      <div>
-        <div class="sec-label">₿ Crypto Scan Log <span style="font-size:11px;color:var(--text3)">(every 15 min, 24/7)</span></div>
-        <div style="padding:20px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)">
-          Crypto scans every 15 minutes continuously. Check Railway deploy logs for full crypto scan output.
-          <br/><br/>Open positions: <span id="crypto-scan-open" style="font-weight:600">—</span> &nbsp;·&nbsp;
-          Total trades: <span id="crypto-scan-total" style="font-weight:600">—</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-</div><!-- /main -->
+<!-- MAIN CONTENT -->
+<div class="main" id="main-content"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-// ── DATA ──────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════
 const NSE_STOCKS = [
   {sym:"RELIANCE",name:"Reliance Industries",grp:"Nifty 50"},{sym:"TCS",name:"Tata Consultancy Svcs",grp:"Nifty 50"},
   {sym:"HDFCBANK",name:"HDFC Bank",grp:"Nifty 50"},{sym:"ICICIBANK",name:"ICICI Bank",grp:"Nifty 50"},
@@ -340,7 +163,7 @@ const NSE_STOCKS = [
   {sym:"CHOLAFIN",name:"Cholamandalam Finance",grp:"Next 50"},{sym:"LUPIN",name:"Lupin Ltd",grp:"Next 50"},
   {sym:"AUROPHARMA",name:"Aurobindo Pharma",grp:"Next 50"},{sym:"BANKBARODA",name:"Bank of Baroda",grp:"Next 50"},
   {sym:"CANBK",name:"Canara Bank",grp:"Next 50"},{sym:"PNB",name:"Punjab National Bank",grp:"Next 50"},
-  {sym:"NAUKRI",name:"Info Edge (Naukri)",grp:"Next 50"},{sym:"PERSISTENT",name:"Persistent Systems",grp:"Next 50"},
+  {sym:"NAUKRI",name:"Info Edge",grp:"Next 50"},{sym:"PERSISTENT",name:"Persistent Systems",grp:"Next 50"},
   {sym:"COFORGE",name:"Coforge Ltd",grp:"Next 50"},{sym:"MPHASIS",name:"Mphasis Ltd",grp:"Next 50"},
   {sym:"TATAPOWER",name:"Tata Power",grp:"Next 50"},{sym:"VEDL",name:"Vedanta Ltd",grp:"Next 50"},
   {sym:"NMDC",name:"NMDC Ltd",grp:"Next 50"},{sym:"SAIL",name:"Steel Authority",grp:"Next 50"},
@@ -350,6 +173,7 @@ const NSE_STOCKS = [
   {sym:"INDHOTEL",name:"Indian Hotels",grp:"Next 50"},{sym:"VOLTAS",name:"Voltas Ltd",grp:"Next 50"},
   {sym:"PAGEIND",name:"Page Industries",grp:"Next 50"},{sym:"TRENT",name:"Trent Ltd",grp:"Next 50"},
   {sym:"JUBLFOOD",name:"Jubilant Foodworks",grp:"Next 50"},{sym:"LICI",name:"Life Insurance Corp",grp:"Next 50"},
+  {sym:"MFSL",name:"Max Financial Services",grp:"Next 50"},{sym:"UNITDSPR",name:"United Spirits",grp:"Next 50"},
   {sym:"ASTRAL",name:"Astral Ltd",grp:"Midcap"},{sym:"DEEPAKNTR",name:"Deepak Nitrite",grp:"Midcap"},
   {sym:"LAURUSLABS",name:"Laurus Labs",grp:"Midcap"},{sym:"ALKEM",name:"Alkem Laboratories",grp:"Midcap"},
   {sym:"IDFCFIRSTB",name:"IDFC First Bank",grp:"Midcap"},{sym:"FEDERALBNK",name:"Federal Bank",grp:"Midcap"},
@@ -366,6 +190,7 @@ const NSE_STOCKS = [
   {sym:"JSPL",name:"Jindal Steel & Power",grp:"Midcap"},{sym:"NYKAA",name:"Nykaa",grp:"Midcap"},
   {sym:"STARHEALTH",name:"Star Health Insurance",grp:"Midcap"},{sym:"PNBHOUSING",name:"PNB Housing Finance",grp:"Midcap"},
   {sym:"SONACOMS",name:"Sona BLW Precision",grp:"Midcap"},{sym:"AIAENG",name:"AIA Engineering",grp:"Midcap"},
+  {sym:"GICRE",name:"General Insurance Corp",grp:"Midcap"},{sym:"NIACL",name:"New India Assurance",grp:"Midcap"},
 ];
 
 const CRYPTO_LIST = [
@@ -381,28 +206,41 @@ const CRYPTO_LIST = [
   {sym:"INJUSDT",name:"Injective",base:"INJ"},{sym:"SUIUSDT",name:"Sui",base:"SUI"},
 ];
 
-// ── STATE ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
 const S = {
-  tab:"overview",
-  prices:{}, nseTrades:[], nseStats:null, daily:[], scanLog:[],
-  health:null, holdings:[], margin:null,
-  cryptoTrades:[], cryptoStats:null, cryptoPrices:{},
-  nseSectorFilter:"All", nseSearch:"",
-  chartType:"nse", chartSym:"RELIANCE",
-  newsNseSym:"RELIANCE", newsCryptoSym:"BTC",
+  mode: "stocks",           // stocks | crypto
+  stocksTab: "overview",   // current stocks sub-tab
+  cryptoTab: "overview",   // current crypto sub-tab
+  // NSE data
+  prices:{}, nseTrades:[], nseStats:{}, daily:[], scanLog:[],
+  health:{}, holdings:[], margin:null,
+  nseFilter:"All", nseSearch:"",
+  // Crypto data
+  cryptoTrades:[], cryptoStats:{}, cryptoPrices:{},
+  cryptoSearch:"",
+  // Chart
+  chartSym:"RELIANCE", cryptoChartSym:"BTCUSDT",
+  // News
+  newsNseSym:"RELIANCE", newsCryptoSym:"BTCUSDT",
+  // Charts
+  equityChart:null, pnlChart:null,
 };
 
-// ── HELPERS ───────────────────────────────────────────────────────────────────
-const INR  = n => `₹${(+n||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
-const USD  = n => `$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:4})}`;
-const pc   = n => `${(+n||0)>=0?"+":""}${(+n||0).toFixed(2)}%`;
-const fmtT = ts => ts?new Date(ts).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"—";
-const clr  = n => +n>=0?"var(--green)":"var(--red)";
-const pill = (t,c) => `<span class="pill p${c||"gr"}">${t}</span>`;
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
+const INR   = n => `₹${(+n||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
+const pc    = n => `${(+n||0)>=0?"+":""}${(+n||0).toFixed(2)}%`;
+const fmtT  = ts => ts?new Date(ts).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"—";
+const clr   = n => +n>=0?"var(--green)":"var(--red)";
+const pill  = (t,c) => `<span class="pill p${c||"gr"}">${t}</span>`;
+const sc    = (l,v,c,s) => `<div class="sc"><div class="l">${l}</div><div class="v" style="color:${c||"var(--text)"}">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`;
 
-function statCard(l,v,c,s){return`<div class="stat"><div class="l">${l}</div><div class="v" style="color:${c||"var(--text)"};">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`;}
-
-// ── FETCH ALL ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// FETCH
+// ═══════════════════════════════════════════════════════
 async function fetchAll(){
   try {
     const rs = await Promise.allSettled([
@@ -410,436 +248,645 @@ async function fetchAll(){
       fetch("/paper-trades/stats"),fetch("/paper-trades/daily"),
       fetch("/scan-log"),fetch("/holdings"),fetch("/margin"),
     ]);
-    const ok=(r)=>r.status==="fulfilled"&&r.value.ok;
-    if(ok(rs[0])) S.health     = await rs[0].value.json();
-    if(ok(rs[1])) S.prices     = await rs[1].value.json();
-    if(ok(rs[2])){const d=await rs[2].value.json();if(Array.isArray(d))S.nseTrades=d;}
-    if(ok(rs[3])) S.nseStats   = await rs[3].value.json();
-    if(ok(rs[4])){const d=await rs[4].value.json();if(Array.isArray(d))S.daily=d;}
-    if(ok(rs[5])){const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
-    if(ok(rs[6])){const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
-    if(ok(rs[7])) S.margin     = await rs[7].value.json();
-  } catch(e){ console.error("NSE fetch error:",e); }
-
-  // Crypto endpoints — optional, won't break if missing
+    if(rs[0].status==="fulfilled"&&rs[0].value.ok) S.health = await rs[0].value.json();
+    if(rs[1].status==="fulfilled"&&rs[1].value.ok) S.prices = await rs[1].value.json();
+    if(rs[2].status==="fulfilled"&&rs[2].value.ok){const d=await rs[2].value.json();if(Array.isArray(d))S.nseTrades=d;}
+    if(rs[3].status==="fulfilled"&&rs[3].value.ok) S.nseStats = await rs[3].value.json();
+    if(rs[4].status==="fulfilled"&&rs[4].value.ok){const d=await rs[4].value.json();if(Array.isArray(d))S.daily=d;}
+    if(rs[5].status==="fulfilled"&&rs[5].value.ok){const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
+    if(rs[6].status==="fulfilled"&&rs[6].value.ok){const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
+    if(rs[7].status==="fulfilled"&&rs[7].value.ok) S.margin = await rs[7].value.json();
+  } catch(e){}
+  // Crypto — optional
   try {
-    const cr = await Promise.allSettled([
-      fetch("/crypto/trades"),
-      fetch("/crypto/trades/stats"),
-    ]);
+    const cr = await Promise.allSettled([fetch("/crypto/trades"),fetch("/crypto/trades/stats")]);
     if(cr[0].status==="fulfilled"&&cr[0].value.ok){const d=await cr[0].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
-    if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats=await cr[1].value.json();
-  } catch(e){ console.log("Crypto endpoints not ready yet"); }
-
-  renderAll();
+    if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats = await cr[1].value.json();
+  } catch(e){}
+  render();
 }
 
 async function fetchCryptoPrices(){
-  try{
-    const syms=CRYPTO_LIST.map(c=>`"${c.sym}"`).join(",");
-    const r=await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${syms}]`);
-    if(!r.ok)return;
-    const data=await r.json();
+  try {
+    const syms = CRYPTO_LIST.map(c=>`"${c.sym}"`).join(",");
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${syms}]`);
+    if(!r.ok) return;
+    const data = await r.json();
     data.forEach(t=>{S.cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
-    if(S.tab==="market"||S.tab==="overview"||S.tab==="positions")renderAll();
-  }catch(e){}
+    if(S.mode==="crypto") render();
+  } catch(e){}
 }
 
-// ── RENDER ALL ────────────────────────────────────────────────────────────────
-function renderAll(){
-  updateTopBar();
-  if(S.tab==="overview")  renderOverview();
-  if(S.tab==="positions") renderPositions();
-  if(S.tab==="trades")    renderTrades();
-  if(S.tab==="market")    {renderNSEMarket();renderCryptoMarket();}
-  if(S.tab==="portfolio") renderPortfolio();
-  if(S.tab==="scanlog")   renderScanLog();
+// ═══════════════════════════════════════════════════════
+// MODE & TAB SWITCHING
+// ═══════════════════════════════════════════════════════
+const STOCKS_TABS = [
+  {id:"overview",   label:"◎ Overview"},
+  {id:"positions",  label:"○ Positions"},
+  {id:"trades",     label:"⇅ Trade History"},
+  {id:"market",     label:"▦ Live Market"},
+  {id:"chart",      label:"↗ Chart"},
+  {id:"news",       label:"◈ News (RSS)"},
+  {id:"portfolio",  label:"◻ Portfolio"},
+  {id:"scanlog",    label:"⌾ Scan Log"},
+];
+const CRYPTO_TABS = [
+  {id:"overview",   label:"◎ Overview"},
+  {id:"positions",  label:"○ Positions"},
+  {id:"trades",     label:"⇅ Trade History"},
+  {id:"market",     label:"₿ Live Prices"},
+  {id:"chart",      label:"↗ Chart"},
+  {id:"news",       label:"◈ News (RSS)"},
+];
+
+function setMode(mode){
+  S.mode = mode;
+  document.getElementById("mode-stocks").className = `mode-tab stocks${mode==="stocks"?" active":""}`;
+  document.getElementById("mode-crypto").className = `mode-tab crypto${mode==="crypto"?" active":""}`;
+  renderSubTabs();
+  render();
 }
 
-function updateTopBar(){
-  const h=S.health||{}, ns=S.nseStats||{}, cs=S.cryptoStats||{}, m=S.margin;
-  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
-  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  const nsePnL=+(ns.total_pnl||0), cryptoPnL=+(cs.total_pnl||0);
-  const cash=m?.equity?.net?.available?.live_balance;
-
-  document.getElementById("market-badge").style.display=h?.marketOpen?"inline-block":"none";
-  document.getElementById("scan-info").textContent=S.scanLog[0]?`Last scan: ${new Date(S.scanLog[0].scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})} · ${S.scanLog[0].regime}`:"";
-  document.getElementById("h-nse-pnl").innerHTML=`<span style="color:${clr(nsePnL)}">${nsePnL>=0?"+":""}${INR(nsePnL.toFixed(0))}</span>`;
-  document.getElementById("h-crypto-pnl").innerHTML=`<span style="color:${clr(cryptoPnL)}">${cryptoPnL>=0?"+":""}${INR(cryptoPnL.toFixed(0))}</span>`;
-  document.getElementById("h-nse-pos").textContent=nseOpen.length;
-  document.getElementById("h-crypto-pos").textContent=cryptoOpen.length;
-  document.getElementById("h-cash").textContent=cash!=null?INR(cash.toFixed(0)):"—";
-
-  // Tab labels
-  document.getElementById("tab-positions").textContent=`⬡ Positions (${nseOpen.length}+${cryptoOpen.length})`;
-  document.getElementById("tab-trades").textContent=`⇅ Trades (${S.nseTrades.filter(t=>t.status==="CLOSED").length}+${S.cryptoTrades.filter(t=>t.status==="CLOSED").length})`;
+function setTab(tab){
+  if(S.mode==="stocks") S.stocksTab = tab;
+  else S.cryptoTab = tab;
+  renderSubTabs();
+  render();
+  if(tab==="news" && S.mode==="stocks") fetchNSENews();
+  if(tab==="news" && S.mode==="crypto") fetchCryptoNews();
+  if(tab==="chart") loadChart();
 }
 
-// ── OVERVIEW ──────────────────────────────────────────────────────────────────
-function renderOverview(){
-  // NSE stats
+function renderSubTabs(){
+  const tabs = S.mode==="stocks" ? STOCKS_TABS : CRYPTO_TABS;
+  const current = S.mode==="stocks" ? S.stocksTab : S.cryptoTab;
+  const activeClass = S.mode==="stocks" ? "stocks-active" : "crypto-active";
+  document.getElementById("subtabs").innerHTML = tabs.map(t=>
+    `<button class="stab${current===t.id?" "+activeClass:""}" onclick="setTab('${t.id}')">${t.label}</button>`
+  ).join("");
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER DISPATCHER — defined later in file
+// ═══════════════════════════════════════════════════════
+
+function renderTopBar(){
+  const h = S.health||{}, ns = S.nseStats||{}, cs = S.cryptoStats||{};
+  const m = S.margin;
+  const nseOpen = S.nseTrades.filter(t=>t.status==="OPEN").length;
+  const cryptoOpen = S.cryptoTrades.filter(t=>t.status==="OPEN").length;
+  const nsePnL = +(ns.total_pnl||0);
+  const cryptoPnL = +(cs.total_pnl||0);
+  const nw=+(ns.wins||0),nl=+(ns.losses||0),nwr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
+  const cw=+(cs.wins||0),cl=+(cs.losses||0),cwr=cw+cl>0?Math.round(cw/(cw+cl)*100):0;
+  const cash = m?.equity?.net?.available?.live_balance;
+  const sl = S.scanLog[0];
+
+  document.getElementById("market-badge").style.display = h.marketOpen?"inline-block":"none";
+
+  if(S.mode==="stocks"){
+    document.getElementById("topbar-stats").innerHTML = [
+      `<div class="hstat"><div class="l">Paper P&L</div><div class="v" style="color:${clr(nsePnL)}">${nsePnL>=0?"+":""}${INR(nsePnL.toFixed(0))}</div></div>`,
+      `<div class="hstat"><div class="l">Open</div><div class="v">${nseOpen}</div></div>`,
+      `<div class="hstat"><div class="l">Win Rate</div><div class="v" style="color:${nwr>=55?"var(--green)":"var(--red)"}">${nwr}%</div></div>`,
+      `<div class="hstat"><div class="l">Cash</div><div class="v">${cash!=null?INR(cash.toFixed(0)):"—"}</div></div>`,
+      sl?`<div class="hstat"><div class="l">Last Scan</div><div class="v" style="font-size:11px">${new Date(sl.scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})} · ${sl.regime||""}</div></div>`:"",
+    ].join("");
+  } else {
+    document.getElementById("topbar-stats").innerHTML = [
+      `<div class="hstat"><div class="l">Crypto P&L</div><div class="v" style="color:${clr(cryptoPnL)}">${cryptoPnL>=0?"+":""}${INR(cryptoPnL.toFixed(0))}</div></div>`,
+      `<div class="hstat"><div class="l">Open</div><div class="v">${cryptoOpen}</div></div>`,
+      `<div class="hstat"><div class="l">Win Rate</div><div class="v" style="color:${cwr>=55?"var(--green)":"var(--red)"}">${cwr}%</div></div>`,
+      `<div class="hstat"><div class="l">Pairs</div><div class="v" style="color:var(--purple)">${CRYPTO_LIST.length}</div></div>`,
+      `<div class="hstat"><div class="l">24/7</div><div class="v" style="color:var(--purple)">Live</div></div>`,
+    ].join("");
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// STOCKS TABS
+// ═══════════════════════════════════════════════════════
+
+function renderStocksOverview(){
   const ns=S.nseStats||{};
-  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
-  const nsePnL=+(ns.total_pnl||0);
-  const nw=+(ns.wins||0),nl=+(ns.losses||0);
-  const nwr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
-  const openNsePnL=nseOpen.reduce((s,t)=>{const c=S.prices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
+  const open=S.nseTrades.filter(t=>t.status==="OPEN");
+  const pnl=+(ns.total_pnl||0);
+  const nw=+(ns.wins||0),nl=+(ns.losses||0),wr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
+  const openPnL=open.reduce((s,t)=>{const c=S.prices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
 
-  document.getElementById("nse-stats").innerHTML=[
-    statCard("Total P&L",`${nsePnL>=0?"+":""}${INR(nsePnL.toFixed(0))}`,clr(nsePnL),`${S.nseTrades.filter(t=>t.status==="CLOSED").length} closed`),
-    statCard("Open P&L",`${openNsePnL>=0?"+":""}${INR(openNsePnL.toFixed(0))}`,clr(openNsePnL),`${nseOpen.length} open`),
-    statCard("Win rate",`${nwr}%`,nwr>=55?"var(--green)":nwr>=40?"var(--amber)":"var(--red)",`${nw}W/${nl}L`),
-    statCard("Avg win",`+${INR((+(ns?.avg_win||0)).toFixed(0))}`,"var(--green)"),
-  ].join("");
+  const daily=S.daily.slice().reverse();
+  let cum=0;
+  const eLabels=[],eData=[];
+  daily.forEach(d=>{cum+=+(+d.pnl);eLabels.push(d.date?.slice(5,10));eData.push(+cum.toFixed(0));});
 
-  document.getElementById("nse-recent").innerHTML=S.nseTrades.length===0
-    ?`<div class="empty">No trades yet — bot scans 9:15–15:30 IST every 3 min</div>`
-    :S.nseTrades.slice(0,6).map(t=>{
+  document.getElementById("main-content").innerHTML=`
+    <div class="stat-grid">
+      ${sc("Total P&L (closed)",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl),`${S.nseTrades.filter(t=>t.status==="CLOSED").length} closed trades`)}
+      ${sc("Open P&L (live)",`${openPnL>=0?"+":""}${INR(openPnL.toFixed(0))}`,clr(openPnL),`${open.length} positions`)}
+      ${sc("Win rate",`${wr}%`,wr>=55?"var(--green)":wr>=40?"var(--amber)":"var(--red)",`${nw}W / ${nl}L`)}
+      ${sc("Avg win",`+${INR((+(ns.avg_win||0)).toFixed(0))}`,"var(--green)")}
+      ${sc("Avg loss",INR((+(ns.avg_loss||0)).toFixed(0)),"var(--red)")}
+      ${sc("Best trade",`+${INR((+(ns.best_trade||0)).toFixed(0))}`,"var(--green)")}
+      ${sc("Available cash",S.margin?.equity?.net?.available?.live_balance!=null?INR(S.margin.equity.net.available.live_balance.toFixed(0)):"—","var(--text)","Kite margin")}
+      ${sc("Holdings value",INR(S.holdings.reduce((s,h)=>s+(h.last_price||h.average_price||0)*h.quantity,0).toFixed(0)),"var(--text)",`${S.holdings.length} stocks`)}
+    </div>
+    <div class="sec-title">Cumulative P&L</div>
+    <div class="chart-wrap"><canvas id="equity-chart"></canvas></div>
+    <div class="sec-title">Recent trades</div>
+    <div id="recent-list"></div>`;
+
+  // Equity chart
+  if(S.equityChart){S.equityChart.destroy();S.equityChart=null;}
+  if(eLabels.length>0){
+    const ctx=document.getElementById("equity-chart").getContext("2d");
+    S.equityChart=new Chart(ctx,{type:"line",data:{labels:eLabels,datasets:[{label:"Cumulative P&L",data:eData,borderColor:pnl>=0?"#22c55e":"#ef4444",backgroundColor:pnl>=0?"#22c55e18":"#ef444418",fill:true,tension:.3,pointRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}});
+  }
+
+  const recent=S.nseTrades.slice(0,8);
+  document.getElementById("recent-list").innerHTML=recent.length===0
+    ?`<div class="empty">No trades yet — bot scans every 3 min during 9:15–15:30 IST</div>`
+    :recent.map(t=>{
       const cmp=S.prices[t.symbol]?.price??t.price;
-      const livePnl=(cmp-t.price)*t.quantity;
-      return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="width:30px;height:30px;border-radius:7px;background:${t.status==="OPEN"?"var(--amber-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓"}</div>
-        <div style="flex:1;min-width:0"><div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${t.quantity} ${t.strategy||""}</span></div>
-        <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div></div>
-        <div style="text-align:right">${t.status==="OPEN"
-          ?`<div style="font-weight:500;color:${clr(livePnl)}">${livePnl>=0?"+":""}${INR(livePnl.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
-          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}</div>
-      </div>`;}).join("");
-
-  // Crypto stats
-  const cs=S.cryptoStats||{};
-  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  const cryptoPnL=+(cs.total_pnl||0);
-  const cw=+(cs.wins||0),cl2=+(cs.losses||0);
-  const cwr=cw+cl2>0?Math.round(cw/(cw+cl2)*100):0;
-  const openCryptoPnL=cryptoOpen.reduce((s,t)=>{const c=S.cryptoPrices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
-
-  document.getElementById("crypto-stats").innerHTML=[
-    statCard("Total P&L",`${cryptoPnL>=0?"+":""}${INR(cryptoPnL.toFixed(0))}`,clr(cryptoPnL),`${S.cryptoTrades.filter(t=>t.status==="CLOSED").length} closed`),
-    statCard("Open P&L",`${openCryptoPnL>=0?"+":""}${INR(openCryptoPnL.toFixed(0))}`,clr(openCryptoPnL),`${cryptoOpen.length} open`),
-    statCard("Win rate",`${cwr}%`,cwr>=55?"var(--green)":cwr>=40?"var(--amber)":"var(--red)",`${cw}W/${cl2}L`),
-    statCard("Scanning","24/7","var(--purple)","every 15 min"),
-  ].join("");
-
-  document.getElementById("crypto-recent").innerHTML=S.cryptoTrades.length===0
-    ?`<div class="empty">No crypto trades yet — scanning 24/7</div>`
-    :S.cryptoTrades.slice(0,6).map(t=>{
-      const cmp=S.cryptoPrices[t.symbol]?.price??t.price;
       const lp=(cmp-t.price)*t.quantity;
-      return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="width:30px;height:30px;border-radius:7px;background:${t.status==="OPEN"?"var(--purple-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"₿":+(t.pnl||0)>=0?"↑":"↓"}</div>
-        <div style="flex:1;min-width:0"><div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${parseFloat(t.quantity).toFixed(4)}</span></div>
-        <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div></div>
+      return`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+        <div style="width:32px;height:32px;border-radius:7px;background:${t.status==="OPEN"?"var(--amber-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓"}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${t.quantity} · ${t.strategy||""}</span></div>
+          <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div>
+        </div>
         <div style="text-align:right">${t.status==="OPEN"
           ?`<div style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
-          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}</div>
+          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}
+        </div>
+      </div>`;}).join("")+
+    (S.nseTrades.length>8?`<button class="btn" onclick="setTab('trades')" style="margin-top:10px;font-size:12px">View all ${S.nseTrades.length} trades →</button>`:"");
+}
+
+function renderStocksPositions(){
+  const open=S.nseTrades.filter(t=>t.status==="OPEN");
+  const closed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  document.getElementById("main-content").innerHTML=`<div id="pos-list"></div>`;
+  const el=document.getElementById("pos-list");
+  if(!open.length){el.innerHTML=`<div class="empty">No open positions right now</div>`;}
+  else {
+    el.innerHTML=open.map(pos=>{
+      const cmp=S.prices[pos.symbol]?.price??pos.price;
+      const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
+      const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
+      const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
+      return`<div class="pos-card ${pnl>=0?"up":"down"}">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;flex-wrap:wrap">
+          ${pill("▲ BUY","g")}
+          <div>
+            <div style="font-weight:500;font-size:15px">${pos.symbol} <span style="font-size:12px;color:var(--text2);font-weight:400">× ${pos.quantity}</span></div>
+            <div style="font-size:11px;color:var(--text2)">${pos.name||""} · ${pos.strategy||""} · ${pos.regime||""} · ${fmtT(pos.entry_time)}</div>
+          </div>
+          <div style="margin-left:auto;text-align:right">
+            <div style="font-weight:600;font-size:20px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div>
+            <div style="font-size:12px;color:${clr(pct)}">${pc(pct)}</div>
+          </div>
+        </div>
+        <div class="pos-mini-grid">
+          ${[["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Score",pos.signal_score||"—"]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}
+        </div>
+        <div class="prog-bar"><div class="prog-fill" style="width:${prog}%"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL ${INR(pos.stop_loss)}</span><span>TGT ${INR(pos.target)}</span></div>
+        ${pos.indicators?`<div style="margin-top:7px;font-size:10px;color:var(--text3);background:var(--bg2);border-radius:5px;padding:5px 9px;overflow-wrap:break-word">${pos.indicators}</div>`:""}
       </div>`;}).join("");
+  }
+  if(closed.length>0){
+    el.innerHTML+=`<div style="margin-top:16px;margin-bottom:8px;font-size:12px;color:var(--text2);font-weight:500">Closed today (${closed.length})</div>`;
+    el.innerHTML+=`<div class="tw"><table><thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Return</th><th>Reason</th><th>Result</th></tr></thead><tbody>
+      ${closed.map(t=>`<tr><td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td><td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"—"}</td><td style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</td><td style="color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</td><td style="font-size:11px;color:var(--text2)">${t.exit_reason||"—"}</td><td>${+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  }
 }
 
-// ── POSITIONS ─────────────────────────────────────────────────────────────────
-function renderPositions(){
-  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
-  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  document.getElementById("nse-pos-count").textContent=`${nseOpen.length} open`;
-  document.getElementById("crypto-pos-count").textContent=`${cryptoOpen.length} open`;
+function renderStocksTrades(){
+  const ns=S.nseStats||{};
+  const pnl=+(ns.total_pnl||0), nw=+(ns.wins||0), nl=+(ns.losses||0);
+  const wr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
+  const closed=S.nseTrades.filter(t=>t.status==="CLOSED");
 
-  const posCard=(pos,isCrypto)=>{
-    const cmp=isCrypto?(S.cryptoPrices[pos.symbol]?.price??pos.price):(S.prices[pos.symbol]?.price??pos.price);
-    const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
-    const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
-    const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
-    const fmt=isCrypto?v=>`$${parseFloat(v).toFixed(4)}`:v=>INR(v);
-    return`<div class="pos-card ${pnl>=0?"up":"down"}">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-        ${isCrypto?pill("₿ BUY","p"):pill("▲ BUY","g")}
-        <div><div style="font-weight:500;font-size:14px">${pos.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">× ${isCrypto?parseFloat(pos.quantity).toFixed(6):pos.quantity}</span></div>
-        <div style="font-size:10px;color:var(--text2)">${fmtT(pos.entry_time)} · ${pos.strategy||""}</div></div>
-        <div style="margin-left:auto;text-align:right"><div style="font-weight:600;font-size:18px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div><div style="font-size:11px;color:${clr(pct)}">${pc(pct)}</div></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
-        ${[["Entry",fmt(pos.price)],["Live",fmt(cmp)],["SL",fmt(pos.stop_loss)],["Target",fmt(pos.target)]].map(([l,v])=>`<div style="background:var(--bg2);border-radius:6px;padding:6px 8px"><div style="font-size:9px;color:var(--text2);margin-bottom:2px">${l}</div><div style="font-weight:500;font-size:12px">${v}</div></div>`).join("")}
-      </div>
-      <div class="prog-bar"><div class="prog-fill" style="width:${prog}%"></div></div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL</span><span>TGT</span></div>
-    </div>`;
-  };
+  document.getElementById("main-content").innerHTML=`
+    <div class="chart-wrap" style="height:140px;margin-bottom:14px"><canvas id="pnl-chart"></canvas></div>
+    <div class="tw"><table>
+      <thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry time</th><th>Exit time</th><th>P&L</th><th>Return</th><th>Strategy</th><th>Regime</th><th>Exit reason</th><th>Result</th></tr></thead>
+      <tbody id="trades-body"></tbody>
+    </table></div>
+    <div id="trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>`;
 
-  document.getElementById("nse-positions-list").innerHTML=nseOpen.length?nseOpen.map(p=>posCard(p,false)).join(""):`<div class="empty">No open NSE positions</div>`;
-  document.getElementById("crypto-positions-list").innerHTML=cryptoOpen.length?cryptoOpen.map(p=>posCard(p,true)).join(""):`<div class="empty">No open crypto positions</div>`;
-}
+  if(S.pnlChart){S.pnlChart.destroy();S.pnlChart=null;}
+  if(closed.length>0){
+    const data=closed.slice(0,30).reverse().map(t=>+(t.pnl||0));
+    const ctx=document.getElementById("pnl-chart").getContext("2d");
+    S.pnlChart=new Chart(ctx,{type:"bar",data:{labels:closed.slice(0,30).reverse().map(t=>t.symbol),datasets:[{data,backgroundColor:data.map(v=>v>=0?"#22c55e":"#ef4444"),borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}});
+  }
 
-// ── TRADES ────────────────────────────────────────────────────────────────────
-function renderTrades(){
-  const nseClosed=S.nseTrades.filter(t=>t.status==="CLOSED");
-  const cryptoClosed=S.cryptoTrades.filter(t=>t.status==="CLOSED");
-  const ns=S.nseStats, cs=S.cryptoStats;
-
-  document.getElementById("nse-trade-count").textContent=`${nseClosed.length} closed`;
-  document.getElementById("crypto-trade-count").textContent=`${cryptoClosed.length} closed`;
-
-  document.getElementById("nse-trades-body").innerHTML=S.nseTrades.length===0
-    ?`<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text2)">No trades yet</td></tr>`
+  document.getElementById("trades-body").innerHTML=S.nseTrades.length===0
+    ?`<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">No trades yet — bot trades 9:15–15:30 IST</td></tr>`
     :S.nseTrades.map(t=>`<tr>
       <td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td>
       <td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"—"}</td>
       <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
+      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.exit_time)}</td>
       <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
       <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
-      <td style="font-size:11px">${t.strategy||"—"}</td>
+      <td style="font-size:11px">${t.strategy||"—"}</td><td style="font-size:11px">${t.regime||"—"}</td>
+      <td style="font-size:11px;color:var(--text2)">${t.exit_reason||"—"}</td>
       <td>${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
     </tr>`).join("");
 
-  const nPnL=+(ns?.total_pnl||0),nw=+(ns?.wins||0),nl=+(ns?.losses||0);
-  document.getElementById("nse-trades-footer").innerHTML=nseClosed.length?`<span>Closed: <b>${nseClosed.length}</b></span><span>P&L: <b style="color:${clr(nPnL)}">${nPnL>=0?"+":""}${INR(nPnL.toFixed(0))}</b></span><span>Win: <b>${nw+nl>0?Math.round(nw/(nw+nl)*100):0}%</b></span>`:"";
-
-  document.getElementById("crypto-trades-body").innerHTML=S.cryptoTrades.length===0
-    ?`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text2)">No crypto trades yet</td></tr>`
-    :S.cryptoTrades.map(t=>`<tr>
-      <td style="font-weight:500">${t.symbol}</td><td style="font-size:11px">${parseFloat(t.quantity).toFixed(6)}</td>
-      <td>$${parseFloat(t.price).toFixed(4)}</td><td>${t.exit_price?`$${parseFloat(t.exit_price).toFixed(4)}`:"—"}</td>
-      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
-      <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
-      <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
-      <td>${t.status==="OPEN"?pill("Open","p"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
-    </tr>`).join("");
-
-  const cPnL=+(cs?.total_pnl||0),cw=+(cs?.wins||0),cl2=+(cs?.losses||0);
-  document.getElementById("crypto-trades-footer").innerHTML=cryptoClosed.length?`<span>Closed: <b>${cryptoClosed.length}</b></span><span>P&L: <b style="color:${clr(cPnL)}">${cPnL>=0?"+":""}${INR(cPnL.toFixed(0))}</b></span><span>Win: <b>${cw+cl2>0?Math.round(cw/(cw+cl2)*100):0}%</b></span>`:"";
+  document.getElementById("trades-footer").innerHTML=closed.length?`<span>Closed: <b>${closed.length}</b></span><span>Net P&L: <b style="color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</b></span><span>Win rate: <b>${wr}%</b></span><span>Best: <b style="color:var(--green)">+${INR((+(ns.best_trade||0)).toFixed(0))}</b></span><span>Worst: <b style="color:var(--red)">${INR((+(ns.worst_trade||0)).toFixed(0))}</b></span>`:"";
 }
 
-// ── MARKET ────────────────────────────────────────────────────────────────────
-const NSE_GROUPS=["All","Nifty 50","Next 50","Midcap"];
-(function(){
-  const el=document.getElementById("nse-sector-pills");
-  el.innerHTML=NSE_GROUPS.map(g=>`<button class="fpill${g==="All"?" active":""}" onclick="setNSESector('${g}')">${g}</button>`).join("");
-})();
-function setNSESector(g){S.nseSectorFilter=g;document.querySelectorAll(".fpill").forEach(p=>p.classList.toggle("active",p.textContent===g));renderNSEMarket();}
-
-function renderNSEMarket(){
-  const search=(document.getElementById("nse-search")?.value||"").toUpperCase();
+function renderStocksMarket(){
+  const search=(S.nseSearch||"").toUpperCase();
   const rows=NSE_STOCKS.map(s=>{
     const live=S.prices[s.sym];
     const price=live?.price??0;
     const chg=live&&live.open>0?((price-live.open)/live.open*100):0;
-    return{...s,price,chg,high:live?.high??0,low:live?.low??0,isLive:!!live};
-  }).filter(s=>(S.nseSectorFilter==="All"||s.grp===S.nseSectorFilter)&&(s.sym.includes(search)||s.name.toUpperCase().includes(search)));
+    return{...s,price,chg,high:live?.high??0,low:live?.low??0,vol:live?.volume??0,isLive:!!live};
+  }).filter(s=>(S.nseFilter==="All"||s.grp===S.nseFilter)&&(s.sym.includes(search)||s.name.toUpperCase().includes(search)));
   const seen=new Set();const unique=rows.filter(s=>{if(seen.has(s.sym))return false;seen.add(s.sym);return true;});
-  document.getElementById("nse-mkt-count").textContent=`${unique.filter(s=>s.isLive).length} live · ${unique.length}`;
-  document.getElementById("nse-mkt-body").innerHTML=unique.map(s=>`<tr>
-    <td><div style="font-weight:500">${s.sym}</div>${s.isLive?'<div style="font-size:9px;color:var(--green)">●live</div>':''}</td>
-    <td style="font-size:12px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-    <td><span style="background:var(--bg2);border-radius:4px;padding:1px 5px;font-size:10px">${s.grp}</span></td>
-    <td style="font-weight:500">${s.price>0?INR(s.price):"—"}</td>
-    <td style="color:${s.chg>=0?"var(--green)":"var(--red)"};font-weight:500">${s.isLive?pc(s.chg):"—"}</td>
-    <td style="font-size:12px;color:var(--text2)">${s.high>0?INR(s.high):"—"}</td>
-    <td style="font-size:12px;color:var(--text2)">${s.low>0?INR(s.low):"—"}</td>
-    <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="goChart('nse','${s.sym}')">Chart</button><button class="btn btn-sm" onclick="goNSENews('${s.sym}')">News</button></td>
-  </tr>`).join("");
-}
 
-function renderCryptoMarket(){
-  document.getElementById("crypto-mkt-body").innerHTML=CRYPTO_LIST.map(c=>{
-    const p=S.cryptoPrices[c.sym];
-    const chg=p?.change24h??0;
-    return`<tr>
-      <td style="font-weight:500">${c.base}</td>
-      <td style="font-size:12px;color:var(--text2)">${c.name}</td>
-      <td style="font-weight:500">${p?`$${p.price.toLocaleString("en-US",{maximumFractionDigits:4})}`:"—"}</td>
-      <td style="color:${chg>=0?"var(--green)":"var(--red)"};font-weight:500">${p?`${chg>=0?"+":""}${chg.toFixed(2)}%`:"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${p?`$${p.high.toFixed(4)}`:"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${p?`$${p.low.toFixed(4)}`:"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${p?`$${Math.round(p.quoteVolume/1e6)}M`:"—"}</td>
-      <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="goChart('crypto','${c.base}USDT')">Chart</button><button class="btn btn-sm" onclick="goCryptoNews('${c.base}')">News</button></td>
-    </tr>`;}).join("");
-}
-
-// ── CHART ─────────────────────────────────────────────────────────────────────
-function renderChartSelectors(){
-  const type=document.getElementById("chart-type").value;
-  const sel=document.getElementById("chart-sym");
-  if(type==="nse"){
-    sel.innerHTML=NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
-    sel.value=S.chartSym||"RELIANCE";
-  } else {
-    sel.innerHTML=CRYPTO_LIST.map(c=>`<option value="${c.sym}">${c.base} — ${c.name}</option>`).join("");
-    sel.value="BTCUSDT";
-  }
-}
-
-function goChart(type,sym){S.chartType=type;S.chartSym=sym;showTab("chart");document.getElementById("chart-type").value=type;renderChartSelectors();document.getElementById("chart-sym").value=sym;loadChart();}
-
-function loadChart(){
-  const type=document.getElementById("chart-type").value;
-  const sym=document.getElementById("chart-sym").value;
-  S.chartType=type;S.chartSym=sym;
-
-  // Update price display
-  if(type==="nse"&&S.prices[sym]) document.getElementById("chart-price").innerHTML=`${INR(S.prices[sym].price)} <span style="font-size:12px;color:${clr(S.prices[sym].change||0)}">${pc(S.prices[sym].change||0)}</span>`;
-  else if(type==="crypto"&&S.cryptoPrices[sym]) document.getElementById("chart-price").innerHTML=`$${S.cryptoPrices[sym].price.toFixed(4)} <span style="font-size:12px;color:${clr(S.cryptoPrices[sym].change24h||0)}">${pc(S.cryptoPrices[sym].change24h||0)}</span>`;
-  else document.getElementById("chart-price").textContent="";
-
-  const tvSym = type==="nse" ? `NSE:${sym}` : `BINANCE:${sym}`;
-  const interval = type==="nse"?"5":"60";
-
-  document.getElementById("tv-widget").innerHTML="";
-  const load=()=>{new window.TradingView.widget({container_id:"tv-widget",symbol:tvSym,interval,timezone:type==="nse"?"Asia/Kolkata":"UTC",theme:"light",style:"1",locale:"en",width:"100%",height:480,studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],hide_side_toolbar:false,allow_symbol_change:true});};
-  if(window.TradingView)load();
-  else{const s=document.createElement("script");s.src="https://s3.tradingview.com/tv.js";s.async=true;s.onload=load;document.head.appendChild(s);}
-
-  // Show paper trades for this symbol
-  const trades=type==="nse"?S.nseTrades.filter(t=>t.symbol===sym):S.cryptoTrades.filter(t=>t.symbol===sym);
-  document.getElementById("chart-trades").innerHTML=trades.length?`
-    <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text2)">Paper trades for ${sym}</div>`+
-    trades.slice(0,5).map(t=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
-      ${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}
-      <span style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)} → ${fmtT(t.exit_time)}</span>
-      <span style="font-size:12px">Entry ${type==="nse"?INR(t.price):"$"+parseFloat(t.price).toFixed(4)}</span>
-      ${t.exit_price?`<span style="font-size:12px">Exit ${type==="nse"?INR(t.exit_price):"$"+parseFloat(t.exit_price).toFixed(4)}</span>`:""}
-      <span style="margin-left:auto;font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"Open":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</span>
-    </div>`).join(""):"";
-}
-
-// ── NEWS ──────────────────────────────────────────────────────────────────────
-(function(){
-  const nseEl=document.getElementById("news-nse-sym");
-  const cryptoEl=document.getElementById("news-crypto-sym");
-  nseEl.innerHTML=NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
-  cryptoEl.innerHTML=CRYPTO_LIST.map(c=>`<option value="${c.base}">${c.base} — ${c.name}</option>`).join("");
-})();
-
-function goNSENews(sym){document.getElementById("news-nse-sym").value=sym;showTab("news");fetchNSENews();}
-function goCryptoNews(base){document.getElementById("news-crypto-sym").value=base;showTab("news");fetchCryptoNews();}
-
-async function fetchNSENews(){
-  const sym=document.getElementById("news-nse-sym").value;
-  const stock=NSE_STOCKS.find(s=>s.sym===sym);
-  document.getElementById("nse-news-status").textContent="Fetching...";
-  document.getElementById("nse-news-status").className="pulsing muted";
-  document.getElementById("nse-news-list").innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
-  document.getElementById("nse-news-sentiment").innerHTML="";
-  try{
-    const r=await fetch(`/api/news?sym=${sym}&name=${encodeURIComponent(stock?.name||sym)}`);
-    const items=await r.json();
-    document.getElementById("nse-news-status").textContent="";
-    renderNewsItems(items,"nse-news-list","nse-news-sentiment",sym);
-  }catch{document.getElementById("nse-news-status").textContent="";document.getElementById("nse-news-list").innerHTML=`<div class="empty">Could not load news</div>`;}
-}
-
-async function fetchCryptoNews(){
-  const base=document.getElementById("news-crypto-sym").value;
-  document.getElementById("crypto-news-status").textContent="Fetching...";
-  document.getElementById("crypto-news-status").className="pulsing muted";
-  document.getElementById("crypto-news-list").innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
-  document.getElementById("crypto-news-sentiment").innerHTML="";
-  try{
-    const r=await fetch(`/api/news?sym=${base}&name=${base}%20cryptocurrency`);
-    const items=await r.json();
-    document.getElementById("crypto-news-status").textContent="";
-    renderNewsItems(items,"crypto-news-list","crypto-news-sentiment",base);
-  }catch{document.getElementById("crypto-news-status").textContent="";document.getElementById("crypto-news-list").innerHTML=`<div class="empty">Could not load news</div>`;}
-}
-
-function renderNewsItems(items,listId,sentId,label){
-  const bull=items.filter(n=>n.sentiment==="bullish").length;
-  const bear=items.filter(n=>n.sentiment==="bearish").length;
-  const total=items.length||1;
-  const score=((bull-bear)/total*100).toFixed(0);
-  document.getElementById(sentId).innerHTML=items.length?`
-    <div style="background:var(--bg2);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">Sentiment for ${label}</div>
-      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:5px"><div style="width:${Math.max(0,Math.min(100,bull/total*100))}%;height:100%;background:var(--green);border-radius:3px"></div></div>
-      <div style="display:flex;gap:10px;font-size:11px;color:var(--text3)">
-        <span style="color:var(--green)">● ${bull} bullish</span><span style="color:var(--red)">● ${bear} bearish</span>
-        <span style="margin-left:auto;font-weight:500;color:${+score>=0?"var(--green)":"var(--red)"}">${+score>=0?"Bullish":"Bearish"} ${Math.abs(+score)}%</span>
+  document.getElementById("main-content").innerHTML=`
+    <div class="fr">
+      <input id="mkt-search" placeholder="Search symbol or name..." value="${S.nseSearch||""}" oninput="S.nseSearch=this.value;renderStocksMarket()" style="min-width:200px"/>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        ${["All","Nifty 50","Next 50","Midcap"].map(g=>`<button class="fpill${S.nseFilter===g?" active":""}" onclick="S.nseFilter='${g}';renderStocksMarket()">${g}</button>`).join("")}
       </div>
-    </div>`:"";
-  document.getElementById(listId).innerHTML=items.map(item=>`
-    <div class="news-card ${item.sentiment==="bullish"?"bull":item.sentiment==="bearish"?"bear":""}">
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">
-        <span class="pill ${item.sentiment==="bullish"?"pg":item.sentiment==="bearish"?"pr":"pgr"}">${item.sentiment}</span>
-        <span style="font-size:11px;color:var(--text3)">${item.source||""}${item.timeAgo?" · "+item.timeAgo:""}</span>
-      </div>
-      <div style="font-weight:500;font-size:13px;line-height:1.5;margin-bottom:4px">${item.link?`<a href="${item.link}" target="_blank" style="color:inherit;text-decoration:none">${item.headline}</a>`:item.headline}</div>
-      ${item.impact?`<div style="font-size:12px;color:var(--text2);line-height:1.5">${item.impact}</div>`:""}
-    </div>`).join("");
+      <span style="margin-left:auto;font-size:11px;color:var(--text3)">${unique.filter(s=>s.isLive).length} live · ${unique.length} stocks</span>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Symbol</th><th>Company</th><th>Group</th><th>Price</th><th>Chg%</th><th>High</th><th>Low</th><th>Volume</th><th></th></tr></thead>
+      <tbody>${unique.map(s=>`<tr>
+        <td><div style="font-weight:500">${s.sym}</div>${s.isLive?'<div style="font-size:9px;color:var(--green)">● live</div>':''}</td>
+        <td style="font-size:12px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
+        <td><span style="background:var(--bg2);border-radius:4px;padding:1px 6px;font-size:10px">${s.grp}</span></td>
+        <td style="font-weight:500">${s.price>0?INR(s.price):"—"}</td>
+        <td style="color:${s.chg>=0?"var(--green)":"var(--red)"};font-weight:500">${s.isLive?pc(s.chg):"—"}</td>
+        <td style="font-size:12px;color:var(--text2)">${s.high>0?INR(s.high):"—"}</td>
+        <td style="font-size:12px;color:var(--text2)">${s.low>0?INR(s.low):"—"}</td>
+        <td style="font-size:12px;color:var(--text2)">${s.vol>0?s.vol.toLocaleString("en-IN"):"—"}</td>
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-sm" onclick="S.chartSym='${s.sym}';setTab('chart')">Chart</button>
+          <button class="btn btn-sm" onclick="S.newsNseSym='${s.sym}';setTab('news')">News</button>
+        </td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
 }
 
-// ── PORTFOLIO ─────────────────────────────────────────────────────────────────
 function renderPortfolio(){
   const h=S.holdings, m=S.margin;
   const cash=m?.equity?.net?.available?.live_balance;
   const holdVal=h.reduce((s,hh)=>s+(hh.last_price||hh.average_price||0)*hh.quantity,0);
   const invested=h.reduce((s,hh)=>s+hh.average_price*hh.quantity,0);
   const pnl=holdVal-invested;
-
-  document.getElementById("port-stats").innerHTML=[
-    statCard("Cash",cash!=null?INR(cash.toFixed(0)):"—","var(--text)","Kite margin"),
-    statCard("Holdings",INR(holdVal.toFixed(0)),"var(--text)",`${h.length} stocks`),
-    statCard("P&L",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl)),
-  ].join("");
-
-  document.getElementById("holdings-body").innerHTML=!h.length?`<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text2)">No holdings</td></tr>`:
-    h.map(hh=>{const inv=hh.average_price*hh.quantity,cur=(hh.last_price||hh.average_price)*hh.quantity,p=cur-inv,r=p/inv*100;
-      return`<tr><td style="font-weight:500">${hh.tradingsymbol}</td><td>${hh.quantity}</td><td>${INR(hh.average_price)}</td><td>${INR(hh.last_price||hh.average_price)}</td><td style="color:var(--text2)">${INR(inv.toFixed(0))}</td><td>${INR(cur.toFixed(0))}</td><td style="font-weight:500;color:${clr(p)}">${p>=0?"+":""}${INR(p.toFixed(0))}</td><td style="color:${clr(r)}">${pc(r)}</td></tr>`;}).join("");
-
-  // Crypto open positions portfolio view
-  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  const cs=S.cryptoStats;
-  document.getElementById("crypto-port-stats").innerHTML=[
-    statCard("Open trades",cryptoOpen.length,"var(--purple)","positions"),
-    statCard("Total P&L",`${+(cs?.total_pnl||0)>=0?"+":""}${INR((+(cs?.total_pnl||0)).toFixed(0))}`,clr(+(cs?.total_pnl||0))),
-    statCard("Win rate",`${+(cs?.wins||0)++(cs?.losses||0)>0?Math.round(+(cs?.wins||0)/(+(cs?.wins||0)++(cs?.losses||0))*100):0}%`,"var(--purple)"),
-  ].join("");
-
-  document.getElementById("crypto-port-body").innerHTML=!cryptoOpen.length?`<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text2)">No open crypto positions</td></tr>`:
-    cryptoOpen.map(t=>{const cmp=S.cryptoPrices[t.symbol]?.price??t.price;const lp=(cmp-t.price)*t.quantity;
-      return`<tr><td style="font-weight:500">${t.symbol}</td><td style="font-size:11px">${parseFloat(t.quantity).toFixed(6)}</td><td>$${parseFloat(t.price).toFixed(4)}</td><td style="color:${clr(cmp-t.price)}">$${cmp.toFixed(4)}</td><td>${INR(t.capital)}</td><td style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</td></tr>`;}).join("");
+  document.getElementById("main-content").innerHTML=`
+    <div class="stat-grid">
+      ${sc("Available cash",cash!=null?INR(cash.toFixed(0)):"—","var(--text)","Kite margin")}
+      ${sc("Holdings value",INR(holdVal.toFixed(0)),"var(--text)",`${h.length} stocks`)}
+      ${sc("Total invested",INR(invested.toFixed(0)))}
+      ${sc("Total P&L",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl))}
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg price</th><th>LTP</th><th>Invested</th><th>Current</th><th>P&L</th><th>Return</th></tr></thead>
+      <tbody>${!h.length?`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text2)">No holdings</td></tr>`:
+        h.map(hh=>{const inv=hh.average_price*hh.quantity,cur=(hh.last_price||hh.average_price)*hh.quantity,p=cur-inv,r=p/inv*100;
+          return`<tr><td style="font-weight:500">${hh.tradingsymbol}</td><td>${hh.quantity}</td><td>${INR(hh.average_price)}</td><td>${INR(hh.last_price||hh.average_price)}</td><td style="color:var(--text2)">${INR(inv.toFixed(0))}</td><td>${INR(cur.toFixed(0))}</td><td style="font-weight:500;color:${clr(p)}">${p>=0?"+":""}${INR(p.toFixed(0))}</td><td style="color:${clr(r)}">${pc(r)}</td></tr>`;}).join("")}
+      </tbody>
+    </table></div>`;
 }
 
-// ── SCAN LOG ──────────────────────────────────────────────────────────────────
 function renderScanLog(){
-  const regClr=r=>r==="TRENDING"?"g":r==="BREAKOUT"?"a":r==="MOMENTUM"?"b":"gr";
-  document.getElementById("nse-scanlog-body").innerHTML=!S.scanLog.length?`<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text2)">No scans yet</td></tr>`:
-    S.scanLog.map(s=>`<tr>
-      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(s.scanned_at)}</td>
-      <td>${s.stocks}</td>
-      <td style="font-weight:${s.signals>0?600:400};color:${s.signals>0?"var(--green)":"var(--text2)"}">${s.signals}</td>
-      <td>${s.regime?pill(s.regime,regClr(s.regime)):"—"}</td>
-      <td style="font-size:11px;color:var(--text2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.message||""}</td>
-    </tr>`).join("");
-
-  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN").length;
-  document.getElementById("crypto-scan-open").textContent=cryptoOpen;
-  document.getElementById("crypto-scan-total").textContent=S.cryptoTrades.length;
+  const rc=r=>r==="TRENDING"?"g":r==="BREAKOUT"?"a":r==="MOMENTUM"?"b":"gr";
+  document.getElementById("main-content").innerHTML=`
+    <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Each row = one scan. Bot scans all ${NSE_STOCKS.length} stocks every 3 minutes during 9:15–15:30 IST.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Strategy</th><th>Message</th></tr></thead>
+      <tbody>${!S.scanLog.length?`<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2)">No scans yet</td></tr>`:
+        S.scanLog.map(s=>`<tr>
+          <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(s.scanned_at)}</td>
+          <td>${s.stocks}</td>
+          <td style="font-weight:${s.signals>0?600:400};color:${s.signals>0?"var(--green)":"var(--text2)"}">${s.signals}</td>
+          <td>${s.regime?pill(s.regime,rc(s.regime)):"—"}</td>
+          <td style="font-size:11px">${s.strategy||"—"}</td>
+          <td style="font-size:11px;color:var(--text2);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.message||""}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>`;
 }
 
-// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
-function showTab(id){
-  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
-  document.getElementById("tab-"+id).classList.add("active");
-  document.querySelectorAll("[id^='page-']").forEach(p=>p.style.display="none");
-  document.getElementById("page-"+id).style.display="block";
-  S.tab=id;
-  if(id==="chart"){renderChartSelectors();}
-  if(id==="news"){fetchNSENews();fetchCryptoNews();}
-  if(id==="market"){renderNSEMarket();renderCryptoMarket();}
-  renderAll();
+// ── STOCKS CHART & NEWS ───────────────────────────────
+function renderStocksChartPage(){
+  document.getElementById("main-content").innerHTML=`
+    <div class="fr" style="margin-bottom:12px">
+      <select id="chart-sym-sel" onchange="S.chartSym=this.value;loadChart()" style="min-width:200px">
+        ${NSE_STOCKS.map(s=>`<option value="${s.sym}"${s.sym===S.chartSym?" selected":""}>${s.sym} — ${s.name}</option>`).join("")}
+      </select>
+      <span id="chart-price" style="font-weight:600;font-size:15px">${S.prices[S.chartSym]?INR(S.prices[S.chartSym].price):""}</span>
+      <span style="font-size:12px;color:var(--text2)">5-min · TradingView · EMA + RSI + MACD</span>
+    </div>
+    <div style="border-radius:10px;overflow:hidden;border:1px solid var(--border)"><div id="tv-widget" style="height:480px"></div></div>
+    <div id="chart-trades" style="margin-top:12px"></div>`;
+  loadChart();
 }
 
-// ── START ─────────────────────────────────────────────────────────────────────
-// Populate selectors without triggering chart load
-(function initSelectors(){
-  const nseSel = document.getElementById("chart-sym");
-  nseSel.innerHTML = NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+function renderStocksNewsPage(){
+  document.getElementById("main-content").innerHTML=`
+    <div class="fr">
+      <select id="news-nse-sel" onchange="S.newsNseSym=this.value;fetchNSENews()" style="min-width:220px">
+        ${NSE_STOCKS.map(s=>`<option value="${s.sym}"${s.sym===S.newsNseSym?" selected":""}>${s.sym} — ${s.name}</option>`).join("")}
+      </select>
+      <span id="nse-news-status" style="font-size:11px;color:var(--text3)"></span>
+      <div id="nse-news-counts" style="display:flex;gap:5px"></div>
+      <button class="btn btn-sm" onclick="fetchNSENews()" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <div id="nse-news-sent"></div>
+    <div id="nse-news-list"></div>`;
+  fetchNSENews();
+}
 
-  const nseNews = document.getElementById("news-nse-sym");
-  nseNews.innerHTML = NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+// ═══════════════════════════════════════════════════════
+// CRYPTO TABS
+// ═══════════════════════════════════════════════════════
 
-  const cryptoNews = document.getElementById("news-crypto-sym");
-  cryptoNews.innerHTML = CRYPTO_LIST.map(c=>`<option value="${c.base}">${c.base} — ${c.name}</option>`).join("");
-})();
+function renderCryptoOverview(){
+  const cs=S.cryptoStats||{};
+  const open=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  const pnl=+(cs.total_pnl||0);
+  const cw=+(cs.wins||0),cl=+(cs.losses||0),wr=cw+cl>0?Math.round(cw/(cw+cl)*100):0;
+  const openPnL=open.reduce((s,t)=>{const c=S.cryptoPrices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
 
+  document.getElementById("main-content").innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;background:var(--purple-bg);border-radius:10px;padding:10px 16px">
+      <span style="font-size:18px">₿</span>
+      <div><div style="font-weight:500;color:var(--purple)">Crypto Paper Trading · 24/7</div>
+      <div style="font-size:12px;color:var(--purple)">Powered by Binance public API · No account needed · Scans every 15 minutes</div></div>
+    </div>
+    <div class="stat-grid">
+      ${sc("Total P&L (closed)",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl),`${S.cryptoTrades.filter(t=>t.status==="CLOSED").length} closed`)}
+      ${sc("Open P&L (live)",`${openPnL>=0?"+":""}${INR(openPnL.toFixed(0))}`,clr(openPnL),`${open.length} positions`)}
+      ${sc("Win rate",`${wr}%`,wr>=55?"var(--green)":wr>=40?"var(--amber)":"var(--red)",`${cw}W / ${cl}L`)}
+      ${sc("Avg win",`+${INR((+(cs.avg_win||0)).toFixed(0))}`,"var(--green)")}
+      ${sc("Avg loss",INR((+(cs.avg_loss||0)).toFixed(0)),"var(--red)")}
+      ${sc("Best trade",`+${INR((+(cs.best_trade||0)).toFixed(0))}`,"var(--green)")}
+      ${sc("Pairs scanning",CRYPTO_LIST.length+"","var(--purple)","Binance · 24/7 · free")}
+      ${sc("Scan interval","15 min","var(--purple)","always running")}
+    </div>
+    <div class="sec-title">Recent crypto trades</div>
+    <div id="crypto-recent"></div>`;
+
+  const el=document.getElementById("crypto-recent");
+  if(!S.cryptoTrades.length){el.innerHTML=`<div class="empty">No crypto trades yet — engine runs 24/7</div>`;return;}
+  el.innerHTML=S.cryptoTrades.slice(0,8).map(t=>{
+    const cmp=S.cryptoPrices[t.symbol]?.price??t.price;
+    const lp=(cmp-t.price)*t.quantity;
+    return`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+      <div style="width:32px;height:32px;border-radius:7px;background:${t.status==="OPEN"?"var(--purple-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"₿":+(t.pnl||0)>=0?"↑":"↓"}</div>
+      <div style="flex:1"><div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${parseFloat(t.quantity).toFixed(6)}</span></div>
+      <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div></div>
+      <div style="text-align:right">${t.status==="OPEN"
+        ?`<div style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
+        :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}
+      </div>
+    </div>`;}).join("")+
+    (S.cryptoTrades.length>8?`<button class="btn" onclick="setTab('trades')" style="margin-top:10px;font-size:12px">View all ${S.cryptoTrades.length} trades →</button>`:"");
+}
+
+function renderCryptoPositions(){
+  const open=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  document.getElementById("main-content").innerHTML=`<div id="cpos-list"></div>`;
+  const el=document.getElementById("cpos-list");
+  if(!open.length){el.innerHTML=`<div class="empty">No open crypto positions right now</div>`;return;}
+  el.innerHTML=open.map(pos=>{
+    const cmp=S.cryptoPrices[pos.symbol]?.price??pos.price;
+    const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
+    const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
+    const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
+    return`<div class="pos-card ${pnl>=0?"up":"down"}">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;flex-wrap:wrap">
+        ${pill("₿ BUY","p")}
+        <div><div style="font-weight:500;font-size:15px">${pos.symbol} <span style="font-size:12px;color:var(--text2);font-weight:400">× ${parseFloat(pos.quantity).toFixed(6)}</span></div>
+        <div style="font-size:11px;color:var(--text2)">${pos.name||""} · ${fmtT(pos.entry_time)}</div></div>
+        <div style="margin-left:auto;text-align:right">
+          <div style="font-weight:600;font-size:20px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div>
+          <div style="font-size:12px;color:${clr(pct)}">${pc(pct)}</div>
+        </div>
+      </div>
+      <div class="pos-mini-grid">
+        ${[["Entry","$"+parseFloat(pos.price).toFixed(4)],["Live","$"+cmp.toFixed(4)],["Stop Loss","$"+parseFloat(pos.stop_loss).toFixed(4)],["Target","$"+parseFloat(pos.target).toFixed(4)],["Capital",INR(pos.capital)]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}
+      </div>
+      <div class="prog-bar"><div class="prog-fill" style="width:${prog}%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL</span><span>← progress to target →</span><span>TGT</span></div>
+    </div>`;}).join("");
+}
+
+function renderCryptoTrades(){
+  const cs=S.cryptoStats||{};
+  const pnl=+(cs.total_pnl||0), cw=+(cs.wins||0), cl=+(cs.losses||0);
+  const wr=cw+cl>0?Math.round(cw/(cw+cl)*100):0;
+  const closed=S.cryptoTrades.filter(t=>t.status==="CLOSED");
+  document.getElementById("main-content").innerHTML=`
+    <div class="tw"><table>
+      <thead><tr><th>Coin</th><th>Qty</th><th>Entry $</th><th>Exit $</th><th>Entry time</th><th>Exit time</th><th>P&L</th><th>Return</th><th>Exit reason</th><th>Result</th></tr></thead>
+      <tbody>${!S.cryptoTrades.length?`<tr><td colspan="10" style="text-align:center;padding:30px;color:var(--text2)">No crypto trades yet</td></tr>`:
+        S.cryptoTrades.map(t=>`<tr>
+          <td style="font-weight:500">${t.symbol}</td>
+          <td style="font-size:11px">${parseFloat(t.quantity).toFixed(6)}</td>
+          <td>$${parseFloat(t.price).toFixed(4)}</td>
+          <td>${t.exit_price?`$${parseFloat(t.exit_price).toFixed(4)}`:"—"}</td>
+          <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
+          <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.exit_time)}</td>
+          <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
+          <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
+          <td style="font-size:11px;color:var(--text2)">${t.exit_reason||"—"}</td>
+          <td>${t.status==="OPEN"?pill("Open","p"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>
+    <div style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px">
+      ${closed.length?`<span>Closed: <b>${closed.length}</b></span><span>P&L: <b style="color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</b></span><span>Win rate: <b>${wr}%</b></span>`:""}</div>`;
+}
+
+function renderCryptoMarket(){
+  document.getElementById("main-content").innerHTML=`
+    <div style="margin-bottom:10px;font-size:12px;color:var(--text3)">Live prices from Binance · Updates every 30 seconds · No account needed</div>
+    <div class="tw"><table>
+      <thead><tr><th>Coin</th><th>Name</th><th>Price (USDT)</th><th>24h Change</th><th>24h High</th><th>24h Low</th><th>Volume (USD)</th><th></th></tr></thead>
+      <tbody>${CRYPTO_LIST.map(c=>{
+        const p=S.cryptoPrices[c.sym];
+        const chg=p?.change24h??0;
+        return`<tr>
+          <td style="font-weight:500">${c.base}${S.cryptoTrades.some(t=>t.symbol===c.sym&&t.status==="OPEN")?'<div style="font-size:9px;color:var(--purple)">● in position</div>':''}</td>
+          <td style="font-size:12px;color:var(--text2)">${c.name}</td>
+          <td style="font-weight:500">${p?`$${p.price.toLocaleString("en-US",{maximumFractionDigits:4})}`:"—"}</td>
+          <td style="color:${chg>=0?"var(--green)":"var(--red)"};font-weight:500">${p?`${chg>=0?"+":""}${chg.toFixed(2)}%`:"—"}</td>
+          <td style="font-size:12px;color:var(--text2)">${p?`$${p.high.toFixed(4)}`:"—"}</td>
+          <td style="font-size:12px;color:var(--text2)">${p?`$${p.low.toFixed(4)}`:"—"}</td>
+          <td style="font-size:12px;color:var(--text2)">${p?`$${Math.round(p.quoteVolume/1e6)}M`:"—"}</td>
+          <td style="display:flex;gap:4px">
+            <button class="btn btn-sm" onclick="S.cryptoChartSym='${c.sym}';setTab('chart')">Chart</button>
+            <button class="btn btn-sm" onclick="S.newsCryptoSym='${c.sym}';setTab('news')">News</button>
+          </td>
+        </tr>`;}).join("")}
+      </tbody>
+    </table></div>`;
+}
+
+function renderCryptoChartPage(){
+  document.getElementById("main-content").innerHTML=`
+    <div class="fr" style="margin-bottom:12px">
+      <select id="crypto-chart-sel" onchange="S.cryptoChartSym=this.value;loadCryptoChart()" style="min-width:180px">
+        ${CRYPTO_LIST.map(c=>`<option value="${c.sym}"${c.sym===S.cryptoChartSym?" selected":""}>${c.base} — ${c.name}</option>`).join("")}
+      </select>
+      <span id="crypto-chart-price" style="font-weight:600;font-size:15px">${S.cryptoPrices[S.cryptoChartSym]?`$${S.cryptoPrices[S.cryptoChartSym].price.toFixed(4)}`:""}</span>
+      <span style="font-size:12px;color:var(--text2)">1h · TradingView · Binance</span>
+    </div>
+    <div style="border-radius:10px;overflow:hidden;border:1px solid var(--border)"><div id="tv-widget" style="height:480px"></div></div>
+    <div id="chart-trades" style="margin-top:12px"></div>`;
+  loadCryptoChart();
+}
+
+function renderCryptoNewsPage(){
+  document.getElementById("main-content").innerHTML=`
+    <div class="fr">
+      <select id="news-crypto-sel" onchange="S.newsCryptoSym=this.value;fetchCryptoNews()" style="min-width:180px">
+        ${CRYPTO_LIST.map(c=>`<option value="${c.sym}"${c.sym===S.newsCryptoSym?" selected":""}>${c.base} — ${c.name}</option>`).join("")}
+      </select>
+      <span id="crypto-news-status" style="font-size:11px;color:var(--text3)"></span>
+      <div id="crypto-news-counts" style="display:flex;gap:5px"></div>
+      <button class="btn btn-sm" onclick="fetchCryptoNews()" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <div id="crypto-news-sent"></div>
+    <div id="crypto-news-list"></div>`;
+  fetchCryptoNews();
+}
+
+// ═══════════════════════════════════════════════════════
+// CHART
+// ═══════════════════════════════════════════════════════
+function loadChart(){
+  const sym=S.chartSym;
+  const container=document.getElementById("tv-widget");
+  if(!container)return;
+  container.innerHTML="";
+  const load=()=>{new window.TradingView.widget({container_id:"tv-widget",symbol:`NSE:${sym}`,interval:"5",timezone:"Asia/Kolkata",theme:"light",style:"1",locale:"en",width:"100%",height:480,studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],hide_side_toolbar:false,allow_symbol_change:true});};
+  if(window.TradingView)load();
+  else{const s=document.createElement("script");s.src="https://s3.tradingview.com/tv.js";s.async=true;s.onload=load;document.head.appendChild(s);}
+  const trades=S.nseTrades.filter(t=>t.symbol===sym);
+  const el=document.getElementById("chart-trades");
+  if(el&&trades.length) el.innerHTML=`<div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text2)">Paper trades for ${sym}</div>`+
+    trades.slice(0,5).map(t=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+      ${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}
+      <span style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)} → ${fmtT(t.exit_time)}</span>
+      <span style="font-size:12px">Entry ${INR(t.price)}</span>
+      ${t.exit_price?`<span style="font-size:12px">Exit ${INR(t.exit_price)}</span>`:""}
+      <span style="margin-left:auto;font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"Open":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</span>
+    </div>`).join("");
+}
+
+function loadCryptoChart(){
+  const sym=S.cryptoChartSym;
+  const container=document.getElementById("tv-widget");
+  if(!container)return;
+  container.innerHTML="";
+  const load=()=>{new window.TradingView.widget({container_id:"tv-widget",symbol:`BINANCE:${sym}`,interval:"60",timezone:"UTC",theme:"light",style:"1",locale:"en",width:"100%",height:480,studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies"],hide_side_toolbar:false,allow_symbol_change:true});};
+  if(window.TradingView)load();
+  else{const s=document.createElement("script");s.src="https://s3.tradingview.com/tv.js";s.async=true;s.onload=load;document.head.appendChild(s);}
+}
+
+// ═══════════════════════════════════════════════════════
+// NEWS
+// ═══════════════════════════════════════════════════════
+function renderNewsItems(items,listId,sentId,countsId,label){
+  const bull=items.filter(n=>n.sentiment==="bullish").length;
+  const bear=items.filter(n=>n.sentiment==="bearish").length;
+  const total=items.length||1;
+  const score=((bull-bear)/total*100).toFixed(0);
+  const sentEl=document.getElementById(sentId);
+  if(sentEl) sentEl.innerHTML=items.length?`<div style="background:var(--bg2);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+    <div style="font-size:11px;color:var(--text2);margin-bottom:5px">Sentiment for ${label}</div>
+    <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:5px"><div style="width:${Math.max(0,Math.min(100,bull/total*100))}%;height:100%;background:var(--green);border-radius:3px"></div></div>
+    <div style="display:flex;gap:10px;font-size:11px;color:var(--text3)">
+      <span style="color:var(--green)">● ${bull} bullish</span><span style="color:var(--red)">● ${bear} bearish</span>
+      <span style="margin-left:auto;font-weight:500;color:${+score>=0?"var(--green)":"var(--red)"}">${+score>=0?"Bullish":"Bearish"} ${Math.abs(+score)}%</span>
+    </div>
+  </div>`:"";
+  const cEl=document.getElementById(countsId);
+  if(cEl) cEl.innerHTML=[["bullish","g"],["bearish","r"],["neutral","gr"]].map(([s,c])=>{const n=items.filter(x=>x.sentiment===s).length;return n?pill(`${n} ${s}`,c):"";}).join("");
+  const lEl=document.getElementById(listId);
+  if(lEl) lEl.innerHTML=items.map(item=>`<div class="news-card ${item.sentiment==="bullish"?"bull":item.sentiment==="bearish"?"bear":""}">
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">
+      ${pill(item.sentiment,item.sentiment==="bullish"?"g":item.sentiment==="bearish"?"r":"gr")}
+      <span style="font-size:11px;color:var(--text3)">${item.source||""}${item.timeAgo?" · "+item.timeAgo:""}</span>
+    </div>
+    <div style="font-weight:500;font-size:13px;line-height:1.5;margin-bottom:4px">${item.link?`<a href="${item.link}" target="_blank" style="color:inherit;text-decoration:none">${item.headline}</a>`:item.headline}</div>
+    ${item.impact?`<div style="font-size:12px;color:var(--text2);line-height:1.5">${item.impact}</div>`:""}
+  </div>`).join("");
+}
+
+async function fetchNSENews(){
+  const sym=S.newsNseSym;
+  const stock=NSE_STOCKS.find(s=>s.sym===sym);
+  const statusEl=document.getElementById("nse-news-status");
+  if(statusEl){statusEl.textContent="Fetching...";statusEl.className="pulsing";}
+  const listEl=document.getElementById("nse-news-list");
+  if(listEl) listEl.innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
+  try{
+    const r=await fetch(`/api/news?sym=${sym}&name=${encodeURIComponent(stock?.name||sym)}`);
+    const items=await r.json();
+    if(statusEl){statusEl.textContent="";statusEl.className="";}
+    renderNewsItems(items,"nse-news-list","nse-news-sent","nse-news-counts",sym);
+  }catch{if(statusEl)statusEl.textContent="";if(listEl)listEl.innerHTML=`<div class="empty">Could not load news</div>`;}
+}
+
+async function fetchCryptoNews(){
+  const sym=S.newsCryptoSym;
+  const coin=CRYPTO_LIST.find(c=>c.sym===sym);
+  const base=coin?.base||sym.replace("USDT","");
+  const statusEl=document.getElementById("crypto-news-status");
+  if(statusEl){statusEl.textContent="Fetching...";statusEl.className="pulsing";}
+  const listEl=document.getElementById("crypto-news-list");
+  if(listEl) listEl.innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
+  try{
+    const r=await fetch(`/api/news?sym=${base}&name=${base}%20cryptocurrency%20bitcoin`);
+    const items=await r.json();
+    if(statusEl){statusEl.textContent="";statusEl.className="";}
+    renderNewsItems(items,"crypto-news-list","crypto-news-sent","crypto-news-counts",base);
+  }catch{if(statusEl)statusEl.textContent="";if(listEl)listEl.innerHTML=`<div class="empty">Could not load news</div>`;}
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER DISPATCHER — single definitive version
+// ═══════════════════════════════════════════════════════
+function render(){
+  renderTopBar();
+  const tab = S.mode==="stocks" ? S.stocksTab : S.cryptoTab;
+  if(S.mode==="stocks"){
+    if(tab==="overview")  renderStocksOverview();
+    if(tab==="positions") renderStocksPositions();
+    if(tab==="trades")    renderStocksTrades();
+    if(tab==="market")    renderStocksMarket();
+    if(tab==="portfolio") renderPortfolio();
+    if(tab==="scanlog")   renderScanLog();
+    if(tab==="chart")     renderStocksChartPage();
+    if(tab==="news")      renderStocksNewsPage();
+  } else {
+    if(tab==="overview")  renderCryptoOverview();
+    if(tab==="positions") renderCryptoPositions();
+    if(tab==="trades")    renderCryptoTrades();
+    if(tab==="market")    { renderCryptoMarket(); fetchCryptoPrices(); }
+    if(tab==="chart")     renderCryptoChartPage();
+    if(tab==="news")      renderCryptoNewsPage();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════════════════
+setMode("stocks");
 fetchAll();
 fetchCryptoPrices();
 setInterval(fetchAll, 15000);
