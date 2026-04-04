@@ -1182,6 +1182,32 @@ function extractAMC(name) {
   return name.split(" ")[0];
 }
 
+// ── Qualitative AMC scores — research-based (updated Apr 2026) ────────────────
+const AMC_QUAL = {
+  "PPFAS":     {score:10,sebi:"clean",  warning:null,                                                                      note:"Owner-run, Rajeev Thakkar since inception, documented value philosophy, never changed style"},
+  "HDFC":      {score:9, sebi:"minor",  warning:"2020 minor front-running fine (settled)",                                 note:"HDFC Ltd + abrdn UK, publicly listed AMC, 40+ analysts, deep bench, strong succession planning"},
+  "Nippon":    {score:9, sebi:"clean",  warning:null,                                                                      note:"Nippon Life Japan (world's largest insurer), listed AMC, process-driven, strong governance"},
+  "ICICI Pru": {score:8, sebi:"clean",  warning:null,                                                                      note:"ICICI Bank + Prudential UK, listed, largest research team in India, dynamic all-weather approach"},
+  "SBI":       {score:8, sebi:"clean",  warning:null,                                                                      note:"SBI + Amundi France, govt backing, R. Srinivasan 15yr on small cap, conservative culture"},
+  "Kotak":     {score:8, sebi:"clean",  warning:null,                                                                      note:"Kotak Mahindra Bank, strong risk mgmt, quality-focused, low volatility preference"},
+  "DSP":       {score:8, sebi:"clean",  warning:null,                                                                      note:"Hemendra Kothari family, independent, global research partnerships, disciplined"},
+  "Mirae":     {score:8, sebi:"clean",  warning:null,                                                                      note:"Mirae Asset Korea (global), growing team, growth-at-reasonable-price philosophy"},
+  "UTI":       {score:7, sebi:"clean",  warning:null,                                                                      note:"Govt of India + T Rowe Price USA, institutional backing, steady long-term approach"},
+  "Canara":    {score:7, sebi:"clean",  warning:null,                                                                      note:"Canara Bank + Robeco Netherlands, conservative culture, consistent process"},
+  "Motilal":   {score:7, sebi:"clean",  warning:"Concentrated bets — high volatility risk",                               note:"Promoter-owned, founder-led, high conviction buy-right-sit-tight philosophy"},
+  "Edelweiss": {score:7, sebi:"clean",  warning:null,                                                                      note:"Edelweiss Financial Group, improving processes, quality-growth focus"},
+  "Tata":      {score:7, sebi:"clean",  warning:null,                                                                      note:"Tata Sons — India's most trusted conglomerate, stable conservative management"},
+  "Invesco":   {score:7, sebi:"clean",  warning:null,                                                                      note:"Invesco USA, global research expertise, disciplined research-driven process"},
+  "PGIM":      {score:7, sebi:"clean",  warning:null,                                                                      note:"Prudential Financial USA, international backing, consistent moderate-risk approach"},
+  "Sundaram":  {score:7, sebi:"clean",  warning:null,                                                                      note:"Sundaram Finance Group, Chennai-based, quality-growth, experienced team"},
+  "Bandhan":   {score:6, sebi:"clean",  warning:"Relatively new AMC, shorter track record",                               note:"Bandhan Bank, small growing team, improving track record"},
+  "Franklin":  {score:6, sebi:"minor",  warning:"2020 debt crisis — 6 schemes wound up (equity funds unaffected)",        note:"Franklin Templeton USA, strong global research, value-oriented equity team"},
+  "ABSL":      {score:6, sebi:"minor",  warning:"2024 front-running — ₹2.8 Cr fine, 6-month employee debarment",         note:"Aditya Birla Group + Sun Life Canada, large team, process-heavy"},
+  "Axis":      {score:5, sebi:"action", warning:"⚠️ 2022 front-running — 21 entities barred, ₹30.5 Cr impounded by SEBI", note:"Axis Bank, rebuilt team post-scandal, style drift, rebuilding investor trust"},
+  "Quant":     {score:2, sebi:"probe",  warning:"🔴 SEBI front-running RAID 2024 — investigation ONGOING, no closure yet", note:"Only 4 analysts for 26 schemes, opaque algorithmic strategy, governance concerns"},
+};
+function getAmcQual(amc){ return AMC_QUAL[amc]||{score:5,sebi:"unknown",warning:null,note:"Limited public information available"}; }
+
 // In-memory cache
 let mfCache = {};           // code -> enriched fund object
 let mfCacheTime = null;     // last refresh timestamp
@@ -1394,6 +1420,21 @@ function scoreMFComplete(fund) {
   if (d.instant_redemption)       { score+=1; hits["Instant redemption available"]=1; }
   if (d.portfolio_turnover && d.portfolio_turnover < 50){ score+=2; hits["Low portfolio turnover <50%"]=2; }
 
+  // ── AMC QUALITATIVE (10 pts — research-based) ────────────────────
+  const qual = getAmcQual(fund.amc);
+  const qualScore = Math.round((qual.score/10)*10); // 0-10 pts
+  score += qualScore;
+  if (qual.score >= 9)  hits["Top-tier AMC (governance, stability, team)"] = qualScore;
+  else if (qual.score >= 7) hits["Established AMC (good governance)"] = qualScore;
+  else if (qual.score >= 5) hits["Mid-tier AMC (minor concerns)"] = qualScore;
+  else hits["AMC concerns (regulatory/governance issues)"] = qualScore;
+  if (qual.warning) hits["⚠️ "+qual.warning] = 0; // flag warning, zero pts
+  // Auto-disqualify if active SEBI probe
+  if (qual.sebi === "probe") {
+    score = Math.min(score, 15); // cap score at 15 if under active investigation
+    hits["🔴 DISQUALIFIED: Active SEBI investigation"] = 0;
+  }
+
   return { score:+score.toFixed(1), hits, maxPossible:100 };
 }
 
@@ -1461,6 +1502,12 @@ async function enrichFund(f) {
     // Final fallbacks
     if (!merged.navFormatted && merged.nav) merged.navFormatted = "₹"+parseFloat(merged.nav).toFixed(2);
     if (!merged.aum_cr) merged.aum_cr = merged.aum;
+
+    const qual = getAmcQual(f.amc);
+    merged.amc_qual_score = qual.score;
+    merged.amc_sebi = qual.sebi;
+    merged.amc_warning = qual.warning;
+    merged.amc_note = qual.note;
 
     const {score, hits} = scoreMFComplete(merged);
     merged.score = score;
