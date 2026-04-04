@@ -1371,15 +1371,15 @@ async function renderMFPage(){
         return;
       }
       var top5=catFunds.slice(0,5),maxS=top5[0]?top5[0].score:1;
+      var catId = 'cat-'+cat.replace(/\s/g,'-');
       html+='<div style="margin-bottom:36px">';
       html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">';
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
       html+='<span style="font-size:10px;color:var(--text3);margin-left:auto">'+catFunds.length+' funds &middot; top 5 &middot; max 100 pts</span></div>';
-      html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px">';
-      top5.forEach(function(f,i){html+=mfCard(f,i+1,cfg,maxS);});
-      html+='</div>';
+      // Cards go in a named div — we'll set their innerHTML after
+      html+='<div id="cards-'+catId+'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px"></div>';
       html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">All '+catFunds.length+' funds &middot; scroll right for all 55 columns &middot; source: Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
       html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2800px;width:100%">';
@@ -1664,6 +1664,19 @@ async function renderMFPage(){
       html+='</tbody></table></div></div>';
     });
     catsEl.innerHTML=html;
+
+    // Set cards separately to avoid innerHTML parsing issues with special chars in hit keys
+    ["smallcap","midcap","flexicap"].forEach(function(cat){
+      var catFunds=grouped[cat], cfg=MF_CAT[cat];
+      if(!catFunds||!catFunds.length) return;
+      var catId='cat-'+cat.replace(/\s/g,'-');
+      var el=document.getElementById('cards-'+catId);
+      if(!el) return;
+      var maxS=catFunds[0]?catFunds[0].score:1;
+      var cardHtml='';
+      catFunds.slice(0,5).forEach(function(f,i){ cardHtml+=mfCard(f,i+1,cfg,maxS); });
+      el.innerHTML=cardHtml;
+    });
 
     document.getElementById("mf-footer").innerHTML=
       '<div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;background:var(--bg2);margin-top:8px">'
