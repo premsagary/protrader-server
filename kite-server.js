@@ -968,7 +968,7 @@ app.get("/api/news", async(req,res)=>{
 
   await Promise.allSettled(feeds.map(async({url,source})=>{
     try {
-      const r = await fetch(url, {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(5000)});
+      const r = await fetch(url, {headers:{"User-Agent":"Mozilla/5.0"}});
       if(!r.ok) return;
       const xml = await r.text();
       // Parse RSS items
@@ -1180,6 +1180,13 @@ app.get("/auth/callback", async(req,res)=>{
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Timeout-safe fetch (compatible with Node 18) ─────────────────────────────
+function fetchT(url, opts={}, ms=8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), ms);
+  return fetch(url, {...opts, signal:ctrl.signal}).finally(()=>clearTimeout(t));
+}
+
 // ── CRYPTO ENGINE — Binance Public API (no account needed) ────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1216,10 +1223,7 @@ async function fetchCryptoCandles(sym) {
   ];
   for (const url of endpoints) {
     try {
-      const r = await fetch(url, {
-        headers:{"User-Agent":"Mozilla/5.0 (compatible; ProTrader/1.0)"},
-        signal:AbortSignal.timeout(8000)
-      });
+      const r = await fetchT(url, {headers:{"User-Agent":"Mozilla/5.0"}});
       if (!r.ok) continue;
       const data = await r.json();
       if (!Array.isArray(data) || data.length < 30) continue;
@@ -1238,10 +1242,7 @@ async function fetchCryptoCandles(sym) {
     };
     const id = coinMap[sym];
     if (!id) return false;
-    const r = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=7`,
-      {headers:{"User-Agent":"ProTrader/1.0"},signal:AbortSignal.timeout(10000)}
-    );
+    const r = await fetchT(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=7`, {headers:{"User-Agent":"ProTrader/1.0"}}, 10000);
     if (!r.ok) return false;
     const data = await r.json();
     if (!Array.isArray(data) || data.length < 30) return false;
@@ -1264,10 +1265,7 @@ async function fetchCryptoPricesREST() {
   ];
   for (const url of endpoints) {
     try {
-      const r = await fetch(url, {
-        headers:{"User-Agent":"Mozilla/5.0 (compatible; ProTrader/1.0)"},
-        signal:AbortSignal.timeout(8000)
-      });
+      const r = await fetchT(url, {headers:{"User-Agent":"Mozilla/5.0"}});
       if (!r.ok) continue;
       const data = await r.json();
       if (!Array.isArray(data)) continue;
@@ -1289,8 +1287,7 @@ async function fetchCryptoPricesREST() {
   // CoinGecko fallback for prices
   try {
     const ids="bitcoin,ethereum,binancecoin,solana,ripple,cardano,dogecoin,avalanche-2,matic-network,polkadot,chainlink,uniswap,cosmos,litecoin,near,aptos,arbitrum,optimism,injective-protocol,sui";
-    const r=await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
-      {headers:{"User-Agent":"ProTrader/1.0"},signal:AbortSignal.timeout(10000)});
+    const r=await fetchT(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`, {headers:{"User-Agent":"ProTrader/1.0"}}, 10000);
     if(!r.ok) return;
     const data=await r.json();
     const symToId={BTCUSDT:"bitcoin",ETHUSDT:"ethereum",BNBUSDT:"binancecoin",SOLUSDT:"solana",
