@@ -1549,44 +1549,216 @@ async function refreshMFData() {
 }
 
 // ── MF API endpoints ──────────────────────────────────────────────────────────
-app.get("/api/mf/funds", async(req,res) => {
+// ── MF Tickertape endpoints — uses real Tickertape data from PostgreSQL ────────
+
+// Score a fund using real Tickertape data (all 55 fields)
+function scoreMFTickertape(f) {
+  let score = 0;
+  const hits = {};
+  const cat = (f.sub_category||"").toLowerCase().includes("small") ? "smallcap"
+             : (f.sub_category||"").toLowerCase().includes("mid")   ? "midcap"
+             : "flexicap";
+
+  const catBM = {smallcap:{r1:15,r3:20,r5:18},midcap:{r1:12,r3:17,r5:15},flexicap:{r1:10,r3:14,r5:12}};
+  const bm = catBM[cat];
+
+  // ── RETURNS vs BENCHMARK (25 pts) — using vs_cat fields (Tickertape: excess vs sub-category)
+  const r1=+f.ret_1y||0, r3=+f.cagr_3y||0, r5=+f.cagr_5y||0, r10=+f.cagr_10y||0;
+  const vc1=+f.vs_cat_1y||0, vc3=+f.vs_cat_3y||0, vc5=+f.vs_cat_5y||0, vc10=+f.vs_cat_10y||0;
+  const roll=+f.rolling_return_3y||0;
+
+  if(r1>bm.r1+12){score+=4;hits["1Y >"+(bm.r1+12)+"%"]=4;}
+  else if(r1>bm.r1+5){score+=2.5;hits["1Y >"+(bm.r1+5)+"%"]=2.5;}
+  else if(r1>bm.r1){score+=1;hits["1Y >category benchmark"]=1;}
+
+  if(r3>bm.r3+8){score+=5;hits["3Y >"+(bm.r3+8)+"%"]=5;}
+  else if(r3>bm.r3+4){score+=3;hits["3Y >"+(bm.r3+4)+"%"]=3;}
+  else if(r3>bm.r3){score+=1.5;hits["3Y >benchmark"]=1.5;}
+
+  if(r5>bm.r5+8){score+=5;hits["5Y >"+(bm.r5+8)+"%"]=5;}
+  else if(r5>bm.r5+4){score+=3;hits["5Y >"+(bm.r5+4)+"%"]=3;}
+  else if(r5>bm.r5){score+=1.5;hits["5Y >benchmark"]=1.5;}
+
+  if(r10>bm.r5){score+=4;hits["10Y >benchmark"]=4;}
+  if(roll>bm.r3){score+=3;hits["3Y rolling return >benchmark"]=3;}
+
+  // Beats sub-category peers
+  if(vc3>2){score+=2;hits["Beats peers by >2% (3Y)"]=2;}
+  else if(vc3>0){score+=1;hits["Beats peers (3Y)"]=1;}
+  if(vc5>2){score+=1;hits["Beats peers by >2% (5Y)"]=1;}
+
+  // ── RISK-ADJUSTED (20 pts) — Tickertape provided Sharpe, Sortino
+  const sharpe=+f.sharpe||0, sortino=+f.sortino||0;
+  const catSD=+f.category_std_dev||0, vol=+f.volatility||0, mdd=+f.max_drawdown||0;
+
+  if(sharpe>0.5){score+=6;hits["Sharpe >0.5"]=6;}
+  else if(sharpe>0){score+=3;hits["Sharpe positive"]=3;}
+  else if(sharpe>-0.3){score+=1;hits["Sharpe near zero"]=1;}
+
+  if(sortino>0.5){score+=4;hits["Sortino >0.5"]=4;}
+  else if(sortino>0){score+=2;hits["Sortino positive"]=2;}
+
+  // Rolling return quality
+  if(roll>22){score+=4;hits["3Y rolling >22%"]=4;}
+  else if(roll>18){score+=2.5;hits["3Y rolling >18%"]=2.5;}
+  else if(roll>14){score+=1;hits["3Y rolling >14%"]=1;}
+
+  // Max drawdown
+  if(mdd<20){score+=3;hits["Max drawdown <20%"]=3;}
+  else if(mdd<30){score+=2;hits["Max drawdown <30%"]=2;}
+  else if(mdd<40){score+=1;hits["Max drawdown <40%"]=1;}
+
+  // Calmar = 3Y / max drawdown
+  if(mdd>0){const cal=r3/mdd; if(cal>1){score+=3;hits["Calmar >1.0"]=3;}else if(cal>0.5){score+=1.5;hits["Calmar >0.5"]=1.5;}}
+
+  // ── RISK METRICS (15 pts)
+  if(catSD>0 && vol<catSD*0.85){score+=4;hits["Volatility well below category"]=4;}
+  else if(catSD>0 && vol<catSD){score+=2;hits["Volatility below category avg"]=2;}
+
+  const alpha=+f.alpha||0;
+  if(alpha>5){score+=4;hits["Alpha >5% (strong)"]=4;}
+  else if(alpha>3){score+=2.5;hits["Alpha >3%"]=2.5;}
+  else if(alpha>0){score+=1;hits["Positive alpha"]=1;}
+
+  const pe=+f.pe_ratio||0, catPE=+f.category_pe||0;
+  if(pe>0 && catPE>0 && pe<catPE*0.85){score+=3;hits["PE below category avg"]=3;}
+  else if(pe>0 && catPE>0 && pe<catPE){score+=1.5;hits["PE at/near category avg"]=1.5;}
+
+  const cash=+f.pct_cash||0;
+  if(cash>=3 && cash<=10){score+=2;hits["Cash 3-10% (healthy)"]=2;}
+  else if(cash>15){score+=0;hits["Cash >15% (concern)"]=0;}
+
+  // ── COST (10 pts)
+  const exp=+f.expense_ratio||0;
+  if(exp>0 && exp<0.3){score+=4;hits["Expense <0.3% (very low)"]=4;}
+  else if(exp<0.5){score+=3;hits["Expense <0.5%"]=3;}
+  else if(exp<0.75){score+=2;hits["Expense <0.75%"]=2;}
+  else if(exp<1){score+=1;hits["Expense <1%"]=1;}
+
+  if(+f.exit_load<=1){score+=2;hits["Exit load ≤1%"]=2;}
+
+  const lump=+f.min_lumpsum||0;
+  if(lump<=100){score+=2;hits["Min lumpsum ₹100"]=2;}
+  else if(lump<=500){score+=1.5;hits["Min lumpsum ≤₹500"]=1.5;}
+  else if(lump<=1000){score+=1;hits["Min lumpsum ≤₹1,000"]=1;}
+
+  const sip=+f.min_sip||0;
+  if(sip>0&&sip<=100){score+=1;hits["SIP from ₹100"]=1;}
+  else if(sip<=500){score+=0.5;hits["SIP ≤₹500"]=0.5;}
+
+  // ── AUM & ACCESS (10 pts)
+  const aum=+f.aum||0;
+  if(aum>=2000&&aum<=25000){score+=4;hits["AUM sweet spot ₹2K-25K Cr"]=4;}
+  else if(aum<2000&&aum>=500){score+=2;hits["AUM ₹500-2K Cr (growing)"]=2;}
+  else if(aum>25000){score+=2;hits["Large established fund"]=2;}
+  if(aum>=1000){score+=2;hits["AUM >₹1,000 Cr"]=2;}
+  if(aum>=5000){score+=1;hits["AUM >₹5,000 Cr"]=1;}
+  if((f.sip_allowed||"").toLowerCase()==="allowed"){score+=3;hits["SIP available"]=3;}
+
+  // ── PORTFOLIO QUALITY (10 pts)
+  const top10=+f.top10_concentration||0;
+  if(top10<45){score+=3;hits["Top 10 holdings <45% (diversified)"]=3;}
+  else if(top10<55){score+=2;hits["Top 10 holdings <55%"]=2;}
+  else if(top10<65){score+=1;hits["Top 10 holdings <65%"]=1;}
+
+  const eq=+f.pct_equity||0;
+  if(eq>=90){score+=3;hits["High equity allocation >90%"]=3;}
+  else if(eq>=75){score+=2;hits["Good equity allocation >75%"]=2;}
+
+  const ath=+f.pct_away_from_ath||0;
+  if(ath<10){score+=2;hits["Within 10% of all-time high"]=2;}
+  else if(ath<20){score+=1;hits["Within 20% of all-time high"]=1;}
+
+  if(+f.months_since_inception>=60){score+=2;hits["5+ year track record"]=2;}
+  if(+f.months_since_inception>=120){score+=1;hits["10+ year track record"]=1;}
+
+  // ── AMC QUALITATIVE (10 pts — research-based)
+  // Extract short AMC name from full AMC string
+  const amcFull = f.amc||"";
+  const amcShort = Object.keys(AMC_QUAL).find(k=>amcFull.toUpperCase().includes(k.toUpperCase()))||"";
+  const qual = getAmcQual(amcShort);
+  const qualPts = Math.round((qual.score/10)*10);
+  score += qualPts;
+  if(qual.score>=9) hits["Top-tier AMC (governance, team, stability)"]=qualPts;
+  else if(qual.score>=7) hits["Established AMC"]=qualPts;
+  else hits["AMC concerns"]=qualPts;
+  if(qual.warning) hits["⚠️ "+qual.warning]=0;
+  if(qual.sebi==="probe"){score=Math.min(score,15);hits["🔴 DISQUALIFIED: Active SEBI investigation"]=0;}
+
+  return {score:+score.toFixed(1), hits, cat,
+          amc_sebi:qual.sebi, amc_warning:qual.warning, amc_note:qual.note};
+}
+
+app.get("/api/mf/tickertape", async(req,res)=>{
   try {
-    // If cache is empty, fetch now and wait
-    if (Object.keys(mfCache).length === 0) {
-      if (!mfRefreshing) await refreshMFData();
-      else {
-        // Still refreshing — wait up to 60s
-        let waited = 0;
-        while (mfRefreshing && waited < 60000) {
-          await new Promise(r=>setTimeout(r,1000));
-          waited += 1000;
-        }
-      }
-    } else {
-      // Cache exists — trigger background refresh if stale
-      const stale = !mfCacheTime || Date.now()-mfCacheTime > MF_CACHE_TTL;
-      if (stale && !mfRefreshing) refreshMFData();
-    }
-    const funds = Object.values(mfCache);
-    res.json({
-      funds,
-      total: funds.length,
-      cached_at: mfCacheTime,
-      source: "mfdata.in + mf.captnemo.in + mfapi.in",
+    const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
+    // Score all funds
+    const scored = rows.map(f=>{
+      const {score,hits,cat,amc_sebi,amc_warning,amc_note} = scoreMFTickertape(f);
+      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note,
+              navFormatted: f.nav ? "₹"+parseFloat(f.nav).toFixed(2) : null,
+              aum_cr: f.aum,
+              expense_ratio: f.expense_ratio,
+              ret_1y: f.ret_1y, cagr_3y: f.cagr_3y, cagr_5y: f.cagr_5y, cagr_10y: f.cagr_10y,
+              sharpe: f.sharpe, sortino: f.sortino, stdDev: f.volatility,
+              maxDD: f.max_drawdown, rollConsistency: null,
+              fund_manager: f.fund_manager,
+              dataSource: "Tickertape (Apr 2026)"};
     });
+    res.json({funds:scored, total:scored.length, source:"Tickertape CSV — Apr 4 2026", cached_at:Date.now()});
+  } catch(e){
+    // Table might not exist yet
+    res.status(503).json({error:"Run the SQL migration first: "+e.message, funds:[]});
+  }
+});
+
+// /api/mf/funds — primary endpoint, uses Tickertape DB (real data)
+// Falls back to MFAPI cache if DB table not yet loaded
+app.get("/api/mf/funds", async(req,res)=>{
+  try {
+    // Try Tickertape DB first
+    const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
+    if (rows.length > 0) {
+      const scored = rows.map(f => {
+        const {score,hits,cat,amc_sebi,amc_warning,amc_note} = scoreMFTickertape(f);
+        return {
+          ...f,
+          score, hits, cat, amc_sebi, amc_warning, amc_note,
+          navFormatted: f.nav ? "₹"+parseFloat(f.nav).toFixed(2) : null,
+          aum_cr:       parseFloat(f.aum)||null,
+          ret_1y:       parseFloat(f.ret_1y)||null,
+          cagr_3y:      parseFloat(f.cagr_3y)||null,
+          cagr_5y:      parseFloat(f.cagr_5y)||null,
+          cagr_10y:     parseFloat(f.cagr_10y)||null,
+          sharpe:       parseFloat(f.sharpe)||null,
+          sortino:      parseFloat(f.sortino)||null,
+          stdDev:       parseFloat(f.volatility)||null,
+          maxDD:        parseFloat(f.max_drawdown)||null,
+          rollConsistency: parseFloat(f.rolling_3y)||null,
+          dataSource:   "Tickertape — Apr 4 2026",
+        };
+      });
+      return res.json({funds:scored, total:scored.length, source:"Tickertape CSV (real data)", cached_at:Date.now()});
+    }
+    throw new Error("No rows in mf_tickertape");
   } catch(e) {
-    res.status(500).json({error: e.message, funds: []});
+    // Fallback to MFAPI cache
+    console.log("Tickertape DB not ready, using MFAPI cache:", e.message);
+    const funds = Object.values(mfCache);
+    if (funds.length > 0) {
+      return res.json({funds, total:funds.length, source:"MFAPI (fallback — run mf_load.sql to use real data)", cached_at:mfCacheTime});
+    }
+    res.status(503).json({error:"No MF data available. Run mf_load.sql in Railway PostgreSQL.", funds:[], total:0});
   }
 });
 
 app.post("/api/mf/refresh", async(req,res) => {
-  res.json({message:"MF refresh started"});
-  refreshMFData();
+  res.json({message:"MF refresh started (MFAPI background fetch)"});
+  discoverMFUniverse().then(()=>refreshMFData());
 });
 
-// Refresh MF data daily at 6 AM IST
+// Background MFAPI refresh — runs daily at 6AM as secondary source
 cron.schedule("0 6 * * *", async()=>{ await discoverMFUniverse(); refreshMFData(); }, {timezone:"Asia/Kolkata"});
-// Startup — discover universe then load data after 30s
 setTimeout(async()=>{ await discoverMFUniverse(); refreshMFData(); }, 30000);
 
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
