@@ -1183,567 +1183,282 @@ function extractAMC(name) {
 }
 
 // ── Qualitative AMC scores — research-based (updated Apr 2026) ────────────────
-const AMC_QUAL = {
-  "PPFAS":     {score:10,sebi:"clean",  warning:null,                                                                      note:"Owner-run, Rajeev Thakkar since inception, documented value philosophy, never changed style"},
-  "HDFC":      {score:9, sebi:"minor",  warning:"2020 minor front-running fine (settled)",                                 note:"HDFC Ltd + abrdn UK, publicly listed AMC, 40+ analysts, deep bench, strong succession planning"},
-  "Nippon":    {score:9, sebi:"clean",  warning:null,                                                                      note:"Nippon Life Japan (world's largest insurer), listed AMC, process-driven, strong governance"},
-  "ICICI Pru": {score:8, sebi:"clean",  warning:null,                                                                      note:"ICICI Bank + Prudential UK, listed, largest research team in India, dynamic all-weather approach"},
-  "SBI":       {score:8, sebi:"clean",  warning:null,                                                                      note:"SBI + Amundi France, govt backing, R. Srinivasan 15yr on small cap, conservative culture"},
-  "Kotak":     {score:8, sebi:"clean",  warning:null,                                                                      note:"Kotak Mahindra Bank, strong risk mgmt, quality-focused, low volatility preference"},
-  "DSP":       {score:8, sebi:"clean",  warning:null,                                                                      note:"Hemendra Kothari family, independent, global research partnerships, disciplined"},
-  "Mirae":     {score:8, sebi:"clean",  warning:null,                                                                      note:"Mirae Asset Korea (global), growing team, growth-at-reasonable-price philosophy"},
-  "UTI":       {score:7, sebi:"clean",  warning:null,                                                                      note:"Govt of India + T Rowe Price USA, institutional backing, steady long-term approach"},
-  "Canara":    {score:7, sebi:"clean",  warning:null,                                                                      note:"Canara Bank + Robeco Netherlands, conservative culture, consistent process"},
-  "Motilal":   {score:7, sebi:"clean",  warning:"Concentrated bets — high volatility risk",                               note:"Promoter-owned, founder-led, high conviction buy-right-sit-tight philosophy"},
-  "Edelweiss": {score:7, sebi:"clean",  warning:null,                                                                      note:"Edelweiss Financial Group, improving processes, quality-growth focus"},
-  "Tata":      {score:7, sebi:"clean",  warning:null,                                                                      note:"Tata Sons — India's most trusted conglomerate, stable conservative management"},
-  "Invesco":   {score:7, sebi:"clean",  warning:null,                                                                      note:"Invesco USA, global research expertise, disciplined research-driven process"},
-  "PGIM":      {score:7, sebi:"clean",  warning:null,                                                                      note:"Prudential Financial USA, international backing, consistent moderate-risk approach"},
-  "Sundaram":  {score:7, sebi:"clean",  warning:null,                                                                      note:"Sundaram Finance Group, Chennai-based, quality-growth, experienced team"},
-  "Bandhan":   {score:6, sebi:"clean",  warning:"Relatively new AMC, shorter track record",                               note:"Bandhan Bank, small growing team, improving track record"},
-  "Franklin":  {score:6, sebi:"minor",  warning:"2020 debt crisis — 6 schemes wound up (equity funds unaffected)",        note:"Franklin Templeton USA, strong global research, value-oriented equity team"},
-  "ABSL":      {score:6, sebi:"minor",  warning:"2024 front-running — ₹2.8 Cr fine, 6-month employee debarment",         note:"Aditya Birla Group + Sun Life Canada, large team, process-heavy"},
-  "Axis":      {score:5, sebi:"action", warning:"⚠️ 2022 front-running — 21 entities barred, ₹30.5 Cr impounded by SEBI", note:"Axis Bank, rebuilt team post-scandal, style drift, rebuilding investor trust"},
-  "Quant":     {score:2, sebi:"probe",  warning:"🔴 SEBI front-running RAID 2024 — investigation ONGOING, no closure yet", note:"Only 4 analysts for 26 schemes, opaque algorithmic strategy, governance concerns"},
-};
-function getAmcQual(amc){ return AMC_QUAL[amc]||{score:5,sebi:"unknown",warning:null,note:"Limited public information available"}; }
-
-// In-memory cache
-let mfCache = {};           // code -> enriched fund object
-let mfCacheTime = null;     // last refresh timestamp
-const MF_CACHE_TTL = 6*60*60*1000; // 6 hours
-
-// ── Fetch from mfdata.in ──────────────────────────────────────────────────────
-async function fetchMFData(code) {
-  try {
-    const r = await fetchT(`https://mfdata.in/api/v1/schemes/${code}`, {
-      headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json"}
-    }, 10000);
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (!d || d.status === "error") return null;
-    return d.data || d;
-  } catch(e) { return null; }
-}
-
-// ── Fetch from mf.captnemo.in (Kuvera metadata) ───────────────────────────────
-async function fetchKuveraData(isin) {
-  try {
-    const r = await fetchT(`https://mf.captnemo.in/kuvera/${isin}`, {
-      headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json"}
-    }, 10000);
-    if (!r.ok) return null;
-    const d = await r.json();
-    return d || null;
-  } catch(e) { return null; }
-}
-
-// ── Fetch NAV history from mfapi.in ──────────────────────────────────────────
-async function fetchMFNavHistory(code) {
-  try {
-    const r = await fetchT(`https://api.mfapi.in/mf/${code}`, {
-      headers:{"User-Agent":"Mozilla/5.0"}
-    }, 12000);
-    if (!r.ok) return null;
-    const d = await r.json();
-    const raw = (d.data || []).slice().reverse(); // oldest first
-    if (raw.length < 50) return null;
-    const navs = raw.map(x => +x.nav).filter(n => n > 0);
-    return navs;
-  } catch(e) { return null; }
-}
-
-// ── Calculate metrics from NAV history ───────────────────────────────────────
-function calcNavMetrics(navs) {
-  const N = navs.length;
-  const last = navs[N-1];
-  function idx(days) { return Math.max(0, N-1-Math.round(days)); }
-  function ann(old, yrs) { return old && old>0 ? +((Math.pow(last/old,1/yrs)-1)*100).toFixed(1) : null; }
-  function ret(old) { return old && old>0 ? +((last-old)/old*100).toFixed(1) : null; }
-
-  const last3y = navs.slice(idx(365*3));
-  const dailyRet = [];
-  for (let i=1; i<last3y.length; i++) dailyRet.push((last3y[i]-last3y[i-1])/last3y[i-1]);
-
-  const mean = dailyRet.reduce((a,b)=>a+b,0)/dailyRet.length;
-  const variance = dailyRet.reduce((a,b)=>a+Math.pow(b-mean,2),0)/dailyRet.length;
-  const stdDev = +(Math.sqrt(variance)*Math.sqrt(252)*100).toFixed(2);
-
-  const downRet = dailyRet.filter(r=>r<0);
-  const downVariance = downRet.reduce((a,b)=>a+b*b,0)/dailyRet.length;
-  const downDev = +(Math.sqrt(downVariance)*Math.sqrt(252)*100).toFixed(2);
-
-  let peak = last3y[0], maxDD = 0;
-  for (const n of last3y) {
-    if (n>peak) peak=n;
-    const dd=(n-peak)/peak*100;
-    if (dd<maxDD) maxDD=dd;
-  }
-
-  const annRet3y = ann(navs[idx(365*3)], 3) || 0;
-  const rf = 6.5; // RBI repo rate proxy
-  const sharpe = stdDev>0 ? +((annRet3y-rf)/stdDev).toFixed(2) : null;
-  const sortino = downDev>0 ? +((annRet3y-rf)/downDev).toFixed(2) : null;
-  const calmar = maxDD<0 ? +(annRet3y/Math.abs(maxDD)).toFixed(2) : null;
-
-  // Rolling 1Y consistency — % of 1Y rolling windows with positive return
-  let posWindows=0, totalWindows=0;
-  for (let i=252; i<navs.length; i++) {
-    totalWindows++;
-    if (navs[i] > navs[i-252]) posWindows++;
-  }
-  const rollConsistency = totalWindows>0 ? Math.round(posWindows/totalWindows*100) : null;
-
-  return {
-    nav: last,
-    navFormatted: "₹"+last.toFixed(2),
-    ret1m:  ret(navs[idx(30)]),
-    ret3m:  ret(navs[idx(91)]),
-    ret6m:  ret(navs[idx(182)]),
-    ret1y:  ret(navs[idx(365)]),
-    cagr2y: ann(navs[idx(365*2)], 2),
-    cagr3y: ann(navs[idx(365*3)], 3),
-    cagr5y: ann(navs[idx(365*5)], 5),
-    cagr7y: N>365*7  ? ann(navs[idx(365*7)],  7) : null,
-    cagr10y:N>365*10 ? ann(navs[idx(365*10)],10) : null,
-    cagrInception: ann(navs[0], N/365.25),
-    stdDev, maxDD: +maxDD.toFixed(1), sharpe, sortino, calmar,
-    rollConsistency, dataPoints: N,
-  };
-}
-
-// ── Score a fund with all available data ─────────────────────────────────────
-function scoreMFComplete(fund) {
-  const d = fund;
-  let score = 0;
-  const hits = {};
-
-  // ── RETURNS (25 pts) ─────────────────────────────────────────────
-  const catBM = {smallcap:{r1:15,r3:20,r5:18},midcap:{r1:12,r3:17,r5:15},flexicap:{r1:10,r3:14,r5:12}};
-  const bm = catBM[fund.cat] || catBM.flexicap;
-
-  if (d.ret1y > bm.r1+12) { score+=4;   hits["1Y >"+(bm.r1+12)+"%"]=4; }
-  else if (d.ret1y > bm.r1+5) { score+=2.5; hits["1Y >"+(bm.r1+5)+"%"]=2.5; }
-  else if (d.ret1y > bm.r1)   { score+=1;   hits["1Y >benchmark"]=1; }
-
-  if (d.cagr3y > bm.r3+8) { score+=5;   hits["3Y >"+(bm.r3+8)+"%"]=5; }
-  else if (d.cagr3y > bm.r3+4) { score+=3; hits["3Y >"+(bm.r3+4)+"%"]=3; }
-  else if (d.cagr3y > bm.r3)   { score+=1.5; hits["3Y >benchmark"]=1.5; }
-
-  if (d.cagr5y > bm.r5+8) { score+=5;   hits["5Y >"+(bm.r5+8)+"%"]=5; }
-  else if (d.cagr5y > bm.r5+4) { score+=3; hits["5Y >"+(bm.r5+4)+"%"]=3; }
-  else if (d.cagr5y > bm.r5)   { score+=1.5; hits["5Y >benchmark"]=1.5; }
-
-  if (d.cagr10y > bm.r5)    { score+=4;   hits["10Y >benchmark"]=4; }
-  if (d.cagrInception > bm.r5){ score+=3; hits["Inception >benchmark"]=3; }
-  if (d.ret6m > 0)           { score+=1;   hits["6M positive"]=1; }
-  if (d.ret3m > 0)           { score+=0.5; hits["3M positive"]=0.5; }
-
-  // ── RISK-ADJUSTED (20 pts) ───────────────────────────────────────
-  if (d.sharpe > 1.0)      { score+=6; hits["Sharpe >1.0"]=6; }
-  else if (d.sharpe > 0.5) { score+=4; hits["Sharpe >0.5"]=4; }
-  else if (d.sharpe > 0)   { score+=2; hits["Sharpe positive"]=2; }
-
-  if (d.sortino > 1.5)     { score+=4; hits["Sortino >1.5"]=4; }
-  else if (d.sortino > 0.8){ score+=2.5; hits["Sortino >0.8"]=2.5; }
-  else if (d.sortino > 0)  { score+=1; hits["Sortino positive"]=1; }
-
-  if (d.calmar > 1.0)      { score+=3; hits["Calmar >1.0"]=3; }
-  else if (d.calmar > 0.5) { score+=1.5; hits["Calmar >0.5"]=1.5; }
-
-  if (d.rollConsistency > 85){ score+=4; hits["Rolling 1Y >85% positive"]=4; }
-  else if (d.rollConsistency > 70){ score+=2.5; hits["Rolling 1Y >70% positive"]=2.5; }
-  else if (d.rollConsistency > 55){ score+=1; hits["Rolling 1Y >55% positive"]=1; }
-
-  if (d.maxDD > -20)       { score+=3; hits["Max drawdown <20%"]=3; }
-  else if (d.maxDD > -30)  { score+=2; hits["Max drawdown <30%"]=2; }
-  else if (d.maxDD > -40)  { score+=1; hits["Max drawdown <40%"]=1; }
-
-  // ── RISK METRICS (15 pts) ────────────────────────────────────────
-  const catAvgVol = {smallcap:22,midcap:20,flexicap:16};
-  const avgVol = catAvgVol[fund.cat]||18;
-  if (d.stdDev && d.stdDev < avgVol-4)  { score+=4; hits["Volatility well below avg"]=4; }
-  else if (d.stdDev && d.stdDev < avgVol){ score+=2; hits["Volatility below avg"]=2; }
-
-  if (d.beta && d.beta < 0.8)  { score+=4; hits["Beta <0.8 (low market risk)"]=4; }
-  else if (d.beta && d.beta < 0.95){ score+=2; hits["Beta <0.95"]=2; }
-
-  if (d.alpha && d.alpha > 5)   { score+=4; hits["Alpha >5% (strong manager skill)"]=4; }
-  else if (d.alpha && d.alpha > 3){ score+=2.5; hits["Alpha >3%"]=2.5; }
-  else if (d.alpha && d.alpha > 0){ score+=1; hits["Alpha positive"]=1; }
-
-  if (d.pe && d.pe < 22)        { score+=2; hits["Portfolio P/E <22"]=2; }
-  if (d.pb && d.pb < 3.5)       { score+=1; hits["Portfolio P/B <3.5"]=1; }
-
-  // ── COST (10 pts) ────────────────────────────────────────────────
-  if (d.expense_ratio < 0.3)      { score+=4; hits["Expense <0.3% (very low)"]=4; }
-  else if (d.expense_ratio < 0.5) { score+=3; hits["Expense <0.5%"]=3; }
-  else if (d.expense_ratio < 0.75){ score+=2; hits["Expense <0.75%"]=2; }
-  else if (d.expense_ratio < 1.0) { score+=1; hits["Expense <1.0%"]=1; }
-
-  if (d.exit_load_pct && +d.exit_load_pct < 1) { score+=2; hits["Low exit load <1%"]=2; }
-  else if (!d.exit_load_pct || +d.exit_load_pct <= 1){ score+=1; hits["Standard exit load"]=1; }
-
-  if (d.min_lumpsum <= 100)      { score+=2; hits["Min ₹100 (most accessible)"]=2; }
-  else if (d.min_lumpsum <= 500) { score+=1.5; hits["Min ≤₹500"]=1.5; }
-  else if (d.min_lumpsum <= 1000){ score+=1; hits["Min ≤₹1,000"]=1; }
-
-  if (d.sip_min <= 100)          { score+=1; hits["SIP from ₹100"]=1; }
-  else if (d.sip_min <= 500)     { score+=0.5; hits["SIP ≤₹500"]=0.5; }
-
-  // ── AUM & FLOWS (10 pts) ─────────────────────────────────────────
-  const aum = d.aum_cr || d.aum;
-  if (aum >= 2000 && aum <= 25000) { score+=4; hits["AUM sweet spot ₹2K-25K Cr"]=4; }
-  else if (aum >= 500 && aum < 2000){ score+=2; hits["AUM ₹500-2K Cr (growing)"]=2; }
-  else if (aum >= 25000)           { score+=2; hits["Large fund >₹25K Cr"]=2; }
-  if (aum >= 1000)                 { score+=2; hits["AUM >₹1,000 Cr (established)"]=2; }
-  if (aum >= 5000)                 { score+=1; hits["AUM >₹5,000 Cr"]=1; }
-  if (d.lumpsum_open)              { score+=3; hits["Lumpsum open to investors"]=3; }
-
-  // ── FUND QUALITY (10 pts) ────────────────────────────────────────
-  if (d.morningstar >= 5)         { score+=4; hits["5-star Morningstar rated"]=4; }
-  else if (d.morningstar >= 4)    { score+=2.5; hits["4-star Morningstar rated"]=2.5; }
-  else if (d.morningstar >= 3)    { score+=1; hits["3-star Morningstar rated"]=1; }
-
-  if (d.crisil_rating)            { score+=2; hits["CRISIL rated"]=2; }
-
-  if (d.dataPoints > 3000)        { score+=2; hits["10+ year history"]=2; }
-  else if (d.dataPoints > 1500)   { score+=1; hits["5+ year history"]=1; }
-
-  if (d.fund_manager && d.manager_tenure_yrs >= 5){ score+=2; hits["Fund manager 5+ year tenure"]=2; }
-  else if (d.manager_tenure_yrs >= 3){ score+=1; hits["Fund manager 3+ year tenure"]=1; }
-
-  // ── GOVERNANCE (10 pts) ──────────────────────────────────────────
-  if (d.sebi_clean !== false)     { score+=3; hits["Clean SEBI record"]=3; }
-  if (d.direct)                   { score+=2; hits["Direct plan available"]=2; }
-  if (d.fund_type === "Open Ended"||d.maturity_type==="Open Ended"){ score+=2; hits["Open-ended fund"]=2; }
-  if (d.instant_redemption)       { score+=1; hits["Instant redemption available"]=1; }
-  if (d.portfolio_turnover && d.portfolio_turnover < 50){ score+=2; hits["Low portfolio turnover <50%"]=2; }
-
-  // ── AMC QUALITATIVE (10 pts — research-based) ────────────────────
-  const qual = getAmcQual(fund.amc);
-  const qualScore = Math.round((qual.score/10)*10); // 0-10 pts
-  score += qualScore;
-  if (qual.score >= 9)  hits["Top-tier AMC (governance, stability, team)"] = qualScore;
-  else if (qual.score >= 7) hits["Established AMC (good governance)"] = qualScore;
-  else if (qual.score >= 5) hits["Mid-tier AMC (minor concerns)"] = qualScore;
-  else hits["AMC concerns (regulatory/governance issues)"] = qualScore;
-  if (qual.warning) hits["⚠️ "+qual.warning] = 0; // flag warning, zero pts
-  // Auto-disqualify if active SEBI probe
-  if (qual.sebi === "probe") {
-    score = Math.min(score, 15); // cap score at 15 if under active investigation
-    hits["🔴 DISQUALIFIED: Active SEBI investigation"] = 0;
-  }
-
-  return { score:+score.toFixed(1), hits, maxPossible:100 };
-}
-
-// ── Enrich one fund from all 3 sources ───────────────────────────────────────
-async function enrichFund(f) {
-  try {
-    // Fetch all 3 sources in parallel
-    const [mfd, kuv, navs] = await Promise.allSettled([
-      fetchMFData(f.code),
-      fetchKuveraData(f.isin),
-      fetchMFNavHistory(f.code),
-    ]);
-
-    const mfData  = mfd.status==="fulfilled"  ? mfd.value  : null;
-    const kuvData = kuv.status==="fulfilled"  ? kuv.value  : null;
-    const navArr  = navs.status==="fulfilled" ? navs.value : null;
-
-    // Merge all data sources — mfdata.in is primary
-    const merged = {
-      code: f.code, isin: f.isin,
-      name: f.name, amc: f.amc, cat: f.cat,
-      sebi_clean: true,
-      // from mfdata.in
-      nav:          mfData?.nav || mfData?.last_nav?.nav,
-      navFormatted: mfData?.nav ? "₹"+parseFloat(mfData.nav).toFixed(2) : null,
-      aum_cr:       mfData?.aum_cr || mfData?.aum,
-      expense_ratio:parseFloat(mfData?.expense_ratio || 0),
-      morningstar:  mfData?.morningstar || mfData?.fund_rating,
-      category:     mfData?.category,
-      fund_type:    mfData?.fund_type || mfData?.maturity_type,
-      pe:           mfData?.pe_ratio,
-      pb:           mfData?.pb_ratio,
-      sharpe:       mfData?.sharpe,
-      beta:         mfData?.beta,
-      alpha:        mfData?.alpha,
-      sortino:      mfData?.sortino,
-      stdDev_api:   mfData?.standard_deviation,
-      ret1y_api:    mfData?.returns?.["1y"] || mfData?.returns?.["1Y"],
-      ret3y_api:    mfData?.returns?.["3y"] || mfData?.returns?.["3Y"],
-      ret5y_api:    mfData?.returns?.["5y"] || mfData?.returns?.["5Y"],
-      holdings:     mfData?.holdings || [],
-      sectors:      mfData?.sector_allocation || {},
-      fund_manager: mfData?.fund_manager,
-      // from kuvera
-      crisil_rating:   kuvData?.crisil_rating,
-      lumpsum_open:    kuvData?.lump_available === "Y",
-      min_lumpsum:     kuvData?.lump_min || kuvData?.min_lumpsum,
-      sip_min:         kuvData?.sip_min_amount || kuvData?.min_sip,
-      exit_load_pct:   kuvData?.exit_load,
-      direct:          kuvData?.direct === "Y",
-      fund_rating:     kuvData?.fund_rating,
-      instant_redemption: kuvData?.instant === "Y",
-      manager_tenure_yrs: null, // derived below
-    };
-
-    // Calculate from NAV history (more accurate than API-provided)
-    if (navArr && navArr.length > 50) {
-      const calc = calcNavMetrics(navArr);
-      Object.assign(merged, calc);
-      // Use API-provided Sharpe/Beta/Alpha if available, otherwise calculated
-      if (!merged.sharpe && calc.sharpe) merged.sharpe = calc.sharpe;
-      if (!merged.sortino && calc.sortino) merged.sortino = calc.sortino;
-    }
-
-    // Final fallbacks
-    if (!merged.navFormatted && merged.nav) merged.navFormatted = "₹"+parseFloat(merged.nav).toFixed(2);
-    if (!merged.aum_cr) merged.aum_cr = merged.aum;
-
-    const qual = getAmcQual(f.amc);
-    merged.amc_qual_score = qual.score;
-    merged.amc_sebi = qual.sebi;
-    merged.amc_warning = qual.warning;
-    merged.amc_note = qual.note;
-
-    const {score, hits} = scoreMFComplete(merged);
-    merged.score = score;
-    merged.hits  = hits;
-    merged.dataSource = [
-      mfData?"mfdata.in":"",
-      kuvData?"kuvera":"",
-      navArr?"mfapi.in":""
-    ].filter(Boolean).join(" + ");
-
-    return merged;
-  } catch(e) {
-    console.error(`MF enrich error ${f.code}:`, e.message);
-    return null;
-  }
-}
-
-// ── Refresh all fund data ─────────────────────────────────────────────────────
-let mfRefreshing = false;
-async function refreshMFData() {
-  if (mfRefreshing) return;
-  mfRefreshing = true;
-  console.log("📊 Refreshing MF data from mfdata.in + kuvera + mfapi...");
-  const start = Date.now();
-  // Fetch in batches of 5 to avoid rate limiting
-  const BATCH = 5;
-  const results = {};
-  for (let i=0; i<MF_UNIVERSE_SERVER.length; i+=BATCH) {
-    const batch = MF_UNIVERSE_SERVER.slice(i, i+BATCH);
-    const enriched = await Promise.all(batch.map(f => enrichFund(f)));
-    enriched.forEach((f,j) => { if(f) results[batch[j].code] = f; });
-    if (i+BATCH < MF_UNIVERSE_SERVER.length) await new Promise(r=>setTimeout(r,1000)); // 1s between batches
-  }
-  mfCache = results;
-  mfCacheTime = Date.now();
-  const ok = Object.keys(results).length;
-  console.log(`✅ MF data refreshed — ${ok}/${MF_UNIVERSE_SERVER.length} funds in ${((Date.now()-start)/1000).toFixed(1)}s`);
-  mfRefreshing = false;
-}
-
-// ── MF API endpoints ──────────────────────────────────────────────────────────
-// ── MF Tickertape endpoints — uses real Tickertape data from PostgreSQL ────────
-
-// Score a fund using real Tickertape data (all 55 fields)
-// ── Per-category value distributions (computed from Tickertape Apr 2026 data)
-// Used for percentile-based scoring — so funds are ranked relative to peers, not absolute thresholds
-const CAT_DIST = {
-  "Flexi Cap Fund": {
-    rolling_3y: [5.7698,12.3292,15.0669,15.2152,15.3106,15.8228,15.9575,16.7316,16.9639,17.6144,17.7589,17.8976,17.9022,18.459,18.5537,18.7907,19.1356,19.5943,19.7419,19.876,19.9503,21.1851,21.5155,21.6913,21.8923,22.1144,22.5608,22.7729,23.9026,24.4229,25.3622,25.5812,25.8541,26.5318],
-    sharpe: [-1.6922,-1.6128,-1.5827,-1.443,-0.9636,-0.8826,-0.7826,-0.5921,-0.5683,-0.562,-0.481,-0.4461,-0.4413,-0.4127,-0.3921,-0.3492,-0.3365,-0.327,-0.2905,-0.2826,-0.2826,-0.2778,-0.2746,-0.273,-0.2683,-0.2492,-0.2381,-0.2207,-0.2127,-0.181,-0.1699,-0.1699,-0.1492,-0.1429,-0.081,-0.027,-0.0238,-0.0127,0.0381,0.0619,0.0762,0.0794,0.0889,0.0984,0.1254],
-    sortino: [-0.157,-0.1478,-0.1438,-0.136,-0.0897,-0.0789,-0.0787,-0.0579,-0.0578,-0.0547,-0.0477,-0.043,-0.043,-0.0409,-0.0386,-0.0338,-0.0335,-0.0318,-0.0294,-0.0283,-0.0278,-0.0276,-0.0272,-0.0267,-0.0261,-0.0259,-0.0241,-0.0216,-0.0205,-0.0176,-0.0171,-0.017,-0.0148,-0.0144,-0.008,-0.0026,-0.0023,-0.0013,0.0037,0.0062,0.0077,0.0077,0.0088,0.0101,0.0121],
-    volatility: [7.6214,9.0564,11.69,12.2631,12.3456,12.5948,12.9663,13.0044,13.2632,13.4267,13.6378,13.66,13.6616,13.7822,13.814,13.8854,13.941,14.0029,14.1394,14.1585,14.2251,14.2712,14.2744,14.2902,14.3855,14.4125,14.5204,14.6458,14.8157,14.9093,15.0125,15.2633,15.5126,15.7697,15.7904,15.8507,16.0015,16.0809,16.0904,16.2618,16.2904,16.4111,17.0238,17.6191,18.8097],
-    max_drawdown: [1.6949,9.2469,10.6821,13.1819,14.2857,15.5891,15.6629,16.1057,16.1102,17.2352,17.5253,18.1193,18.2302,18.8755,19.4023,19.7101,19.7955,20.3958,21.4428,23.7292,26.7357,29.8701,30.1587,31.2021,32.1026,33.2387,33.4906,33.859,34.2035,34.9506,35.3594,35.7143,35.8001,36.1022,36.445,36.8934,37.0959,37.3063,37.7152,37.8936,38.5915,39.7875,40.9866,41.2847,41.8394],
-    cagr_3y: [1.6755,8.4773,10.0397,11.1916,11.2268,12.5059,12.5944,12.9239,13.4249,13.6377,13.6495,13.7829,14.2231,14.3984,14.4142,14.7376,14.8184,14.9809,15.1596,15.2665,16.0024,16.2401,16.431,16.6323,17.2254,17.2756,17.7083,17.7697,18.0641,18.1219,18.8982,19.7348,20.1148,21.4916],
-    cagr_5y: [5.9228,9.3527,9.7345,9.9723,10.0091,10.1825,11.1654,11.3404,11.5409,11.7519,11.837,11.9905,12.3526,12.3912,12.407,13.1034,13.7636,14.5072,14.9237,15.8971,16.4541,18.5443,18.5955,18.7136],
-    cagr_10y: [9.4336,10.3825,11.5788,11.7721,12.8254,13.1671,13.4673,13.5766,14.0439,14.5727,14.7214,14.8049,14.8105,15.0116,15.7965,16.8681,16.9431,17.6495,19.3645],
-    vs_cat_3y: [0.1394,0.7053,0.8353,0.9311,0.9341,1.0405,1.0479,1.0753,1.117,1.1347,1.1356,1.1467,1.1834,1.198,1.1993,1.2262,1.2329,1.2464,1.2613,1.2702,1.3314,1.3512,1.3671,1.3838,1.4332,1.4373,1.4733,1.4784,1.5029,1.5078,1.5723,1.6419,1.6736,1.7881],
-    vs_cat_5y: [0.6085,0.9608,1.0001,1.0245,1.0283,1.0461,1.1471,1.165,1.1856,1.2073,1.2161,1.2318,1.269,1.273,1.2746,1.3462,1.414,1.4904,1.5332,1.6332,1.6904,1.9051,1.9104,1.9225],
-    vs_cat_10y: [0.9374,1.0317,1.1505,1.1697,1.2744,1.3084,1.3382,1.349,1.3955,1.448,1.4628,1.4711,1.4716,1.4916,1.5696,1.6761,1.6836,1.7538,1.9242],
-    expense: [0.36,0.39,0.41,0.43,0.44,0.45,0.46,0.47,0.48,0.49,0.49,0.49,0.5,0.52,0.52,0.54,0.55,0.56,0.56,0.57,0.59,0.61,0.63,0.66,0.69,0.7,0.7,0.72,0.74,0.78,0.81,0.82,0.85,0.89,0.91,0.93,0.94,1.01,1.05,1.08,1.13,1.2,1.59,2.56],
-    pe: [17.5137,17.5428,18.9311,19.8134,21.0629,22.4463,23.454,23.7514,24.0123,24.2245,24.5747,24.9162,24.9547,25.0815,25.166,25.55,25.7922,26.0349,26.1543,26.2255,26.3676,26.3681,26.5308,26.8288,26.8764,26.9006,26.9758,27.3443,27.4499,28.3972,28.5961,29.0875,29.1779,30.2201,30.2641,30.8572,31.1247,31.2109,31.2494,34.5601,35.3888,35.8169,37.6163,41.1],
-    top10: [27.9739,30.2487,32.0386,32.2447,32.7117,34.6961,34.9976,35.0235,35.0495,35.4445,35.5034,35.5917,36.0531,36.0943,36.6463,37.0902,37.2104,37.2161,37.2921,37.9014,38.1968,38.3177,38.4362,38.5614,40.0403,40.063,40.0726,41.9375,42.0923,42.5657,42.9325,43.4739,43.5917,44.248,45.0638,45.9256,47.1019,49.2644,49.4092,49.7495,50.6378,53.9922,68.5773,73.8369],
-  },
-  "Mid Cap Fund": {
-    rolling_3y: [16.2351,19.6578,19.6742,19.8851,21.8736,22.1017,22.2437,22.5604,22.7051,22.8331,23.3004,23.6661,24.4105,24.66,24.9474,25.4554,25.5909,25.5947,27.1101,27.5026,28.3214,28.3943,28.7385,28.7405,29.0161,29.9107,29.9984,30.0637,30.7543],
-    sharpe: [-3.5622,-3.286,-3.259,-2.678,-1.2493,-0.6413,-0.6334,-0.4969,-0.354,-0.3159,-0.2508,-0.2476,-0.1778,-0.1318,-0.0492,0.0825,0.0857,0.1,0.1191,0.1254,0.1365,0.154,0.1651,0.1699,0.1794,0.2095,0.2159,0.2429,0.2619,0.2762,0.281,0.2905,0.4096,0.4889,0.6191],
-    sortino: [-0.3258,-0.3105,-0.3045,-0.2509,-0.1175,-0.065,-0.0631,-0.0465,-0.0339,-0.0301,-0.0248,-0.0245,-0.0177,-0.0126,-0.0048,0.0082,0.0085,0.0097,0.0118,0.0124,0.0128,0.0152,0.0164,0.017,0.0176,0.0208,0.0218,0.0233,0.026,0.0267,0.0276,0.0282,0.0413,0.0499,0.0617],
-    volatility: [13.2505,13.7013,13.9775,14.4363,14.622,14.822,14.9601,15.0141,15.0316,15.1967,15.584,15.6189,15.6253,15.6777,15.7316,15.8316,15.9507,15.9555,16.0872,16.1888,16.3984,16.4047,16.4825,16.4825,16.6889,16.7841,17.1191,17.1318,17.327,17.3921,17.4016,17.6048,17.6112,18.2287,25.5119],
-    max_drawdown: [2.2931,10.427,12.4877,13.0306,14.1946,16.7424,19.3299,21.2404,21.2625,22.5384,22.6601,22.7126,29.3625,32.7156,32.8046,33.0995,33.4299,34.0946,35.0964,35.3231,35.5517,35.9712,36.4256,36.5917,37.232,37.3778,39.2055,39.5132,39.8177,40.7467,42.8137,43.0512,44.0389,44.3083,45.0828],
-    cagr_3y: [12.2096,14.5053,14.7862,15.8229,15.966,18.5837,18.6424,18.8834,18.9059,18.9522,19.1021,19.2726,19.506,19.9331,20.1735,20.206,20.3238,20.4155,22.2749,22.915,23.1737,23.2335,23.548,23.7402,23.8449,23.9555,24.0335,24.6976,25.5007],
-    cagr_5y: [11.997,12.8302,13.4802,13.8024,13.9398,14.8868,14.9178,15.1635,15.7937,16.7519,16.7896,16.8209,17.1563,17.3325,17.3542,17.8097,18.3494,18.9041,19.044,19.6196,19.7902,20.275,20.519,20.6071,21.7365],
-    cagr_10y: [14.1164,14.6555,14.7937,14.7995,15.1066,15.3871,15.5955,16.5765,16.906,16.9182,17.0222,17.2444,17.2497,17.343,17.6106,18.4358,18.7302,19.08,19.1461,19.2611],
-    vs_cat_3y: [0.7423,0.8819,0.899,0.962,0.9707,1.1298,1.1334,1.148,1.1494,1.1522,1.1613,1.1717,1.1859,1.2119,1.2265,1.2285,1.2356,1.2412,1.3542,1.3932,1.4089,1.4125,1.4316,1.4433,1.4497,1.4564,1.4612,1.5015,1.5504],
-    vs_cat_5y: [0.9167,0.9803,1.03,1.0546,1.0651,1.1375,1.1399,1.1586,1.2068,1.28,1.2829,1.2853,1.3109,1.3244,1.326,1.3608,1.4021,1.4444,1.4551,1.4991,1.5122,1.5492,1.5678,1.5746,1.6609],
-    vs_cat_10y: [1.1618,1.2062,1.2176,1.218,1.2433,1.2664,1.2835,1.3643,1.3914,1.3924,1.401,1.4193,1.4197,1.4274,1.4494,1.5173,1.5415,1.5703,1.5758,1.5852],
-    expense: [0.28,0.38,0.46,0.51,0.53,0.54,0.54,0.55,0.56,0.58,0.59,0.62,0.64,0.65,0.65,0.7,0.72,0.73,0.76,0.78,0.8,0.82,0.82,0.85,0.86,0.86,0.89,0.92,0.99,1.02,1.03,1.12,1.44,1.92],
-    pe: [16.8002,19.7914,24.5081,25.5244,26.9496,29.0669,29.5527,29.9441,30.035,30.4099,30.5312,30.8027,31.4668,31.4738,31.5591,32.2579,32.3324,33.023,34.7139,34.8647,35.1473,35.7087,35.9237,37.8823,38.3074,38.5947,38.7225,38.8707,39.1355,39.3501,46.5612,46.6273,46.6843,48.1434],
-    top10: [20.806,21.6984,22.8795,23.1062,24.451,24.4604,25.5343,26.5031,27.5147,27.5202,27.762,28.7562,28.8108,28.812,29.1325,29.2327,29.8185,29.9017,31.01,32.5852,33.333,33.7605,34.3074,37.43,38.087,39.5064,39.9377,42.2618,43.821,44.2147,47.4115,53.6006,61.1297,75.9024],
-  },
-  "Small Cap Fund": {
-    rolling_3y: [16.6116,18.1346,19.1034,19.4308,20.2386,20.9095,20.9842,21.1539,21.7263,21.8699,22.5951,23.0348,23.1127,23.5268,24.0189,24.2413,24.8255,25.7536,26.4331,27.6143,28.8394,29.5281,30.9707,35.3825],
-    sharpe: [-2.2304,-2.0669,-1.4922,-1.3509,-1.3017,-0.9683,-0.5032,-0.5,-0.454,-0.3953,-0.3778,-0.3223,-0.2969,-0.2778,-0.2175,-0.2127,-0.1841,-0.181,-0.1333,-0.1286,-0.1254,-0.1048,-0.0952,-0.0698,-0.0619,-0.0095,0.0127,0.019,0.0238,0.0571,0.0778,0.1111,0.2143,0.2302,0.3016,0.308],
-    sortino: [-0.2217,-0.1704,-0.1462,-0.1305,-0.1285,-0.0977,-0.066,-0.0507,-0.0445,-0.039,-0.0375,-0.0323,-0.0297,-0.0287,-0.0217,-0.0212,-0.0185,-0.0181,-0.0134,-0.0127,-0.0124,-0.0104,-0.0097,-0.0068,-0.0061,-0.0009,0.0013,0.0019,0.0025,0.0059,0.0079,0.0115,0.0216,0.0233,0.0292,0.0308],
-    volatility: [12.5028,13.5711,14.2013,14.314,15.2459,15.2967,15.4919,15.5396,15.6015,15.6078,15.63,15.8618,15.8666,15.9094,16.0174,16.1587,16.5984,16.6412,16.7127,16.8635,16.9429,17.0762,17.1048,17.2429,17.3048,17.5001,18.0049,18.0842,18.1128,18.4398,18.5525,18.5859,18.9224,20.3511,20.8289,22.3005],
-    max_drawdown: [0.001,1.7049,9.8732,11.8343,15.1065,16.2189,16.8986,18.2099,22.3368,23.6939,24.0218,24.3363,24.36,24.5915,24.9983,25.9964,32.3671,34.6386,36.1836,36.6051,37.0863,37.6592,39.882,40.2601,40.6113,44.7141,45.1177,46.0222,46.7065,48.2557,48.5837,49.0585,49.9177,52.4548,57.0556,57.4091],
-    cagr_3y: [12.2033,12.6182,13.8857,14.0455,14.7122,14.8564,14.864,16.3568,16.7156,16.7507,16.782,16.9918,17.584,18.5178,18.6229,19.1511,19.2082,19.3115,19.5007,19.7503,22.6607,23.3329,23.3358,29.4751],
-    cagr_5y: [13.7,14.4602,14.5795,16.9582,17.0415,17.3414,17.4323,17.6518,17.6832,17.9524,18.0781,18.3056,18.6368,18.706,18.748,18.9531,19.0978,19.4725,20.934,21.2006,22.6045,23.0943],
-    cagr_10y: [13.6225,14.9495,15.6678,16.0893,16.427,16.9244,17.3008,18.2175,18.2709,18.423,18.4894,18.9284,21.041],
-    vs_cat_3y: [0.8687,0.8982,0.9885,0.9998,1.0473,1.0576,1.0581,1.1644,1.1899,1.1924,1.1946,1.2096,1.2517,1.3182,1.3257,1.3633,1.3673,1.3747,1.3882,1.4059,1.6131,1.661,1.6612,2.0982],
-    vs_cat_5y: [0.9453,0.9978,1.006,1.1701,1.1759,1.1966,1.2029,1.218,1.2202,1.2388,1.2474,1.2631,1.286,1.2908,1.2937,1.3078,1.3178,1.3436,1.4445,1.4629,1.5598,1.5936],
-    vs_cat_10y: [1.0543,1.157,1.2126,1.2453,1.2714,1.3099,1.339,1.41,1.4141,1.4259,1.431,1.465,1.6285],
-    expense: [0.39,0.39,0.4,0.41,0.45,0.47,0.49,0.51,0.52,0.54,0.55,0.55,0.55,0.58,0.6,0.65,0.65,0.7,0.7,0.7,0.73,0.75,0.76,0.79,0.79,0.79,0.83,0.83,0.85,0.91,0.94,0.95,1.03,1.03],
-    pe: [18.0689,23.2341,23.2863,24.8709,25.6128,27.6369,28.0361,28.1584,28.1639,28.5628,28.7717,29.3791,29.5052,29.9367,30.1877,30.7799,30.9907,31.5056,31.5749,31.6424,31.8458,33.4791,33.6694,33.9306,34.147,34.1604,34.5502,35.4183,36.261,38.5287,38.8827,39.5856,43.2638,44.9065],
-    top10: [16.4118,19.2898,21.743,24.3209,25.18,25.2219,25.2691,26.3348,26.5243,26.8432,27.0384,27.8623,29.0392,29.1425,29.495,29.6396,29.663,30.2836,30.7801,31.0368,32.474,32.9663,33.0568,33.6842,33.7205,33.8103,34.068,36.4558,37.2865,37.3984,38.2571,38.6701,43.0407,64.9013],
-  },
-};
-function pctRank(val, arr, higherBetter=true) {
-  if (!arr || arr.length === 0) return 50;
+function pctRank(val, arr, higher=true) {
+  if (val==null || !arr || !arr.length) return null;
   const below = arr.filter(v => v < val).length;
-  const rank = below / arr.length * 100;
-  return higherBetter ? rank : 100 - rank;
+  const r = below / arr.length * 100;
+  return higher ? r : 100 - r;
+}
+function pts(pct, mx) {
+  if (pct==null) return 0;
+  return Math.round(pct/100*mx*10)/10;
 }
 
+// ── AMC quality scores (Morningstar Stewardship Pillar) ──────────
+const AMC_QUAL = {
+  "PPFAS":10,"HDFC":9,"Nippon":9,"ICICI":8,"SBI":8,"Kotak":8,
+  "DSP":8,"Mirae":8,"UTI":7,"Canara":7,"Motilal":7,"Edelweiss":7,
+  "Tata":7,"Invesco":7,"PGIM":7,"Sundaram":7,"Bandhan":6,
+  "Franklin":6,"Aditya Birla":6,"Axis":5,"Quant":2,"WhiteOak":7,
+  "JM":6,"360 ONE":6,"ITI":5,"HSBC":7,"Baroda":6,"LIC":5,
+  "Mahindra":6,"Bank of India":5,"Old Bridge":6,"Navi":4,
+  "NJ":5,"Samco":4,"Union":6,"Helios":5,"Trust":5,"Bajaj":5,
+  "Abakkus":5,"Capitalmind":6,"Unifi":5,"WOC":7,"iSIF":3,"Qsif":3,
+  "Shriram":4,"Taurus":3,"Jio":5,"Wealth":3,"Quantum":6,
+  "Groww":4,"TRUSTMF":5,
+};
+const AMC_SEBI = {
+  "Quant":"probe","Axis":"action","Aditya Birla":"minor",
+  "HDFC":"minor","Franklin":"minor","Qsif":"probe"
+};
+function getAmcQual(amcFull) {
+  const up = (amcFull||'').toUpperCase();
+  const key = Object.keys(AMC_QUAL).find(k => up.includes(k.toUpperCase())) || '';
+  const score = key ? AMC_QUAL[key] : 5;
+  const sebiKey = Object.keys(AMC_SEBI).find(k => up.includes(k.toUpperCase())) || '';
+  const sebi = sebiKey ? AMC_SEBI[sebiKey] : 'clean';
+  const warnings = {
+    "probe": "Active SEBI investigation (2024)",
+    "action": "Past SEBI enforcement action (2022)",
+    "minor": "Minor SEBI fine on record",
+  };
+  return { key, score, sebi, warning: warnings[sebi]||null };
+}
+
+// ── Category-specific AUM sweet spots ───────────────────────────
+// Small cap >₹15K Cr = can't find enough small cap stocks to deploy
+const CAT_AUM = {
+  'Small Cap Fund':  [1000, 15000],
+  'Mid Cap Fund':    [1000, 40000],
+  'Flexi Cap Fund':  [2000, 100000],
+};
+
+// ── Distributions built from ELIGIBLE funds only ─────────────────
+// Populated at startup in /api/mf/funds endpoint
+let CAT_DIST = {};
+
+// ── STEP 1: HARD ELIGIBILITY FILTERS ─────────────────────────────
+// Any fund failing ANY filter = not scored (shown in table as Not Eligible)
+function checkEligible(f) {
+  const reasons = [];
+  const aum     = parseFloat(f.aum)     || 0;
+  const months  = parseFloat(f.months_inception) || 0;
+  const roll    = parseFloat(f.rolling_3y) || 0;
+  const exp     = parseFloat(f.expense_ratio) || 0;
+  const r3      = parseFloat(f.cagr_3y) || 0;
+
+  if (aum < 1000)    reasons.push(`AUM ₹${Math.round(aum)} Cr < ₹1,000 Cr minimum`);
+  if (months < 60)   reasons.push(`Only ${Math.round(months)} months old (need 5Y minimum)`);
+  if (!roll)         reasons.push('No 3Y rolling return data (insufficient history)');
+  if (!r3)           reasons.push('No 3Y return data');
+  if (exp >= 2.0)    reasons.push(`Expense ratio ${exp.toFixed(2)}% >= 2% (too expensive)`);
+
+  return { eligible: reasons.length === 0, reasons };
+}
+
+// ── STEP 2: SCORING ENGINE ────────────────────────────────────────
+// Only runs on funds that passed eligibility
+// Max ~120 pts (percentile-based within category, eligible funds only)
 function scoreMFTickertape(f) {
+  const subcat  = f.sub_category || '';
+  const cat     = subcat.includes('Small') ? 'smallcap' : subcat.includes('Mid') ? 'midcap' : 'flexicap';
+  const dist    = CAT_DIST[subcat] || {};
+  const months  = parseFloat(f.months_inception) || 0;
+  const [aumMin, aumMax] = CAT_AUM[subcat] || [1000, 50000];
   let score = 0;
   const hits = {};
-  const subcat = f.sub_category || "";
-  const cat = subcat.includes("Small") ? "smallcap"
-             : subcat.includes("Mid")   ? "midcap"
-             : "flexicap";
-  const dist = CAT_DIST[subcat] || CAT_DIST["Flexi Cap Fund"];
 
-  function pr(val, arr, higherBetter=true) {
-    return pctRank(+val||0, arr, higherBetter);
+  function get(col) {
+    const v = f[col]; if (v==null) return null;
+    const n = parseFloat(v); return isNaN(n) ? null : n;
   }
-  function pts(pct, max) { return Math.round(pct / 100 * max * 10) / 10; }
+  function pr(val, arr, higher=true) { return pctRank(val, arr, higher); }
 
-  // ── 1. ROLLING 3Y RETURN (20 pts) — best consistency signal
-  const roll = +f.rolling_3y || 0;
-  const rollPct = pr(roll, dist.rolling_3y);
-  const rollPts = pts(rollPct, 20);
+  // 1. ROLLING 3Y CONSISTENCY (25 pts) ─────────────────────────────
+  // #1 predictor. Average return across ALL rolling 3Y windows.
+  const roll = get('rolling_3y');
+  const rollP = (roll && roll > 0) ? pr(roll, dist.rolling_3y) : null;
+  const rollPts = pts(rollP, 25);
   score += rollPts;
-  hits[`Rolling 3Y return: ${roll.toFixed(1)}% (top ${(100-rollPct).toFixed(0)}% in category)`] = rollPts;
+  hits[`Rolling 3Y: ${roll!=null?roll.toFixed(1):'?'}% (top ${rollP!=null?(100-rollP).toFixed(0):'?'}% of eligible funds)`] = rollPts;
 
-  // ── 2. RETURNS vs SUB-CATEGORY (20 pts) — beating peers matters most
-  const vc3 = +f.vs_cat_3y || 0, vc5 = +f.vs_cat_5y || 0, vc10 = +f.vs_cat_10y || 0;
-  const vc3Pct = pr(vc3, dist.vs_cat_3y);
-  const vc5Pct = pr(vc5, dist.vs_cat_5y||dist.vs_cat_3y);
-  const vc10Pct = pr(vc10, dist.vs_cat_10y||dist.vs_cat_5y||dist.vs_cat_3y);
-  const vc3Pts = pts(vc3Pct, 10);
-  const vc5Pts = pts(vc5Pct, 7);
-  const vc10Pts = vc10 > 0 ? pts(vc10Pct, 3) : 0;
-  score += vc3Pts + vc5Pts + vc10Pts;
-  hits[`Beats category 3Y: ${vc3.toFixed(2)}x (${vc3>1?'above':'below'} median)`] = vc3Pts;
-  hits[`Beats category 5Y: ${vc5.toFixed(2)}x`] = vc5Pts;
-  if (vc10 > 0) hits[`Beats category 10Y: ${vc10.toFixed(2)}x`] = vc10Pts;
+  // 2. RISK-ADJUSTED RETURNS (20 pts) ──────────────────────────────
+  // Sharpe + Sortino both percentile-ranked within category.
+  // Never use absolute thresholds — all negative in bear markets.
+  const sharpe  = get('sharpe');
+  const sortino = get('sortino');
+  const shP  = pr(sharpe,  dist.sharpe,  true);
+  const soP  = pr(sortino, dist.sortino, true);
+  const shPts = pts(shP, 12);
+  const soPts = pts(soP, 8);
+  score += shPts + soPts;
+  hits[`Sharpe: ${sharpe!=null?sharpe.toFixed(3):'?'} (top ${shP!=null?(100-shP).toFixed(0):'?'}% in category)`] = shPts;
+  hits[`Sortino: ${sortino!=null?sortino.toFixed(4):'?'} (top ${soP!=null?(100-soP).toFixed(0):'?'}% in category)`] = soPts;
 
-  // ── 3. SHARPE & SORTINO RELATIVE (15 pts) — both percentile ranked
-  const sharpe = +f.sharpe || 0;
-  const sharpePct = pr(sharpe, dist.sharpe);
-  const sharpePts = pts(sharpePct, 10);
-  const sortino = +f.sortino || 0;
-  const sortinoPct = pr(sortino, dist.sortino);
-  const sortinoPts = pts(sortinoPct, 5);
-  score += sharpePts + sortinoPts;
-  hits[`Sharpe: ${sharpe.toFixed(3)} (top ${(100-sharpePct).toFixed(0)}% in category)`] = sharpePts;
-  hits[`Sortino: ${sortino.toFixed(4)} (top ${(100-sortinoPct).toFixed(0)}% in category)`] = sortinoPts;
-
-  // ── 4. DOWNSIDE PROTECTION (15 pts)
-  const mdd = +f.max_drawdown || 0;
-  const mddPct = pr(mdd, dist.max_drawdown, false);
-  const mddPts = pts(mddPct, 8);
-  const vol = +f.volatility || 0;
-  const volPct = pr(vol, dist.volatility, false);
-  const volPts = pts(volPct, 7);
+  // 3. DOWNSIDE PROTECTION (15 pts) ────────────────────────────────
+  // Max drawdown = worst single crash fall. Volatility = daily swing.
+  // Both lower-is-better, percentile vs eligible peers.
+  const mdd    = get('max_drawdown');
+  const vol    = get('volatility');
+  const catVol = get('category_stddev') || 16;
+  const mddP   = pr(mdd, dist.max_drawdown, false);
+  const volP   = pr(vol, dist.volatility,   false);
+  const mddPts = pts(mddP, 9);
+  const volPts = pts(volP, 6);
   score += mddPts + volPts;
-  hits[`Max Drawdown: ${mdd.toFixed(1)}% (top ${(100-mddPct).toFixed(0)}% protection)`] = mddPts;
-  hits[`Volatility: ${vol.toFixed(1)}% (top ${(100-volPct).toFixed(0)}% stable)`] = volPts;
+  hits[`Max drawdown: ${mdd!=null?mdd.toFixed(1):'?'}% (top ${mddP!=null?(100-mddP).toFixed(0):'?'}% protected)`] = mddPts;
+  hits[`Volatility: ${vol!=null?vol.toFixed(1):'?'}% vs category avg ${catVol.toFixed(1)}%`] = volPts;
 
-  // ── 5. ABSOLUTE RETURNS (10 pts)
-  const r3 = +f.cagr_3y || 0, r5 = +f.cagr_5y || 0, r10 = +f.cagr_10y || 0;
-  const r3Pct = pr(r3, dist.cagr_3y);
-  const r5Pct = pr(r5, dist.cagr_5y||dist.cagr_3y);
-  const r10Pct = pr(r10, dist.cagr_10y||dist.cagr_5y);
-  const r3Pts = pts(r3Pct, 5);
-  const r5Pts = pts(r5Pct, 3);
-  const r10Pts = r10 > 0 ? pts(r10Pct, 2) : 0;
-  score += r3Pts + r5Pts + r10Pts;
-  hits[`3Y CAGR: ${r3.toFixed(1)}%`] = r3Pts;
-  hits[`5Y CAGR: ${r5.toFixed(1)}%`] = r5Pts;
-  if (r10 > 0) hits[`10Y CAGR: ${r10.toFixed(1)}%`] = r10Pts;
+  // 4. BEATS PEERS (15 pts) ─────────────────────────────────────────
+  // vs_cat_3Y/5Y/10Y are RATIOS (>1.0 = beats median peer).
+  // Purest measure of manager skill. vs_cat_1Y excluded (wrong scale).
+  const vc3  = get('vs_cat_3y');
+  const vc5  = get('vs_cat_5y');
+  const vc10 = get('vs_cat_10y');
+  const vc3P  = (vc3  && vc3  > 0) ? pr(vc3,  dist.vs_cat_3y)  : null;
+  const vc5P  = (vc5  && vc5  > 0) ? pr(vc5,  dist.vs_cat_5y  || dist.vs_cat_3y)  : null;
+  const vc10P = (vc10 && vc10 > 0) ? pr(vc10, dist.vs_cat_10y || dist.vs_cat_5y) : null;
+  const vc3Pts  = pts(vc3P,  8);
+  const vc5Pts  = pts(vc5P,  5);
+  const vc10Pts = pts(vc10P, 2);
+  score += vc3Pts + vc5Pts + vc10Pts;
+  hits[vc3  ? `Beats peers 3Y: ${vc3.toFixed(2)}x (${vc3>1?'above':'below'} median)` : 'Beats peers 3Y: no data'] = vc3Pts;
+  hits[vc5  ? `Beats peers 5Y: ${vc5.toFixed(2)}x` : 'Beats peers 5Y: no data'] = vc5Pts;
+  if (vc10 && vc10 > 0) hits[`Beats peers 10Y: ${vc10.toFixed(2)}x`] = vc10Pts;
 
-  // ── 6. PORTFOLIO QUALITY (8 pts) — all percentile-based
-  const pe = +f.pe_ratio || 0, catPE = +f.category_pe || 30;
-  if (pe > 0 && dist.pe && dist.pe.length > 0) {
-    const pePct = pr(pe, dist.pe, false); // lower PE = better
-    const pePts = pts(pePct, 4);
-    score += pePts;
-    hits[`PE: ${pe.toFixed(1)} vs Category: ${catPE.toFixed(1)} (top ${(100-pePct).toFixed(0)}% cheapest)`] = pePts;
-  }
-  const cash = +f.pct_cash || 0;
-  const cashPts = (cash >= 3 && cash <= 10) ? 2 : (cash > 0 && cash < 3) ? 1 : 0;
-  if (cashPts) { score += cashPts; hits[`Cash: ${cash.toFixed(1)}% (healthy buffer)`] = cashPts; }
-  const top10 = +f.top10_conc || 0;
-  if (top10 > 0 && dist.top10 && dist.top10.length > 0) {
-    const top10Pct = pr(top10, dist.top10, false);
-    const top10Pts = pts(top10Pct, 2);
-    score += top10Pts;
-    hits[`Top 10 concentration: ${top10.toFixed(1)}% (top ${(100-top10Pct).toFixed(0)}% diversified)`] = top10Pts;
-  }
-
-  // ── 7. COST (7 pts)
-  const exp = +f.expense_ratio || 0;
-  const expPct = pr(exp, dist.expense, false);
-  const expPts = pts(expPct, 5);
+  // 5. EXPENSE RATIO (12 pts) ───────────────────────────────────────
+  // Most reliable long-term predictor per Morningstar/VR.
+  // 0.5% diff = ₹8-12 lakh less on ₹10L over 20 years.
+  const exp  = get('expense_ratio');
+  const expP = (exp && exp > 0) ? pr(exp, dist.expense, false) : null;
+  const expPts = pts(expP, 12);
   score += expPts;
-  hits[`Expense ratio: ${exp.toFixed(2)}% (top ${(100-expPct).toFixed(0)}% cheapest)`] = expPts;
-  const lump = +f.min_lumpsum || 0;
-  const lumpPts = lump <= 100 ? 1.5 : lump <= 1000 ? 1 : lump <= 5000 ? 0.5 : 0;
-  if (lumpPts) { score += lumpPts; hits[`Min lumpsum: ₹${lump}`] = lumpPts; }
-  const sip = +f.min_sip || 0;
-  const sipPts = sip > 0 && sip <= 500 ? 0.5 : 0;
-  if (sipPts) { score += sipPts; hits[`Min SIP: ₹${sip}`] = sipPts; }
+  const expTier = exp ? (exp<0.5?'very low':exp<0.75?'low':exp<1.0?'average':'high') : '?';
+  hits[`Expense: ${exp!=null?exp.toFixed(2):'?'}% (${expTier})`] = expPts;
 
-  // ── 8. AUM QUALITY (5 pts) — sweet spot 2K-30K Cr
-  const aum = +f.aum_cr || 0;
-  const aumPts = (aum>=2000&&aum<=30000) ? 5 : (aum>=500&&aum<2000) ? 3 : aum>30000 ? 3 : aum>100 ? 1 : 0;
-  score += aumPts;
-  hits[`AUM: ₹${Math.round(aum).toLocaleString('en-IN')} Cr`] = aumPts;
+  // 6. ABSOLUTE RETURNS (8 pts) ─────────────────────────────────────
+  // Lower weight — point-in-time returns have low predictive power.
+  const r3  = get('cagr_3y');
+  const r5  = get('cagr_5y');
+  const r10 = get('cagr_10y');
+  const r3P  = (r3  && r3  > 0) ? pr(r3,  dist.cagr_3y)  : null;
+  const r5P  = (r5  && r5  > 0) ? pr(r5,  dist.cagr_5y  || dist.cagr_3y) : null;
+  const r10P = (r10 && r10 > 0) ? pr(r10, dist.cagr_10y || dist.cagr_5y) : null;
+  const r3Pts  = pts(r3P,  4);
+  const r5Pts  = pts(r5P,  3);
+  const r10Pts = pts(r10P, 1);
+  score += r3Pts + r5Pts + r10Pts;
+  hits[r3  ? `3Y CAGR: ${r3.toFixed(1)}%`  : '3Y CAGR: no data']  = r3Pts;
+  hits[r5  ? `5Y CAGR: ${r5.toFixed(1)}%`  : '5Y CAGR: no data']  = r5Pts;
+  if (r10 && r10 > 0) hits[`10Y CAGR: ${r10.toFixed(1)}%`] = r10Pts;
 
-  // ── 9. TRACK RECORD (3 pts)
-  const months = +f.months_inception || 0;
-  const trPts = months >= 120 ? 3 : months >= 60 ? 2 : months >= 36 ? 1 : 0;
-  if (trPts) { score += trPts; hits[`Track record: ${months.toFixed(0)} months`] = trPts; }
+  // 7. PORTFOLIO QUALITY (8 pts) ────────────────────────────────────
+  // PE vs category: lower = better value. Cash 3-10%: healthy buffer.
+  // Top10 concentration: lower = less single-stock risk.
+  // ATH recovery: closer to all-time high = stronger fund momentum.
+  const pe    = get('pe_ratio');
+  const catPE = get('category_pe') || 30;
+  const peP   = (pe && pe > 0) ? pr(pe, dist.pe, false) : null;
+  const pePts = pts(peP, 2);
+  score += pePts;
+  if (pe) hits[`Portfolio PE: ${pe.toFixed(1)} vs category ${catPE.toFixed(1)}`] = pePts;
 
-  // ── 10. AMC QUALITATIVE (10 pts — research-based, updated Apr 2026)
-  const amcFull = f.amc || "";
-  const amcKey = Object.keys(AMC_QUAL).find(k => amcFull.toUpperCase().includes(k.toUpperCase())) || "";
-  const qual = getAmcQual(amcKey);
-  score += qual.score;
-  hits[`AMC: ${amcKey||amcFull.split(" ")[0]} — governance score ${qual.score}/10`] = qual.score;
-  if (qual.warning) hits[`⚠️ ${qual.warning}`] = 0;
-  if (qual.sebi === "probe") {
-    score = Math.min(score, 15);
-    hits["🔴 DISQUALIFIED: Active SEBI investigation — capped"] = 0;
+  const cash = get('pct_cash') || 0;
+  if (cash >= 3 && cash <= 10) { score += 2; hits[`Cash: ${cash.toFixed(1)}% (healthy buffer)`] = 2; }
+  else if (cash > 0 && cash < 3) { score += 1; hits[`Cash: ${cash.toFixed(1)}%`] = 1; }
+  else if (cash > 20) hits[`Cash: ${cash.toFixed(1)}% (excess — uncertain market view?)`] = 0;
+
+  const top10  = get('top10_conc') || 0;
+  const top10P = (top10 > 0) ? pr(top10, dist.top10, false) : null;
+  const top10Pts = pts(top10P, 1);
+  score += top10Pts;
+  if (top10) hits[`Top 10 holdings: ${top10.toFixed(1)}% concentration`] = top10Pts;
+
+  // % Away from ATH (2 pts) — 100% data coverage
+  // Measures how much the fund has recovered vs its own all-time high.
+  // Lower = better (0% = at ATH, 28% = 28% below peak).
+  // Rewards funds that have held up or recovered well in the 2024-25 correction.
+  const ath = get('pct_from_ath');
+  if (ath != null) {
+    const athP = pr(ath, dist.pct_from_ath, false); // lower ATH gap = better
+    const athPts = pts(athP, 2);
+    score += athPts;
+    const athLabel = ath <= 5 ? 'near ATH' : ath <= 15 ? 'moderate recovery' : 'significant drawdown';
+    hits[`From ATH: ${ath.toFixed(1)}% below peak (${athLabel})`] = athPts;
   }
+
+  // Volatility vs Category StdDev bonus (1 pt) — 100% data coverage
+  // Funds that deliver lower volatility than category average are
+  // demonstrating better risk management, not just riding the beta.
+  const vol2    = get('volatility');
+  const catVol2 = get('category_stddev');
+  if (vol2 && catVol2 && vol2 < catVol2) {
+    const outperformance = catVol2 - vol2;
+    const volBonusPts = outperformance > 2 ? 1 : 0.5;
+    score += volBonusPts;
+    hits[`Volatility below category avg: ${vol2.toFixed(1)}% vs ${catVol2.toFixed(1)}% (better risk control)`] = volBonusPts;
+  }
+
+  // Style drift penalty for Mid Cap funds only (up to -2 pts)
+  // Mid cap funds holding >25% small cap are taking hidden risk beyond mandate.
+  // Flexi cap funds CAN legitimately hold small cap — no penalty for them.
+  if (subcat.includes('Mid')) {
+    const smallCapPct = get('pct_smallcap') || 0;
+    if (smallCapPct > 27) {
+      score -= 2;
+      hits[`Style drift: ${smallCapPct.toFixed(1)}% in small cap for a mid cap fund (mandate breach)`] = -2;
+    } else if (smallCapPct > 20) {
+      score -= 1;
+      hits[`Style drift: ${smallCapPct.toFixed(1)}% in small cap (elevated for mid cap fund)`] = -1;
+    }
+  }
+
+  // 8. AUM QUALITY (5 pts) ──────────────────────────────────────────
+  // Category-specific sweet spots.
+  // Small cap >₹15K Cr = liquidity constrained, can't find stocks.
+  const aum = get('aum_cr') || 0;
+  if (aum >= aumMin && aum <= aumMax) {
+    score += 5; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (ideal range)`] = 5;
+  } else if (aum > aumMax) {
+    const p = subcat.includes('Small') ? 2 : 4;
+    score += p;
+    hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr ${subcat.includes('Small') ? '(too large — liquidity risk for small cap)' : '(large, established fund)'}`] = p;
+  } else if (aum >= aumMin * 0.5) {
+    score += 3; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (below ideal, growing)`] = 3;
+  } else if (aum > 0) {
+    score += 1; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fund)`] = 1;
+  }
+
+  // 9. TRACK RECORD (5 pts) ─────────────────────────────────────────
+  // All eligible funds are 5Y+ (filter ensures this).
+  // 10Y = full bull+bear cycle including 2020 crash + 2024-25 correction.
+  if      (months >= 120) { score += 5; hits[`Track record: ${Math.round(months)} months (10Y+ full cycle)`] = 5; }
+  else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+)`] = 4; }
+  else if (months >= 60)  { score += 3; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 3; }
+
+  // 10. AMC QUALITY (10 pts) ────────────────────────────────────────
+  // Morningstar Stewardship Pillar: governance, team depth, SEBI record.
+  const qual = getAmcQual(f.amc || '');
+  const amcPts = Math.round(qual.score / 10 * 10 * 10) / 10;
+  score += amcPts;
+  hits[`AMC ${qual.key||'?'}: ${qual.score}/10 (governance & stewardship)`] = amcPts;
+  if (qual.warning) hits[`Flagged: ${qual.warning}`] = 0;
+
+  // SEBI penalties applied to final score
+  if      (qual.sebi === 'probe')  { score = Math.min(score, 15); hits['DISQUALIFIED: Active SEBI investigation (capped at 15)'] = 0; }
+  else if (qual.sebi === 'action') { score = Math.round(score * 0.85 * 10)/10; hits['Past SEBI enforcement action: -15% score penalty'] = 0; }
+  else if (qual.sebi === 'minor')  { score = Math.round(score * 0.95 * 10)/10; hits['Minor SEBI fine on record: -5% score penalty'] = 0; }
 
   return {
     score: Math.round(score * 10) / 10,
     hits,
     cat,
-    amc_sebi: qual.sebi,
+    amc_sebi:    qual.sebi,
     amc_warning: qual.warning,
-    amc_note: qual.note,
+    amc_note:    qual.note || null,
   };
 }
+
 
 app.get("/api/mf/tickertape", async(req,res)=>{
   try {
@@ -1772,88 +1487,123 @@ app.get("/api/mf/tickertape", async(req,res)=>{
 // Falls back to MFAPI cache if DB table not yet loaded
 app.get("/api/mf/funds", async(req,res)=>{
   try {
-    // Try Tickertape DB first
     const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
-    if (rows.length > 0) {
-      const scored = rows.map(f => {
-        const {score,hits,cat,amc_sebi,amc_warning,amc_note} = scoreMFTickertape(f);
-        return {
-          // Identity
-          name:          f.name,
-          sub_category:  f.sub_category,
-          cat,
-          amc:           f.amc,
-          benchmark:     f.benchmark,
-          fund_manager:  f.fund_manager,
-          sip_allowed:   f.sip_allowed,
-          sebi_risk:     f.sebi_risk,
-          // Pricing
-          nav:           f.nav!=null ? parseFloat(f.nav) : null,
-          navFormatted:  f.nav ? "₹"+parseFloat(f.nav).toFixed(2) : null,
-          aum_cr:        f.aum!=null ? parseFloat(f.aum) : null,
-          // Cost
-          expense_ratio: f.expense_ratio!=null ? parseFloat(f.expense_ratio) : null,
-          min_lumpsum:   f.min_lumpsum!=null ? parseFloat(f.min_lumpsum) : null,
-          min_sip:       f.min_sip!=null ? parseFloat(f.min_sip) : null,
-          exit_load:     f.exit_load!=null ? parseFloat(f.exit_load) : null,
-          lock_in:       f.lock_in!=null ? parseFloat(f.lock_in) : null,
-          months_inception: f.months_inception!=null ? parseFloat(f.months_inception) : null,
-          // Returns — null=no data, 0=valid flat return
-          ret_1y:        f.ret_1y!=null ? parseFloat(f.ret_1y) : null,
-          ret_3m:        f.ret_3m!=null ? parseFloat(f.ret_3m) : null,
-          ret_6m:        f.ret_6m!=null ? parseFloat(f.ret_6m) : null,
-          cagr_3y:       f.cagr_3y!=null ? parseFloat(f.cagr_3y) : null,
-          cagr_5y:       f.cagr_5y!=null ? parseFloat(f.cagr_5y) : null,
-          cagr_10y:      f.cagr_10y!=null ? parseFloat(f.cagr_10y) : null,
-          rolling_3y:    f.rolling_3y!=null ? parseFloat(f.rolling_3y) : null,
-          // vs Category
-          vs_cat_1y:     f.vs_cat_1y!=null ? parseFloat(f.vs_cat_1y) : null,
-          vs_cat_3y:     f.vs_cat_3y!=null ? parseFloat(f.vs_cat_3y) : null,
-          vs_cat_5y:     f.vs_cat_5y!=null ? parseFloat(f.vs_cat_5y) : null,
-          vs_cat_10y:    f.vs_cat_10y!=null ? parseFloat(f.vs_cat_10y) : null,
-          // Risk
-          sharpe:        f.sharpe!=null ? parseFloat(f.sharpe) : null,
-          sortino:       f.sortino!=null ? parseFloat(f.sortino) : null,
-          volatility:    f.volatility!=null ? parseFloat(f.volatility) : null,
-          stdDev:        f.volatility!=null ? parseFloat(f.volatility) : null,
-          category_stddev: f.category_stddev!=null ? parseFloat(f.category_stddev) : null,
-          max_drawdown:  f.max_drawdown!=null ? parseFloat(f.max_drawdown) : null,
-          maxDD:         f.max_drawdown!=null ? parseFloat(f.max_drawdown) : null,
-          pct_from_ath:  f.pct_from_ath!=null ? parseFloat(f.pct_from_ath) : null,
-          tracking_error:f.tracking_error!=null ? parseFloat(f.tracking_error) : null,
-          // Portfolio
-          pe_ratio:      f.pe_ratio!=null ? parseFloat(f.pe_ratio) : null,
-          category_pe:   f.category_pe!=null ? parseFloat(f.category_pe) : null,
-          pct_equity:    f.pct_equity!=null ? parseFloat(f.pct_equity) : null,
-          pct_largecap:  f.pct_largecap!=null ? parseFloat(f.pct_largecap) : null,
-          pct_midcap:    f.pct_midcap!=null ? parseFloat(f.pct_midcap) : null,
-          pct_smallcap:  f.pct_smallcap!=null ? parseFloat(f.pct_smallcap) : null,
-          pct_cash:      f.pct_cash!=null ? parseFloat(f.pct_cash) : null,
-          pct_debt:      f.pct_debt!=null ? parseFloat(f.pct_debt) : null,
-          pct_a_bonds:   f.pct_a_bonds!=null ? parseFloat(f.pct_a_bonds) : null,
-          pct_b_bonds:   f.pct_b_bonds!=null ? parseFloat(f.pct_b_bonds) : null,
-          pct_corp_debt: f.pct_corp_debt!=null ? parseFloat(f.pct_corp_debt) : null,
-          pct_sovereign: f.pct_sovereign!=null ? parseFloat(f.pct_sovereign) : null,
-          // Concentration
-          top3_conc:     f.top3_conc!=null ? parseFloat(f.top3_conc) : null,
-          top5_conc:     f.top5_conc!=null ? parseFloat(f.top5_conc) : null,
-          top10_conc:    f.top10_conc!=null ? parseFloat(f.top10_conc) : null,
-          // AMC qualitative
-          score, hits, amc_sebi, amc_warning, amc_note,
-          dataSource: "Tickertape — Apr 4 2026",
-        };
+    if (!rows.length) throw new Error("No rows in mf_tickertape");
+
+    // ── STEP 1: Map raw DB rows → fund objects ──────────────────────
+    const pf = (v) => v!=null ? parseFloat(v) : null;
+    const funds = rows.map(f => ({
+      // identity
+      name: f.name, sub_category: f.sub_category, amc: f.amc,
+      benchmark: f.benchmark, fund_manager: f.fund_manager,
+      sip_allowed: f.sip_allowed, sebi_risk: f.sebi_risk,
+      // pricing
+      nav: pf(f.nav), navFormatted: f.nav ? "₹"+parseFloat(f.nav).toFixed(2) : null,
+      aum_cr: pf(f.aum), aum: pf(f.aum),
+      // cost
+      expense_ratio: pf(f.expense_ratio), min_lumpsum: pf(f.min_lumpsum),
+      min_sip: pf(f.min_sip), exit_load: pf(f.exit_load),
+      months_inception: pf(f.months_inception),
+      // returns
+      ret_1y: pf(f.ret_1y), ret_3m: pf(f.ret_3m), ret_6m: pf(f.ret_6m),
+      cagr_3y: pf(f.cagr_3y), cagr_5y: pf(f.cagr_5y), cagr_10y: pf(f.cagr_10y),
+      rolling_3y: pf(f.rolling_3y),
+      // vs category (3Y/5Y/10Y are ratios, 1Y is absolute %)
+      vs_cat_1y: pf(f.vs_cat_1y), vs_cat_3y: pf(f.vs_cat_3y),
+      vs_cat_5y: pf(f.vs_cat_5y), vs_cat_10y: pf(f.vs_cat_10y),
+      // risk
+      sharpe: pf(f.sharpe), sortino: pf(f.sortino),
+      volatility: pf(f.volatility), stdDev: pf(f.volatility),
+      category_stddev: pf(f.category_stddev),
+      max_drawdown: pf(f.max_drawdown), maxDD: pf(f.max_drawdown),
+      pct_from_ath: pf(f.pct_from_ath), tracking_error: pf(f.tracking_error),
+      // portfolio
+      pe_ratio: pf(f.pe_ratio), category_pe: pf(f.category_pe),
+      pct_equity: pf(f.pct_equity), pct_largecap: pf(f.pct_largecap),
+      pct_midcap: pf(f.pct_midcap), pct_smallcap: pf(f.pct_smallcap),
+      pct_cash: pf(f.pct_cash), pct_debt: pf(f.pct_debt),
+      pct_a_bonds: pf(f.pct_a_bonds), pct_b_bonds: pf(f.pct_b_bonds),
+      pct_corp_debt: pf(f.pct_corp_debt), pct_sovereign: pf(f.pct_sovereign),
+      // concentration
+      top3_conc: pf(f.top3_conc), top5_conc: pf(f.top5_conc), top10_conc: pf(f.top10_conc),
+      dataSource: "Tickertape — Apr 4 2026",
+    }));
+
+    // ── STEP 2: ELIGIBILITY FILTER ──────────────────────────────────
+    // Hard filters — any fail = fund not scored
+    // Filters: AUM ≥₹1K Cr, Age ≥5Y, 3Y rolling data exists, expense <2%
+    const eligible   = funds.filter(f => checkEligible(f).eligible);
+    const ineligible = funds.filter(f => !checkEligible(f).eligible);
+
+    // ── STEP 3: BUILD DISTRIBUTIONS FROM ELIGIBLE FUNDS ONLY ────────
+    // Critical: distributions must NOT include unproven small/new funds
+    CAT_DIST = {};
+    const distCols = {
+      rolling_3y:    f => f.rolling_3y  && f.rolling_3y  > 0 ? f.rolling_3y  : null,
+      sharpe:        f => f.sharpe  != null ? f.sharpe  : null,
+      sortino:       f => f.sortino != null ? f.sortino : null,
+      volatility:    f => f.volatility   && f.volatility   > 0 ? f.volatility   : null,
+      max_drawdown:  f => f.max_drawdown && f.max_drawdown > 0 ? f.max_drawdown : null,
+      cagr_3y:       f => f.cagr_3y  && f.cagr_3y  > 0 ? f.cagr_3y  : null,
+      cagr_5y:       f => f.cagr_5y  && f.cagr_5y  > 0 ? f.cagr_5y  : null,
+      cagr_10y:      f => f.cagr_10y && f.cagr_10y > 0 ? f.cagr_10y : null,
+      vs_cat_3y:     f => f.vs_cat_3y  && f.vs_cat_3y  > 0 ? f.vs_cat_3y  : null,
+      vs_cat_5y:     f => f.vs_cat_5y  && f.vs_cat_5y  > 0 ? f.vs_cat_5y  : null,
+      vs_cat_10y:    f => f.vs_cat_10y && f.vs_cat_10y > 0 ? f.vs_cat_10y : null,
+      expense:       f => f.expense_ratio && f.expense_ratio > 0 ? f.expense_ratio : null,
+      pe:            f => f.pe_ratio && f.pe_ratio > 0 ? f.pe_ratio : null,
+      top10:         f => f.top10_conc && f.top10_conc > 0 ? f.top10_conc : null,
+      pct_from_ath:  f => f.pct_from_ath != null ? f.pct_from_ath : null,
+    };
+    eligible.forEach(f => {
+      const subcat = f.sub_category;
+      if (!CAT_DIST[subcat]) CAT_DIST[subcat] = Object.fromEntries(Object.keys(distCols).map(k=>[k,[]]));
+      Object.entries(distCols).forEach(([col, fn]) => {
+        const v = fn(f); if (v != null) CAT_DIST[subcat][col].push(v);
       });
-      return res.json({funds:scored, total:scored.length, source:"Tickertape CSV (real data)", cached_at:Date.now()});
-    }
-    throw new Error("No rows in mf_tickertape");
+    });
+
+    // ── STEP 4: SCORE ELIGIBLE FUNDS ────────────────────────────────
+    const scoredEligible = eligible.map(f => {
+      const {score, hits, cat, amc_sebi, amc_warning, amc_note} = scoreMFTickertape(f);
+      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, eligible: true, filter_reasons: []};
+    });
+
+    // ── STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) ──
+    const scoredIneligible = ineligible.map(f => {
+      const subcat = f.sub_category || '';
+      const cat = subcat.includes('Small') ? 'smallcap' : subcat.includes('Mid') ? 'midcap' : 'flexicap';
+      const {reasons} = checkEligible(f);
+      const qual = getAmcQual(f.amc || '');
+      return {...f, score: null, hits: {}, cat,
+        amc_sebi: qual.sebi, amc_warning: qual.warning, amc_note: null,
+        eligible: false, filter_reasons: reasons};
+    });
+
+    // ── STEP 6: SORT — eligible by score desc, ineligible by name ───
+    const allFunds = [...scoredEligible, ...scoredIneligible];
+    allFunds.sort((a,b) => {
+      if (a.sub_category !== b.sub_category) return a.sub_category.localeCompare(b.sub_category);
+      if (a.eligible && !b.eligible) return -1;
+      if (!a.eligible && b.eligible) return 1;
+      return (b.score||0) - (a.score||0);
+    });
+
+    return res.json({
+      funds: allFunds,
+      total: allFunds.length,
+      eligible_count: scoredEligible.length,
+      not_eligible_count: scoredIneligible.length,
+      source: "Tickertape CSV — Apr 4 2026",
+      filters: "AUM ≥₹1,000 Cr · Age ≥5Y · 3Y rolling data · Expense <2%",
+      cached_at: Date.now()
+    });
+
   } catch(e) {
-    // Fallback to MFAPI cache
-    console.log("Tickertape DB not ready, using MFAPI cache:", e.message);
+    console.log("Tickertape DB not ready:", e.message);
     const funds = Object.values(mfCache);
-    if (funds.length > 0) {
-      return res.json({funds, total:funds.length, source:"MFAPI (fallback — run mf_load.sql to use real data)", cached_at:mfCacheTime});
-    }
-    res.status(503).json({error:"No MF data available. Run mf_load.sql in Railway PostgreSQL.", funds:[], total:0});
+    if (funds.length > 0) return res.json({funds, total:funds.length, source:"MFAPI (fallback)", cached_at:mfCacheTime});
+    res.status(503).json({error:"No MF data. Run mf_load_v2.sql in Railway PostgreSQL.", funds:[], total:0});
   }
 });
 
