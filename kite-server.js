@@ -862,7 +862,7 @@ async function scanAndTrade() {
 
   for (const stock of UNIVERSE) {
     try {
-      const token = INSTRUMENTS[stock.sym];
+      const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
       if (!token){await delay(200);continue;}
 
       const today   = new Date().toISOString().split("T")[0];
@@ -1022,7 +1022,30 @@ app.get("/api/news", async(req,res)=>{
   res.json(unique);
 });
 
-// ── Crypto prices proxy (avoids browser CORS issues) ─────────────────────────
+// ── Fetch and cache valid instrument tokens from Kite ─────────────────────────
+let validTokens = {}; // sym -> token, populated from Kite instruments API
+
+async function refreshInstruments() {
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
+  try {
+    console.log("📋 Fetching instrument tokens from Kite...");
+    const instruments = await kite.getInstruments("NSE");
+    instruments.forEach(inst => {
+      if (inst.exchange === "NSE" && inst.instrument_type === "EQ") {
+        validTokens[inst.tradingsymbol] = inst.instrument_token;
+      }
+    });
+    console.log(`✅ Loaded ${Object.keys(validTokens).length} NSE instrument tokens`);
+  } catch(e) {
+    console.error("Could not fetch instruments:", e.message);
+    // Fall back to hardcoded tokens
+    validTokens = {...INSTRUMENTS};
+  }
+}
+
+app.get("/api/instruments", (req,res) => res.json(validTokens));
+
+// ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get("/api/crypto-prices", async(req,res)=>{
   try {
     const CRYPTO_SYMS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","MATICUSDT","DOTUSDT","LINKUSDT","UNIUSDT","ATOMUSDT","LTCUSDT","NEARUSDT","APTUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT"];
@@ -1371,6 +1394,7 @@ async function start() {
   if (process.env.KITE_ACCESS_TOKEN) {
     console.log("✅ Token found — starting smart engine...");
     startTicker(process.env.KITE_ACCESS_TOKEN);
+    await refreshInstruments();  // fetch real tokens from Kite
     setTimeout(scanAndTrade, 5000);
   } else {
     console.log("⚠️  No token — visit /auth/login");
@@ -1378,6 +1402,8 @@ async function start() {
   // NSE: every 3 min during market hours Mon–Fri
   cron.schedule("*/3 9-15 * * 1-5", ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
   cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
+  // Refresh instrument tokens daily at 9:00 AM
+  cron.schedule("0 9 * * 1-5", ()=>refreshInstruments(), {timezone:"Asia/Kolkata"});
 
   // Crypto: start immediately, run 24/7 every 15 minutes
   console.log("₿ Starting crypto engine — 24/7...");
