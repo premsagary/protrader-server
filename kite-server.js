@@ -1181,6 +1181,10 @@ app.get("/auth/callback", async(req,res)=>{
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Timeout-safe fetch (compatible with Node 18) ─────────────────────────────
+const cryptoPrices  = {};
+const cryptoCandles = {};
+let   cryptoWSActive = false;
+
 function fetchT(url, opts={}, ms=8000) {
   const ctrl = new AbortController();
   const t = setTimeout(()=>ctrl.abort(), ms);
