@@ -527,7 +527,7 @@ function renderStocksMarket(){
         <td style="font-size:12px;color:var(--text2)">${s.low>0?INR(s.low):"—"}</td>
         <td style="font-size:12px;color:var(--text2)">${s.vol>0?s.vol.toLocaleString("en-IN"):"—"}</td>
         <td style="display:flex;gap:4px">
-          <button class="btn btn-sm" onclick="S.chartSym='${s.sym}';setTab('chart')">Chart</button>
+          <button class="btn btn-sm" onclick="S.chartSym='${s.sym}';S.chartTF='5m';setTab('chart')">Chart</button>
           <button class="btn btn-sm" onclick="S.newsNseSym='${s.sym}';setTab('news')">News</button>
         </td>
       </tr>`).join("")}</tbody>
@@ -575,20 +575,212 @@ function renderScanLog(){
     </table></div>`;
 }
 
-// ── STOCKS CHART & NEWS ───────────────────────────────
+// ── STOCKS CHART — Custom candlestick using Kite /history/:symbol ─────────────
 function renderStocksChartPage(){
   document.getElementById("main-content").innerHTML=`
-    <div class="fr" style="margin-bottom:12px">
-      <select id="chart-sym-sel" onchange="S.chartSym=this.value;loadChart()" style="min-width:200px">
+    <div class="fr" style="margin-bottom:10px">
+      <select id="chart-sym-sel" onchange="S.chartSym=this.value;loadKiteChart()" style="min-width:200px">
         ${NSE_STOCKS.map(s=>`<option value="${s.sym}"${s.sym===S.chartSym?" selected":""}>${s.sym} — ${s.name}</option>`).join("")}
       </select>
-      <span id="chart-price" style="font-weight:600;font-size:15px">${S.prices[S.chartSym]?INR(S.prices[S.chartSym].price):""}</span>
-      <span style="font-size:12px;color:var(--text2)">5-min · TradingView · EMA + RSI + MACD</span>
+      <div style="display:flex;gap:4px">
+        ${["5m","15m","1h","1D"].map(tf=>`<button class="btn btn-sm" id="tf-${tf}" onclick="S.chartTF='${tf}';loadKiteChart()" style="${(S.chartTF||"5m")===tf?"background:var(--text);color:var(--bg);border-color:var(--text)":""}">${tf}</button>`).join("")}
+      </div>
+      <span id="kite-chart-price" style="font-weight:600;font-size:15px"></span>
+      <span id="kite-chart-change" style="font-size:12px"></span>
+      <span style="font-size:11px;color:var(--text3);margin-left:auto">Real-time · Kite Connect · Free</span>
     </div>
-    <div style="border-radius:10px;overflow:hidden;border:1px solid var(--border)"><div id="tv-widget" style="height:480px"></div></div>
+    <div id="kite-chart-container" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;position:relative">
+      <canvas id="kite-candle-chart" style="width:100%;height:420px"></canvas>
+      <div id="kite-chart-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:10px;font-size:13px;color:var(--text2)">Loading chart data...</div>
+    </div>
+    <div id="kite-chart-info" style="display:flex;gap:16px;padding:8px 0;font-size:12px;color:var(--text2);flex-wrap:wrap"></div>
     <div id="chart-trades" style="margin-top:12px"></div>`;
-  loadChart();
+  S.chartTF = S.chartTF||"5m";
+  loadKiteChart();
 }
+
+async function loadKiteChart(){
+  const sym = S.chartSym;
+  const tf  = S.chartTF||"5m";
+
+  // Update TF button styles
+  ["5m","15m","1h","1D"].forEach(t=>{
+    const b=document.getElementById(`tf-${t}`);
+    if(b) b.style.cssText=t===tf?"background:var(--text);color:var(--bg);border:1px solid var(--text);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer":"background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;color:var(--text)";
+  });
+
+  const loading=document.getElementById("kite-chart-loading");
+  if(loading) loading.style.display="flex";
+
+  // Map tf to Kite interval
+  const intervalMap={"5m":"5minute","15m":"15minute","1h":"60minute","1D":"day"};
+  const interval=intervalMap[tf]||"5minute";
+
+  try {
+    const r=await fetch(`/history/${sym}?interval=${interval}`);
+    if(!r.ok) throw new Error("Failed to fetch");
+    const candles=await r.json();
+    if(!candles||candles.length<2) throw new Error("No data");
+
+    if(loading) loading.style.display="none";
+    drawCandleChart(candles, sym, tf);
+
+    // Update price display
+    const last=candles[candles.length-1];
+    const first=candles[0];
+    const chg=((last.close-first.open)/first.open*100);
+    const priceEl=document.getElementById("kite-chart-price");
+    const chgEl=document.getElementById("kite-chart-change");
+    if(priceEl) priceEl.textContent=INR(last.close);
+    if(chgEl){chgEl.textContent=`${chg>=0?"+":""}${chg.toFixed(2)}%`;chgEl.style.color=clr(chg);}
+
+    // Info bar
+    const info=document.getElementById("kite-chart-info");
+    if(info) info.innerHTML=`
+      <span>O: <b>${INR(last.open)}</b></span>
+      <span>H: <b style="color:var(--green)">${INR(last.high)}</b></span>
+      <span>L: <b style="color:var(--red)">${INR(last.low)}</b></span>
+      <span>C: <b>${INR(last.close)}</b></span>
+      <span>Vol: <b>${(last.volume||0).toLocaleString("en-IN")}</b></span>
+      <span style="color:var(--text3)">${candles.length} candles · ${tf} · Kite</span>`;
+
+  } catch(e){
+    if(loading){ loading.innerHTML=`<div style="text-align:center"><div style="font-size:13px;color:var(--red);margin-bottom:8px">Could not load chart data</div><div style="font-size:11px;color:var(--text3)">Market may be closed or token expired</div></div>`; loading.style.display="flex"; }
+  }
+
+  // Paper trades for this symbol
+  const trades=S.nseTrades.filter(t=>t.symbol===sym);
+  const el=document.getElementById("chart-trades");
+  if(el&&trades.length) el.innerHTML=`<div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text2)">Paper trades for ${sym}</div>`+
+    trades.slice(0,5).map(t=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+      ${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}
+      <span style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)} → ${fmtT(t.exit_time)}</span>
+      <span style="font-size:12px">Entry ${INR(t.price)}</span>
+      ${t.exit_price?`<span style="font-size:12px">Exit ${INR(t.exit_price)}</span>`:""}
+      <span style="margin-left:auto;font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"Open":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</span>
+    </div>`).join("");
+}
+
+function drawCandleChart(candles, sym, tf){
+  const canvas=document.getElementById("kite-candle-chart");
+  if(!canvas) return;
+
+  // Limit candles for display
+  const maxCandles={"5m":80,"15m":80,"1h":60,"1D":120};
+  const data=candles.slice(-(maxCandles[tf]||80));
+
+  const dpr=window.devicePixelRatio||1;
+  const W=canvas.parentElement.clientWidth-24;
+  const H=420;
+  canvas.width=W*dpr; canvas.height=H*dpr;
+  canvas.style.width=W+"px"; canvas.style.height=H+"px";
+  const ctx=canvas.getContext("2d");
+  ctx.scale(dpr,dpr);
+
+  // Colors from CSS vars (approximate)
+  const isDark=window.matchMedia("(prefers-color-scheme:dark)").matches;
+  const C={
+    bg:"#ffffff", grid:"#f1f3f5", text:"#6b7280",
+    bull:"#16a34a", bear:"#dc2626", wick:"#9ca3af",
+    ema9:"#3b82f6", ema21:"#f59e0b", vol:"#e5e7eb"
+  };
+
+  // Margins
+  const mL=65,mR=16,mT=16,mB=40,mVol=60;
+  const cW=W-mL-mR, cH=H-mT-mB-mVol-8;
+
+  // Price range
+  const highs=data.map(c=>c.high), lows=data.map(c=>c.low);
+  const pMax=Math.max(...highs)*1.001, pMin=Math.min(...lows)*0.999;
+  const pRange=pMax-pMin||1;
+
+  // Volume range
+  const vols=data.map(c=>c.volume||0);
+  const vMax=Math.max(...vols)||1;
+
+  const toY=p=>mT+cH*(1-(p-pMin)/pRange);
+  const toVY=v=>mT+cH+8+mVol*(1-v/vMax);
+  const candleW=Math.max(2,Math.floor(cW/data.length)-1);
+  const gap=Math.floor(cW/data.length);
+
+  // Background
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,W,H);
+
+  // Grid lines
+  ctx.strokeStyle=C.grid; ctx.lineWidth=1;
+  const gridCount=5;
+  for(let i=0;i<=gridCount;i++){
+    const y=mT+i*(cH/gridCount);
+    ctx.beginPath();ctx.moveTo(mL,y);ctx.lineTo(W-mR,y);ctx.stroke();
+    const price=pMax-i*(pRange/gridCount);
+    ctx.fillStyle=C.text;ctx.font="10px -apple-system,sans-serif";
+    ctx.textAlign="right";ctx.fillText(INR(price),mL-4,y+3);
+  }
+
+  // EMA lines
+  function calcEMA(closes,n){
+    const k=2/(n+1);let e=closes[0];
+    return closes.map((v,i)=>i?(e=v*k+e*(1-k)):v);
+  }
+  const closes=data.map(c=>c.close);
+  const ema9=calcEMA(closes,9), ema21=calcEMA(closes,21);
+
+  function drawEMA(vals,color){
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.beginPath();
+    vals.forEach((v,i)=>{
+      const x=mL+i*gap+candleW/2, y=toY(v);
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  }
+  drawEMA(ema9,C.ema9);
+  drawEMA(ema21,C.ema21);
+
+  // Candles + volume
+  data.forEach((c,i)=>{
+    const x=mL+i*gap;
+    const isBull=c.close>=c.open;
+    const color=isBull?C.bull:C.bear;
+    const oY=toY(c.open), cY=toY(c.close);
+    const hY=toY(c.high), lY=toY(c.low);
+    const bodyTop=Math.min(oY,cY), bodyH=Math.max(1,Math.abs(cY-oY));
+    const midX=x+candleW/2;
+
+    // Wick
+    ctx.strokeStyle=color;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(midX,hY);ctx.lineTo(midX,lY);ctx.stroke();
+
+    // Body
+    ctx.fillStyle=isBull?color:"#fff";
+    ctx.fillRect(x,bodyTop,candleW,bodyH);
+    ctx.strokeStyle=color;ctx.strokeRect(x,bodyTop,candleW,bodyH);
+
+    // Volume bar
+    const vH=Math.max(1,mVol*(c.volume||0)/vMax);
+    ctx.fillStyle=isBull?"#16a34a30":"#dc262630";
+    ctx.fillRect(x,mT+cH+8+mVol-vH,candleW,vH);
+  });
+
+  // X axis labels
+  ctx.fillStyle=C.text;ctx.font="10px -apple-system,sans-serif";ctx.textAlign="center";
+  const step=Math.ceil(data.length/8);
+  data.forEach((c,i)=>{
+    if(i%step!==0) return;
+    const x=mL+i*gap+candleW/2;
+    const d=new Date(c.date||c.timestamp);
+    const label=tf==="1D"?d.toLocaleDateString("en-IN",{day:"2-digit",month:"short"}):d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
+    ctx.fillText(label,x,H-mB+14);
+  });
+
+  // Legend
+  ctx.font="11px -apple-system,sans-serif";ctx.textAlign="left";
+  ctx.fillStyle=C.ema9;ctx.fillRect(mL,4,20,2);ctx.fillStyle=C.text;ctx.fillText("EMA 9",mL+24,9);
+  ctx.fillStyle=C.ema21;ctx.fillRect(mL+70,4,20,2);ctx.fillStyle=C.text;ctx.fillText("EMA 21",mL+94,9);
+  ctx.fillStyle=C.text;ctx.fillText(`${sym} · ${tf} · ${data.length} bars`,mL+160,9);
+}
+
+// Keep TradingView for crypto only
+function loadChart(){ loadKiteChart(); }
 
 function renderStocksNewsPage(){
   document.getElementById("main-content").innerHTML=`
@@ -769,10 +961,10 @@ function loadChart(){
   const container=document.getElementById("tv-widget");
   if(!container)return;
   container.innerHTML="";
-  // User has BSE subscription on TradingView — use BSE: prefix for Indian stocks
-  const tvSym = `BSE:${sym}`;
+  // BSE subscription supports D/W/M intervals — use Daily
   const load=()=>{new window.TradingView.widget({
-    container_id:"tv-widget",symbol:tvSym,interval:"5",
+    container_id:"tv-widget",symbol:`BSE:${sym}`,
+    interval:"D",  // Daily — works with BSE Essential plan
     timezone:"Asia/Kolkata",theme:"light",style:"1",locale:"en",
     width:"100%",height:480,
     studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
