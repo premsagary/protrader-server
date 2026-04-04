@@ -559,7 +559,11 @@ function renderPortfolio(){
 function renderScanLog(){
   const rc=r=>r==="TRENDING"?"g":r==="BREAKOUT"?"a":r==="MOMENTUM"?"b":"gr";
   document.getElementById("main-content").innerHTML=`
-    <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Each row = one scan. Bot scans all ${NSE_STOCKS.length} stocks every 3 minutes during 9:15–15:30 IST.</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      <p style="font-size:13px;color:var(--text2);flex:1">Each row = one scan. Bot scans every 3 min during 9:15–15:30 IST.</p>
+      <button class="btn btn-sm" onclick="cleanupTrades()" style="color:var(--amber);border-color:var(--amber)">🧹 Remove bad trades (&gt;100% return)</button>
+      <button class="btn btn-sm" onclick="resetTrades()" style="color:var(--red);border-color:var(--red)">🗑️ Reset all trades</button>
+    </div>
     <div class="tw"><table>
       <thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Strategy</th><th>Message</th></tr></thead>
       <tbody>${!S.scanLog.length?`<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2)">No scans yet</td></tr>`:
@@ -573,6 +577,22 @@ function renderScanLog(){
         </tr>`).join("")}
       </tbody>
     </table></div>`;
+}
+
+async function cleanupTrades(){
+  if(!confirm("Remove all trades with >100% return (bad instrument tokens)?")) return;
+  const r=await fetch("/cleanup-trades",{method:"POST"});
+  const d=await r.json();
+  alert(d.message);
+  fetchAll();
+}
+
+async function resetTrades(){
+  if(!confirm("⚠️ Delete ALL paper trades and start fresh? This cannot be undone.")) return;
+  const r=await fetch("/reset-trades",{method:"POST"});
+  const d=await r.json();
+  alert(d.message);
+  fetchAll();
 }
 
 // ── STOCKS CHART — Custom candlestick using Kite /history/:symbol ─────────────
