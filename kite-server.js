@@ -1409,18 +1409,33 @@ async function refreshMFData() {
 
 // ── MF API endpoints ──────────────────────────────────────────────────────────
 app.get("/api/mf/funds", async(req,res) => {
-  // Return cached data, refresh if stale
-  const stale = !mfCacheTime || Date.now()-mfCacheTime > MF_CACHE_TTL;
-  if (stale && !mfRefreshing) refreshMFData(); // async refresh, don't wait
-  if (Object.keys(mfCache).length === 0) {
-    // First load — wait for it
-    await refreshMFData();
+  try {
+    // If cache is empty, fetch now and wait
+    if (Object.keys(mfCache).length === 0) {
+      if (!mfRefreshing) await refreshMFData();
+      else {
+        // Still refreshing — wait up to 60s
+        let waited = 0;
+        while (mfRefreshing && waited < 60000) {
+          await new Promise(r=>setTimeout(r,1000));
+          waited += 1000;
+        }
+      }
+    } else {
+      // Cache exists — trigger background refresh if stale
+      const stale = !mfCacheTime || Date.now()-mfCacheTime > MF_CACHE_TTL;
+      if (stale && !mfRefreshing) refreshMFData();
+    }
+    const funds = Object.values(mfCache);
+    res.json({
+      funds,
+      total: funds.length,
+      cached_at: mfCacheTime,
+      source: "mfdata.in + mf.captnemo.in + mfapi.in",
+    });
+  } catch(e) {
+    res.status(500).json({error: e.message, funds: []});
   }
-  res.json({
-    funds: Object.values(mfCache),
-    cached_at: mfCacheTime,
-    source: "mfdata.in + mf.captnemo.in + mfapi.in",
-  });
 });
 
 app.post("/api/mf/refresh", async(req,res) => {
