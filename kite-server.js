@@ -1125,6 +1125,27 @@ app.get("/regime", (req,res)=>{
 
 app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
 
+// ── Reset all paper trades (clean slate) ──────────────────────────────────────
+app.post("/reset-trades", async(req,res)=>{
+  try {
+    await pool.query("DELETE FROM paper_trades");
+    await pool.query("DELETE FROM scan_log");
+    res.json({message:"All paper trades and scan log cleared. Fresh start!"});
+    console.log("🗑️  Paper trades reset by user");
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// ── Remove suspicious trades (P&L > 100% return = likely bad token) ──────────
+app.post("/cleanup-trades", async(req,res)=>{
+  try {
+    const{rowCount}=await pool.query(
+      "DELETE FROM paper_trades WHERE ABS(pnl_pct) > 100 OR (status='CLOSED' AND ABS(exit_price - price)/price > 1)"
+    );
+    res.json({message:`Removed ${rowCount} suspicious trades with >100% return`});
+    console.log(`🧹 Cleaned ${rowCount} bad trades`);
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
 app.get("/orders",    async(req,res)=>{try{res.json(await kite.getOrders());}   catch(e){res.status(500).json({error:e.message});}});
 app.get("/positions", async(req,res)=>{try{res.json(await kite.getPositions());}catch(e){res.status(500).json({error:e.message});}});
 app.get("/holdings",  async(req,res)=>{try{res.json(await kite.getHoldings());} catch(e){res.status(500).json({error:e.message});}});
@@ -1133,8 +1154,9 @@ app.get("/margin",    async(req,res)=>{try{res.json(await kite.getMargins());}  
 app.get("/history/:symbol", async(req,res)=>{
   try {
     const{interval="5minute"}=req.query;
-    const token=INSTRUMENTS[req.params.symbol];
-    if(!token)return res.status(404).json({error:"Symbol not found"});
+    // Use validTokens (from Kite API) with fallback to hardcoded INSTRUMENTS
+    const token=validTokens[req.params.symbol]||INSTRUMENTS[req.params.symbol];
+    if(!token)return res.status(404).json({error:"Symbol not found — token not loaded yet"});
     const today=new Date().toISOString().split("T")[0];
     const weekAgo=new Date(Date.now()-7*24*60*60*1000).toISOString().split("T")[0];
     res.json(await kite.getHistoricalData(token,interval,weekAgo,today));
