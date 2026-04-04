@@ -404,23 +404,33 @@ function statCard(l,v,c,s){return`<div class="stat"><div class="l">${l}</div><di
 
 // ── FETCH ALL ─────────────────────────────────────────────────────────────────
 async function fetchAll(){
-  const rs = await Promise.allSettled([
-    fetch("/health"),fetch("/prices"),fetch("/paper-trades"),
-    fetch("/paper-trades/stats"),fetch("/paper-trades/daily"),
-    fetch("/scan-log"),fetch("/holdings"),fetch("/margin"),
-    fetch("/crypto/trades"),fetch("/crypto/trades/stats"),
-  ]);
-  const ok = (r,i) => rs[i].status==="fulfilled"&&rs[i].value.ok;
-  if(ok(rs,0)) S.health       = await rs[0].value.json();
-  if(ok(rs,1)) S.prices       = await rs[1].value.json();
-  if(ok(rs,2)) {const d=await rs[2].value.json();if(Array.isArray(d))S.nseTrades=d;}
-  if(ok(rs,3)) S.nseStats     = await rs[3].value.json();
-  if(ok(rs,4)) {const d=await rs[4].value.json();if(Array.isArray(d))S.daily=d;}
-  if(ok(rs,5)) {const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
-  if(ok(rs,6)) {const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
-  if(ok(rs,7)) S.margin       = await rs[7].value.json();
-  if(ok(rs,8)) {const d=await rs[8].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
-  if(ok(rs,9)) S.cryptoStats  = await rs[9].value.json();
+  try {
+    const rs = await Promise.allSettled([
+      fetch("/health"),fetch("/prices"),fetch("/paper-trades"),
+      fetch("/paper-trades/stats"),fetch("/paper-trades/daily"),
+      fetch("/scan-log"),fetch("/holdings"),fetch("/margin"),
+    ]);
+    const ok=(r)=>r.status==="fulfilled"&&r.value.ok;
+    if(ok(rs[0])) S.health     = await rs[0].value.json();
+    if(ok(rs[1])) S.prices     = await rs[1].value.json();
+    if(ok(rs[2])){const d=await rs[2].value.json();if(Array.isArray(d))S.nseTrades=d;}
+    if(ok(rs[3])) S.nseStats   = await rs[3].value.json();
+    if(ok(rs[4])){const d=await rs[4].value.json();if(Array.isArray(d))S.daily=d;}
+    if(ok(rs[5])){const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
+    if(ok(rs[6])){const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
+    if(ok(rs[7])) S.margin     = await rs[7].value.json();
+  } catch(e){ console.error("NSE fetch error:",e); }
+
+  // Crypto endpoints — optional, won't break if missing
+  try {
+    const cr = await Promise.allSettled([
+      fetch("/crypto/trades"),
+      fetch("/crypto/trades/stats"),
+    ]);
+    if(cr[0].status==="fulfilled"&&cr[0].value.ok){const d=await cr[0].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
+    if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats=await cr[1].value.json();
+  } catch(e){ console.log("Crypto endpoints not ready yet"); }
+
   renderAll();
 }
 
@@ -447,10 +457,10 @@ function renderAll(){
 }
 
 function updateTopBar(){
-  const h=S.health, ns=S.nseStats, cs=S.cryptoStats, m=S.margin;
+  const h=S.health||{}, ns=S.nseStats||{}, cs=S.cryptoStats||{}, m=S.margin;
   const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
   const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  const nsePnL=+(ns?.total_pnl||0), cryptoPnL=+(cs?.total_pnl||0);
+  const nsePnL=+(ns.total_pnl||0), cryptoPnL=+(cs.total_pnl||0);
   const cash=m?.equity?.net?.available?.live_balance;
 
   document.getElementById("market-badge").style.display=h?.marketOpen?"inline-block":"none";
@@ -469,10 +479,10 @@ function updateTopBar(){
 // ── OVERVIEW ──────────────────────────────────────────────────────────────────
 function renderOverview(){
   // NSE stats
-  const ns=S.nseStats;
+  const ns=S.nseStats||{};
   const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
-  const nsePnL=+(ns?.total_pnl||0);
-  const nw=+(ns?.wins||0),nl=+(ns?.losses||0);
+  const nsePnL=+(ns.total_pnl||0);
+  const nw=+(ns.wins||0),nl=+(ns.losses||0);
   const nwr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
   const openNsePnL=nseOpen.reduce((s,t)=>{const c=S.prices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
 
@@ -498,10 +508,10 @@ function renderOverview(){
       </div>`;}).join("");
 
   // Crypto stats
-  const cs=S.cryptoStats;
+  const cs=S.cryptoStats||{};
   const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
-  const cryptoPnL=+(cs?.total_pnl||0);
-  const cw=+(cs?.wins||0),cl2=+(cs?.losses||0);
+  const cryptoPnL=+(cs.total_pnl||0);
+  const cw=+(cs.wins||0),cl2=+(cs.losses||0);
   const cwr=cw+cl2>0?Math.round(cw/(cw+cl2)*100):0;
   const openCryptoPnL=cryptoOpen.reduce((s,t)=>{const c=S.cryptoPrices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
 
