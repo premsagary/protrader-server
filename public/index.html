@@ -3,900 +3,832 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ProTrader Dashboard</title>
+<title>ProTrader — NSE + Crypto</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  :root{
-    --bg:#ffffff;--bg2:#f8f9fa;--bg3:#f1f3f5;
-    --text:#1a1a1a;--text2:#6b7280;--text3:#9ca3af;
-    --border:#e5e7eb;--border2:#d1d5db;
-    --green:#16a34a;--green-bg:#dcfce7;
-    --red:#dc2626;--red-bg:#fee2e2;
-    --amber:#b45309;--amber-bg:#fef3c7;
-    --blue:#1d4ed8;--blue-bg:#dbeafe;
-    --accent:#1a1a1a;
-  }
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
-  a{color:inherit;text-decoration:none}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fff;--bg2:#f8f9fa;--bg3:#f1f3f5;
+  --text:#111;--text2:#6b7280;--text3:#9ca3af;
+  --border:#e5e7eb;--border2:#d1d5db;
+  --green:#16a34a;--green-bg:#dcfce7;
+  --red:#dc2626;--red-bg:#fee2e2;
+  --amber:#b45309;--amber-bg:#fef3c7;
+  --blue:#1d4ed8;--blue-bg:#dbeafe;
+  --purple:#7c3aed;--purple-bg:#ede9fe;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+/* Layout */
+.topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:100}
+.logo{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px}
+.logo-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{box-shadow:0 0 0 0 #22c55e40}70%{box-shadow:0 0 0 6px transparent}}
+.hstat{text-align:right}
+.hstat .l{font-size:9px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
+.hstat .v{font-weight:600;font-size:14px}
+.tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);padding:0 20px;background:var(--bg);gap:0;white-space:nowrap;position:sticky;top:49px;z-index:99}
+.tab{padding:10px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;font-family:inherit;transition:.15s}
+.tab:hover{color:var(--text)}.tab.active{color:var(--text);border-bottom-color:var(--text);font-weight:500}
+.main{padding:16px 20px}
 
-  /* Layout */
-  #app{display:flex;flex-direction:column;min-height:100vh}
-  .topbar{background:var(--bg);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;position:sticky;top:0;z-index:100}
-  .logo{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px}
-  .logo-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 5px #22c55e}
-  .header-stats{display:flex;gap:20px;flex-wrap:wrap}
-  .header-stat{text-align:right}
-  .header-stat .lbl{font-size:10px;color:var(--text3);letter-spacing:.5px}
-  .header-stat .val{font-weight:600;font-size:15px}
+/* Two-column split */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.split{grid-template-columns:1fr}}
+.panel{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px}
+.panel-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.panel-title{font-weight:600;font-size:14px}
+.panel-sub{font-size:11px;color:var(--text3);margin-left:auto}
 
-  /* Tabs */
-  .tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);padding:0 20px;background:var(--bg);gap:0;white-space:nowrap}
-  .tab{padding:12px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px;font-family:inherit;transition:.15s}
-  .tab:hover{color:var(--text)}
-  .tab.active{color:var(--text);border-bottom-color:var(--text);font-weight:500}
+/* Stats */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-bottom:12px}
+.stat{background:var(--bg2);border-radius:8px;padding:9px 12px}
+.stat .l{font-size:10px;color:var(--text2);margin-bottom:3px}
+.stat .v{font-weight:600;font-size:17px}
+.stat .s{font-size:10px;color:var(--text3);margin-top:2px}
 
-  /* Main content */
-  .main{padding:20px;flex:1}
+/* Tables */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{padding:7px 9px;text-align:left;font-size:11px;font-weight:500;color:var(--text2);border-bottom:1px solid var(--border);white-space:nowrap;user-select:none;cursor:pointer}
+th:hover{color:var(--text)}
+td{padding:8px 9px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:hover td{background:var(--bg2)}
 
-  /* Cards */
-  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}
-  .stat-card{background:var(--bg2);border-radius:10px;padding:12px 14px}
-  .stat-card .lbl{font-size:11px;color:var(--text2);margin-bottom:4px}
-  .stat-card .val{font-weight:600;font-size:19px}
-  .stat-card .sub{font-size:11px;color:var(--text3);margin-top:2px}
+/* Pills */
+.pill{display:inline-block;border-radius:5px;padding:2px 7px;font-size:11px;font-weight:500;white-space:nowrap}
+.pg{background:var(--green-bg);color:var(--green)}
+.pr{background:var(--red-bg);color:var(--red)}
+.pa{background:var(--amber-bg);color:var(--amber)}
+.pb{background:var(--blue-bg);color:var(--blue)}
+.pp{background:var(--purple-bg);color:var(--purple)}
+.pgr{background:var(--bg3);color:var(--text2)}
 
-  /* Tables */
-  .tbl-wrap{overflow-x:auto}
-  table{width:100%;border-collapse:collapse}
-  th{padding:8px 10px;text-align:left;font-size:11px;font-weight:500;color:var(--text2);border-bottom:1px solid var(--border);cursor:pointer;white-space:nowrap;user-select:none}
-  th:hover{color:var(--text)}
-  td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
-  tr:hover td{background:var(--bg2)}
+/* Position cards */
+.pos-card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px}
+.pos-card.up{border-color:#86efac}.pos-card.down{border-color:#fca5a5}
+.prog-bar{height:5px;background:var(--bg3);border-radius:3px;overflow:hidden;margin:6px 0 3px}
+.prog-fill{height:100%;background:linear-gradient(90deg,#ef4444,#fbbf24 50%,#22c55e);border-radius:3px}
 
-  /* Pills/badges */
-  .pill{display:inline-block;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:500;white-space:nowrap}
-  .pill-green{background:var(--green-bg);color:var(--green)}
-  .pill-red{background:var(--red-bg);color:var(--red)}
-  .pill-amber{background:var(--amber-bg);color:var(--amber)}
-  .pill-blue{background:var(--blue-bg);color:var(--blue)}
-  .pill-gray{background:var(--bg3);color:var(--text2)}
+/* News */
+.news-card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px}
+.news-card.bull{border-color:#86efac}.news-card.bear{border-color:#fca5a5}
 
-  /* Buttons */
-  .btn{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--text)}
-  .btn:hover{background:var(--bg3)}
-  .btn-sm{padding:3px 8px;font-size:11px}
+/* Buttons */
+.btn{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--text)}
+.btn:hover{background:var(--bg3)}.btn-sm{padding:3px 8px;font-size:11px}
+input,select{background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:6px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none}
+input:focus,select:focus{border-color:#999}
 
-  /* Inputs */
-  input,select{background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none}
-  input:focus,select:focus{border-color:#999}
+/* Filter */
+.filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.fpill{border-radius:20px;padding:3px 10px;font-size:11px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--text2);font-family:inherit}
+.fpill.active{background:var(--text);color:var(--bg);border-color:var(--text)}
 
-  /* Position cards */
-  .pos-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
-  .pos-card.up{border-color:#86efac}
-  .pos-card.down{border-color:#fca5a5}
-  .pos-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
-  .pos-pnl{margin-left:auto;text-align:right}
-  .pos-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:7px;margin-bottom:12px}
-  .pos-cell{background:var(--bg2);border-radius:7px;padding:7px 10px}
-  .pos-cell .lbl{font-size:9px;color:var(--text2);margin-bottom:2px;text-transform:uppercase;letter-spacing:.5px}
-  .pos-cell .val{font-weight:500;font-size:13px}
-  .progress-bar{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:4px}
-  .progress-fill{height:100%;background:linear-gradient(90deg,#ef4444,#fbbf24 50%,#22c55e);border-radius:3px;transition:width .5s}
-  .progress-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--text3)}
+/* Section label */
+.sec-label{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;margin-bottom:10px;margin-top:4px}
+.sec-badge{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.stocks-badge{background:#dbeafe;color:#1d4ed8}
+.crypto-badge{background:#ede9fe;color:#7c3aed}
 
-  /* News cards */
-  .news-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px}
-  .news-card.bull{border-color:#86efac}
-  .news-card.bear{border-color:#fca5a5}
-  .news-headline{font-weight:500;font-size:14px;line-height:1.5;margin-bottom:6px}
-  .news-impact{font-size:13px;color:var(--text2);line-height:1.6}
+/* Shimmer */
+@keyframes sh{0%,100%{opacity:.4}50%{opacity:.9}}
+.sh{animation:sh 1.5s infinite;background:var(--bg2);border-radius:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.pulsing{animation:pulse 1.5s infinite}
 
-  /* Sentiment bar */
-  .sent-bar{background:var(--bg2);border-radius:10px;padding:12px 16px;margin-bottom:14px}
-  .sent-track{height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin:8px 0}
-  .sent-fill{height:100%;background:#22c55e;border-radius:4px;transition:width .5s}
-
-  /* Shimmer */
-  @keyframes sh{0%,100%{opacity:.4}50%{opacity:.9}}
-  .sh{animation:sh 1.5s infinite;background:var(--bg2);border-radius:8px}
-
-  /* TradingView */
-  #tv-frame{border-radius:10px;overflow:hidden;border:1px solid var(--border)}
-
-  /* Equity chart */
-  .chart-wrap{position:relative;height:180px;margin-bottom:20px}
-  canvas{width:100%!important}
-
-  /* Filter row */
-  .filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-  .sector-pill{border-radius:20px;padding:3px 10px;font-size:11px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--text2);font-family:inherit;transition:.1s}
-  .sector-pill.active{background:var(--text);color:var(--bg);border-color:var(--text)}
-
-  /* Colors */
-  .green{color:var(--green)}.red{color:var(--red)}.muted{color:var(--text2)}
-
-  /* Section title */
-  .section-title{font-weight:500;font-size:14px;margin-bottom:10px}
-
-  /* Empty state */
-  .empty{text-align:center;padding:50px 0;color:var(--text2);font-size:13px}
-
-  @media(max-width:600px){.topbar{padding:10px 12px}.main{padding:12px}.header-stats{gap:12px}}
-
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-  .pulsing{animation:pulse 1.5s infinite}
+.empty{text-align:center;padding:30px 0;color:var(--text2);font-size:13px}
+.green{color:var(--green)}.red{color:var(--red)}.muted{color:var(--text2)}
 </style>
 </head>
 <body>
-<div id="app">
 
-  <!-- TOP BAR -->
-  <div class="topbar">
-    <div class="logo">
-      <span class="logo-dot" id="dot"></span>
-      ProTrader
-      <span id="market-badge" style="display:none" class="pill pill-green" style="font-size:11px">Market Open</span>
-    </div>
-    <div class="header-stats">
-      <div class="header-stat"><div class="lbl">PAPER P&L</div><div class="val" id="h-pnl">—</div></div>
-      <div class="header-stat"><div class="lbl">OPEN</div><div class="val" id="h-open">—</div></div>
-      <div class="header-stat"><div class="lbl">WIN RATE</div><div class="val" id="h-wr">—</div></div>
-      <div class="header-stat"><div class="lbl">CASH</div><div class="val" id="h-cash">—</div></div>
-      <div class="header-stat"><div class="lbl">LAST SCAN</div><div class="val" id="h-scan" style="font-size:12px">—</div></div>
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo"><span class="logo-dot"></span>ProTrader</div>
+  <span id="market-badge" class="pill pb" style="display:none;font-size:11px">NSE Open</span>
+  <span id="crypto-badge" class="pill pp" style="font-size:11px">₿ 24/7</span>
+  <span id="scan-info" style="font-size:11px;color:var(--text3)"></span>
+  <div style="margin-left:auto;display:flex;gap:16px;flex-wrap:wrap">
+    <div class="hstat"><div class="l">NSE P&L</div><div class="v" id="h-nse-pnl">—</div></div>
+    <div class="hstat"><div class="l">Crypto P&L</div><div class="v" id="h-crypto-pnl">—</div></div>
+    <div class="hstat"><div class="l">NSE Positions</div><div class="v" id="h-nse-pos">—</div></div>
+    <div class="hstat"><div class="l">Crypto Positions</div><div class="v" id="h-crypto-pos">—</div></div>
+    <div class="hstat"><div class="l">Cash</div><div class="v" id="h-cash">—</div></div>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <button class="tab active" onclick="showTab('overview')"  id="tab-overview">◎ Overview</button>
+  <button class="tab"        onclick="showTab('positions')" id="tab-positions">⬡ Positions</button>
+  <button class="tab"        onclick="showTab('trades')"    id="tab-trades">⇅ Trades</button>
+  <button class="tab"        onclick="showTab('market')"    id="tab-market">▦ Live Market</button>
+  <button class="tab"        onclick="showTab('chart')"     id="tab-chart">↗ Chart</button>
+  <button class="tab"        onclick="showTab('news')"      id="tab-news">◈ News</button>
+  <button class="tab"        onclick="showTab('portfolio')" id="tab-portfolio">◻ Portfolio</button>
+  <button class="tab"        onclick="showTab('scanlog')"   id="tab-scanlog">⌾ Scan Log</button>
+</div>
+
+<div class="main">
+
+  <!-- OVERVIEW -->
+  <div id="page-overview">
+    <div class="split">
+      <!-- NSE -->
+      <div>
+        <div class="sec-label">📈 Stocks <span class="sec-badge stocks-badge">NSE · 9:15–15:30</span></div>
+        <div class="stat-row" id="nse-stats"></div>
+        <div style="font-size:12px;font-weight:500;margin-bottom:8px">Recent trades</div>
+        <div id="nse-recent"></div>
+      </div>
+      <!-- Crypto -->
+      <div>
+        <div class="sec-label">₿ Crypto <span class="sec-badge crypto-badge">Binance · 24/7 · Free</span></div>
+        <div class="stat-row" id="crypto-stats"></div>
+        <div style="font-size:12px;font-weight:500;margin-bottom:8px">Recent trades</div>
+        <div id="crypto-recent"></div>
+      </div>
     </div>
   </div>
 
-  <!-- TABS -->
-  <div class="tabs">
-    <button class="tab active" onclick="showTab('overview')" id="tab-overview">◎ Overview</button>
-    <button class="tab" onclick="showTab('positions')" id="tab-positions">⬡ Positions</button>
-    <button class="tab" onclick="showTab('trades')" id="tab-trades">⇅ Trade History</button>
-    <button class="tab" onclick="showTab('market')" id="tab-market">▦ Live Market</button>
-    <button class="tab" onclick="showTab('chart')" id="tab-chart">↗ Chart</button>
-    <button class="tab" onclick="showTab('news')" id="tab-news">◈ News (RSS)</button>
-    <button class="tab" onclick="showTab('portfolio')" id="tab-portfolio">◻ Portfolio</button>
-    <button class="tab" onclick="showTab('scanlog')" id="tab-scanlog">⌾ Scan Log</button>
+  <!-- POSITIONS -->
+  <div id="page-positions" style="display:none">
+    <div class="split">
+      <div>
+        <div class="sec-label">📈 NSE Positions <span class="sec-badge stocks-badge" id="nse-pos-count">0 open</span></div>
+        <div id="nse-positions-list"></div>
+      </div>
+      <div>
+        <div class="sec-label">₿ Crypto Positions <span class="sec-badge crypto-badge" id="crypto-pos-count">0 open</span></div>
+        <div id="crypto-positions-list"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- MAIN -->
-  <div class="main">
-
-    <!-- OVERVIEW -->
-    <div id="page-overview">
-      <div class="stat-grid" id="stats-grid">
-        <div class="stat-card sh" style="height:70px"></div>
-        <div class="stat-card sh" style="height:70px"></div>
-        <div class="stat-card sh" style="height:70px"></div>
-        <div class="stat-card sh" style="height:70px"></div>
+  <!-- TRADES -->
+  <div id="page-trades" style="display:none">
+    <div class="split">
+      <div>
+        <div class="sec-label">📈 NSE Trade History <span class="sec-badge stocks-badge" id="nse-trade-count"></span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry time</th><th>P&L</th><th>Return</th><th>Strategy</th><th>Result</th></tr></thead>
+          <tbody id="nse-trades-body"></tbody></table>
+        </div>
+        <div id="nse-trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:14px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>
       </div>
-      <div class="section-title">Cumulative P&L</div>
-      <div class="chart-wrap"><canvas id="equity-chart"></canvas></div>
-      <div class="section-title">Recent trades</div>
-      <div id="recent-trades"><div class="empty">Loading...</div></div>
-    </div>
-
-    <!-- POSITIONS -->
-    <div id="page-positions" style="display:none">
-      <div id="positions-list"><div class="empty">Loading...</div></div>
-    </div>
-
-    <!-- TRADE HISTORY -->
-    <div id="page-trades" style="display:none">
-      <div class="chart-wrap" style="height:140px;margin-bottom:16px"><canvas id="pnl-chart"></canvas></div>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr id="trades-head"></tr></thead>
-          <tbody id="trades-body"></tbody>
-        </table>
-      </div>
-      <div id="trades-footer" style="padding:10px;border-top:1px solid var(--border);font-size:13px;color:var(--text2);display:flex;gap:20px;flex-wrap:wrap"></div>
-    </div>
-
-    <!-- LIVE MARKET -->
-    <div id="page-market" style="display:none">
-      <div class="filter-row">
-        <input id="mkt-search" placeholder="Search symbol or name..." oninput="renderMarket()" style="min-width:200px"/>
-        <div id="sector-pills"></div>
-        <span id="mkt-count" style="margin-left:auto;font-size:11px;color:var(--text3)"></span>
-      </div>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr id="mkt-head"></tr></thead>
-          <tbody id="mkt-body"></tbody>
-        </table>
+      <div>
+        <div class="sec-label">₿ Crypto Trade History <span class="sec-badge crypto-badge" id="crypto-trade-count"></span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Coin</th><th>Qty</th><th>Entry $</th><th>Exit $</th><th>Entry time</th><th>P&L</th><th>Return</th><th>Result</th></tr></thead>
+          <tbody id="crypto-trades-body"></tbody></table>
+        </div>
+        <div id="crypto-trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:14px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>
       </div>
     </div>
+  </div>
 
-    <!-- CHART -->
-    <div id="page-chart" style="display:none">
-      <div class="filter-row">
-        <select id="chart-sym" onchange="loadChart()"></select>
-        <span id="chart-price" style="font-weight:600;font-size:15px"></span>
-        <span style="font-size:12px;color:var(--text2)">5-min · TradingView · EMA + RSI + MACD</span>
+  <!-- LIVE MARKET -->
+  <div id="page-market" style="display:none">
+    <div class="split">
+      <!-- NSE -->
+      <div>
+        <div class="sec-label">📈 NSE Stocks <span class="sec-badge stocks-badge" id="nse-mkt-count"></span></div>
+        <div class="filter-row">
+          <input id="nse-search" placeholder="Search..." oninput="renderNSEMarket()" style="width:140px"/>
+          <div id="nse-sector-pills" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+        </div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Symbol</th><th>Name</th><th>Group</th><th>Price</th><th>Chg%</th><th>High</th><th>Low</th><th></th></tr></thead>
+          <tbody id="nse-mkt-body"></tbody></table>
+        </div>
       </div>
-      <div id="tv-frame"><div id="tv-widget" style="height:460px"></div></div>
-      <div id="chart-trades" style="margin-top:14px"></div>
-    </div>
-
-    <!-- NEWS -->
-    <div id="page-news" style="display:none">
-      <div class="filter-row">
-        <select id="news-sym" onchange="fetchNews()"></select>
-        <span id="news-status" style="font-size:12px;color:var(--text3)"></span>
-        <div id="news-counts" style="display:flex;gap:6px"></div>
-        <button class="btn btn-sm" onclick="fetchNews()" style="margin-left:auto">↻ Refresh</button>
-      </div>
-      <div id="news-sentiment"></div>
-      <div id="news-list"></div>
-    </div>
-
-    <!-- PORTFOLIO -->
-    <div id="page-portfolio" style="display:none">
-      <div class="stat-grid" id="port-stats"></div>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr><th>Symbol</th><th>Qty</th><th>Avg price</th><th>LTP</th><th>Invested</th><th>Current</th><th>P&L</th><th>Return</th></tr></thead>
-          <tbody id="holdings-body"></tbody>
-        </table>
+      <!-- Crypto -->
+      <div>
+        <div class="sec-label">₿ Crypto Prices <span class="sec-badge crypto-badge" id="crypto-mkt-status">live</span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Coin</th><th>Name</th><th>Price (USDT)</th><th>24h Chg</th><th>24h High</th><th>24h Low</th><th>Vol</th><th></th></tr></thead>
+          <tbody id="crypto-mkt-body"></tbody></table>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- SCAN LOG -->
-    <div id="page-scanlog" style="display:none">
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Every row = one scan. Bot scans all 30 stocks every 5 minutes during market hours (9:15–15:30 IST).</p>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Strategy</th><th>Message</th></tr></thead>
-          <tbody id="scanlog-body"></tbody>
-        </table>
+  <!-- CHART -->
+  <div id="page-chart" style="display:none">
+    <div class="filter-row">
+      <select id="chart-type" onchange="renderChartSelectors()" style="width:110px">
+        <option value="nse">📈 NSE</option>
+        <option value="crypto">₿ Crypto</option>
+      </select>
+      <select id="chart-sym" onchange="loadChart()" style="min-width:200px"></select>
+      <span id="chart-price" style="font-weight:600;font-size:15px"></span>
+      <span style="font-size:11px;color:var(--text2)">TradingView · EMA + RSI + MACD</span>
+    </div>
+    <div id="tv-frame" style="border-radius:10px;overflow:hidden;border:1px solid var(--border)">
+      <div id="tv-widget" style="height:480px"></div>
+    </div>
+    <div id="chart-trades" style="margin-top:14px"></div>
+  </div>
+
+  <!-- NEWS -->
+  <div id="page-news" style="display:none">
+    <div class="split">
+      <!-- NSE News -->
+      <div>
+        <div class="sec-label">📈 NSE Stock News <span class="sec-badge stocks-badge">RSS feeds · free</span></div>
+        <div class="filter-row">
+          <select id="news-nse-sym" onchange="fetchNSENews()" style="min-width:180px"></select>
+          <span id="nse-news-status" style="font-size:11px;color:var(--text3)"></span>
+          <button class="btn btn-sm" onclick="fetchNSENews()" style="margin-left:auto">↻</button>
+        </div>
+        <div id="nse-news-sentiment"></div>
+        <div id="nse-news-list"></div>
+      </div>
+      <!-- Crypto News -->
+      <div>
+        <div class="sec-label">₿ Crypto News <span class="sec-badge crypto-badge">RSS feeds · free</span></div>
+        <div class="filter-row">
+          <select id="news-crypto-sym" onchange="fetchCryptoNews()" style="min-width:180px"></select>
+          <span id="crypto-news-status" style="font-size:11px;color:var(--text3)"></span>
+          <button class="btn btn-sm" onclick="fetchCryptoNews()" style="margin-left:auto">↻</button>
+        </div>
+        <div id="crypto-news-sentiment"></div>
+        <div id="crypto-news-list"></div>
       </div>
     </div>
+  </div>
 
-  </div><!-- /main -->
-</div><!-- /app -->
+  <!-- PORTFOLIO -->
+  <div id="page-portfolio" style="display:none">
+    <div class="split">
+      <div>
+        <div class="sec-label">📈 NSE Holdings</div>
+        <div class="stat-row" id="port-stats"></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>LTP</th><th>Invested</th><th>Current</th><th>P&L</th><th>Return</th></tr></thead>
+          <tbody id="holdings-body"></tbody></table>
+        </div>
+      </div>
+      <div>
+        <div class="sec-label">₿ Crypto Summary</div>
+        <div class="stat-row" id="crypto-port-stats"></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Coin</th><th>Open Qty</th><th>Entry $</th><th>Live $</th><th>Capital</th><th>Live P&L</th></tr></thead>
+          <tbody id="crypto-port-body"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCAN LOG -->
+  <div id="page-scanlog" style="display:none">
+    <div class="split">
+      <div>
+        <div class="sec-label">📈 NSE Scan Log</div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Message</th></tr></thead>
+          <tbody id="nse-scanlog-body"></tbody></table>
+        </div>
+      </div>
+      <div>
+        <div class="sec-label">₿ Crypto Scan Log <span style="font-size:11px;color:var(--text3)">(every 15 min, 24/7)</span></div>
+        <div style="padding:20px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--text2)">
+          Crypto scans every 15 minutes continuously. Check Railway deploy logs for full crypto scan output.
+          <br/><br/>Open positions: <span id="crypto-scan-open" style="font-weight:600">—</span> &nbsp;·&nbsp;
+          Total trades: <span id="crypto-scan-total" style="font-weight:600">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-// ── CONFIG ────────────────────────────────────────────────────────────────────
-const SERVER = "";  // same origin
+// ── DATA ──────────────────────────────────────────────────────────────────────
+const NSE_STOCKS = [
+  {sym:"RELIANCE",name:"Reliance Industries",grp:"Nifty 50"},{sym:"TCS",name:"Tata Consultancy Svcs",grp:"Nifty 50"},
+  {sym:"HDFCBANK",name:"HDFC Bank",grp:"Nifty 50"},{sym:"ICICIBANK",name:"ICICI Bank",grp:"Nifty 50"},
+  {sym:"INFY",name:"Infosys",grp:"Nifty 50"},{sym:"HINDUNILVR",name:"Hindustan Unilever",grp:"Nifty 50"},
+  {sym:"ITC",name:"ITC Ltd",grp:"Nifty 50"},{sym:"SBIN",name:"State Bank of India",grp:"Nifty 50"},
+  {sym:"BHARTIARTL",name:"Bharti Airtel",grp:"Nifty 50"},{sym:"BAJFINANCE",name:"Bajaj Finance",grp:"Nifty 50"},
+  {sym:"KOTAKBANK",name:"Kotak Mahindra Bank",grp:"Nifty 50"},{sym:"LT",name:"Larsen & Toubro",grp:"Nifty 50"},
+  {sym:"HCLTECH",name:"HCL Technologies",grp:"Nifty 50"},{sym:"WIPRO",name:"Wipro Ltd",grp:"Nifty 50"},
+  {sym:"AXISBANK",name:"Axis Bank",grp:"Nifty 50"},{sym:"MARUTI",name:"Maruti Suzuki",grp:"Nifty 50"},
+  {sym:"SUNPHARMA",name:"Sun Pharma",grp:"Nifty 50"},{sym:"TITAN",name:"Titan Company",grp:"Nifty 50"},
+  {sym:"TATAMOTORS",name:"Tata Motors",grp:"Nifty 50"},{sym:"ADANIENT",name:"Adani Enterprises",grp:"Nifty 50"},
+  {sym:"NTPC",name:"NTPC Ltd",grp:"Nifty 50"},{sym:"ONGC",name:"ONGC",grp:"Nifty 50"},
+  {sym:"TATASTEEL",name:"Tata Steel",grp:"Nifty 50"},{sym:"HINDALCO",name:"Hindalco Industries",grp:"Nifty 50"},
+  {sym:"JSWSTEEL",name:"JSW Steel",grp:"Nifty 50"},{sym:"TECHM",name:"Tech Mahindra",grp:"Nifty 50"},
+  {sym:"DRREDDY",name:"Dr Reddy's Labs",grp:"Nifty 50"},{sym:"CIPLA",name:"Cipla Ltd",grp:"Nifty 50"},
+  {sym:"ASIANPAINT",name:"Asian Paints",grp:"Nifty 50"},{sym:"NESTLEIND",name:"Nestlé India",grp:"Nifty 50"},
+  {sym:"POWERGRID",name:"Power Grid Corp",grp:"Nifty 50"},{sym:"BAJAJFINSV",name:"Bajaj Finserv",grp:"Nifty 50"},
+  {sym:"ULTRACEMCO",name:"UltraTech Cement",grp:"Nifty 50"},{sym:"M&M",name:"Mahindra & Mahindra",grp:"Nifty 50"},
+  {sym:"COALINDIA",name:"Coal India",grp:"Nifty 50"},{sym:"GRASIM",name:"Grasim Industries",grp:"Nifty 50"},
+  {sym:"ADANIPORTS",name:"Adani Ports",grp:"Nifty 50"},{sym:"HEROMOTOCO",name:"Hero MotoCorp",grp:"Nifty 50"},
+  {sym:"BPCL",name:"BPCL Ltd",grp:"Nifty 50"},{sym:"INDUSINDBK",name:"IndusInd Bank",grp:"Nifty 50"},
+  {sym:"SBILIFE",name:"SBI Life Insurance",grp:"Nifty 50"},{sym:"HDFCLIFE",name:"HDFC Life",grp:"Nifty 50"},
+  {sym:"APOLLOHOSP",name:"Apollo Hospitals",grp:"Nifty 50"},{sym:"DIVISLAB",name:"Divi's Laboratories",grp:"Nifty 50"},
+  {sym:"BRITANNIA",name:"Britannia Industries",grp:"Nifty 50"},{sym:"EICHERMOT",name:"Eicher Motors",grp:"Nifty 50"},
+  {sym:"TATACONSUM",name:"Tata Consumer",grp:"Nifty 50"},{sym:"SHRIRAMFIN",name:"Shriram Finance",grp:"Nifty 50"},
+  {sym:"ZOMATO",name:"Zomato Ltd",grp:"Nifty 50"},{sym:"BAJAJ-AUTO",name:"Bajaj Auto",grp:"Nifty 50"},
+  {sym:"DMART",name:"Avenue Supermarts",grp:"Next 50"},{sym:"PIDILITIND",name:"Pidilite Industries",grp:"Next 50"},
+  {sym:"SIEMENS",name:"Siemens Ltd",grp:"Next 50"},{sym:"HAVELLS",name:"Havells India",grp:"Next 50"},
+  {sym:"DABUR",name:"Dabur India",grp:"Next 50"},{sym:"MARICO",name:"Marico Ltd",grp:"Next 50"},
+  {sym:"GODREJCP",name:"Godrej Consumer",grp:"Next 50"},{sym:"AMBUJACEM",name:"Ambuja Cements",grp:"Next 50"},
+  {sym:"ACC",name:"ACC Ltd",grp:"Next 50"},{sym:"BIOCON",name:"Biocon Ltd",grp:"Next 50"},
+  {sym:"BERGEPAINT",name:"Berger Paints",grp:"Next 50"},{sym:"MUTHOOTFIN",name:"Muthoot Finance",grp:"Next 50"},
+  {sym:"CHOLAFIN",name:"Cholamandalam Finance",grp:"Next 50"},{sym:"LUPIN",name:"Lupin Ltd",grp:"Next 50"},
+  {sym:"AUROPHARMA",name:"Aurobindo Pharma",grp:"Next 50"},{sym:"BANKBARODA",name:"Bank of Baroda",grp:"Next 50"},
+  {sym:"CANBK",name:"Canara Bank",grp:"Next 50"},{sym:"PNB",name:"Punjab National Bank",grp:"Next 50"},
+  {sym:"NAUKRI",name:"Info Edge (Naukri)",grp:"Next 50"},{sym:"PERSISTENT",name:"Persistent Systems",grp:"Next 50"},
+  {sym:"COFORGE",name:"Coforge Ltd",grp:"Next 50"},{sym:"MPHASIS",name:"Mphasis Ltd",grp:"Next 50"},
+  {sym:"TATAPOWER",name:"Tata Power",grp:"Next 50"},{sym:"VEDL",name:"Vedanta Ltd",grp:"Next 50"},
+  {sym:"NMDC",name:"NMDC Ltd",grp:"Next 50"},{sym:"SAIL",name:"Steel Authority",grp:"Next 50"},
+  {sym:"HINDPETRO",name:"Hindustan Petroleum",grp:"Next 50"},{sym:"IOC",name:"Indian Oil Corp",grp:"Next 50"},
+  {sym:"GAIL",name:"GAIL India",grp:"Next 50"},{sym:"RECLTD",name:"REC Ltd",grp:"Next 50"},
+  {sym:"PFC",name:"Power Finance Corp",grp:"Next 50"},{sym:"IRCTC",name:"IRCTC Ltd",grp:"Next 50"},
+  {sym:"INDHOTEL",name:"Indian Hotels",grp:"Next 50"},{sym:"VOLTAS",name:"Voltas Ltd",grp:"Next 50"},
+  {sym:"PAGEIND",name:"Page Industries",grp:"Next 50"},{sym:"TRENT",name:"Trent Ltd",grp:"Next 50"},
+  {sym:"JUBLFOOD",name:"Jubilant Foodworks",grp:"Next 50"},{sym:"LICI",name:"Life Insurance Corp",grp:"Next 50"},
+  {sym:"ASTRAL",name:"Astral Ltd",grp:"Midcap"},{sym:"DEEPAKNTR",name:"Deepak Nitrite",grp:"Midcap"},
+  {sym:"LAURUSLABS",name:"Laurus Labs",grp:"Midcap"},{sym:"ALKEM",name:"Alkem Laboratories",grp:"Midcap"},
+  {sym:"IDFCFIRSTB",name:"IDFC First Bank",grp:"Midcap"},{sym:"FEDERALBNK",name:"Federal Bank",grp:"Midcap"},
+  {sym:"RBLBANK",name:"RBL Bank",grp:"Midcap"},{sym:"POLYCAB",name:"Polycab India",grp:"Midcap"},
+  {sym:"KEI",name:"KEI Industries",grp:"Midcap"},{sym:"HAL",name:"Hindustan Aeronautics",grp:"Midcap"},
+  {sym:"BEL",name:"Bharat Electronics",grp:"Midcap"},{sym:"BHEL",name:"Bharat Heavy Electricals",grp:"Midcap"},
+  {sym:"TATAELXSI",name:"Tata Elxsi",grp:"Midcap"},{sym:"LTTS",name:"L&T Technology Services",grp:"Midcap"},
+  {sym:"KPITTECH",name:"KPIT Technologies",grp:"Midcap"},{sym:"HAPPSTMNDS",name:"Happiest Minds",grp:"Midcap"},
+  {sym:"ANGELONE",name:"Angel One",grp:"Midcap"},{sym:"CDSL",name:"CDSL Ltd",grp:"Midcap"},
+  {sym:"MCX",name:"MCX India",grp:"Midcap"},{sym:"BSE",name:"BSE Ltd",grp:"Midcap"},
+  {sym:"MRF",name:"MRF Ltd",grp:"Midcap"},{sym:"APOLLOTYRE",name:"Apollo Tyres",grp:"Midcap"},
+  {sym:"ASHOKLEY",name:"Ashok Leyland",grp:"Midcap"},{sym:"ESCORTS",name:"Escorts Kubota",grp:"Midcap"},
+  {sym:"SUZLON",name:"Suzlon Energy",grp:"Midcap"},{sym:"TORNTPOWER",name:"Torrent Power",grp:"Midcap"},
+  {sym:"JSPL",name:"Jindal Steel & Power",grp:"Midcap"},{sym:"NYKAA",name:"Nykaa",grp:"Midcap"},
+  {sym:"STARHEALTH",name:"Star Health Insurance",grp:"Midcap"},{sym:"PNBHOUSING",name:"PNB Housing Finance",grp:"Midcap"},
+  {sym:"SONACOMS",name:"Sona BLW Precision",grp:"Midcap"},{sym:"AIAENG",name:"AIA Engineering",grp:"Midcap"},
+];
 
-const STOCKS = [
-  // ── NIFTY 50 ──
-  {sym:"RELIANCE",   name:"Reliance Industries",       grp:"Nifty 50"},
-  {sym:"TCS",        name:"Tata Consultancy Svcs",     grp:"Nifty 50"},
-  {sym:"HDFCBANK",   name:"HDFC Bank",                 grp:"Nifty 50"},
-  {sym:"ICICIBANK",  name:"ICICI Bank",                grp:"Nifty 50"},
-  {sym:"INFY",       name:"Infosys",                   grp:"Nifty 50"},
-  {sym:"HINDUNILVR", name:"Hindustan Unilever",        grp:"Nifty 50"},
-  {sym:"ITC",        name:"ITC Ltd",                   grp:"Nifty 50"},
-  {sym:"SBIN",       name:"State Bank of India",       grp:"Nifty 50"},
-  {sym:"BHARTIARTL", name:"Bharti Airtel",             grp:"Nifty 50"},
-  {sym:"BAJFINANCE", name:"Bajaj Finance",             grp:"Nifty 50"},
-  {sym:"KOTAKBANK",  name:"Kotak Mahindra Bank",       grp:"Nifty 50"},
-  {sym:"LT",         name:"Larsen & Toubro",           grp:"Nifty 50"},
-  {sym:"HCLTECH",    name:"HCL Technologies",          grp:"Nifty 50"},
-  {sym:"WIPRO",      name:"Wipro Ltd",                 grp:"Nifty 50"},
-  {sym:"AXISBANK",   name:"Axis Bank",                 grp:"Nifty 50"},
-  {sym:"MARUTI",     name:"Maruti Suzuki",             grp:"Nifty 50"},
-  {sym:"SUNPHARMA",  name:"Sun Pharmaceutical",        grp:"Nifty 50"},
-  {sym:"TITAN",      name:"Titan Company",             grp:"Nifty 50"},
-  {sym:"TATAMOTORS", name:"Tata Motors",               grp:"Nifty 50"},
-  {sym:"ADANIENT",   name:"Adani Enterprises",         grp:"Nifty 50"},
-  {sym:"NTPC",       name:"NTPC Ltd",                  grp:"Nifty 50"},
-  {sym:"ONGC",       name:"ONGC",                      grp:"Nifty 50"},
-  {sym:"TATASTEEL",  name:"Tata Steel",                grp:"Nifty 50"},
-  {sym:"HINDALCO",   name:"Hindalco Industries",       grp:"Nifty 50"},
-  {sym:"JSWSTEEL",   name:"JSW Steel",                 grp:"Nifty 50"},
-  {sym:"TECHM",      name:"Tech Mahindra",             grp:"Nifty 50"},
-  {sym:"DRREDDY",    name:"Dr Reddy's Labs",           grp:"Nifty 50"},
-  {sym:"CIPLA",      name:"Cipla Ltd",                 grp:"Nifty 50"},
-  {sym:"ASIANPAINT", name:"Asian Paints",              grp:"Nifty 50"},
-  {sym:"NESTLEIND",  name:"Nestlé India",              grp:"Nifty 50"},
-  {sym:"POWERGRID",  name:"Power Grid Corp",           grp:"Nifty 50"},
-  {sym:"BAJAJFINSV", name:"Bajaj Finserv",             grp:"Nifty 50"},
-  {sym:"ULTRACEMCO", name:"UltraTech Cement",          grp:"Nifty 50"},
-  {sym:"M&M",        name:"Mahindra & Mahindra",       grp:"Nifty 50"},
-  {sym:"COALINDIA",  name:"Coal India",                grp:"Nifty 50"},
-  {sym:"GRASIM",     name:"Grasim Industries",         grp:"Nifty 50"},
-  {sym:"ADANIPORTS", name:"Adani Ports & SEZ",         grp:"Nifty 50"},
-  {sym:"HEROMOTOCO", name:"Hero MotoCorp",             grp:"Nifty 50"},
-  {sym:"BPCL",       name:"BPCL Ltd",                  grp:"Nifty 50"},
-  {sym:"INDUSINDBK", name:"IndusInd Bank",             grp:"Nifty 50"},
-  {sym:"SBILIFE",    name:"SBI Life Insurance",        grp:"Nifty 50"},
-  {sym:"HDFCLIFE",   name:"HDFC Life Insurance",       grp:"Nifty 50"},
-  {sym:"APOLLOHOSP", name:"Apollo Hospitals",          grp:"Nifty 50"},
-  {sym:"DIVISLAB",   name:"Divi's Laboratories",       grp:"Nifty 50"},
-  {sym:"BRITANNIA",  name:"Britannia Industries",      grp:"Nifty 50"},
-  {sym:"EICHERMOT",  name:"Eicher Motors",             grp:"Nifty 50"},
-  {sym:"TATACONSUM", name:"Tata Consumer Products",    grp:"Nifty 50"},
-  {sym:"SHRIRAMFIN", name:"Shriram Finance",           grp:"Nifty 50"},
-  {sym:"ZOMATO",     name:"Zomato Ltd",                grp:"Nifty 50"},
-  {sym:"BAJAJ-AUTO", name:"Bajaj Auto",                grp:"Nifty 50"},
-  // ── NIFTY NEXT 50 ──
-  {sym:"DMART",      name:"Avenue Supermarts",         grp:"Next 50"},
-  {sym:"PIDILITIND", name:"Pidilite Industries",       grp:"Next 50"},
-  {sym:"SIEMENS",    name:"Siemens Ltd",               grp:"Next 50"},
-  {sym:"HAVELLS",    name:"Havells India",             grp:"Next 50"},
-  {sym:"DABUR",      name:"Dabur India",               grp:"Next 50"},
-  {sym:"MARICO",     name:"Marico Ltd",                grp:"Next 50"},
-  {sym:"GODREJCP",   name:"Godrej Consumer Products",  grp:"Next 50"},
-  {sym:"AMBUJACEM",  name:"Ambuja Cements",            grp:"Next 50"},
-  {sym:"ACC",        name:"ACC Ltd",                   grp:"Next 50"},
-  {sym:"BIOCON",     name:"Biocon Ltd",                grp:"Next 50"},
-  {sym:"BERGEPAINT", name:"Berger Paints",             grp:"Next 50"},
-  {sym:"MUTHOOTFIN", name:"Muthoot Finance",           grp:"Next 50"},
-  {sym:"CHOLAFIN",   name:"Cholamandalam Finance",     grp:"Next 50"},
-  {sym:"ICICIPRULI", name:"ICICI Prudential Life",     grp:"Next 50"},
-  {sym:"SBICARD",    name:"SBI Cards",                 grp:"Next 50"},
-  {sym:"TORNTPHARM", name:"Torrent Pharmaceuticals",   grp:"Next 50"},
-  {sym:"LUPIN",      name:"Lupin Ltd",                 grp:"Next 50"},
-  {sym:"AUROPHARMA", name:"Aurobindo Pharma",          grp:"Next 50"},
-  {sym:"BANKBARODA", name:"Bank of Baroda",            grp:"Next 50"},
-  {sym:"CANBK",      name:"Canara Bank",               grp:"Next 50"},
-  {sym:"PNB",        name:"Punjab National Bank",      grp:"Next 50"},
-  {sym:"UNIONBANK",  name:"Union Bank of India",       grp:"Next 50"},
-  {sym:"ICICIGI",    name:"ICICI Lombard General",     grp:"Next 50"},
-  {sym:"NAUKRI",     name:"Info Edge (Naukri)",        grp:"Next 50"},
-  {sym:"PERSISTENT", name:"Persistent Systems",        grp:"Next 50"},
-  {sym:"COFORGE",    name:"Coforge Ltd",               grp:"Next 50"},
-  {sym:"MPHASIS",    name:"Mphasis Ltd",               grp:"Next 50"},
-  {sym:"TATAPOWER",  name:"Tata Power",                grp:"Next 50"},
-  {sym:"ADANIGREEN", name:"Adani Green Energy",        grp:"Next 50"},
-  {sym:"VEDL",       name:"Vedanta Ltd",               grp:"Next 50"},
-  {sym:"NMDC",       name:"NMDC Ltd",                  grp:"Next 50"},
-  {sym:"SAIL",       name:"Steel Authority of India",  grp:"Next 50"},
-  {sym:"HINDPETRO",  name:"Hindustan Petroleum",       grp:"Next 50"},
-  {sym:"IOC",        name:"Indian Oil Corp",           grp:"Next 50"},
-  {sym:"GAIL",       name:"GAIL India",                grp:"Next 50"},
-  {sym:"RECLTD",     name:"REC Ltd",                   grp:"Next 50"},
-  {sym:"PFC",        name:"Power Finance Corp",        grp:"Next 50"},
-  {sym:"IRCTC",      name:"IRCTC Ltd",                 grp:"Next 50"},
-  {sym:"CONCOR",     name:"Container Corp of India",   grp:"Next 50"},
-  {sym:"MOTHERSON",  name:"Samvardhana Motherson",     grp:"Next 50"},
-  {sym:"BALKRISIND", name:"Balkrishna Industries",     grp:"Next 50"},
-  {sym:"INDHOTEL",   name:"Indian Hotels Co",          grp:"Next 50"},
-  {sym:"VOLTAS",     name:"Voltas Ltd",                grp:"Next 50"},
-  {sym:"PAGEIND",    name:"Page Industries",           grp:"Next 50"},
-  {sym:"TRENT",      name:"Trent Ltd",                 grp:"Next 50"},
-  {sym:"JUBLFOOD",   name:"Jubilant Foodworks",        grp:"Next 50"},
-  {sym:"MFSL",       name:"Max Financial Services",    grp:"Next 50"},
-  {sym:"UNITDSPR",   name:"United Spirits",            grp:"Next 50"},
-  {sym:"WHIRLPOOL",  name:"Whirlpool of India",        grp:"Next 50"},
-  {sym:"LICI",       name:"Life Insurance Corp",       grp:"Next 50"},
-  // ── MIDCAP ──
-  {sym:"ASTRAL",     name:"Astral Ltd",                grp:"Midcap"},
-  {sym:"SUPREMEIND", name:"Supreme Industries",        grp:"Midcap"},
-  {sym:"DEEPAKNTR",  name:"Deepak Nitrite",            grp:"Midcap"},
-  {sym:"LAURUSLABS", name:"Laurus Labs",               grp:"Midcap"},
-  {sym:"ALKEM",      name:"Alkem Laboratories",        grp:"Midcap"},
-  {sym:"IPCALAB",    name:"IPCA Laboratories",         grp:"Midcap"},
-  {sym:"AJANTPHARM", name:"Ajanta Pharma",             grp:"Midcap"},
-  {sym:"FORTIS",     name:"Fortis Healthcare",         grp:"Midcap"},
-  {sym:"MAXHEALTH",  name:"Max Healthcare",            grp:"Midcap"},
-  {sym:"METROPOLIS", name:"Metropolis Healthcare",     grp:"Midcap"},
-  {sym:"IDFCFIRSTB", name:"IDFC First Bank",           grp:"Midcap"},
-  {sym:"FEDERALBNK", name:"Federal Bank",              grp:"Midcap"},
-  {sym:"RBLBANK",    name:"RBL Bank",                  grp:"Midcap"},
-  {sym:"POLYCAB",    name:"Polycab India",             grp:"Midcap"},
-  {sym:"KEI",        name:"KEI Industries",            grp:"Midcap"},
-  {sym:"HAL",        name:"Hindustan Aeronautics",     grp:"Midcap"},
-  {sym:"BEL",        name:"Bharat Electronics",        grp:"Midcap"},
-  {sym:"BHEL",       name:"Bharat Heavy Electricals",  grp:"Midcap"},
-  {sym:"TATAELXSI",  name:"Tata Elxsi",               grp:"Midcap"},
-  {sym:"LTTS",       name:"L&T Technology Services",   grp:"Midcap"},
-  {sym:"KPITTECH",   name:"KPIT Technologies",         grp:"Midcap"},
-  {sym:"PERSISTENT", name:"Persistent Systems",        grp:"Midcap"},
-  {sym:"HAPPSTMNDS", name:"Happiest Minds",            grp:"Midcap"},
-  {sym:"ANGELONE",   name:"Angel One Ltd",             grp:"Midcap"},
-  {sym:"CDSL",       name:"CDSL Ltd",                  grp:"Midcap"},
-  {sym:"MCX",        name:"MCX India",                 grp:"Midcap"},
-  {sym:"BSE",        name:"BSE Ltd",                   grp:"Midcap"},
-  {sym:"MRF",        name:"MRF Ltd",                   grp:"Midcap"},
-  {sym:"APOLLOTYRE", name:"Apollo Tyres",              grp:"Midcap"},
-  {sym:"CEATLTD",    name:"CEAT Ltd",                  grp:"Midcap"},
-  {sym:"ASHOKLEY",   name:"Ashok Leyland",             grp:"Midcap"},
-  {sym:"ESCORTS",    name:"Escorts Kubota",            grp:"Midcap"},
-  {sym:"EXIDEIND",   name:"Exide Industries",          grp:"Midcap"},
-  {sym:"BOSCHLTD",   name:"Bosch Ltd",                 grp:"Midcap"},
-  {sym:"CROMPTON",   name:"Crompton Greaves",          grp:"Midcap"},
-  {sym:"SUZLON",     name:"Suzlon Energy",             grp:"Midcap"},
-  {sym:"TORNTPOWER", name:"Torrent Power",             grp:"Midcap"},
-  {sym:"CESC",       name:"CESC Ltd",                  grp:"Midcap"},
-  {sym:"JSPL",       name:"Jindal Steel & Power",      grp:"Midcap"},
-  {sym:"NYKAA",      name:"FSN E-Commerce (Nykaa)",    grp:"Midcap"},
-  {sym:"STARHEALTH", name:"Star Health Insurance",     grp:"Midcap"},
-  {sym:"GICRE",      name:"General Insurance Corp",    grp:"Midcap"},
-  {sym:"PNBHOUSING", name:"PNB Housing Finance",       grp:"Midcap"},
-  {sym:"CREDITACC",  name:"Credit Access Grameen",     grp:"Midcap"},
-  {sym:"SONACOMS",   name:"Sona BLW Precision",        grp:"Midcap"},
-  {sym:"SOLARINDS",  name:"Solar Industries",          grp:"Midcap"},
-  {sym:"AIAENG",     name:"AIA Engineering",           grp:"Midcap"},
-  {sym:"PRAJ",       name:"Praj Industries",           grp:"Midcap"},
-  {sym:"INOXWIND",   name:"Inox Wind",                 grp:"Midcap"},
-  {sym:"KALYANKJIL", name:"Kalyan Jewellers",          grp:"Midcap"},
-  {sym:"ABFRL",      name:"Aditya Birla Fashion",      grp:"Midcap"},
-  {sym:"IRCTC",      name:"IRCTC Ltd",                 grp:"Midcap"},
-  {sym:"COFORGE",    name:"Coforge Ltd",               grp:"Midcap"},
-  {sym:"TRENT",      name:"Trent Ltd",                 grp:"Midcap"},
-  {sym:"MAPMYINDIA", name:"C.E. Info Systems",         grp:"Midcap"},
-  {sym:"ROUTE",      name:"Route Mobile",              grp:"Midcap"},
-  {sym:"TANLA",      name:"Tanla Platforms",           grp:"Midcap"},
-  {sym:"LATENTVIEW", name:"LatentView Analytics",      grp:"Midcap"},
-  {sym:"CYIENT",     name:"Cyient Ltd",                grp:"Midcap"},
-  {sym:"ZENSAR",     name:"Zensar Technologies",       grp:"Midcap"},
-  {sym:"APLAPOLLO",  name:"APL Apollo Tubes",          grp:"Midcap"},
-  {sym:"RATNAMANI",  name:"Ratnamani Metals",          grp:"Midcap"},
-  {sym:"NALCO",      name:"National Aluminium",        grp:"Midcap"},
-  {sym:"HINDCOPPER", name:"Hindustan Copper",          grp:"Midcap"},
-  {sym:"KEC",        name:"KEC International",         grp:"Midcap"},
-  {sym:"KALPATPOWR", name:"Kalpataru Power",           grp:"Midcap"},
-  {sym:"CUMMINSIND", name:"Cummins India",             grp:"Midcap"},
-  {sym:"THERMAX",    name:"Thermax Ltd",               grp:"Midcap"},
-  {sym:"GRINDWELL",  name:"Grindwell Norton",          grp:"Midcap"},
-  {sym:"SCHAEFFLER", name:"Schaeffler India",          grp:"Midcap"},
-  {sym:"SKFINDIA",   name:"SKF India",                 grp:"Midcap"},
-  {sym:"SUNDRMFAST", name:"Sundram Fasteners",         grp:"Midcap"},
-  {sym:"BALKRISIND", name:"Balkrishna Industries",     grp:"Midcap"},
-  {sym:"BATA",       name:"Bata India",                grp:"Midcap"},
-  {sym:"RELAXO",     name:"Relaxo Footwears",          grp:"Midcap"},
-  {sym:"KAJARIACER", name:"Kajaria Ceramics",          grp:"Midcap"},
-  {sym:"AAVAS",      name:"Aavas Financiers",          grp:"Midcap"},
-  {sym:"HOMEFIRST",  name:"Home First Finance",        grp:"Midcap"},
-  {sym:"UJJIVANSFB", name:"Ujjivan Small Finance",     grp:"Midcap"},
-  {sym:"EQUITASBNK", name:"Equitas Small Finance",     grp:"Midcap"},
+const CRYPTO_LIST = [
+  {sym:"BTCUSDT",name:"Bitcoin",base:"BTC"},{sym:"ETHUSDT",name:"Ethereum",base:"ETH"},
+  {sym:"BNBUSDT",name:"BNB",base:"BNB"},{sym:"SOLUSDT",name:"Solana",base:"SOL"},
+  {sym:"XRPUSDT",name:"XRP",base:"XRP"},{sym:"ADAUSDT",name:"Cardano",base:"ADA"},
+  {sym:"DOGEUSDT",name:"Dogecoin",base:"DOGE"},{sym:"AVAXUSDT",name:"Avalanche",base:"AVAX"},
+  {sym:"MATICUSDT",name:"Polygon",base:"MATIC"},{sym:"DOTUSDT",name:"Polkadot",base:"DOT"},
+  {sym:"LINKUSDT",name:"Chainlink",base:"LINK"},{sym:"UNIUSDT",name:"Uniswap",base:"UNI"},
+  {sym:"ATOMUSDT",name:"Cosmos",base:"ATOM"},{sym:"LTCUSDT",name:"Litecoin",base:"LTC"},
+  {sym:"NEARUSDT",name:"NEAR Protocol",base:"NEAR"},{sym:"APTUSDT",name:"Aptos",base:"APT"},
+  {sym:"ARBUSDT",name:"Arbitrum",base:"ARB"},{sym:"OPUSDT",name:"Optimism",base:"OP"},
+  {sym:"INJUSDT",name:"Injective",base:"INJ"},{sym:"SUIUSDT",name:"Sui",base:"SUI"},
 ];
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
-let STATE = {
-  prices:{}, trades:[], stats:null, daily:[], scanLog:[],
+const S = {
+  tab:"overview",
+  prices:{}, nseTrades:[], nseStats:null, daily:[], scanLog:[],
   health:null, holdings:[], margin:null,
-  activeTab:"overview", chartSym:"RELIANCE", newsSym:"RELIANCE",
-  secFilter:"All", mktSort:{col:"chg",dir:-1},
-  equityChart:null, pnlChart:null, tvLoaded:false
+  cryptoTrades:[], cryptoStats:null, cryptoPrices:{},
+  nseSectorFilter:"All", nseSearch:"",
+  chartType:"nse", chartSym:"RELIANCE",
+  newsNseSym:"RELIANCE", newsCryptoSym:"BTC",
 };
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
-const INR = n => `₹${(+n||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
-const pc  = n => `${(+n||0)>=0?"+":""}${(+n||0).toFixed(2)}%`;
-const fmtT = ts => ts ? new Date(ts).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : "—";
-const clr  = n => +n>=0 ? "var(--green)" : "var(--red)";
-const pill = (txt,type) => `<span class="pill pill-${type||"gray"}">${txt}</span>`;
+const INR  = n => `₹${(+n||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
+const USD  = n => `$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:4})}`;
+const pc   = n => `${(+n||0)>=0?"+":""}${(+n||0).toFixed(2)}%`;
+const fmtT = ts => ts?new Date(ts).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"—";
+const clr  = n => +n>=0?"var(--green)":"var(--red)";
+const pill = (t,c) => `<span class="pill p${c||"gr"}">${t}</span>`;
 
-function regimePill(r) {
-  const t = r==="TRENDING"?"green":r==="BREAKOUT"?"amber":r==="MOMENTUM"?"blue":"gray";
-  return pill(r,t);
+function statCard(l,v,c,s){return`<div class="stat"><div class="l">${l}</div><div class="v" style="color:${c||"var(--text)"};">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`;}
+
+// ── FETCH ALL ─────────────────────────────────────────────────────────────────
+async function fetchAll(){
+  const rs = await Promise.allSettled([
+    fetch("/health"),fetch("/prices"),fetch("/paper-trades"),
+    fetch("/paper-trades/stats"),fetch("/paper-trades/daily"),
+    fetch("/scan-log"),fetch("/holdings"),fetch("/margin"),
+    fetch("/crypto/trades"),fetch("/crypto/trades/stats"),
+  ]);
+  const ok = (r,i) => rs[i].status==="fulfilled"&&rs[i].value.ok;
+  if(ok(rs,0)) S.health       = await rs[0].value.json();
+  if(ok(rs,1)) S.prices       = await rs[1].value.json();
+  if(ok(rs,2)) {const d=await rs[2].value.json();if(Array.isArray(d))S.nseTrades=d;}
+  if(ok(rs,3)) S.nseStats     = await rs[3].value.json();
+  if(ok(rs,4)) {const d=await rs[4].value.json();if(Array.isArray(d))S.daily=d;}
+  if(ok(rs,5)) {const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
+  if(ok(rs,6)) {const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
+  if(ok(rs,7)) S.margin       = await rs[7].value.json();
+  if(ok(rs,8)) {const d=await rs[8].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
+  if(ok(rs,9)) S.cryptoStats  = await rs[9].value.json();
+  renderAll();
 }
 
-// ── FETCH ─────────────────────────────────────────────────────────────────────
-async function fetchAll() {
-  try {
-    const [hR,pR,tR,sR,dR,slR,hldR,mR] = await Promise.allSettled([
-      fetch("/health"), fetch("/prices"), fetch("/paper-trades"),
-      fetch("/paper-trades/stats"), fetch("/paper-trades/daily"),
-      fetch("/scan-log"), fetch("/holdings"), fetch("/margin"),
-    ]);
-    if(hR.status==="fulfilled"&&hR.value.ok)    STATE.health   = await hR.value.json();
-    if(pR.status==="fulfilled"&&pR.value.ok)    STATE.prices   = await pR.value.json();
-    if(tR.status==="fulfilled"&&tR.value.ok)    { const d=await tR.value.json(); if(Array.isArray(d)) STATE.trades=d; }
-    if(sR.status==="fulfilled"&&sR.value.ok)    STATE.stats    = await sR.value.json();
-    if(dR.status==="fulfilled"&&dR.value.ok)    { const d=await dR.value.json(); if(Array.isArray(d)) STATE.daily=d; }
-    if(slR.status==="fulfilled"&&slR.value.ok)  { const d=await slR.value.json(); if(Array.isArray(d)) STATE.scanLog=d; }
-    if(hldR.status==="fulfilled"&&hldR.value.ok){ const d=await hldR.value.json(); if(Array.isArray(d)) STATE.holdings=d; }
-    if(mR.status==="fulfilled"&&mR.value.ok)    STATE.margin   = await mR.value.json();
-    renderAll();
-  } catch(e) { console.error(e); }
-}
-
-// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
-function showTab(id) {
-  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
-  document.getElementById("tab-"+id).classList.add("active");
-  document.querySelectorAll("[id^='page-']").forEach(p=>p.style.display="none");
-  document.getElementById("page-"+id).style.display="block";
-  STATE.activeTab = id;
-  if(id==="chart") loadChart();
-  if(id==="news")  fetchNews();
-  if(id==="market") renderMarket();
+async function fetchCryptoPrices(){
+  try{
+    const syms=CRYPTO_LIST.map(c=>`"${c.sym}"`).join(",");
+    const r=await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${syms}]`);
+    if(!r.ok)return;
+    const data=await r.json();
+    data.forEach(t=>{S.cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
+    if(S.tab==="market"||S.tab==="overview"||S.tab==="positions")renderAll();
+  }catch(e){}
 }
 
 // ── RENDER ALL ────────────────────────────────────────────────────────────────
-function renderAll() {
-  renderTopBar();
-  renderOverview();
-  renderPositions();
-  renderTrades();
-  renderMarket();
-  renderScanLog();
-  renderPortfolio();
-  updateChartPrice();
-  // Update tab labels
-  const open = STATE.trades.filter(t=>t.status==="OPEN").length;
-  const closed = STATE.trades.filter(t=>t.status==="CLOSED").length;
-  document.getElementById("tab-positions").textContent = `⬡ Positions (${open})`;
-  document.getElementById("tab-trades").textContent = `⇅ Trade History (${closed})`;
+function renderAll(){
+  updateTopBar();
+  if(S.tab==="overview")  renderOverview();
+  if(S.tab==="positions") renderPositions();
+  if(S.tab==="trades")    renderTrades();
+  if(S.tab==="market")    {renderNSEMarket();renderCryptoMarket();}
+  if(S.tab==="portfolio") renderPortfolio();
+  if(S.tab==="scanlog")   renderScanLog();
 }
 
-// ── TOP BAR ───────────────────────────────────────────────────────────────────
-function renderTopBar() {
-  const h = STATE.health, s = STATE.stats, sl = STATE.scanLog[0];
-  const m = STATE.margin;
+function updateTopBar(){
+  const h=S.health, ns=S.nseStats, cs=S.cryptoStats, m=S.margin;
+  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
+  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  const nsePnL=+(ns?.total_pnl||0), cryptoPnL=+(cs?.total_pnl||0);
+  const cash=m?.equity?.net?.available?.live_balance;
 
-  // Dot color
-  const dot = document.getElementById("dot");
-  dot.style.background = h?.ticker==="connected" ? "#22c55e" : "#ccc";
-  dot.style.boxShadow  = h?.ticker==="connected" ? "0 0 5px #22c55e" : "none";
+  document.getElementById("market-badge").style.display=h?.marketOpen?"inline-block":"none";
+  document.getElementById("scan-info").textContent=S.scanLog[0]?`Last scan: ${new Date(S.scanLog[0].scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})} · ${S.scanLog[0].regime}`:"";
+  document.getElementById("h-nse-pnl").innerHTML=`<span style="color:${clr(nsePnL)}">${nsePnL>=0?"+":""}${INR(nsePnL.toFixed(0))}</span>`;
+  document.getElementById("h-crypto-pnl").innerHTML=`<span style="color:${clr(cryptoPnL)}">${cryptoPnL>=0?"+":""}${INR(cryptoPnL.toFixed(0))}</span>`;
+  document.getElementById("h-nse-pos").textContent=nseOpen.length;
+  document.getElementById("h-crypto-pos").textContent=cryptoOpen.length;
+  document.getElementById("h-cash").textContent=cash!=null?INR(cash.toFixed(0)):"—";
 
-  // Market badge
-  const mb = document.getElementById("market-badge");
-  mb.style.display = h?.marketOpen ? "inline-block" : "none";
-
-  const totalPnL = +(s?.total_pnl||0);
-  const wins = +(s?.wins||0), losses = +(s?.losses||0);
-  const wr = (wins+losses)>0 ? Math.round(wins/(wins+losses)*100) : 0;
-  const cash = m?.equity?.net?.available?.live_balance;
-
-  document.getElementById("h-pnl").innerHTML  = `<span style="color:${clr(totalPnL)}">${totalPnL>=0?"+":""}${INR(totalPnL.toFixed(0))}</span>`;
-  document.getElementById("h-open").textContent = STATE.trades.filter(t=>t.status==="OPEN").length;
-  document.getElementById("h-wr").innerHTML   = `<span style="color:${wr>=55?"var(--green)":"var(--red)"}">${wr}%</span>`;
-  document.getElementById("h-cash").textContent = cash!=null ? INR(cash.toFixed(0)) : "—";
-  document.getElementById("h-scan").textContent = sl ? new Date(sl.scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})+" · "+sl.regime : "—";
+  // Tab labels
+  document.getElementById("tab-positions").textContent=`⬡ Positions (${nseOpen.length}+${cryptoOpen.length})`;
+  document.getElementById("tab-trades").textContent=`⇅ Trades (${S.nseTrades.filter(t=>t.status==="CLOSED").length}+${S.cryptoTrades.filter(t=>t.status==="CLOSED").length})`;
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────────────────────────
-function renderOverview() {
-  const s = STATE.stats, h = STATE.holdings, m = STATE.margin;
-  const totalPnL  = +(s?.total_pnl||0);
-  const wins=+(s?.wins||0), losses=+(s?.losses||0);
-  const wr = (wins+losses)>0?Math.round(wins/(wins+losses)*100):0;
-  const openTrades = STATE.trades.filter(t=>t.status==="OPEN");
-  const openPnL = openTrades.reduce((sum,t)=>{
-    const cmp = STATE.prices[t.symbol]?.price ?? t.price;
-    return sum + ((cmp-t.price)*t.quantity);
-  },0);
-  const holdVal = h.reduce((s,hh)=>s+(hh.last_price||hh.average_price||0)*hh.quantity,0);
-  const cash = m?.equity?.net?.available?.live_balance;
+function renderOverview(){
+  // NSE stats
+  const ns=S.nseStats;
+  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
+  const nsePnL=+(ns?.total_pnl||0);
+  const nw=+(ns?.wins||0),nl=+(ns?.losses||0);
+  const nwr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
+  const openNsePnL=nseOpen.reduce((s,t)=>{const c=S.prices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
 
-  document.getElementById("stats-grid").innerHTML = [
-    {l:"Total P&L (closed)",  v:`${totalPnL>=0?"+":""}${INR(totalPnL.toFixed(0))}`,  c:clr(totalPnL), sub:`${STATE.trades.filter(t=>t.status==="CLOSED").length} closed trades`},
-    {l:"Open P&L (live)",     v:`${openPnL>=0?"+":""}${INR(openPnL.toFixed(0))}`,    c:clr(openPnL),  sub:`${openTrades.length} positions`},
-    {l:"Win rate",            v:`${wr}%`,                                              c:wr>=55?"var(--green)":wr>=40?"var(--amber)":"var(--red)", sub:`${wins}W / ${losses}L`},
-    {l:"Avg win",             v:`+${INR((+(s?.avg_win||0)).toFixed(0))}`,             c:"var(--green)"},
-    {l:"Avg loss",            v:INR((+(s?.avg_loss||0)).toFixed(0)),                  c:"var(--red)"},
-    {l:"Best trade",          v:`+${INR((+(s?.best_trade||0)).toFixed(0))}`,          c:"var(--green)"},
-    {l:"Available cash",      v:cash!=null?INR(cash.toFixed(0)):"—",                 sub:"Kite margin"},
-    {l:"Holdings value",      v:INR(holdVal.toFixed(0)),                              sub:`${h.length} stocks`},
-  ].map(({l,v,c,sub})=>`
-    <div class="stat-card">
-      <div class="lbl">${l}</div>
-      <div class="val" style="color:${c||"var(--text)"}">${v}</div>
-      ${sub?`<div class="sub">${sub}</div>`:""}
-    </div>`).join("");
+  document.getElementById("nse-stats").innerHTML=[
+    statCard("Total P&L",`${nsePnL>=0?"+":""}${INR(nsePnL.toFixed(0))}`,clr(nsePnL),`${S.nseTrades.filter(t=>t.status==="CLOSED").length} closed`),
+    statCard("Open P&L",`${openNsePnL>=0?"+":""}${INR(openNsePnL.toFixed(0))}`,clr(openNsePnL),`${nseOpen.length} open`),
+    statCard("Win rate",`${nwr}%`,nwr>=55?"var(--green)":nwr>=40?"var(--amber)":"var(--red)",`${nw}W/${nl}L`),
+    statCard("Avg win",`+${INR((+(ns?.avg_win||0)).toFixed(0))}`,"var(--green)"),
+  ].join("");
 
-  // Equity curve
-  const daily = STATE.daily.slice().reverse();
-  let cum = 0;
-  const labels=[], data=[];
-  daily.forEach(d=>{ cum+=+(+d.pnl).toFixed(0); labels.push(d.date?.slice(5,10)); data.push(+cum.toFixed(0)); });
-  if(STATE.equityChart) STATE.equityChart.destroy();
-  if(labels.length>0) {
-    const ctx = document.getElementById("equity-chart").getContext("2d");
-    STATE.equityChart = new Chart(ctx,{
-      type:"line",
-      data:{labels,datasets:[{label:"Cumulative P&L",data,borderColor:cum>=0?"#22c55e":"#ef4444",backgroundColor:cum>=0?"#22c55e18":"#ef444418",fill:true,tension:.3,pointRadius:3}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}
-    });
-  }
+  document.getElementById("nse-recent").innerHTML=S.nseTrades.length===0
+    ?`<div class="empty">No trades yet — bot scans 9:15–15:30 IST every 3 min</div>`
+    :S.nseTrades.slice(0,6).map(t=>{
+      const cmp=S.prices[t.symbol]?.price??t.price;
+      const livePnl=(cmp-t.price)*t.quantity;
+      return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="width:30px;height:30px;border-radius:7px;background:${t.status==="OPEN"?"var(--amber-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓"}</div>
+        <div style="flex:1;min-width:0"><div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${t.quantity} ${t.strategy||""}</span></div>
+        <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div></div>
+        <div style="text-align:right">${t.status==="OPEN"
+          ?`<div style="font-weight:500;color:${clr(livePnl)}">${livePnl>=0?"+":""}${INR(livePnl.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
+          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}</div>
+      </div>`;}).join("");
 
-  // Recent trades
-  const recent = STATE.trades.slice(0,8);
-  const el = document.getElementById("recent-trades");
-  if(!recent.length){ el.innerHTML=`<div class="empty">No paper trades yet — bot scans every 5 min during market hours (9:15–15:30 IST)</div>`; return; }
-  el.innerHTML = recent.map(t=>`
-    <div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--border)">
-      <div style="width:34px;height:34px;border-radius:8px;background:${t.status==="OPEN"?"#fef3c7":+(t.pnl||0)>=0?"#dcfce7":"#fee2e2"};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">
-        ${t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓"}
-      </div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">× ${t.quantity} · ${t.strategy||""}</span></div>
-        <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_time?" → "+fmtT(t.exit_time):""}${t.exit_reason?" · "+t.exit_reason:""}</div>
-      </div>
-      <div style="text-align:right">
-        ${t.status==="OPEN"
-          ? `<span class="pill pill-amber">Open @ ${INR(t.price)}</span>`
-          : `<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl)}">${pc(t.pnl_pct)}</div>`}
-      </div>
-    </div>`).join("");
-  if(STATE.trades.length>8) el.innerHTML+=`<button class="btn" onclick="showTab('trades')" style="margin-top:10px;font-size:12px">View all ${STATE.trades.length} trades →</button>`;
+  // Crypto stats
+  const cs=S.cryptoStats;
+  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  const cryptoPnL=+(cs?.total_pnl||0);
+  const cw=+(cs?.wins||0),cl2=+(cs?.losses||0);
+  const cwr=cw+cl2>0?Math.round(cw/(cw+cl2)*100):0;
+  const openCryptoPnL=cryptoOpen.reduce((s,t)=>{const c=S.cryptoPrices[t.symbol]?.price??t.price;return s+(c-t.price)*t.quantity;},0);
+
+  document.getElementById("crypto-stats").innerHTML=[
+    statCard("Total P&L",`${cryptoPnL>=0?"+":""}${INR(cryptoPnL.toFixed(0))}`,clr(cryptoPnL),`${S.cryptoTrades.filter(t=>t.status==="CLOSED").length} closed`),
+    statCard("Open P&L",`${openCryptoPnL>=0?"+":""}${INR(openCryptoPnL.toFixed(0))}`,clr(openCryptoPnL),`${cryptoOpen.length} open`),
+    statCard("Win rate",`${cwr}%`,cwr>=55?"var(--green)":cwr>=40?"var(--amber)":"var(--red)",`${cw}W/${cl2}L`),
+    statCard("Scanning","24/7","var(--purple)","every 15 min"),
+  ].join("");
+
+  document.getElementById("crypto-recent").innerHTML=S.cryptoTrades.length===0
+    ?`<div class="empty">No crypto trades yet — scanning 24/7</div>`
+    :S.cryptoTrades.slice(0,6).map(t=>{
+      const cmp=S.cryptoPrices[t.symbol]?.price??t.price;
+      const lp=(cmp-t.price)*t.quantity;
+      return`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="width:30px;height:30px;border-radius:7px;background:${t.status==="OPEN"?"var(--purple-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"₿":+(t.pnl||0)>=0?"↑":"↓"}</div>
+        <div style="flex:1;min-width:0"><div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${parseFloat(t.quantity).toFixed(4)}</span></div>
+        <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div></div>
+        <div style="text-align:right">${t.status==="OPEN"
+          ?`<div style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
+          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}</div>
+      </div>`;}).join("");
 }
 
 // ── POSITIONS ─────────────────────────────────────────────────────────────────
-function renderPositions() {
-  const open = STATE.trades.filter(t=>t.status==="OPEN");
-  const el = document.getElementById("positions-list");
-  if(!open.length){ el.innerHTML=`<div class="empty">No open positions right now</div>`; return; }
-  el.innerHTML = open.map(pos=>{
-    const cmp = STATE.prices[pos.symbol]?.price ?? pos.price;
-    const pnl = +((cmp-pos.price)*pos.quantity).toFixed(2);
-    const pct = +((cmp-pos.price)/pos.price*100).toFixed(2);
-    const prog = Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
-    return `
-    <div class="pos-card ${pnl>=0?"up":"down"}">
-      <div class="pos-header">
-        <span class="pill pill-green">▲ BUY</span>
-        <div>
-          <div style="font-weight:500;font-size:15px">${pos.symbol} <span style="font-size:12px;color:var(--text2);font-weight:400">× ${pos.quantity}</span></div>
-          <div style="font-size:11px;color:var(--text2)">${pos.name||""} · ${pos.strategy||""} · ${pos.regime||""} · ${fmtT(pos.entry_time)}</div>
-        </div>
-        <div class="pos-pnl">
-          <div style="font-weight:600;font-size:20px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div>
-          <div style="font-size:12px;color:${clr(pct)}">${pc(pct)}</div>
-        </div>
+function renderPositions(){
+  const nseOpen=S.nseTrades.filter(t=>t.status==="OPEN");
+  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  document.getElementById("nse-pos-count").textContent=`${nseOpen.length} open`;
+  document.getElementById("crypto-pos-count").textContent=`${cryptoOpen.length} open`;
+
+  const posCard=(pos,isCrypto)=>{
+    const cmp=isCrypto?(S.cryptoPrices[pos.symbol]?.price??pos.price):(S.prices[pos.symbol]?.price??pos.price);
+    const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
+    const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
+    const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
+    const fmt=isCrypto?v=>`$${parseFloat(v).toFixed(4)}`:v=>INR(v);
+    return`<div class="pos-card ${pnl>=0?"up":"down"}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        ${isCrypto?pill("₿ BUY","p"):pill("▲ BUY","g")}
+        <div><div style="font-weight:500;font-size:14px">${pos.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">× ${isCrypto?parseFloat(pos.quantity).toFixed(6):pos.quantity}</span></div>
+        <div style="font-size:10px;color:var(--text2)">${fmtT(pos.entry_time)} · ${pos.strategy||""}</div></div>
+        <div style="margin-left:auto;text-align:right"><div style="font-weight:600;font-size:18px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div><div style="font-size:11px;color:${clr(pct)}">${pc(pct)}</div></div>
       </div>
-      <div class="pos-grid">
-        ${[["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Score",pos.signal_score]].map(([l,v])=>`
-          <div class="pos-cell"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join("")}
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
+        ${[["Entry",fmt(pos.price)],["Live",fmt(cmp)],["SL",fmt(pos.stop_loss)],["Target",fmt(pos.target)]].map(([l,v])=>`<div style="background:var(--bg2);border-radius:6px;padding:6px 8px"><div style="font-size:9px;color:var(--text2);margin-bottom:2px">${l}</div><div style="font-weight:500;font-size:12px">${v}</div></div>`).join("")}
       </div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${prog}%"></div></div>
-      <div class="progress-labels"><span>SL ${INR(pos.stop_loss)}</span><span>← progress →</span><span>TGT ${INR(pos.target)}</span></div>
-      ${pos.indicators?`<div style="margin-top:8px;font-size:10px;color:var(--text3);background:var(--bg2);border-radius:6px;padding:5px 10px;overflow-wrap:break-word">${pos.indicators}</div>`:""}
+      <div class="prog-bar"><div class="prog-fill" style="width:${prog}%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL</span><span>TGT</span></div>
     </div>`;
-  }).join("");
+  };
+
+  document.getElementById("nse-positions-list").innerHTML=nseOpen.length?nseOpen.map(p=>posCard(p,false)).join(""):`<div class="empty">No open NSE positions</div>`;
+  document.getElementById("crypto-positions-list").innerHTML=cryptoOpen.length?cryptoOpen.map(p=>posCard(p,true)).join(""):`<div class="empty">No open crypto positions</div>`;
 }
 
-// ── TRADE HISTORY ─────────────────────────────────────────────────────────────
-function renderTrades() {
-  const closed = STATE.trades.filter(t=>t.status==="CLOSED");
-  const all    = STATE.trades;
+// ── TRADES ────────────────────────────────────────────────────────────────────
+function renderTrades(){
+  const nseClosed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  const cryptoClosed=S.cryptoTrades.filter(t=>t.status==="CLOSED");
+  const ns=S.nseStats, cs=S.cryptoStats;
 
-  // P&L bar chart
-  if(STATE.pnlChart) STATE.pnlChart.destroy();
-  if(closed.length>0) {
-    const data = closed.slice(0,30).reverse().map(t=>+(t.pnl||0));
-    const labels = closed.slice(0,30).reverse().map(t=>t.symbol);
-    const ctx = document.getElementById("pnl-chart").getContext("2d");
-    STATE.pnlChart = new Chart(ctx,{
-      type:"bar",
-      data:{labels,datasets:[{data,backgroundColor:data.map(v=>v>=0?"#22c55e":"#ef4444"),borderRadius:3}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}
-    });
-  }
+  document.getElementById("nse-trade-count").textContent=`${nseClosed.length} closed`;
+  document.getElementById("crypto-trade-count").textContent=`${cryptoClosed.length} closed`;
 
-  // Table headers
-  const cols = [["symbol","Stock"],["quantity","Qty"],["price","Entry"],["exit_price","Exit"],["entry_time","Entry time"],["exit_time","Exit time"],["pnl","P&L"],["pnl_pct","Return%"],["strategy","Strategy"],["regime","Regime"],["exit_reason","Reason"],["status","Result"]];
-  document.getElementById("trades-head").innerHTML = cols.map(([k,h])=>`<th onclick="sortTrades('${k}')">${h}</th>`).join("");
+  document.getElementById("nse-trades-body").innerHTML=S.nseTrades.length===0
+    ?`<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text2)">No trades yet</td></tr>`
+    :S.nseTrades.map(t=>`<tr>
+      <td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td>
+      <td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"—"}</td>
+      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
+      <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
+      <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
+      <td style="font-size:11px">${t.strategy||"—"}</td>
+      <td>${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
+    </tr>`).join("");
 
-  document.getElementById("trades-body").innerHTML = all.length===0
-    ? `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text2)">No trades yet — bot trades during 9:15–15:30 IST</td></tr>`
-    : all.map(t=>`<tr>
-        <td style="font-weight:500">${t.symbol}</td>
-        <td>${t.quantity}</td>
-        <td>${INR(t.price)}</td>
-        <td>${t.exit_price?INR(t.exit_price):"—"}</td>
-        <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
-        <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.exit_time)}</td>
-        <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
-        <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
-        <td style="font-size:11px">${t.strategy||"—"}</td>
-        <td style="font-size:11px">${t.regime||"—"}</td>
-        <td style="font-size:11px;color:var(--text2)">${t.exit_reason||"—"}</td>
-        <td>${t.status==="OPEN"?pill("Open","amber"):+(t.pnl||0)>=0?pill("Win","green"):pill("Loss","red")}</td>
-      </tr>`).join("");
+  const nPnL=+(ns?.total_pnl||0),nw=+(ns?.wins||0),nl=+(ns?.losses||0);
+  document.getElementById("nse-trades-footer").innerHTML=nseClosed.length?`<span>Closed: <b>${nseClosed.length}</b></span><span>P&L: <b style="color:${clr(nPnL)}">${nPnL>=0?"+":""}${INR(nPnL.toFixed(0))}</b></span><span>Win: <b>${nw+nl>0?Math.round(nw/(nw+nl)*100):0}%</b></span>`:"";
 
-  const s = STATE.stats, totalPnL=+(s?.total_pnl||0);
-  const wins=+(s?.wins||0),losses=+(s?.losses||0);
-  const wr=(wins+losses)>0?Math.round(wins/(wins+losses)*100):0;
-  document.getElementById("trades-footer").innerHTML = closed.length===0?"" : `
-    <span>Closed: <b>${closed.length}</b></span>
-    <span>Net P&L: <b style="color:${clr(totalPnL)}">${totalPnL>=0?"+":""}${INR(totalPnL.toFixed(0))}</b></span>
-    <span>Win rate: <b>${wr}%</b></span>
-    <span>Best: <b style="color:var(--green)">+${INR((+(s?.best_trade||0)).toFixed(0))}</b></span>
-    <span>Worst: <b style="color:var(--red)">${INR((+(s?.worst_trade||0)).toFixed(0))}</b></span>`;
+  document.getElementById("crypto-trades-body").innerHTML=S.cryptoTrades.length===0
+    ?`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text2)">No crypto trades yet</td></tr>`
+    :S.cryptoTrades.map(t=>`<tr>
+      <td style="font-weight:500">${t.symbol}</td><td style="font-size:11px">${parseFloat(t.quantity).toFixed(6)}</td>
+      <td>$${parseFloat(t.price).toFixed(4)}</td><td>${t.exit_price?`$${parseFloat(t.exit_price).toFixed(4)}`:"—"}</td>
+      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
+      <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"—":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
+      <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"—":pc(t.pnl_pct)}</td>
+      <td>${t.status==="OPEN"?pill("Open","p"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
+    </tr>`).join("");
+
+  const cPnL=+(cs?.total_pnl||0),cw=+(cs?.wins||0),cl2=+(cs?.losses||0);
+  document.getElementById("crypto-trades-footer").innerHTML=cryptoClosed.length?`<span>Closed: <b>${cryptoClosed.length}</b></span><span>P&L: <b style="color:${clr(cPnL)}">${cPnL>=0?"+":""}${INR(cPnL.toFixed(0))}</b></span><span>Win: <b>${cw+cl2>0?Math.round(cw/(cw+cl2)*100):0}%</b></span>`:"";
 }
-
-let tradeSort={col:"entry_time",dir:-1};
-function sortTrades(col){ if(tradeSort.col===col)tradeSort.dir*=-1; else{tradeSort.col=col;tradeSort.dir=-1;} STATE.trades.sort((a,b)=>{ const va=a[col]??"",vb=b[col]??""; return (va<vb?-1:va>vb?1:0)*tradeSort.dir; }); renderTrades(); }
 
 // ── MARKET ────────────────────────────────────────────────────────────────────
-const SECTORS = ["All","Nifty 50","Next 50","Midcap"];
-// Init sector pills once
+const NSE_GROUPS=["All","Nifty 50","Next 50","Midcap"];
 (function(){
-  const el=document.getElementById("sector-pills");
-  el.innerHTML=SECTORS.map(s=>`<button class="sector-pill${s==="All"?" active":""}" onclick="setSector('${s}')">${s}</button>`).join("");
+  const el=document.getElementById("nse-sector-pills");
+  el.innerHTML=NSE_GROUPS.map(g=>`<button class="fpill${g==="All"?" active":""}" onclick="setNSESector('${g}')">${g}</button>`).join("");
 })();
+function setNSESector(g){S.nseSectorFilter=g;document.querySelectorAll(".fpill").forEach(p=>p.classList.toggle("active",p.textContent===g));renderNSEMarket();}
 
-function setSector(s){ STATE.secFilter=s; document.querySelectorAll(".sector-pill").forEach(p=>p.classList.toggle("active",p.textContent===s)); renderMarket(); }
-
-function renderMarket() {
-  const search = document.getElementById("mkt-search")?.value?.toUpperCase()||"";
-  const rows = STOCKS.map(s=>{
-    const live = STATE.prices[s.sym];
-    const price = live?.price??0;
-    const chg = live&&live.open>0?((price-live.open)/live.open*100):0;
-    return{...s,price,chg,high:live?.high??0,low:live?.low??0,vol:live?.volume??0,isLive:!!live};
-  }).filter(s=>(STATE.secFilter==="All"||s.grp===STATE.secFilter)&&(s.sym.includes(search)||s.name.toUpperCase().includes(search)));
-
-  // deduplicate by sym
-  const seen=new Set(); const unique=rows.filter(s=>{ if(seen.has(s.sym))return false; seen.add(s.sym); return true; });
-
-  document.getElementById("mkt-count").textContent=`${unique.filter(s=>s.isLive).length} live · ${unique.length} stocks`;
-  document.getElementById("mkt-head").innerHTML=`<th>Symbol</th><th>Company</th><th>Group</th><th>Price</th><th>Chg%</th><th>High</th><th>Low</th><th>Volume</th><th></th>`;
-  document.getElementById("mkt-body").innerHTML=unique.map(s=>`
-    <tr>
-      <td><div style="font-weight:500">${s.sym}</div>${s.isLive?'<div style="font-size:9px;color:var(--green)">● live</div>':''}</td>
-      <td style="font-size:12px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
-      <td><span style="background:var(--bg2);border-radius:4px;padding:1px 6px;font-size:11px">${s.grp}</span></td>
-      <td style="font-weight:500">${s.price>0?INR(s.price):"—"}</td>
-      <td style="color:${s.chg>=0?"var(--green)":"var(--red)"};font-weight:500">${s.isLive?pc(s.chg):"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${s.high>0?INR(s.high):"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${s.low>0?INR(s.low):"—"}</td>
-      <td style="font-size:12px;color:var(--text2)">${s.vol>0?s.vol.toLocaleString("en-IN"):"—"}</td>
-      <td style="display:flex;gap:5px">
-        <button class="btn btn-sm" onclick="goChart('${s.sym}')">Chart</button>
-        <button class="btn btn-sm" onclick="goNews('${s.sym}')">News</button>
-      </td>
-    </tr>`).join("");
+function renderNSEMarket(){
+  const search=(document.getElementById("nse-search")?.value||"").toUpperCase();
+  const rows=NSE_STOCKS.map(s=>{
+    const live=S.prices[s.sym];
+    const price=live?.price??0;
+    const chg=live&&live.open>0?((price-live.open)/live.open*100):0;
+    return{...s,price,chg,high:live?.high??0,low:live?.low??0,isLive:!!live};
+  }).filter(s=>(S.nseSectorFilter==="All"||s.grp===S.nseSectorFilter)&&(s.sym.includes(search)||s.name.toUpperCase().includes(search)));
+  const seen=new Set();const unique=rows.filter(s=>{if(seen.has(s.sym))return false;seen.add(s.sym);return true;});
+  document.getElementById("nse-mkt-count").textContent=`${unique.filter(s=>s.isLive).length} live · ${unique.length}`;
+  document.getElementById("nse-mkt-body").innerHTML=unique.map(s=>`<tr>
+    <td><div style="font-weight:500">${s.sym}</div>${s.isLive?'<div style="font-size:9px;color:var(--green)">●live</div>':''}</td>
+    <td style="font-size:12px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</td>
+    <td><span style="background:var(--bg2);border-radius:4px;padding:1px 5px;font-size:10px">${s.grp}</span></td>
+    <td style="font-weight:500">${s.price>0?INR(s.price):"—"}</td>
+    <td style="color:${s.chg>=0?"var(--green)":"var(--red)"};font-weight:500">${s.isLive?pc(s.chg):"—"}</td>
+    <td style="font-size:12px;color:var(--text2)">${s.high>0?INR(s.high):"—"}</td>
+    <td style="font-size:12px;color:var(--text2)">${s.low>0?INR(s.low):"—"}</td>
+    <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="goChart('nse','${s.sym}')">Chart</button><button class="btn btn-sm" onclick="goNSENews('${s.sym}')">News</button></td>
+  </tr>`).join("");
 }
 
-function goChart(sym){ STATE.chartSym=sym; showTab("chart"); }
-function goNews(sym){ STATE.newsSym=sym; document.getElementById("news-sym").value=sym; showTab("news"); }
+function renderCryptoMarket(){
+  document.getElementById("crypto-mkt-body").innerHTML=CRYPTO_LIST.map(c=>{
+    const p=S.cryptoPrices[c.sym];
+    const chg=p?.change24h??0;
+    return`<tr>
+      <td style="font-weight:500">${c.base}</td>
+      <td style="font-size:12px;color:var(--text2)">${c.name}</td>
+      <td style="font-weight:500">${p?`$${p.price.toLocaleString("en-US",{maximumFractionDigits:4})}`:"—"}</td>
+      <td style="color:${chg>=0?"var(--green)":"var(--red)"};font-weight:500">${p?`${chg>=0?"+":""}${chg.toFixed(2)}%`:"—"}</td>
+      <td style="font-size:12px;color:var(--text2)">${p?`$${p.high.toFixed(4)}`:"—"}</td>
+      <td style="font-size:12px;color:var(--text2)">${p?`$${p.low.toFixed(4)}`:"—"}</td>
+      <td style="font-size:12px;color:var(--text2)">${p?`$${Math.round(p.quoteVolume/1e6)}M`:"—"}</td>
+      <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="goChart('crypto','${c.base}USDT')">Chart</button><button class="btn btn-sm" onclick="goCryptoNews('${c.base}')">News</button></td>
+    </tr>`;}).join("");
+}
 
 // ── CHART ─────────────────────────────────────────────────────────────────────
-(function(){
-  const el=document.getElementById("chart-sym");
-  el.innerHTML=STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
-  el.value="RELIANCE";
-})();
-
-function loadChart(){
-  const sym = document.getElementById("chart-sym").value || STATE.chartSym;
-  STATE.chartSym=sym;
-  updateChartPrice();
-  const container=document.getElementById("tv-widget");
-  container.innerHTML="";
-  const load=()=>{
-    new window.TradingView.widget({
-      container_id:"tv-widget", symbol:`NSE:${sym}`,
-      interval:"5", timezone:"Asia/Kolkata", theme:"light", style:"1", locale:"en",
-      width:"100%", height:460,
-      studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
-      hide_side_toolbar:false, allow_symbol_change:true, save_image:false,
-    });
-  };
-  if(window.TradingView) load();
-  else { const s=document.createElement("script"); s.src="https://s3.tradingview.com/tv.js"; s.async=true; s.onload=load; document.head.appendChild(s); }
-
-  // Paper trades for this stock
-  const symTrades = STATE.trades.filter(t=>t.symbol===sym).slice(0,5);
-  const el=document.getElementById("chart-trades");
-  if(!symTrades.length){el.innerHTML="";return;}
-  el.innerHTML=`<div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text2)">Paper trades for ${sym}</div>`+
-    symTrades.map(t=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
-      ${t.status==="OPEN"?pill("Open","amber"):+(t.pnl||0)>=0?pill("Win","green"):pill("Loss","red")}
-      <span style="font-size:12px;color:var(--text2)">${fmtT(t.entry_time)} → ${fmtT(t.exit_time)}</span>
-      <span style="font-size:12px">Entry ${INR(t.price)}</span>
-      ${t.exit_price?`<span style="font-size:12px">Exit ${INR(t.exit_price)}</span>`:""}
-      <span style="font-size:11px;color:var(--text2)">${t.strategy||""}</span>
-      <span style="margin-left:auto;font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"Open":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</span>
-    </div>`).join("");
+function renderChartSelectors(){
+  const type=document.getElementById("chart-type").value;
+  const sel=document.getElementById("chart-sym");
+  if(type==="nse"){
+    sel.innerHTML=NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+    sel.value=S.chartSym||"RELIANCE";
+  } else {
+    sel.innerHTML=CRYPTO_LIST.map(c=>`<option value="${c.sym}">${c.base} — ${c.name}</option>`).join("");
+    sel.value="BTCUSDT";
+  }
+  loadChart();
 }
 
-function updateChartPrice(){
-  const p=STATE.prices[STATE.chartSym];
-  document.getElementById("chart-price").innerHTML=p?`${INR(p.price)} <span style="font-size:12px;color:${clr(p.change||0)}">${pc(p.change||0)}</span>`:"";
+function goChart(type,sym){S.chartType=type;S.chartSym=sym;showTab("chart");document.getElementById("chart-type").value=type;renderChartSelectors();document.getElementById("chart-sym").value=sym;loadChart();}
+
+function loadChart(){
+  const type=document.getElementById("chart-type").value;
+  const sym=document.getElementById("chart-sym").value;
+  S.chartType=type;S.chartSym=sym;
+
+  // Update price display
+  if(type==="nse"&&S.prices[sym]) document.getElementById("chart-price").innerHTML=`${INR(S.prices[sym].price)} <span style="font-size:12px;color:${clr(S.prices[sym].change||0)}">${pc(S.prices[sym].change||0)}</span>`;
+  else if(type==="crypto"&&S.cryptoPrices[sym]) document.getElementById("chart-price").innerHTML=`$${S.cryptoPrices[sym].price.toFixed(4)} <span style="font-size:12px;color:${clr(S.cryptoPrices[sym].change24h||0)}">${pc(S.cryptoPrices[sym].change24h||0)}</span>`;
+  else document.getElementById("chart-price").textContent="";
+
+  const tvSym = type==="nse" ? `NSE:${sym}` : `BINANCE:${sym}`;
+  const interval = type==="nse"?"5":"60";
+
+  document.getElementById("tv-widget").innerHTML="";
+  const load=()=>{new window.TradingView.widget({container_id:"tv-widget",symbol:tvSym,interval,timezone:type==="nse"?"Asia/Kolkata":"UTC",theme:"light",style:"1",locale:"en",width:"100%",height:480,studies:["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],hide_side_toolbar:false,allow_symbol_change:true});};
+  if(window.TradingView)load();
+  else{const s=document.createElement("script");s.src="https://s3.tradingview.com/tv.js";s.async=true;s.onload=load;document.head.appendChild(s);}
+
+  // Show paper trades for this symbol
+  const trades=type==="nse"?S.nseTrades.filter(t=>t.symbol===sym):S.cryptoTrades.filter(t=>t.symbol===sym);
+  document.getElementById("chart-trades").innerHTML=trades.length?`
+    <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text2)">Paper trades for ${sym}</div>`+
+    trades.slice(0,5).map(t=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
+      ${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}
+      <span style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)} → ${fmtT(t.exit_time)}</span>
+      <span style="font-size:12px">Entry ${type==="nse"?INR(t.price):"$"+parseFloat(t.price).toFixed(4)}</span>
+      ${t.exit_price?`<span style="font-size:12px">Exit ${type==="nse"?INR(t.exit_price):"$"+parseFloat(t.exit_price).toFixed(4)}</span>`:""}
+      <span style="margin-left:auto;font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"Open":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</span>
+    </div>`).join(""):"";
 }
 
 // ── NEWS ──────────────────────────────────────────────────────────────────────
 (function(){
-  const el=document.getElementById("news-sym");
-  el.innerHTML=STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+  const nseEl=document.getElementById("news-nse-sym");
+  const cryptoEl=document.getElementById("news-crypto-sym");
+  nseEl.innerHTML=NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+  cryptoEl.innerHTML=CRYPTO_LIST.map(c=>`<option value="${c.base}">${c.base} — ${c.name}</option>`).join("");
 })();
 
-async function fetchNews(){
-  const sym=document.getElementById("news-sym")?.value||STATE.newsSym;
-  const stockObj = STOCKS.find(s=>s.sym===sym);
-  const name = stockObj?.name||sym;
-  STATE.newsSym=sym;
-  document.getElementById("news-status").textContent="Fetching live RSS feeds...";
-  document.getElementById("news-status").className="pulsing muted";
-  document.getElementById("news-list").innerHTML=[1,2,3,4].map(()=>`<div class="news-card sh" style="height:90px;margin-bottom:10px"></div>`).join("");
-  document.getElementById("news-sentiment").innerHTML="";
-  document.getElementById("news-counts").innerHTML="";
-  try {
-    const r=await fetch(`/api/news?sym=${sym}&name=${encodeURIComponent(name)}`);
-    if(!r.ok)throw new Error();
+function goNSENews(sym){document.getElementById("news-nse-sym").value=sym;showTab("news");fetchNSENews();}
+function goCryptoNews(base){document.getElementById("news-crypto-sym").value=base;showTab("news");fetchCryptoNews();}
+
+async function fetchNSENews(){
+  const sym=document.getElementById("news-nse-sym").value;
+  const stock=NSE_STOCKS.find(s=>s.sym===sym);
+  document.getElementById("nse-news-status").textContent="Fetching...";
+  document.getElementById("nse-news-status").className="pulsing muted";
+  document.getElementById("nse-news-list").innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
+  document.getElementById("nse-news-sentiment").innerHTML="";
+  try{
+    const r=await fetch(`/api/news?sym=${sym}&name=${encodeURIComponent(stock?.name||sym)}`);
     const items=await r.json();
-    renderNews(items, sym);
-  } catch(e) {
-    document.getElementById("news-status").textContent="";
-    document.getElementById("news-list").innerHTML=`<div class="empty">Could not load news. Try again.</div>`;
-  }
+    document.getElementById("nse-news-status").textContent="";
+    renderNewsItems(items,"nse-news-list","nse-news-sentiment",sym);
+  }catch{document.getElementById("nse-news-status").textContent="";document.getElementById("nse-news-list").innerHTML=`<div class="empty">Could not load news</div>`;}
 }
 
-function renderNews(items, sym){
-  document.getElementById("news-status").textContent="";
+async function fetchCryptoNews(){
+  const base=document.getElementById("news-crypto-sym").value;
+  document.getElementById("crypto-news-status").textContent="Fetching...";
+  document.getElementById("crypto-news-status").className="pulsing muted";
+  document.getElementById("crypto-news-list").innerHTML=`<div class="sh" style="height:80px;margin-bottom:8px"></div>`.repeat(3);
+  document.getElementById("crypto-news-sentiment").innerHTML="";
+  try{
+    const r=await fetch(`/api/news?sym=${base}&name=${base}%20cryptocurrency`);
+    const items=await r.json();
+    document.getElementById("crypto-news-status").textContent="";
+    renderNewsItems(items,"crypto-news-list","crypto-news-sentiment",base);
+  }catch{document.getElementById("crypto-news-status").textContent="";document.getElementById("crypto-news-list").innerHTML=`<div class="empty">Could not load news</div>`;}
+}
+
+function renderNewsItems(items,listId,sentId,label){
   const bull=items.filter(n=>n.sentiment==="bullish").length;
   const bear=items.filter(n=>n.sentiment==="bearish").length;
   const total=items.length||1;
   const score=((bull-bear)/total*100).toFixed(0);
-
-  document.getElementById("news-counts").innerHTML=
-    [["bullish","green"],[" bearish","red"],["neutral","gray"]].map(([s,c])=>{
-      const n=items.filter(x=>x.sentiment===s.trim()).length;
-      return n?`<span class="pill pill-${c}">${n} ${s.trim()}</span>`:"";
-    }).join("");
-
-  document.getElementById("news-sentiment").innerHTML=items.length?`
-    <div class="sent-bar">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:4px">Overall sentiment for ${sym}</div>
-      <div class="sent-track"><div class="sent-fill" style="width:${Math.max(0,Math.min(100,(bull/total)*100))}%"></div></div>
-      <div style="display:flex;gap:12px;font-size:11px;color:var(--text3)">
-        <span style="color:var(--green)">● ${bull} bullish</span>
-        <span style="color:var(--red)">● ${bear} bearish</span>
-        <span>● ${total-bull-bear} neutral</span>
+  document.getElementById(sentId).innerHTML=items.length?`
+    <div style="background:var(--bg2);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">Sentiment for ${label}</div>
+      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:5px"><div style="width:${Math.max(0,Math.min(100,bull/total*100))}%;height:100%;background:var(--green);border-radius:3px"></div></div>
+      <div style="display:flex;gap:10px;font-size:11px;color:var(--text3)">
+        <span style="color:var(--green)">● ${bull} bullish</span><span style="color:var(--red)">● ${bear} bearish</span>
         <span style="margin-left:auto;font-weight:500;color:${+score>=0?"var(--green)":"var(--red)"}">${+score>=0?"Bullish":"Bearish"} ${Math.abs(+score)}%</span>
       </div>
     </div>`:"";
-
-  document.getElementById("news-list").innerHTML=items.map(item=>`
+  document.getElementById(listId).innerHTML=items.map(item=>`
     <div class="news-card ${item.sentiment==="bullish"?"bull":item.sentiment==="bearish"?"bear":""}">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
-        <span class="pill pill-${item.sentiment==="bullish"?"green":item.sentiment==="bearish"?"red":"gray"}">${item.sentiment}</span>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">
+        <span class="pill ${item.sentiment==="bullish"?"pg":item.sentiment==="bearish"?"pr":"pgr"}">${item.sentiment}</span>
         <span style="font-size:11px;color:var(--text3)">${item.source||""}${item.timeAgo?" · "+item.timeAgo:""}</span>
       </div>
-      <div class="news-headline">${item.link?`<a href="${item.link}" target="_blank" style="color:inherit;text-decoration:none">${item.headline}</a>`:item.headline}</div>
-      ${item.impact?`<div class="news-impact" style="margin-top:4px">${item.impact}</div>`:""}
+      <div style="font-weight:500;font-size:13px;line-height:1.5;margin-bottom:4px">${item.link?`<a href="${item.link}" target="_blank" style="color:inherit;text-decoration:none">${item.headline}</a>`:item.headline}</div>
+      ${item.impact?`<div style="font-size:12px;color:var(--text2);line-height:1.5">${item.impact}</div>`:""}
     </div>`).join("");
-}
-
-// ── SCAN LOG ──────────────────────────────────────────────────────────────────
-function renderScanLog(){
-  const el=document.getElementById("scanlog-body");
-  if(!STATE.scanLog.length){el.innerHTML=`<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2)">No scans yet</td></tr>`;return;}
-  el.innerHTML=STATE.scanLog.map(s=>`<tr>
-    <td style="font-size:12px;color:var(--text2);white-space:nowrap">${fmtT(s.scanned_at)}</td>
-    <td>${s.stocks}</td>
-    <td style="font-weight:${s.signals>0?600:400};color:${s.signals>0?"var(--green)":"var(--text2)"}">${s.signals}</td>
-    <td>${s.regime?regimePill(s.regime):"—"}</td>
-    <td style="font-size:11px">${s.strategy||"—"}</td>
-    <td style="font-size:11px;color:var(--text2);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.message||""}</td>
-  </tr>`).join("");
 }
 
 // ── PORTFOLIO ─────────────────────────────────────────────────────────────────
 function renderPortfolio(){
-  const h=STATE.holdings, m=STATE.margin;
+  const h=S.holdings, m=S.margin;
   const cash=m?.equity?.net?.available?.live_balance;
   const holdVal=h.reduce((s,hh)=>s+(hh.last_price||hh.average_price||0)*hh.quantity,0);
   const invested=h.reduce((s,hh)=>s+hh.average_price*hh.quantity,0);
   const pnl=holdVal-invested;
 
   document.getElementById("port-stats").innerHTML=[
-    {l:"Available cash",v:cash!=null?INR(cash.toFixed(0)):"—",sub:"Kite equity margin"},
-    {l:"Holdings value", v:INR(holdVal.toFixed(0)),sub:`${h.length} stocks`},
-    {l:"Invested",       v:INR(invested.toFixed(0))},
-    {l:"Total P&L",      v:`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,c:clr(pnl)},
-  ].map(({l,v,c,sub})=>`<div class="stat-card"><div class="lbl">${l}</div><div class="val" style="color:${c||"var(--text)"}">${v}</div>${sub?`<div class="sub">${sub}</div>`:""}</div>`).join("");
+    statCard("Cash",cash!=null?INR(cash.toFixed(0)):"—","var(--text)","Kite margin"),
+    statCard("Holdings",INR(holdVal.toFixed(0)),"var(--text)",`${h.length} stocks`),
+    statCard("P&L",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl)),
+  ].join("");
 
-  document.getElementById("holdings-body").innerHTML=!h.length
-    ?`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text2)">No holdings found</td></tr>`
-    :h.map(hh=>{
-      const inv=hh.average_price*hh.quantity, cur=(hh.last_price||hh.average_price)*hh.quantity;
-      const p=cur-inv, r=p/inv*100;
-      return `<tr>
-        <td style="font-weight:500">${hh.tradingsymbol}</td><td>${hh.quantity}</td>
-        <td>${INR(hh.average_price)}</td><td>${INR(hh.last_price||hh.average_price)}</td>
-        <td style="color:var(--text2)">${INR(inv.toFixed(0))}</td><td>${INR(cur.toFixed(0))}</td>
-        <td style="font-weight:500;color:${clr(p)}">${p>=0?"+":""}${INR(p.toFixed(0))}</td>
-        <td style="color:${clr(r)}">${pc(r)}</td>
-      </tr>`;}).join("");
+  document.getElementById("holdings-body").innerHTML=!h.length?`<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text2)">No holdings</td></tr>`:
+    h.map(hh=>{const inv=hh.average_price*hh.quantity,cur=(hh.last_price||hh.average_price)*hh.quantity,p=cur-inv,r=p/inv*100;
+      return`<tr><td style="font-weight:500">${hh.tradingsymbol}</td><td>${hh.quantity}</td><td>${INR(hh.average_price)}</td><td>${INR(hh.last_price||hh.average_price)}</td><td style="color:var(--text2)">${INR(inv.toFixed(0))}</td><td>${INR(cur.toFixed(0))}</td><td style="font-weight:500;color:${clr(p)}">${p>=0?"+":""}${INR(p.toFixed(0))}</td><td style="color:${clr(r)}">${pc(r)}</td></tr>`;}).join("");
+
+  // Crypto open positions portfolio view
+  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN");
+  const cs=S.cryptoStats;
+  document.getElementById("crypto-port-stats").innerHTML=[
+    statCard("Open trades",cryptoOpen.length,"var(--purple)","positions"),
+    statCard("Total P&L",`${+(cs?.total_pnl||0)>=0?"+":""}${INR((+(cs?.total_pnl||0)).toFixed(0))}`,clr(+(cs?.total_pnl||0))),
+    statCard("Win rate",`${+(cs?.wins||0)++(cs?.losses||0)>0?Math.round(+(cs?.wins||0)/(+(cs?.wins||0)++(cs?.losses||0))*100):0}%`,"var(--purple)"),
+  ].join("");
+
+  document.getElementById("crypto-port-body").innerHTML=!cryptoOpen.length?`<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text2)">No open crypto positions</td></tr>`:
+    cryptoOpen.map(t=>{const cmp=S.cryptoPrices[t.symbol]?.price??t.price;const lp=(cmp-t.price)*t.quantity;
+      return`<tr><td style="font-weight:500">${t.symbol}</td><td style="font-size:11px">${parseFloat(t.quantity).toFixed(6)}</td><td>$${parseFloat(t.price).toFixed(4)}</td><td style="color:${clr(cmp-t.price)}">$${cmp.toFixed(4)}</td><td>${INR(t.capital)}</td><td style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</td></tr>`;}).join("");
 }
 
-// ── NEWS API ROUTE HANDLER (proxied through server) ───────────────────────────
-// News is fetched server-side via /api/news to avoid CORS with Anthropic API
+// ── SCAN LOG ──────────────────────────────────────────────────────────────────
+function renderScanLog(){
+  const regClr=r=>r==="TRENDING"?"g":r==="BREAKOUT"?"a":r==="MOMENTUM"?"b":"gr";
+  document.getElementById("nse-scanlog-body").innerHTML=!S.scanLog.length?`<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text2)">No scans yet</td></tr>`:
+    S.scanLog.map(s=>`<tr>
+      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(s.scanned_at)}</td>
+      <td>${s.stocks}</td>
+      <td style="font-weight:${s.signals>0?600:400};color:${s.signals>0?"var(--green)":"var(--text2)"}">${s.signals}</td>
+      <td>${s.regime?pill(s.regime,regClr(s.regime)):"—"}</td>
+      <td style="font-size:11px;color:var(--text2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.message||""}</td>
+    </tr>`).join("");
+
+  const cryptoOpen=S.cryptoTrades.filter(t=>t.status==="OPEN").length;
+  document.getElementById("crypto-scan-open").textContent=cryptoOpen;
+  document.getElementById("crypto-scan-total").textContent=S.cryptoTrades.length;
+}
+
+// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
+function showTab(id){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.getElementById("tab-"+id).classList.add("active");
+  document.querySelectorAll("[id^='page-']").forEach(p=>p.style.display="none");
+  document.getElementById("page-"+id).style.display="block";
+  S.tab=id;
+  if(id==="chart"){renderChartSelectors();}
+  if(id==="news"){fetchNSENews();fetchCryptoNews();}
+  if(id==="market"){renderNSEMarket();renderCryptoMarket();}
+  renderAll();
+}
 
 // ── START ─────────────────────────────────────────────────────────────────────
+// Init chart selectors
+renderChartSelectors();
+// Init news dropdowns
+document.getElementById("news-nse-sym").value="RELIANCE";
+document.getElementById("news-crypto-sym").value="BTC";
+
 fetchAll();
+fetchCryptoPrices();
 setInterval(fetchAll, 15000);
+setInterval(fetchCryptoPrices, 30000);
 </script>
 </body>
 </html>
