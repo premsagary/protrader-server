@@ -1380,35 +1380,129 @@ async function renderMFPage(){
       html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px">';
       top5.forEach(function(f,i){html+=mfCard(f,i+1,cfg,maxS);});
       html+='</div>';
-      html+='<div class="section-label" style="margin-bottom:8px">All '+catFunds.length+' funds ranked</div>';
-      html+='<div class="tw"><table>';
-      html+='<thead><tr>';
-      ["#","Fund","NAV","AUM Cr","Exp%","1Y","3Y","5Y","Sharpe","Beta","Alpha","Vol%","Max DD","Stars","Score"].forEach(function(h,i){
-        html+='<th style="text-align:'+(i<2?"left":"right")+'">'+h+'</th>';
+      html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">All '+catFunds.length+' funds &middot; scroll right for all 55 columns &middot; source: Tickertape Apr 2026</div>';
+      html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
+      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2400px;width:100%">';
+      // Column groups
+      var colGroups = [
+        {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
+        {label:"RETURNS",cols:["1Y%","3M%","6M%","3Y CAGR","5Y CAGR","10Y CAGR","Roll 3Y"]},
+        {label:"vs CATEGORY",cols:["vs Cat 1Y","vs Cat 3Y","vs Cat 5Y","vs Cat 10Y"]},
+        {label:"RISK",cols:["Sharpe","Sortino","Volatility","Cat StdDev","Max DD","From ATH"]},
+        {label:"PORTFOLIO",cols:["PE","Cat PE","Equity%","LgCap%","MidCap%","SmCap%","Cash%","Debt%"]},
+        {label:"CONCENTRATION",cols:["Top3%","Top5%","Top10%"]},
+        {label:"SCORE",cols:["SEBI","Score"]},
+      ];
+      // Header group row
+      html+='<thead>';
+      html+='<tr>';
+      colGroups.forEach(function(g){
+        var grpColor = g.label==="RETURNS"?"var(--green)":g.label==="RISK"?"var(--red)":g.label==="vs CATEGORY"?"var(--teal)":g.label==="SCORE"?"var(--blue)":"var(--text3)";
+        html+='<th colspan="'+g.cols.length+'" style="background:var(--bg3);color:'+grpColor+';font-size:9px;letter-spacing:.8px;text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border)">'+g.label+'</th>';
+      });
+      html+='</tr>';
+      // Column header row
+      html+='<tr>';
+      var allCols = colGroups.map(function(g){return g.cols;}).reduce(function(a,b){return a.concat(b);});
+      var groupEndCols = {};
+      var pos = 0;
+      colGroups.forEach(function(g){pos+=g.cols.length; groupEndCols[pos-1]=true;});
+      allCols.forEach(function(h,i){
+        var isLeft = i<2;
+        var isBorder = groupEndCols[i];
+        html+='<th style="padding:5px 8px;text-align:'+(isLeft?"left":"right")+';background:var(--bg2);color:var(--text3);font-weight:600;font-size:10px;position:'+(i<2?"sticky":"")+';'+(i===0?"left:0;z-index:2;min-width:40px":i===1?"left:40px;z-index:2;min-width:220px":"min-width:72px")+';border-bottom:2px solid var(--border3);'+(isBorder?"border-right:2px solid var(--border);":"")+'">'+h+'</th>';
       });
       html+='</tr></thead><tbody>';
+
+      // Rows
       catFunds.forEach(function(f,i){
         var isTop=i<5;
-        function rc(v){return v!=null?(v>=0?'+':'')+v+'%':'—';}
-        function cc(v){return v!=null&&v>=0?'var(--green)':'var(--red)';}
-        var stars=f.morningstar?'★'.repeat(Math.min(5,f.morningstar)):'—';
-        html+='<tr style="'+(isTop?'background:'+cfg.color+'0d;':'')+'">';
-        html+='<td style="color:var(--text3);font-weight:600">'+(i+1)
-          +(isTop?' <span style="background:'+cfg.color+';color:#fff;border-radius:3px;padding:0 4px;font-size:10px">#'+(i+1)+'</span>':'')+'</td>';
-        html+='<td style="font-weight:'+(isTop?600:400)+'">'+f.name+'</td>';
-        html+='<td style="text-align:right;font-size:11px">'+(f.navFormatted||'—')+'</td>';
-        html+='<td style="text-align:right">'+(f.aum_cr?Math.round(f.aum_cr).toLocaleString("en-IN"):'—')+'</td>';
-        html+='<td style="text-align:right">'+(f.expense_ratio?f.expense_ratio+'%':'—')+'</td>';
-        html+='<td style="text-align:right;color:'+cc(f.ret1y)+'">'+rc(f.ret1y)+'</td>';
-        html+='<td style="text-align:right;color:'+cc(f.cagr3y)+'">'+rc(f.cagr3y)+'</td>';
-        html+='<td style="text-align:right;color:'+cc(f.cagr5y)+'">'+rc(f.cagr5y)+'</td>';
-        html+='<td style="text-align:right;color:'+(f.sharpe>0?'var(--green)':'var(--red)')+';font-weight:500">'+(f.sharpe!=null?f.sharpe:'—')+'</td>';
-        html+='<td style="text-align:right">'+(f.beta!=null?f.beta:'—')+'</td>';
-        html+='<td style="text-align:right;color:'+(f.alpha>0?'var(--green)':'var(--red)')+'">'+(f.alpha!=null?f.alpha+'%':'—')+'</td>';
-        html+='<td style="text-align:right">'+(f.stdDev!=null?f.stdDev+'%':f.stdDev_api?f.stdDev_api+'%':'—')+'</td>';
-        html+='<td style="text-align:right;color:var(--red)">'+(f.maxDD!=null?f.maxDD+'%':'—')+'</td>';
-        html+='<td style="text-align:right;color:var(--amber);letter-spacing:-1px">'+stars+'</td>';
-        html+='<td style="text-align:right;font-weight:700;color:'+cfg.color+';font-size:13px">'+(f.score||0)+'</td>';
+        var rowBg=isTop?'background:'+cfg.color+'0a;':'';
+        function rv(v,dec){  // real value, no dash if 0
+          if(v==null||v===undefined) return '<span style="color:var(--text4)">n/a</span>';
+          var num=parseFloat(v);
+          if(isNaN(num)) return '<span style="color:var(--text4)">—</span>';
+          return (num).toFixed(dec!=null?dec:1);
+        }
+        function rc(v){
+          if(v==null||v===undefined||isNaN(parseFloat(v))) return '<span style="color:var(--text4)">n/a</span>';
+          var num=parseFloat(v);
+          var col=num>=0?'var(--green)':'var(--red)';
+          return '<span style="color:'+col+'">'+(num>=0?'+':'')+num.toFixed(1)+'%</span>';
+        }
+        function rsh(v){ // sharpe/sortino color
+          if(v==null||isNaN(parseFloat(v))) return '<span style="color:var(--text4)">n/a</span>';
+          var num=parseFloat(v);
+          var col=num>0?'var(--green)':num>-0.3?'var(--amber)':'var(--red)';
+          return '<span style="color:'+col+';font-weight:600">'+num.toFixed(3)+'</span>';
+        }
+        function rpct(v){ // percent holding
+          if(v==null||isNaN(parseFloat(v))) return '<span style="color:var(--text4)">n/a</span>';
+          var num=parseFloat(v);
+          if(num===0) return '<span style="color:var(--text4)">0%</span>';
+          return num.toFixed(1)+'%';
+        }
+        function rvc(v){ // vs category ratio
+          if(v==null||isNaN(parseFloat(v))||parseFloat(v)===0) return '<span style="color:var(--text4)">n/a</span>';
+          var num=parseFloat(v);
+          var col=num>=1?'var(--green)':'var(--red)';
+          return '<span style="color:'+col+'">'+num.toFixed(2)+'x</span>';
+        }
+        var sebiIcon = f.amc_sebi==='probe'?'🔴':f.amc_sebi==='action'?'⚠️':f.amc_sebi==='minor'?'🟡':'✅';
+        var rankBadge=isTop?'<span style="background:'+cfg.color+';color:#fff;border-radius:3px;padding:0 4px;font-size:9px;margin-left:3px">#'+(i+1)+'</span>':'';
+        var isBorder2 = function(idx){return groupEndCols[idx];};
+        var cells = [
+          // IDENTITY
+          '<td style="padding:5px 8px;color:var(--text3);font-weight:600;position:sticky;left:0;z-index:1;background:var(--bg);'+(isTop?'background:'+cfg.color+'0f;':'')+'">'+(i+1)+rankBadge+'</td>',
+          '<td style="padding:5px 8px;font-weight:'+(isTop?600:400)+';position:sticky;left:40px;z-index:1;background:var(--bg);'+(isTop?'background:'+cfg.color+'0f;':'')+'max-width:220px;overflow:hidden;text-overflow:ellipsis">'+f.name+'</td>',
+          '<td style="padding:5px 8px;color:var(--text2)">'+((f.amc||'').split(' ')[0])+'</td>',
+          '<td style="padding:5px 8px;text-align:right;font-family:monospace">'+(f.navFormatted||'—')+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+(f.aum_cr?Math.round(f.aum_cr).toLocaleString('en-IN'):'—')+'</td>',
+          '<td style="padding:5px 8px;text-align:right;color:'+(parseFloat(f.expense_ratio)<0.5?'var(--green)':parseFloat(f.expense_ratio)>1?'var(--red)':'var(--text)')+'">'+(f.expense_ratio?parseFloat(f.expense_ratio).toFixed(2)+'%':'—')+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.min_lumpsum,0)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.min_sip,0)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border)">'+rv(f.exit_load,0)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.months_inception,0)+' mo</td>',
+          '<td style="padding:5px 8px;color:var(--text2);font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;border-right:2px solid var(--border)">'+(f.fund_manager||'—')+'</td>',
+          // RETURNS
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.ret_1y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.ret_3m)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.ret_6m)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.cagr_3y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.cagr_5y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rc(f.cagr_10y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;font-weight:600;border-right:2px solid var(--border)">'+rc(f.rolling_3y)+'</td>',
+          // vs CATEGORY
+          '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_1y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_3y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rvc(f.vs_cat_5y)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border)">'+rvc(f.vs_cat_10y)+'</td>',
+          // RISK
+          '<td style="padding:5px 8px;text-align:right">'+rsh(f.sharpe)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rsh(f.sortino)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.stdDev||f.volatility,2)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right;color:var(--text3)">'+rv(f.category_stddev||f.category_std_dev,2)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right;color:var(--red)">'+rv(f.maxDD||f.max_drawdown,1)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border);color:'+(parseFloat(f.pct_from_ath||f.pct_away_from_ath)<10?'var(--green)':'var(--amber)')+'">'+rv(f.pct_from_ath||f.pct_away_from_ath,1)+'%</td>',
+          // PORTFOLIO
+          '<td style="padding:5px 8px;text-align:right;color:'+(parseFloat(f.pe_ratio)<parseFloat(f.category_pe||30)?'var(--green)':'var(--text)')+'">'+rv(f.pe_ratio,1)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;color:var(--text3)">'+rv(f.category_pe,1)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rpct(f.pct_equity)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rpct(f.pct_largecap)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rpct(f.pct_midcap)+'</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rpct(f.pct_smallcap)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;color:'+(parseFloat(f.pct_cash)>=3&&parseFloat(f.pct_cash)<=10?'var(--green)':'var(--text)')+'">'+rpct(f.pct_cash)+'</td>',
+          '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border)">'+rpct(f.pct_debt)+'</td>',
+          // CONCENTRATION
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.top3_conc||f.top3_concentration,1)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right">'+rv(f.top5_conc||f.top5_concentration,1)+'%</td>',
+          '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border);color:'+(parseFloat(f.top10_conc||f.top10_concentration)<50?'var(--green)':'var(--amber)')+'">'+rv(f.top10_conc||f.top10_concentration,1)+'%</td>',
+          // SCORE
+          '<td style="padding:5px 8px;text-align:center">'+sebiIcon+'</td>',
+          '<td style="padding:5px 8px;text-align:right;font-weight:700;font-size:13px;color:'+cfg.color+'">'+(f.score||0)+'</td>',
+        ];
+        html+='<tr style="'+rowBg+'border-bottom:1px solid var(--border2)">';
+        html+=cells.join('');
         html+='</tr>';
       });
       html+='</tbody></table></div></div>';
@@ -1416,26 +1510,34 @@ async function renderMFPage(){
     catsEl.innerHTML=html;
 
     document.getElementById("mf-footer").innerHTML=
-      '<div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;background:var(--bg2);margin-top:4px">'
-      +'<div style="font-weight:600;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">100-Point Scoring System</div>'
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">'
-      +[["Returns","25 pts","1M 3M 6M 1Y 3Y 5Y 7Y 10Y inception vs benchmark","MFAPI NAV history"],
-        ["Risk-Adjusted","20 pts","Sharpe, Sortino, Calmar, rolling 1Y consistency","mfdata.in + calculated"],
-        ["Risk","15 pts","Volatility, Beta, Alpha, P/E, P/B","mfdata.in"],
-        ["Cost","10 pts","Expense ratio, exit load, min lumpsum, min SIP","Kuvera + mfdata.in"],
-        ["AUM & Access","10 pts","AUM sweet spot, lumpsum open","Kuvera + mfdata.in"],
-        ["Quality","10 pts","Morningstar stars, CRISIL, manager tenure","mfdata.in + Kuvera"]
+      '<div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;background:var(--bg2);margin-top:8px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">'
+      +'<div style="font-weight:600;font-size:12px">Scoring Methodology — 100 Points</div>'
+      +'<div style="font-size:10px;color:var(--text3)">Source: Tickertape screener — Apr 4 2026 &middot; All scoring is percentile-based within category</div>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">'
+      +[
+        ["Rolling 3Y Return","20 pts","Best consistency signal — not just point-in-time returns","Tickertape"],
+        ["Returns vs Category","20 pts","3Y + 5Y ratio vs sub-category median — beating peers","Tickertape"],
+        ["Sharpe + Sortino","15 pts","Risk-adjusted return — percentile rank within category","Tickertape"],
+        ["Downside Protection","15 pts","Max drawdown + volatility — both percentile vs peers","Tickertape"],
+        ["Absolute Returns","10 pts","3Y + 5Y CAGR percentile rank within category","Tickertape"],
+        ["Portfolio Quality","8 pts","PE vs category, cash 3-10%, top10 concentration","Tickertape"],
+        ["Cost Efficiency","7 pts","Expense ratio + min lumpsum + min SIP","Tickertape"],
+        ["AUM Quality","5 pts","₹2K-30K Cr sweet spot — not too small, not too big","Tickertape"],
+        ["Track Record","3 pts","Months since inception — min 3Y, ideal 10Y+","Tickertape"],
+        ["AMC Quality","10 pts","Governance, SEBI record, team depth, ownership","Research Apr 2026"],
       ].map(function(r){
-        return '<div style="background:var(--bg3);border-radius:var(--radius);padding:9px 11px;border:1px solid var(--border)">'
-          +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">'
-          +'<span style="font-weight:600;font-size:11px;color:var(--text)">'+r[0]+'</span>'
+        return '<div style="background:var(--bg3);border-radius:var(--radius);padding:8px 10px;border:1px solid var(--border)">'
+          +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">'
+          +'<span style="font-weight:600;font-size:11px">'+r[0]+'</span>'
           +'<span style="font-size:11px;font-weight:700;color:var(--blue)">'+r[1]+'</span></div>'
-          +'<div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:2px">'+r[2]+'</div>'
-          +'<div style="font-size:10px;color:var(--text3)">'+r[3]+'</div></div>';
+          +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">'+r[2]+'</div>'
+          +'<div style="font-size:9px;color:var(--text3)">'+r[3]+'</div></div>';
       }).join("")
       +'</div>'
-      +'<div style="margin-top:10px;font-size:10px;color:var(--text3);border-top:1px solid var(--border);padding-top:8px">'
-      +'Sources: mfdata.in (ratios, AUM, Morningstar) &middot; Kuvera (min invest, exit load, CRISIL) &middot; MFAPI (NAV history) &middot; Refreshes daily 6 AM IST'
+      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--text3)">'
+      +'🔴 Quant funds capped at 15/100 (active SEBI investigation) &nbsp;⚠️ Minor past SEBI action &nbsp;✅ Clean record &nbsp;&middot;&nbsp; Not SEBI registered investment advice'
       +'</div></div>';
 
   } catch(e) {
