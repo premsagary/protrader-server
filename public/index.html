@@ -268,14 +268,13 @@ async function fetchAll(){
 
 async function fetchCryptoPrices(){
   try {
-    const syms = CRYPTO_LIST.map(c=>`"${c.sym}"`).join(",");
-    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${syms}]`);
+    // Use server proxy to avoid browser CORS issues with Binance
+    const r = await fetch("/api/crypto-prices");
     if(!r.ok) return;
     const data = await r.json();
-    data.forEach(t=>{S.cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};});
-    // Re-render if on crypto market or overview tab
+    Object.assign(S.cryptoPrices, data);
     if(S.mode==="crypto" && (S.cryptoTab==="market"||S.cryptoTab==="overview"||S.cryptoTab==="positions")) render();
-  } catch(e){}
+  } catch(e){ console.log("Crypto prices error:", e.message); }
 }
 
 // ═══════════════════════════════════════════════════════
