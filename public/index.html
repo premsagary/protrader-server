@@ -1354,6 +1354,14 @@ async function renderMFPage(){
 
     var grouped={smallcap:[],midcap:[],flexicap:[]};
     data.funds.forEach(function(f){if(f&&f.cat&&grouped[f.cat])grouped[f.cat].push(f);});
+    // Sort: eligible by score desc, ineligible after (already sorted by server but ensure)
+    Object.keys(grouped).forEach(function(cat){
+      grouped[cat].sort(function(a,b){
+        if(a.eligible && !b.eligible) return -1;
+        if(!a.eligible && b.eligible) return 1;
+        return (b.score||0)-(a.score||0);
+      });
+    });
     Object.keys(grouped).forEach(function(k){grouped[k].sort(function(a,b){return (b.score||0)-(a.score||0);});});
 
     // Debug — show if any category is empty
@@ -1370,17 +1378,17 @@ async function renderMFPage(){
         html+='<div style="font-size:12px;color:var(--text3);margin-top:6px">No data loaded — check Railway logs for fetch errors</div></div>';
         return;
       }
-      var top5=catFunds.slice(0,5),maxS=top5[0]?top5[0].score:1;
+      var eligibleFunds = catFunds.filter(function(f){return f.eligible!==false;});
+      var top5=eligibleFunds.slice(0,5), maxS=top5[0]?top5[0].score:1;
       var catId = 'cat-'+cat.replace(/\s/g,'-');
       html+='<div style="margin-bottom:36px">';
       html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)">';
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
-      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto">'+catFunds.length+' funds &middot; top 5 &middot; max 100 pts</span></div>';
-      // Cards go in a named div — we'll set their innerHTML after
+      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> &middot; '+(catFunds.length-eligibleFunds.length)+' not eligible &middot; top 5 shown</span></div>';
       html+='<div id="cards-'+catId+'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px"></div>';
-      html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">All '+catFunds.length+' funds &middot; scroll right for all 55 columns &middot; source: Tickertape Apr 2026</div>';
+      html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">'+catFunds.length+' total funds &middot; <b>'+eligibleFunds.length+' eligible</b> (AUM &ge;&#8377;1K Cr, age &ge;5Y, 3Y data) &middot; scroll right for all columns &middot; Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
       html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2800px;width:100%">';
       // Column groups
@@ -1425,8 +1433,12 @@ async function renderMFPage(){
 
       // Data rows
       catFunds.forEach(function(f,i){
-        var isTop = i<5;
+        var isEligible = f.eligible !== false;
+        var eligibleRank = 0;
+        if(isEligible){ eligibleFunds.forEach(function(ef,ei){if(ef.name===f.name)eligibleRank=ei+1;}); }
+        var isTop = isEligible && eligibleRank <= 5;
         var rowTopBg = isTop ? cfg.color+'0f' : 'var(--bg)';
+        var rowOpacity = isEligible ? '' : 'opacity:0.45;';
 
         function rv(v,dec){ 
           if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
@@ -1525,11 +1537,12 @@ async function renderMFPage(){
           {s:'text-align:right;', v:rv(f.top5_conc,1)+'%'},
           {s:'text-align:right;color:'+(top10<45?'var(--green)':top10>65?'var(--red)':'var(--amber)')+';border-right:2px solid var(--border3);', v:rv(top10,1)+'%'},
           // SCORE
-          {s:'text-align:center;font-size:14px;', v:sebiIcon},
-          {s:'text-align:right;font-weight:700;font-size:13px;color:'+cfg.color+';', v:f.score||0},
+          {s:'text-align:center;font-size:14px;', v: isEligible ? sebiIcon : '—'},
+          {s:'text-align:right;font-weight:700;font-size:'+(isEligible?'13':'10')+'px;color:'+(isEligible?cfg.color:'var(--text4)')+';max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
+           v: isEligible ? (f.score||0) : (f.filter_reasons&&f.filter_reasons[0] ? f.filter_reasons[0] : 'Not eligible')},
         ];
 
-        html+='<tr style="border-bottom:1px solid var(--border2);">';
+        html+='<tr style="'+(isEligible?'':'opacity:0.45;')+'border-bottom:1px solid var(--border2);">';
         cells.forEach(function(c){
           html+='<td style="padding:5px 8px;'+c.s+'">'+c.v+'</td>';
         });
@@ -1541,15 +1554,16 @@ async function renderMFPage(){
 
     // Set cards using DOM appendChild — avoids any innerHTML parsing issues
     ["smallcap","midcap","flexicap"].forEach(function(cat){
-      var catFunds=grouped[cat], cfg=MF_CAT[cat];
-      if(!catFunds||!catFunds.length) return;
-      var catId='cat-'+cat.replace(/\s/g,'-');
-      var el=document.getElementById('cards-'+catId);
+      var catFunds2=grouped[cat], cfg2=MF_CAT[cat];
+      if(!catFunds2||!catFunds2.length) return;
+      var catId2='cat-'+cat.replace(/\s/g,'-');
+      var el=document.getElementById('cards-'+catId2);
       if(!el) return;
-      var maxS=catFunds[0]?catFunds[0].score:1;
-      el.innerHTML=''; // clear placeholder
-      catFunds.slice(0,5).forEach(function(f,i){
-        el.appendChild(mfCardEl(f,i+1,cfg,maxS));
+      var eligFunds=catFunds2.filter(function(f){return f.eligible!==false;});
+      var maxS2=eligFunds[0]?eligFunds[0].score:1;
+      el.innerHTML='';
+      eligFunds.slice(0,5).forEach(function(f,i){
+        el.appendChild(mfCardEl(f,i+1,cfg2,maxS2));
       });
     });
 
