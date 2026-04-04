@@ -1044,6 +1044,395 @@ async function refreshInstruments() {
 
 app.get("/api/instruments", (req,res) => res.json(validTokens));
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── MUTUAL FUND DATA ENGINE ────────────────────────────────────────────────────
+// Sources: mfdata.in (ratios, AUM, expense) + mf.captnemo.in (Kuvera metadata)
+//          + mfapi.in (NAV history for calculated returns)
+// Cached in memory, refreshed daily at 6 AM IST
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Fund universe — AMFI scheme codes (direct growth plans)
+const MF_UNIVERSE_SERVER = [
+  // SMALL CAP
+  {code:"147622",isin:"INF204KB14I2",name:"Bandhan Small Cap",          amc:"Bandhan",  cat:"smallcap"},
+  {code:"118989",isin:"INF204K01U16",name:"Nippon India Small Cap",     amc:"Nippon",   cat:"smallcap"},
+  {code:"125497",isin:"INF200K01T51",name:"SBI Small Cap",              amc:"SBI",      cat:"smallcap"},
+  {code:"120505",isin:"INF174KA1994",name:"Kotak Small Cap",            amc:"Kotak",    cat:"smallcap"},
+  {code:"120828",isin:"INF966L01051",name:"Quant Small Cap",            amc:"Quant",    cat:"smallcap"},
+  {code:"118272",isin:"INF740K01UD2",name:"DSP Small Cap",              amc:"DSP",      cat:"smallcap"},
+  {code:"118778",isin:"INF179KB1HF9",name:"HDFC Small Cap",             amc:"HDFC",     cat:"smallcap"},
+  {code:"125354",isin:"INF846K01EW2",name:"Axis Small Cap",             amc:"Axis",     cat:"smallcap"},
+  {code:"135800",isin:"INF277K01Z26",name:"Tata Small Cap",             amc:"Tata",     cat:"smallcap"},
+  {code:"100278",isin:"INF090I01239",name:"Franklin India Smaller Cos", amc:"Franklin", cat:"smallcap"},
+  // MID CAP
+  {code:"135803",isin:"INF247L01EF9",name:"Motilal Oswal Midcap",      amc:"Motilal",  cat:"midcap"},
+  {code:"145552",isin:"INF754K01XO6",name:"Edelweiss Mid Cap",          amc:"Edelweiss",cat:"midcap"},
+  {code:"118701",isin:"INF204K01158",name:"Nippon India Growth",        amc:"Nippon",   cat:"midcap"},
+  {code:"118776",isin:"INF179KB1GN6",name:"HDFC Mid-Cap Opp",           amc:"HDFC",     cat:"midcap"},
+  {code:"120503",isin:"INF174K01AL5",name:"Kotak Emerging Equity",      amc:"Kotak",    cat:"midcap"},
+  {code:"125496",isin:"INF200K01LS2",name:"SBI Magnum Midcap",          amc:"SBI",      cat:"midcap"},
+  {code:"125356",isin:"INF846K01EW2",name:"Axis Midcap",                amc:"Axis",     cat:"midcap"},
+  {code:"118273",isin:"INF740K01RV7",name:"DSP Midcap",                 amc:"DSP",      cat:"midcap"},
+  {code:"120830",isin:"INF966L01119",name:"Quant Mid Cap",              amc:"Quant",    cat:"midcap"},
+  {code:"136179",isin:"INF663L01AN3",name:"PGIM India Midcap",          amc:"PGIM",     cat:"midcap"},
+  // FLEXI CAP
+  {code:"122639",isin:"INF879O01019",name:"Parag Parikh Flexi Cap",     amc:"PPFAS",    cat:"flexicap"},
+  {code:"120832",isin:"INF966L01135",name:"Quant Flexi Cap",            amc:"Quant",    cat:"flexicap"},
+  {code:"118777",isin:"INF179KB1GQ9",name:"HDFC Flexi Cap",             amc:"HDFC",     cat:"flexicap"},
+  {code:"101539",isin:"INF760K01DP3",name:"Canara Rob Flexi Cap",       amc:"Canara",   cat:"flexicap"},
+  {code:"120716",isin:"INF789F01VN2",name:"UTI Flexi Cap",              amc:"UTI",      cat:"flexicap"},
+  {code:"125494",isin:"INF200K01LW4",name:"SBI Flexi Cap",              amc:"SBI",      cat:"flexicap"},
+  {code:"120502",isin:"INF174K01AK7",name:"Kotak Flexi Cap",            amc:"Kotak",    cat:"flexicap"},
+  {code:"118271",isin:"INF740K01RU9",name:"DSP Flexi Cap",              amc:"DSP",      cat:"flexicap"},
+  {code:"125355",isin:"INF846K01EV4",name:"Axis Flexi Cap",             amc:"Axis",     cat:"flexicap"},
+  {code:"100277",isin:"INF090I01213",name:"Franklin Flexi Cap",         amc:"Franklin", cat:"flexicap"},
+];
+
+// In-memory cache
+let mfCache = {};           // code -> enriched fund object
+let mfCacheTime = null;     // last refresh timestamp
+const MF_CACHE_TTL = 6*60*60*1000; // 6 hours
+
+// ── Fetch from mfdata.in ──────────────────────────────────────────────────────
+async function fetchMFData(code) {
+  try {
+    const r = await fetchT(`https://mfdata.in/api/v1/schemes/${code}`, {
+      headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json"}
+    }, 10000);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || d.status === "error") return null;
+    return d.data || d;
+  } catch(e) { return null; }
+}
+
+// ── Fetch from mf.captnemo.in (Kuvera metadata) ───────────────────────────────
+async function fetchKuveraData(isin) {
+  try {
+    const r = await fetchT(`https://mf.captnemo.in/kuvera/${isin}`, {
+      headers:{"User-Agent":"Mozilla/5.0","Accept":"application/json"}
+    }, 10000);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d || null;
+  } catch(e) { return null; }
+}
+
+// ── Fetch NAV history from mfapi.in ──────────────────────────────────────────
+async function fetchMFNavHistory(code) {
+  try {
+    const r = await fetchT(`https://api.mfapi.in/mf/${code}`, {
+      headers:{"User-Agent":"Mozilla/5.0"}
+    }, 12000);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const raw = (d.data || []).slice().reverse(); // oldest first
+    if (raw.length < 50) return null;
+    const navs = raw.map(x => +x.nav).filter(n => n > 0);
+    return navs;
+  } catch(e) { return null; }
+}
+
+// ── Calculate metrics from NAV history ───────────────────────────────────────
+function calcNavMetrics(navs) {
+  const N = navs.length;
+  const last = navs[N-1];
+  function idx(days) { return Math.max(0, N-1-Math.round(days)); }
+  function ann(old, yrs) { return old && old>0 ? +((Math.pow(last/old,1/yrs)-1)*100).toFixed(1) : null; }
+  function ret(old) { return old && old>0 ? +((last-old)/old*100).toFixed(1) : null; }
+
+  const last3y = navs.slice(idx(365*3));
+  const dailyRet = [];
+  for (let i=1; i<last3y.length; i++) dailyRet.push((last3y[i]-last3y[i-1])/last3y[i-1]);
+
+  const mean = dailyRet.reduce((a,b)=>a+b,0)/dailyRet.length;
+  const variance = dailyRet.reduce((a,b)=>a+Math.pow(b-mean,2),0)/dailyRet.length;
+  const stdDev = +(Math.sqrt(variance)*Math.sqrt(252)*100).toFixed(2);
+
+  const downRet = dailyRet.filter(r=>r<0);
+  const downVariance = downRet.reduce((a,b)=>a+b*b,0)/dailyRet.length;
+  const downDev = +(Math.sqrt(downVariance)*Math.sqrt(252)*100).toFixed(2);
+
+  let peak = last3y[0], maxDD = 0;
+  for (const n of last3y) {
+    if (n>peak) peak=n;
+    const dd=(n-peak)/peak*100;
+    if (dd<maxDD) maxDD=dd;
+  }
+
+  const annRet3y = ann(navs[idx(365*3)], 3) || 0;
+  const rf = 6.5; // RBI repo rate proxy
+  const sharpe = stdDev>0 ? +((annRet3y-rf)/stdDev).toFixed(2) : null;
+  const sortino = downDev>0 ? +((annRet3y-rf)/downDev).toFixed(2) : null;
+  const calmar = maxDD<0 ? +(annRet3y/Math.abs(maxDD)).toFixed(2) : null;
+
+  // Rolling 1Y consistency — % of 1Y rolling windows with positive return
+  let posWindows=0, totalWindows=0;
+  for (let i=252; i<navs.length; i++) {
+    totalWindows++;
+    if (navs[i] > navs[i-252]) posWindows++;
+  }
+  const rollConsistency = totalWindows>0 ? Math.round(posWindows/totalWindows*100) : null;
+
+  return {
+    nav: last,
+    navFormatted: "₹"+last.toFixed(2),
+    ret1m:  ret(navs[idx(30)]),
+    ret3m:  ret(navs[idx(91)]),
+    ret6m:  ret(navs[idx(182)]),
+    ret1y:  ret(navs[idx(365)]),
+    cagr2y: ann(navs[idx(365*2)], 2),
+    cagr3y: ann(navs[idx(365*3)], 3),
+    cagr5y: ann(navs[idx(365*5)], 5),
+    cagr7y: N>365*7  ? ann(navs[idx(365*7)],  7) : null,
+    cagr10y:N>365*10 ? ann(navs[idx(365*10)],10) : null,
+    cagrInception: ann(navs[0], N/365.25),
+    stdDev, maxDD: +maxDD.toFixed(1), sharpe, sortino, calmar,
+    rollConsistency, dataPoints: N,
+  };
+}
+
+// ── Score a fund with all available data ─────────────────────────────────────
+function scoreMFComplete(fund) {
+  const d = fund;
+  let score = 0;
+  const hits = {};
+
+  // ── RETURNS (25 pts) ─────────────────────────────────────────────
+  const catBM = {smallcap:{r1:15,r3:20,r5:18},midcap:{r1:12,r3:17,r5:15},flexicap:{r1:10,r3:14,r5:12}};
+  const bm = catBM[fund.cat] || catBM.flexicap;
+
+  if (d.ret1y > bm.r1+12) { score+=4;   hits["1Y >"+(bm.r1+12)+"%"]=4; }
+  else if (d.ret1y > bm.r1+5) { score+=2.5; hits["1Y >"+(bm.r1+5)+"%"]=2.5; }
+  else if (d.ret1y > bm.r1)   { score+=1;   hits["1Y >benchmark"]=1; }
+
+  if (d.cagr3y > bm.r3+8) { score+=5;   hits["3Y >"+(bm.r3+8)+"%"]=5; }
+  else if (d.cagr3y > bm.r3+4) { score+=3; hits["3Y >"+(bm.r3+4)+"%"]=3; }
+  else if (d.cagr3y > bm.r3)   { score+=1.5; hits["3Y >benchmark"]=1.5; }
+
+  if (d.cagr5y > bm.r5+8) { score+=5;   hits["5Y >"+(bm.r5+8)+"%"]=5; }
+  else if (d.cagr5y > bm.r5+4) { score+=3; hits["5Y >"+(bm.r5+4)+"%"]=3; }
+  else if (d.cagr5y > bm.r5)   { score+=1.5; hits["5Y >benchmark"]=1.5; }
+
+  if (d.cagr10y > bm.r5)    { score+=4;   hits["10Y >benchmark"]=4; }
+  if (d.cagrInception > bm.r5){ score+=3; hits["Inception >benchmark"]=3; }
+  if (d.ret6m > 0)           { score+=1;   hits["6M positive"]=1; }
+  if (d.ret3m > 0)           { score+=0.5; hits["3M positive"]=0.5; }
+
+  // ── RISK-ADJUSTED (20 pts) ───────────────────────────────────────
+  if (d.sharpe > 1.0)      { score+=6; hits["Sharpe >1.0"]=6; }
+  else if (d.sharpe > 0.5) { score+=4; hits["Sharpe >0.5"]=4; }
+  else if (d.sharpe > 0)   { score+=2; hits["Sharpe positive"]=2; }
+
+  if (d.sortino > 1.5)     { score+=4; hits["Sortino >1.5"]=4; }
+  else if (d.sortino > 0.8){ score+=2.5; hits["Sortino >0.8"]=2.5; }
+  else if (d.sortino > 0)  { score+=1; hits["Sortino positive"]=1; }
+
+  if (d.calmar > 1.0)      { score+=3; hits["Calmar >1.0"]=3; }
+  else if (d.calmar > 0.5) { score+=1.5; hits["Calmar >0.5"]=1.5; }
+
+  if (d.rollConsistency > 85){ score+=4; hits["Rolling 1Y >85% positive"]=4; }
+  else if (d.rollConsistency > 70){ score+=2.5; hits["Rolling 1Y >70% positive"]=2.5; }
+  else if (d.rollConsistency > 55){ score+=1; hits["Rolling 1Y >55% positive"]=1; }
+
+  if (d.maxDD > -20)       { score+=3; hits["Max drawdown <20%"]=3; }
+  else if (d.maxDD > -30)  { score+=2; hits["Max drawdown <30%"]=2; }
+  else if (d.maxDD > -40)  { score+=1; hits["Max drawdown <40%"]=1; }
+
+  // ── RISK METRICS (15 pts) ────────────────────────────────────────
+  const catAvgVol = {smallcap:22,midcap:20,flexicap:16};
+  const avgVol = catAvgVol[fund.cat]||18;
+  if (d.stdDev && d.stdDev < avgVol-4)  { score+=4; hits["Volatility well below avg"]=4; }
+  else if (d.stdDev && d.stdDev < avgVol){ score+=2; hits["Volatility below avg"]=2; }
+
+  if (d.beta && d.beta < 0.8)  { score+=4; hits["Beta <0.8 (low market risk)"]=4; }
+  else if (d.beta && d.beta < 0.95){ score+=2; hits["Beta <0.95"]=2; }
+
+  if (d.alpha && d.alpha > 5)   { score+=4; hits["Alpha >5% (strong manager skill)"]=4; }
+  else if (d.alpha && d.alpha > 3){ score+=2.5; hits["Alpha >3%"]=2.5; }
+  else if (d.alpha && d.alpha > 0){ score+=1; hits["Alpha positive"]=1; }
+
+  if (d.pe && d.pe < 22)        { score+=2; hits["Portfolio P/E <22"]=2; }
+  if (d.pb && d.pb < 3.5)       { score+=1; hits["Portfolio P/B <3.5"]=1; }
+
+  // ── COST (10 pts) ────────────────────────────────────────────────
+  if (d.expense_ratio < 0.3)      { score+=4; hits["Expense <0.3% (very low)"]=4; }
+  else if (d.expense_ratio < 0.5) { score+=3; hits["Expense <0.5%"]=3; }
+  else if (d.expense_ratio < 0.75){ score+=2; hits["Expense <0.75%"]=2; }
+  else if (d.expense_ratio < 1.0) { score+=1; hits["Expense <1.0%"]=1; }
+
+  if (d.exit_load_pct && +d.exit_load_pct < 1) { score+=2; hits["Low exit load <1%"]=2; }
+  else if (!d.exit_load_pct || +d.exit_load_pct <= 1){ score+=1; hits["Standard exit load"]=1; }
+
+  if (d.min_lumpsum <= 100)      { score+=2; hits["Min ₹100 (most accessible)"]=2; }
+  else if (d.min_lumpsum <= 500) { score+=1.5; hits["Min ≤₹500"]=1.5; }
+  else if (d.min_lumpsum <= 1000){ score+=1; hits["Min ≤₹1,000"]=1; }
+
+  if (d.sip_min <= 100)          { score+=1; hits["SIP from ₹100"]=1; }
+  else if (d.sip_min <= 500)     { score+=0.5; hits["SIP ≤₹500"]=0.5; }
+
+  // ── AUM & FLOWS (10 pts) ─────────────────────────────────────────
+  const aum = d.aum_cr || d.aum;
+  if (aum >= 2000 && aum <= 25000) { score+=4; hits["AUM sweet spot ₹2K-25K Cr"]=4; }
+  else if (aum >= 500 && aum < 2000){ score+=2; hits["AUM ₹500-2K Cr (growing)"]=2; }
+  else if (aum >= 25000)           { score+=2; hits["Large fund >₹25K Cr"]=2; }
+  if (aum >= 1000)                 { score+=2; hits["AUM >₹1,000 Cr (established)"]=2; }
+  if (aum >= 5000)                 { score+=1; hits["AUM >₹5,000 Cr"]=1; }
+  if (d.lumpsum_open)              { score+=3; hits["Lumpsum open to investors"]=3; }
+
+  // ── FUND QUALITY (10 pts) ────────────────────────────────────────
+  if (d.morningstar >= 5)         { score+=4; hits["5-star Morningstar rated"]=4; }
+  else if (d.morningstar >= 4)    { score+=2.5; hits["4-star Morningstar rated"]=2.5; }
+  else if (d.morningstar >= 3)    { score+=1; hits["3-star Morningstar rated"]=1; }
+
+  if (d.crisil_rating)            { score+=2; hits["CRISIL rated"]=2; }
+
+  if (d.dataPoints > 3000)        { score+=2; hits["10+ year history"]=2; }
+  else if (d.dataPoints > 1500)   { score+=1; hits["5+ year history"]=1; }
+
+  if (d.fund_manager && d.manager_tenure_yrs >= 5){ score+=2; hits["Fund manager 5+ year tenure"]=2; }
+  else if (d.manager_tenure_yrs >= 3){ score+=1; hits["Fund manager 3+ year tenure"]=1; }
+
+  // ── GOVERNANCE (10 pts) ──────────────────────────────────────────
+  if (d.sebi_clean !== false)     { score+=3; hits["Clean SEBI record"]=3; }
+  if (d.direct)                   { score+=2; hits["Direct plan available"]=2; }
+  if (d.fund_type === "Open Ended"||d.maturity_type==="Open Ended"){ score+=2; hits["Open-ended fund"]=2; }
+  if (d.instant_redemption)       { score+=1; hits["Instant redemption available"]=1; }
+  if (d.portfolio_turnover && d.portfolio_turnover < 50){ score+=2; hits["Low portfolio turnover <50%"]=2; }
+
+  return { score:+score.toFixed(1), hits, maxPossible:100 };
+}
+
+// ── Enrich one fund from all 3 sources ───────────────────────────────────────
+async function enrichFund(f) {
+  try {
+    // Fetch all 3 sources in parallel
+    const [mfd, kuv, navs] = await Promise.allSettled([
+      fetchMFData(f.code),
+      fetchKuveraData(f.isin),
+      fetchMFNavHistory(f.code),
+    ]);
+
+    const mfData  = mfd.status==="fulfilled"  ? mfd.value  : null;
+    const kuvData = kuv.status==="fulfilled"  ? kuv.value  : null;
+    const navArr  = navs.status==="fulfilled" ? navs.value : null;
+
+    // Merge all data sources — mfdata.in is primary
+    const merged = {
+      code: f.code, isin: f.isin,
+      name: f.name, amc: f.amc, cat: f.cat,
+      sebi_clean: true,
+      // from mfdata.in
+      nav:          mfData?.nav || mfData?.last_nav?.nav,
+      navFormatted: mfData?.nav ? "₹"+parseFloat(mfData.nav).toFixed(2) : null,
+      aum_cr:       mfData?.aum_cr || mfData?.aum,
+      expense_ratio:parseFloat(mfData?.expense_ratio || 0),
+      morningstar:  mfData?.morningstar || mfData?.fund_rating,
+      category:     mfData?.category,
+      fund_type:    mfData?.fund_type || mfData?.maturity_type,
+      pe:           mfData?.pe_ratio,
+      pb:           mfData?.pb_ratio,
+      sharpe:       mfData?.sharpe,
+      beta:         mfData?.beta,
+      alpha:        mfData?.alpha,
+      sortino:      mfData?.sortino,
+      stdDev_api:   mfData?.standard_deviation,
+      ret1y_api:    mfData?.returns?.["1y"] || mfData?.returns?.["1Y"],
+      ret3y_api:    mfData?.returns?.["3y"] || mfData?.returns?.["3Y"],
+      ret5y_api:    mfData?.returns?.["5y"] || mfData?.returns?.["5Y"],
+      holdings:     mfData?.holdings || [],
+      sectors:      mfData?.sector_allocation || {},
+      fund_manager: mfData?.fund_manager,
+      // from kuvera
+      crisil_rating:   kuvData?.crisil_rating,
+      lumpsum_open:    kuvData?.lump_available === "Y",
+      min_lumpsum:     kuvData?.lump_min || kuvData?.min_lumpsum,
+      sip_min:         kuvData?.sip_min_amount || kuvData?.min_sip,
+      exit_load_pct:   kuvData?.exit_load,
+      direct:          kuvData?.direct === "Y",
+      fund_rating:     kuvData?.fund_rating,
+      instant_redemption: kuvData?.instant === "Y",
+      manager_tenure_yrs: null, // derived below
+    };
+
+    // Calculate from NAV history (more accurate than API-provided)
+    if (navArr && navArr.length > 50) {
+      const calc = calcNavMetrics(navArr);
+      Object.assign(merged, calc);
+      // Use API-provided Sharpe/Beta/Alpha if available, otherwise calculated
+      if (!merged.sharpe && calc.sharpe) merged.sharpe = calc.sharpe;
+      if (!merged.sortino && calc.sortino) merged.sortino = calc.sortino;
+    }
+
+    // Final fallbacks
+    if (!merged.navFormatted && merged.nav) merged.navFormatted = "₹"+parseFloat(merged.nav).toFixed(2);
+    if (!merged.aum_cr) merged.aum_cr = merged.aum;
+
+    const {score, hits} = scoreMFComplete(merged);
+    merged.score = score;
+    merged.hits  = hits;
+    merged.dataSource = [
+      mfData?"mfdata.in":"",
+      kuvData?"kuvera":"",
+      navArr?"mfapi.in":""
+    ].filter(Boolean).join(" + ");
+
+    return merged;
+  } catch(e) {
+    console.error(`MF enrich error ${f.code}:`, e.message);
+    return null;
+  }
+}
+
+// ── Refresh all fund data ─────────────────────────────────────────────────────
+let mfRefreshing = false;
+async function refreshMFData() {
+  if (mfRefreshing) return;
+  mfRefreshing = true;
+  console.log("📊 Refreshing MF data from mfdata.in + kuvera + mfapi...");
+  const start = Date.now();
+  // Fetch in batches of 5 to avoid rate limiting
+  const BATCH = 5;
+  const results = {};
+  for (let i=0; i<MF_UNIVERSE_SERVER.length; i+=BATCH) {
+    const batch = MF_UNIVERSE_SERVER.slice(i, i+BATCH);
+    const enriched = await Promise.all(batch.map(f => enrichFund(f)));
+    enriched.forEach((f,j) => { if(f) results[batch[j].code] = f; });
+    if (i+BATCH < MF_UNIVERSE_SERVER.length) await new Promise(r=>setTimeout(r,1000)); // 1s between batches
+  }
+  mfCache = results;
+  mfCacheTime = Date.now();
+  const ok = Object.keys(results).length;
+  console.log(`✅ MF data refreshed — ${ok}/${MF_UNIVERSE_SERVER.length} funds in ${((Date.now()-start)/1000).toFixed(1)}s`);
+  mfRefreshing = false;
+}
+
+// ── MF API endpoints ──────────────────────────────────────────────────────────
+app.get("/api/mf/funds", async(req,res) => {
+  // Return cached data, refresh if stale
+  const stale = !mfCacheTime || Date.now()-mfCacheTime > MF_CACHE_TTL;
+  if (stale && !mfRefreshing) refreshMFData(); // async refresh, don't wait
+  if (Object.keys(mfCache).length === 0) {
+    // First load — wait for it
+    await refreshMFData();
+  }
+  res.json({
+    funds: Object.values(mfCache),
+    cached_at: mfCacheTime,
+    source: "mfdata.in + mf.captnemo.in + mfapi.in",
+  });
+});
+
+app.post("/api/mf/refresh", async(req,res) => {
+  res.json({message:"MF refresh started"});
+  refreshMFData();
+});
+
+// Refresh MF data daily at 6 AM IST
+cron.schedule("0 6 * * *", ()=>refreshMFData(), {timezone:"Asia/Kolkata"});
+// Also refresh on startup after 30s (let server start first)
+setTimeout(refreshMFData, 30000);
+
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get("/api/crypto-prices", async(req,res)=>{
   // Return cached prices updated by background poller every 60s
