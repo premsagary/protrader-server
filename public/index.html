@@ -665,7 +665,6 @@ function renderChartSelectors(){
     sel.innerHTML=CRYPTO_LIST.map(c=>`<option value="${c.sym}">${c.base} — ${c.name}</option>`).join("");
     sel.value="BTCUSDT";
   }
-  loadChart();
 }
 
 function goChart(type,sym){S.chartType=type;S.chartSym=sym;showTab("chart");document.getElementById("chart-type").value=type;renderChartSelectors();document.getElementById("chart-sym").value=sym;loadChart();}
@@ -829,11 +828,17 @@ function showTab(id){
 }
 
 // ── START ─────────────────────────────────────────────────────────────────────
-// Init chart selectors
-renderChartSelectors();
-// Init news dropdowns
-document.getElementById("news-nse-sym").value="RELIANCE";
-document.getElementById("news-crypto-sym").value="BTC";
+// Populate selectors without triggering chart load
+(function initSelectors(){
+  const nseSel = document.getElementById("chart-sym");
+  nseSel.innerHTML = NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+
+  const nseNews = document.getElementById("news-nse-sym");
+  nseNews.innerHTML = NSE_STOCKS.map(s=>`<option value="${s.sym}">${s.sym} — ${s.name}</option>`).join("");
+
+  const cryptoNews = document.getElementById("news-crypto-sym");
+  cryptoNews.innerHTML = CRYPTO_LIST.map(c=>`<option value="${c.base}">${c.base} — ${c.name}</option>`).join("");
+})();
 
 fetchAll();
 fetchCryptoPrices();
