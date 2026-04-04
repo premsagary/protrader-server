@@ -1213,68 +1213,47 @@ const CRYPTO_UNIVERSE = [
   {sym:"SUIUSDT",  name:"Sui",            base:"SUI"},
 ];
 
-const cryptoPrices   = {};  // sym -> {price, change24h, high, low, volume}
-const cryptoCandles  = {};  // sym -> array of closes for indicators
-let   cryptoWS       = null;
-let   cryptoWSActive = false;
+const cryptoPrices   = {};
+const cryptoCandles  = {};
+let cryptoWSActive   = false;
 
-// Fetch initial 1h candles for all cryptos from Binance
+// Fetch candles via REST (more reliable than WebSocket on Railway)
 async function fetchCryptoCandles(sym) {
   try {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`);
-    if (!r.ok) return;
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+      {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(8000)});
+    if (!r.ok) return false;
     const data = await r.json();
-    cryptoCandles[sym] = data.map(c => ({
-      open:   +c[1], high: +c[2], low: +c[3], close: +c[4], volume: +c[5],
-    }));
-  } catch(e) { /* skip */ }
+    if (!Array.isArray(data)) return false;
+    cryptoCandles[sym] = data.map(c=>({open:+c[1],high:+c[2],low:+c[3],close:+c[4],volume:+c[5]}));
+    return true;
+  } catch(e) { console.log(`  ₿ candles ${sym}: ${e.message}`); return false; }
 }
 
-// Start Binance WebSocket for live prices (all 20 cryptos in one stream)
-function startCryptoTicker() {
-  const streams = CRYPTO_UNIVERSE.map(c => `${c.sym.toLowerCase()}@ticker`).join("/");
-  const wsUrl   = `wss://stream.binance.com:9443/stream?streams=${streams}`;
-
-  cryptoWS = new WebSocket(wsUrl);
-
-  cryptoWS.on("open", () => {
+// Fetch live prices via REST polling (replaces broken WebSocket)
+async function fetchCryptoPricesREST() {
+  try {
+    const syms = JSON.stringify(CRYPTO_UNIVERSE.map(c=>c.sym));
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+      {headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(8000)});
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!Array.isArray(data)) return;
+    data.forEach(t=>{
+      cryptoPrices[t.symbol]={price:+t.lastPrice,change24h:+t.priceChangePercent,high:+t.highPrice,low:+t.lowPrice,volume:+t.volume,quoteVolume:+t.quoteVolume};
+      // Also update last candle close
+      if(cryptoCandles[t.symbol]?.length) cryptoCandles[t.symbol][cryptoCandles[t.symbol].length-1].close=+t.lastPrice;
+    });
     cryptoWSActive = true;
-    console.log("✅ Crypto ticker connected — 20 pairs streaming");
-  });
+    broadcast({type:"crypto_tick", prices:cryptoPrices});
+  } catch(e) { cryptoWSActive=false; console.log("₿ Price fetch error:", e.message); }
+}
 
-  cryptoWS.on("message", (raw) => {
-    try {
-      const msg  = JSON.parse(raw);
-      const tick = msg.data;
-      if (!tick) return;
-      const sym = tick.s;
-      cryptoPrices[sym] = {
-        price:     +tick.c,
-        change24h: +tick.P,
-        high:      +tick.h,
-        low:       +tick.l,
-        volume:    +tick.v,
-        open:      +tick.o,
-      };
-      // Update last candle close for live indicator calc
-      if (cryptoCandles[sym]?.length) {
-        cryptoCandles[sym][cryptoCandles[sym].length - 1].close = +tick.c;
-      }
-      // Broadcast to dashboard
-      broadcast({ type:"crypto_tick", prices:cryptoPrices });
-    } catch(e) {}
-  });
-
-  cryptoWS.on("close", () => {
-    cryptoWSActive = false;
-    console.log("Crypto ticker closed — reconnecting in 5s");
-    setTimeout(startCryptoTicker, 5000);
-  });
-
-  cryptoWS.on("error", () => {
-    cryptoWSActive = false;
-    cryptoWS.terminate();
-  });
+// No WebSocket — use REST polling every 60s instead
+function startCryptoTicker() {
+  console.log("₿ Starting crypto REST price polling (every 60s)...");
+  fetchCryptoPricesREST();
+  setInterval(fetchCryptoPricesREST, 60000);
 }
 
 // Crypto strategy — same logic but wider thresholds (crypto is volatile)
@@ -1313,71 +1292,80 @@ function scoreCrypto(closes) {
 }
 
 const CRYPTO_CONFIG = {
-  BUY_SCORE:        4,      // higher threshold — crypto more volatile
-  SELL_SCORE:      -3,
+  BUY_SCORE:        3,      // lowered from 4 — easier to trigger
+  SELL_SCORE:      -2,
   MAX_POSITIONS:    5,
-  CAPITAL_PER_TRADE:5000,   // ₹5000 per crypto trade
-  SL_PCT:           3.0,    // 3% stop loss (crypto moves fast)
-  TGT_PCT:          6.0,    // 6% target
+  CAPITAL_PER_TRADE:5000,
+  SL_PCT:           3.0,
+  TGT_PCT:          6.0,
 };
 
 async function scanCrypto() {
   console.log(`\n₿ Crypto scan at ${new Date().toLocaleTimeString("en-IN")}...`);
+  let signals = 0, scanned = 0, skipped = 0;
+
+  // Refresh all prices first
+  await fetchCryptoPricesREST();
+
   const { rows: openTrades } = await pool.query("SELECT * FROM crypto_trades WHERE status='OPEN'");
-  let signals = 0;
 
   for (const coin of CRYPTO_UNIVERSE) {
     try {
-      // Refresh candles periodically
+      // Fetch/refresh candles
       if (!cryptoCandles[coin.sym] || cryptoCandles[coin.sym].length < 30) {
-        await fetchCryptoCandles(coin.sym);
+        const ok = await fetchCryptoCandles(coin.sym);
+        if (!ok) { skipped++; await delay(300); continue; }
         await delay(200);
       }
       const closes = cryptoCandles[coin.sym]?.map(c=>c.close) || [];
-      if (closes.length < 30) continue;
+      if (closes.length < 30) { skipped++; continue; }
+      scanned++;
 
       const price = cryptoPrices[coin.sym]?.price || closes[closes.length-1];
+      if (!price || price<=0) { skipped++; continue; }
+
       const {total, bd} = scoreCrypto(closes);
       const openPos = openTrades.find(t=>t.symbol===coin.sym);
+
+      console.log(`  ₿ ${coin.base}: $${price.toFixed(4)} | score:${total} | ${Object.entries(bd).map(([k,v])=>`${k}:${v>=0?"+":""}${v}`).join(" ")}`);
 
       if (openPos) {
         const cmp    = price;
         const hitSL  = cmp <= parseFloat(openPos.stop_loss);
         const hitTgt = cmp >= parseFloat(openPos.target);
         const sellSig= total <= CRYPTO_CONFIG.SELL_SCORE;
-
         if (hitSL || hitTgt || sellSig) {
-          const pnl    = +((cmp - openPos.price) * openPos.quantity).toFixed(2);
-          const pnlPct = +((cmp - openPos.price) / openPos.price * 100).toFixed(2);
+          const pnl    = +((cmp-openPos.price)*openPos.quantity).toFixed(2);
+          const pnlPct = +((cmp-openPos.price)/openPos.price*100).toFixed(2);
           const reason = hitSL?"Stop Loss":hitTgt?"Target Hit":"Sell Signal";
           await pool.query(
             `UPDATE crypto_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
-            [cmp, pnl, pnlPct, reason, openPos.id]
+            [cmp,pnl,pnlPct,reason,openPos.id]
           );
           console.log(`  ₿ EXIT ${coin.sym} @ $${cmp} | ${reason} | ${pnl>=0?"+":""}$${pnl.toFixed(2)}`);
+          // Remove from openTrades array
+          const idx=openTrades.findIndex(t=>t.symbol===coin.sym);
+          if(idx>-1) openTrades.splice(idx,1);
           signals++;
         }
-
       } else if (openTrades.filter(t=>t.status==="OPEN").length < CRYPTO_CONFIG.MAX_POSITIONS
                  && total >= CRYPTO_CONFIG.BUY_SCORE) {
-
-        const qty    = +(CRYPTO_CONFIG.CAPITAL_PER_TRADE / price).toFixed(6);
-        const sl     = +(price * (1 - CRYPTO_CONFIG.SL_PCT/100)).toFixed(8);
-        const target = +(price * (1 + CRYPTO_CONFIG.TGT_PCT/100)).toFixed(8);
+        const qty    = +(CRYPTO_CONFIG.CAPITAL_PER_TRADE/price).toFixed(6);
+        const sl     = +(price*(1-CRYPTO_CONFIG.SL_PCT/100)).toFixed(8);
+        const target = +(price*(1+CRYPTO_CONFIG.TGT_PCT/100)).toFixed(8);
         const indStr = Object.entries(bd).map(([k,v])=>`${k}:${v>=0?"+":""}${v}`).join(" ");
-
         await pool.query(
           `INSERT INTO crypto_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
            VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,'CRYPTO_MULTI','CRYPTO',$10,'OPEN')`,
-          [coin.sym, coin.name, price, qty, CRYPTO_CONFIG.CAPITAL_PER_TRADE, sl, target, total, indStr]
+          [coin.sym,coin.name,price,qty,CRYPTO_CONFIG.CAPITAL_PER_TRADE,sl,target,total,indStr]
         );
         openTrades.push({symbol:coin.sym,status:"OPEN"});
-        console.log(`  ₿ BUY  ${coin.sym} @ $${price} | Score:${total} | ${indStr}`);
+        console.log(`  ₿ BUY  ${coin.sym} @ $${price} | Score:${total} | SL:$${sl} | TGT:$${target}`);
         signals++;
       }
-    } catch(e) { console.error(`  ₿ ${coin.sym}: ${e.message}`); }
+    } catch(e) { console.error(`  ₿ ${coin.sym}: ${e.message}`); skipped++; }
   }
-  console.log(`₿ Crypto scan done — ${signals} signals\n`);
+  console.log(`₿ Done — scanned:${scanned} skipped:${skipped} signals:${signals}\n`);
 }
 
 // ── Crypto API endpoints ───────────────────────────────────────────────────────
@@ -1429,10 +1417,9 @@ async function start() {
 
   // Crypto: start immediately, run 24/7 every 15 minutes
   console.log("₿ Starting crypto engine — 24/7...");
-  await Promise.all(CRYPTO_UNIVERSE.map(c => fetchCryptoCandles(c.sym)));
-  startCryptoTicker();
-  setTimeout(scanCrypto, 8000);
-  cron.schedule("*/15 * * * *", ()=>scanCrypto()); // every 15 min, always
+  startCryptoTicker(); // REST polling every 60s
+  setTimeout(scanCrypto, 10000); // first scan after 10s
+  cron.schedule("*/15 * * * *", ()=>scanCrypto());
 
   const PORT=process.env.PORT||3001;
   server.listen(PORT, ()=>{
