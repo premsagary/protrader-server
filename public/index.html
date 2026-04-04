@@ -302,7 +302,7 @@ const S = {
   chartSym:"RELIANCE", cryptoChartSym:"BTCUSDT",
   newsNseSym:"RELIANCE", newsCryptoSym:"BTCUSDT",
   equityChart:null, pnlChart:null,
-  mfData:null, mfLoading:false,
+  mfData:null, mfLoading:false, mfTotal:null,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -442,8 +442,8 @@ function renderTopBar(){
     ].join("");
   } else {
     document.getElementById("topbar-stats").innerHTML=[
-      stat("Universe","30 funds","var(--text2)"),
-      stat("Criteria","20 checks","var(--text2)"),
+      stat("Universe", (S.mfTotal||"—")+" funds","var(--text2)"),
+      stat("Criteria","100 pts","var(--text2)"),
       stat("Data","Live NAV","var(--green)"),
     ].join("");
   }
@@ -1345,6 +1345,7 @@ async function renderMFPage(){
     document.getElementById("mf-cats").style.display="block";
     document.getElementById("mf-footer").style.display="block";
 
+    S.mfTotal = data.total || data.funds.length;
     var updEl=document.getElementById("mf-updated");
     if(updEl) {
       var mins = data.cached_at ? Math.round((Date.now()-data.cached_at)/60000) : 0;
