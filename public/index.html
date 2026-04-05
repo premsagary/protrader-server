@@ -3920,8 +3920,13 @@ async function aipPredict(){
   resEl.style.display='flex';
   resEl.innerHTML='<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px">'
     +'<div style="font-size:34px">🐟</div>'
-    +'<div style="color:#22d3ee;font-size:12px;font-weight:600">5 AI agents running...</div>'
-    +'<div style="font-size:10px;color:#475569;text-align:center">Vikram · Priya · Arjun · Meera · Rahul<br>analyzing '+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')+' over '+_aiPortfolioYears+' years</div>'
+    +'<div style="color:#22d3ee;font-size:13px;font-weight:700">MiroFish is thinking...</div>'
+    +'<div style="font-size:10px;color:#475569;text-align:center;line-height:1.8">'
+    +'MiroFish runs 5 internal agents in parallel:<br>'
+    +'<span style="color:#64748b">Vikram (FA) · Priya (TA) · Arjun (Contrarian)</span><br>'
+    +'<span style="color:#64748b">Meera (Risk) · Rahul (Quant)</span><br>'
+    +'analyzing '+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')+' over '+_aiPortfolioYears+' years'
+    +'</div>'
     +'<div style="width:160px;height:2px;background:rgba(255,255,255,0.06);border-radius:1px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#22d3ee,#6366f1);animation:aip-loading 1.6s ease-in-out infinite;border-radius:1px"></div></div>'
     +'</div>';
 
