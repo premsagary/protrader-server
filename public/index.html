@@ -3666,7 +3666,7 @@ async function renderAIPortfolio(){
   h+='#aip-root input[type=number]{-moz-appearance:textfield}';
   h+='#aip-root ::-webkit-scrollbar{width:3px}#aip-root ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}';
   h+='#aip-root input,#aip-root select{font-family:inherit}';
-  h+='@media(max-width:1000px){#aip-grid{grid-template-columns:1fr 300px!important}#aip-left-panel{display:none!important}}';
+  h+='@media(max-width:1000px){#aip-grid{grid-template-columns:1fr 1fr!important}#aip-left-panel{display:none!important}}';
   h+='@media(max-width:650px){#aip-grid{grid-template-columns:1fr!important}#aip-left-panel{display:flex!important}}';
   h+='</style>';
 
@@ -3679,7 +3679,7 @@ async function renderAIPortfolio(){
   h+='</div>';
 
   // 3-column grid
-  h+='<div id="aip-grid" style="display:grid;grid-template-columns:240px 1fr 300px;gap:12px;align-items:start">';
+  h+='<div id="aip-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:start">';
 
   var panel='background:#111827;border-radius:12px;border:1px solid rgba(255,255,255,0.07);overflow:hidden;display:flex;flex-direction:column;height:620px';
   var hdr='padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);font-size:9px;font-weight:700;color:#64748b;letter-spacing:.08em;flex-shrink:0';
