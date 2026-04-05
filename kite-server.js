@@ -1716,6 +1716,35 @@ app.get("/health", (req,res)=>res.json({
   hasToken:!!process.env.KITE_ACCESS_TOKEN, marketOpen:isMarketOpen(),
   prices:Object.keys(livePrices).length,
 }));
+
+// ── Token management endpoints ────────────────────────────────────────────────
+app.get("/api/token/status", (req,res)=>{
+  const hasToken  = !!process.env.KITE_ACCESS_TOKEN;
+  const isWorking = tickerOn || Object.keys(livePrices).length > 0;
+  // Token is expired if we have it but ticker isn't on and market is open
+  const marketOpen = isMarketOpen();
+  const tokenExpired = hasToken && marketOpen && !tickerOn && Object.keys(livePrices).length === 0;
+  res.json({
+    hasToken, isWorking, tickerOn, tokenExpired, marketOpen,
+    livePrices: Object.keys(livePrices).length,
+    loginUrl: kite ? kite.getLoginURL() : null,
+  });
+});
+
+app.post("/api/token/update", async(req,res)=>{
+  try {
+    const { token } = req.body;
+    if (!token || token.length < 10) return res.status(400).json({ error: 'Invalid token' });
+    process.env.KITE_ACCESS_TOKEN = token;
+    initKite(token);
+    kite.setAccessToken(token);
+    startTicker(token);
+    console.log('🔑 Kite token updated via dashboard');
+    res.json({ success: true, message: 'Token updated and ticker restarted' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get("/prices", (req,res)=>res.json(livePrices));
 
 app.get("/paper-trades",       async(req,res)=>{try{const{rows}=await pool.query("SELECT * FROM paper_trades ORDER BY entry_time DESC LIMIT 500");res.json(rows);}catch(e){res.status(500).json({error:e.message});}});
