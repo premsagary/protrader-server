@@ -1498,6 +1498,37 @@ function scoreMFTickertape(f) {
   else if (qual.sebi === 'action') { score = Math.round(score * 0.85 * 10)/10; hits['Past SEBI enforcement action: -15% score penalty'] = 0; }
   else if (qual.sebi === 'minor')  { score = Math.round(score * 0.95 * 10)/10; hits['Minor SEBI fine on record: -5% score penalty'] = 0; }
 
+  // ── POST-SCORING RULES ────────────────────────────────────────────
+  // Applied after all scoring to prevent unproven small funds from
+  // outranking established funds with long track records.
+
+  // Rule 1: Minimum Credibility — AUM < ₹5,000 Cr AND age < 84 months
+  // A small, young fund cannot be recommended above established peers
+  // regardless of good recent numbers. Numbers are unproven at scale.
+  const fundAum = parseFloat(f.aum_cr || f.aum) || 0;
+  if (fundAum < 5000 && months < 84 && score > 70) {
+    score = 70;
+    hits['📌 Credibility cap: AUM < ₹5K Cr + age < 7Y → score capped at 70 (watchlist)'] = 0;
+  }
+
+  // Rule 2: No 5Y return data AND young fund → cap at 75
+  // Without 5Y data the fund hasn't been tested across a full market cycle.
+  const has5Y = parseFloat(f.cagr_5y) > 0;
+  if (!has5Y && months < 84 && score > 75) {
+    score = Math.min(score, 75);
+    hits['📌 No 5Y data + age < 7Y → score capped at 75'] = 0;
+  }
+
+  // Rule 3: Low-credibility AMC + small AUM → cap at 72
+  // Double governance risk: unknown AMC managing small corpus.
+  if (qual.score <= 5 && fundAum < 5000 && score > 72) {
+    score = 72;
+    hits[`📌 Low AMC credibility (${qual.score}/10) + AUM < ₹5K Cr → score capped at 72`] = 0;
+  }
+
+  // Watchlist flag — AUM < ₹5,000 Cr (informational, no score change)
+  const isWatchlist = fundAum > 0 && fundAum < 5000;
+
   // Professional overlay — DO NOT INVEST flag
   const dniFlag = DO_NOT_INVEST[f.name] || null;
 
@@ -1508,7 +1539,8 @@ function scoreMFTickertape(f) {
     amc_sebi:    qual.sebi,
     amc_warning: qual.warning,
     amc_note:    qual.note || null,
-    dni:         dniFlag,   // {level, short, reason} or null
+    dni:         dniFlag,
+    watchlist:   isWatchlist,  // small fund — monitor, don't rush
   };
 }
 
@@ -1618,8 +1650,8 @@ app.get("/api/mf/funds", async(req,res)=>{
 
     // ── STEP 4: SCORE ELIGIBLE FUNDS ────────────────────────────────
     const scoredEligible = eligible.map(f => {
-      const {score, hits, cat, amc_sebi, amc_warning, amc_note, dni} = scoreMFTickertape(f);
-      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, eligible: true, filter_reasons: []};
+      const {score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist} = scoreMFTickertape(f);
+      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist, eligible: true, filter_reasons: []};
     });
 
     // ── STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) ──
