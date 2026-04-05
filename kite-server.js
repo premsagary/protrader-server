@@ -4613,7 +4613,7 @@ You use historical base rates: stocks with RSI<30 + ROE>15% recover 73% of the t
 let mfLastSimulation = null;
 let mfSimulationRunning = false;
 
-async function callAnthropicAgent(systemPrompt, userPrompt) {
+async function callAnthropicAgent(systemPrompt, userPrompt, maxTokens) {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set in Railway env vars');
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -4625,11 +4625,11 @@ async function callAnthropicAgent(systemPrompt, userPrompt) {
     },
     body: JSON.stringify({
       model:      MIROFISH_MODEL,
-      max_tokens: 1200,
+      max_tokens: maxTokens || 1200,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: userPrompt }],
     }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(55000),
   });
 
   if (!resp.ok) {
@@ -4950,40 +4950,99 @@ app.post('/api/mirofish/portfolio-predict', async(req,res) => {
   const { items, years } = req.body;
   if (!items||!items.length) return res.json({ error: 'No items provided' });
 
-  const system = `You are a senior portfolio manager and MiroFish synthesis agent.
-You receive a list of investments (stocks and/or mutual funds) with amounts.
-Your job: predict the portfolio value after ${years} year${years>1?'s':''}.
+  const system = `You are MiroFish, a senior Indian portfolio manager with deep knowledge of NSE equity and mutual fund markets.
+Your job: predict realistic portfolio growth over ${years} year${years>1?'s':''} based on each asset's actual historical data.
 
-For each item estimate a realistic CAGR based on:
-- Stock: quality, sector, growth trajectory
-- MF: category (small/mid/flexi cap), historical CAGR, expense ratio effect
+CAGR guidelines by asset type (use historical data provided as your primary anchor):
+- Small Cap MF: 18-26% CAGR based on historical. Apply mild mean reversion for 20Y+ horizons (-1 to -3%).
+- Mid Cap MF: 16-22% CAGR based on historical. Slight mean reversion for 20Y+ (-1 to -2%).
+- Flexi Cap MF: 14-20% CAGR based on historical.
+- Large Cap MF / Index: 11-14% CAGR.
+- High-quality stocks (ROE>20%, golden cross): 14-22% CAGR.
+- Average stocks: 10-14% CAGR.
 
-Apply mean reversion for longer horizons. Be conservative, not optimistic.
+DO NOT default to 12% unless the asset genuinely has low historical returns.
+USE the historical_cagr_3y field as your primary anchor. Adjust for horizon, not drastically.
+Nifty average is 12% — small/mid cap should be HIGHER than this, not equal.
 
 Respond ONLY in valid JSON, no markdown:
 {
   "items": [
     {
-      "sym": "RELIANCE",
-      "type": "stock",
+      "sym": "Fund or stock name",
+      "name": "Full name",
+      "type": "mf or stock",
       "amount": 100000,
-      "cagr": 12.5,
-      "projected": 225000,
-      "thesis": "One sentence reason for this CAGR"
+      "cagr": 19.5,
+      "projected": 1280000,
+      "thesis": "One sentence anchored to historical data"
     }
   ],
-  "total_projected": 450000,
-  "portfolio_cagr": 13.2,
+  "total_projected": 2500000,
+  "portfolio_cagr": 18.2,
+  "risk_level": "High",
   "confidence": "High/Medium/Low",
-  "portfolio_insight": "2-3 sentence overall portfolio assessment",
-  "key_risk": "Biggest single risk to this portfolio"
+  "portfolio_insight": "2-3 sentence overall assessment referencing the actual historical returns",
+  "key_risk": "Biggest single risk to this portfolio",
+  "best_case": 3000000,
+  "worst_case": 1800000,
+  "inflation_adjusted": 900000
 }`;
 
-  const itemsText = items.map((x,i) =>
-    `${i+1}. ${x.sym} (${x.type==='mf'?'Mutual Fund — '+(x.cat||''):'Stock — '+(x.sector||'')}) — ₹${x.amount.toLocaleString('en-IN')} invested`
-  ).join('\n');
+  const itemsText = items.map((x, i) => {
+    const n = v => (v == null || isNaN(v)) ? null : +v;
+    if (x.type === 'mf') {
+      const lines = [
+        `${i+1}. [MUTUAL FUND] ${x.name}`,
+        `   Category: ${x.cat} | Risk: ${x.sebi_risk||x.risk||'N/A'} | AMC: ${x.amc||'N/A'}`,
+        `   Amount invested: ₹${x.amount.toLocaleString('en-IN')}`,
+        `   --- ACTUAL HISTORICAL RETURNS (use as primary anchor) ---`,
+        `   3Y CAGR: ${n(x.cagr_3y)!=null ? n(x.cagr_3y).toFixed(1)+'%' : 'N/A'}`,
+        `   5Y CAGR: ${n(x.cagr_5y)!=null ? n(x.cagr_5y).toFixed(1)+'%' : 'N/A'}`,
+        `   10Y CAGR: ${n(x.cagr_10y)!=null ? n(x.cagr_10y).toFixed(1)+'%' : 'N/A'}`,
+        `   Rolling 3Y avg: ${n(x.rolling_3y)!=null ? n(x.rolling_3y).toFixed(1)+'%' : 'N/A'}`,
+        `   --- RISK METRICS ---`,
+        `   Sharpe: ${n(x.sharpe)!=null ? n(x.sharpe).toFixed(3) : 'N/A'} | Sortino: ${n(x.sortino)!=null ? n(x.sortino).toFixed(3) : 'N/A'}`,
+        `   Max Drawdown: ${n(x.max_drawdown)!=null ? n(x.max_drawdown).toFixed(1)+'%' : 'N/A'}`,
+        `   --- COST & SIZE ---`,
+        `   Expense Ratio: ${n(x.expense_ratio)!=null ? n(x.expense_ratio).toFixed(2)+'%' : 'N/A'} | AUM: ${n(x.aum_cr)!=null ? '₹'+Math.round(n(x.aum_cr)).toLocaleString('en-IN')+' Cr' : 'N/A'}`,
+        `   Alpha vs benchmark: ${n(x.alpha)!=null ? n(x.alpha).toFixed(2) : 'N/A'}`,
+        `   vs Category 3Y: ${n(x.vs_cat_3y)!=null ? n(x.vs_cat_3y).toFixed(2)+'x' : 'N/A'} | vs Category 5Y: ${n(x.vs_cat_5y)!=null ? n(x.vs_cat_5y).toFixed(2)+'x' : 'N/A'}`,
+        `   ProTrader Score: ${x.score||'N/A'}/100`,
+        `   SEBI/AMC record: ${x.amc_sebi||'clean'}`,
+      ];
+      return lines.filter(Boolean).join('\n');
+    } else {
+      const lines = [
+        `${i+1}. [STOCK] ${x.name} (${x.grp||'NSE'} | ${x.sector||'N/A'})`,
+        `   Amount invested: ₹${x.amount.toLocaleString('en-IN')}`,
+        `   Price: ₹${n(x.price)!=null ? n(x.price).toFixed(1) : 'N/A'}`,
+        `   --- FUNDAMENTALS ---`,
+        `   ROE: ${n(x.roe)!=null ? n(x.roe).toFixed(1)+'%' : 'N/A'} | P/E: ${n(x.pe)!=null ? n(x.pe).toFixed(1) : 'N/A'} | D/E: ${n(x.debtToEq)!=null ? n(x.debtToEq).toFixed(2)+'x' : 'N/A'}`,
+        `   Op Margin: ${n(x.opMargin)!=null ? n(x.opMargin).toFixed(1)+'%' : 'N/A'}`,
+        `   EPS Growth: ${n(x.earGrowth)!=null ? n(x.earGrowth).toFixed(1)+'%' : 'N/A'} | Rev Growth: ${n(x.revGrowth)!=null ? n(x.revGrowth).toFixed(1)+'%' : 'N/A'}`,
+        `   --- TECHNICAL ---`,
+        `   From 52W High: ${n(x.pctFromHigh)!=null ? n(x.pctFromHigh).toFixed(1)+'%' : 'N/A'} | 52W Change: ${n(x.wk52Change)!=null ? n(x.wk52Change).toFixed(1)+'%' : 'N/A'}`,
+        `   RSI: ${n(x.rsi)!=null ? n(x.rsi).toFixed(0) : 'N/A'} | Golden Cross: ${x.goldenCross==null?'N/A':x.goldenCross?'Yes (bullish)':'No (bearish)'}`,
+        `   200 DMA: ${n(x.dma200)!=null ? '₹'+n(x.dma200).toFixed(0) : 'N/A'}`,
+        `   ProTrader Score: ${x.score||'N/A'}/100`,
+      ];
+      return lines.filter(Boolean).join('\n');
+    }
+  }).join('\n\n');
 
-  const user = `Portfolio to analyze over ${years} year${years>1?'s':''}:\n\n${itemsText}\n\nPredict each item's projected value and the total portfolio value. JSON only.`;
+  const user = `Predict portfolio growth over ${years} year${years>1?'s':''}. All historical data is provided above — USE IT as your anchor.
+
+${itemsText}
+
+Rules:
+- For MF: base your CAGR on the actual historical 3Y/5Y CAGR shown. A mid cap fund with 24% 3Y CAGR should NOT get 12% prediction.
+- Apply modest mean reversion for 20Y+ horizons (subtract 1-3%), but never collapse to Nifty average unless it's an index fund.
+- For stocks: anchor to ROE, EPS growth, and sector trajectory.
+- best_case = portfolio_cagr + 4%, worst_case = portfolio_cagr - 5%, inflation_adjusted assumes 6% inflation.
+- total_projected and each item projected must be mathematically consistent with the CAGRs and years.
+
+JSON only, no markdown.`;
 
   try {
     const raw = await callAnthropicAgent(system, user);
@@ -5096,6 +5155,318 @@ Give per-year CAGR for each horizon. Account for ALL the above data — especial
     const clean = raw.replace(/```json|```/g,'').trim();
     res.json(JSON.parse(clean));
   } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
+
+// =============================================================================
+// AI PORTFOLIO — DEEP MIROFISH PREDICTION ENGINE
+// Built on: Varsity scoring pillars + 5-agent debate + Varsity CAGR frameworks
+// =============================================================================
+
+// Varsity-derived CAGR anchors per asset class (Module 11 + Module 15)
+const VARSITY_CAGR_ANCHORS = {
+  'Small Cap':    { base: 19, high: 27, low: 14, meanReversion20y: 3, meanReversion30y: 5 },
+  'Mid Cap':      { base: 17, high: 24, low: 13, meanReversion20y: 2, meanReversion30y: 4 },
+  'Flexi Cap':    { base: 15, high: 21, low: 12, meanReversion20y: 2, meanReversion30y: 3 },
+  'Large Cap':    { base: 13, high: 16, low: 10, meanReversion20y: 1, meanReversion30y: 2 },
+  'Index':        { base: 12, high: 14, low: 10, meanReversion20y: 0, meanReversion30y: 0 },
+  'ELSS':         { base: 14, high: 20, low: 11, meanReversion20y: 2, meanReversion30y: 3 },
+  'Contra':       { base: 14, high: 19, low: 10, meanReversion20y: 2, meanReversion30y: 3 },
+  'IT':           { base: 13, high: 20, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
+  'Banking':      { base: 12, high: 18, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
+  'Consumer':     { base: 13, high: 18, low: 9,  meanReversion20y: 2, meanReversion30y: 3 },
+  'Energy':       { base: 11, high: 16, low: 7,  meanReversion20y: 2, meanReversion30y: 3 },
+  'Pharma':       { base: 12, high: 17, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
+  'default_mf':   { base: 14, high: 20, low: 10, meanReversion20y: 2, meanReversion30y: 3 },
+  'default_stock':{ base: 12, high: 18, log: 7,  meanReversion20y: 2, meanReversion30y: 3 },
+  'crypto':       { base: 30, high: 60, low: -50, meanReversion20y: 10, meanReversion30y: 15 },
+};
+
+// 5 agents — each applies Varsity principles from their perspective
+const AIP_AGENTS = [
+  {
+    id: 'vikram',
+    name: 'Vikram (FA)',
+    persona: `You are Vikram Mehta, Fundamental Analyst, trained on Zerodha Varsity Modules 3 and 15.
+You evaluate every asset through a business quality lens:
+- For MF: Rolling 3Y CAGR is more reliable than point-to-point. Sortino > Sharpe (Module 11).
+  Expense ratio compounding is brutal — 0.5% more TER costs ₹40L on ₹10L over 30Y.
+  AUM above ₹50K Cr in small/mid cap ALWAYS creates performance drag. Benchmark alpha near 0 = closet indexer.
+- For stocks: ROE>15% + D/E<1 + EPS growth > Revenue growth = operating leverage = compounding machine.
+  CFO/PAT > 1 = real earnings. Negative or falling ROE = capital destroyer, avoid.
+Respond ONLY in JSON. Be specific. Use actual numbers from the data.`,
+    weight: 0.28,
+  },
+  {
+    id: 'priya',
+    name: 'Priya (TA)',
+    persona: `You are Priya Sharma, Technical Analyst, trained on Zerodha Varsity Module 2.
+You read price action and trend signals:
+- For stocks: 200 DMA is the line of truth. Golden Cross = bullish primary trend confirmed.
+  RSI Bullish Divergence is the STRONGEST reversal signal — Varsity Module 2 explicitly calls this out.
+  RSI < 30 + rising OBV = institutional accumulation. MACD bullish crossover above zero line = momentum.
+- For MF: Pct from ATH matters. Funds in drawdown from peak need trend reversal confirmation.
+  Rolling 3Y is the TA equivalent for funds — smooths noise. vs Category ratio trending up = alpha acceleration.
+Respond ONLY in JSON. Reference specific indicator values from the data.`,
+    weight: 0.22,
+  },
+  {
+    id: 'arjun',
+    name: 'Arjun (Contrarian)',
+    persona: `You are Arjun Kapoor, Contrarian Analyst, applying the Varsity "margin of safety" doctrine.
+You look at valuation and cycle positioning:
+- For MF: PE ratio vs Category PE — fund trading at premium to category = expensive. 
+  High cash allocation (>10%) = manager cautious = defensive positioning.
+  Sector concentration risk — top 10 holding % signals how diversified the bet really is.
+- For stocks: PEG ratio (PE/EPS Growth) — PEG<1 = undervalued growth. Sector-relative PE matters more than absolute.
+  Discount from 52W high — deep value vs structural decline, distinguish using ROE trend.
+  Contrarian signal: stock hated by market but ROE still >15% + CFO intact = asymmetric opportunity.
+Respond ONLY in JSON. Focus on valuation and margin of safety.`,
+    weight: 0.20,
+  },
+  {
+    id: 'meera',
+    name: 'Meera (Risk)',
+    persona: `You are Meera Nair, Risk Manager, applying Varsity Module 11 risk framework.
+You quantify downside before upside:
+- For MF: Sortino ratio is PRIMARY (penalizes only bad volatility — Varsity: SIP investors care about downside).
+  Max drawdown tells you the worst you'll experience. Volatility vs category = relative risk.
+  SEBI probe / AMC issues = non-quantifiable tail risk — cap score heavily.
+- For stocks: Beta > 1.5 = amplified market moves. High debt + falling margins = earnings cliff risk.
+  Stop loss discipline: stock below 200DMA + death cross = exit signal regardless of fundamentals.
+  Position sizing: high conviction but high risk = small position. Never bet the farm on one thesis.
+Respond ONLY in JSON. Quantify all risks with specific numbers from the data.`,
+    weight: 0.18,
+  },
+  {
+    id: 'rahul',
+    name: 'Rahul (Quant)',
+    persona: `You are Rahul Iyer, Quantitative Analyst, building factor models grounded in Varsity data.
+You translate all signals into probability-weighted CAGR estimates:
+- For MF: Compute compound wealth: ₹1L * (1 + cagr/100)^years. Then subtract expense drag.
+  Expense drag formula: (1+cagr)^years - (1+cagr-expense_ratio/100)^years = money lost to fees.
+  Alpha consistency (vs category across 1Y/3Y/5Y/10Y) = regime-robust fund vs one-trick pony.
+- For stocks: Factor scoring: Quality (ROE, D/E, margins) + Momentum (52W return, 200DMA) + Value (PEG, PE vs sector).
+  Base rate: stocks with Score>70 + golden cross historically return 18% CAGR on NSE over 5Y.
+  Mean reversion: anything returning >30% annually for 5Y will revert. Build that in.
+Respond ONLY in JSON. Show your math. Give specific CAGR numbers.`,
+    weight: 0.12,
+  },
+];
+
+// Per-agent analysis call
+async function aipRunAgent(agent, items, years) {
+  const itemsText = items.map((x, i) => {
+    const nv = v => (v==null||isNaN(+v)) ? 'N/A' : (+v).toFixed(2);
+    const pv = v => (v==null||isNaN(+v)) ? 'N/A' : (+v).toFixed(1)+'%';
+    const cr = v => (v==null||isNaN(+v)) ? 'N/A' : '₹'+Math.round(+v).toLocaleString('en-IN')+' Cr';
+
+    if (x.type === 'mf') {
+      return `${i+1}. [MF] ${x.name} | ${x.cat} | ${x.sebi_risk||x.risk||'N/A'}
+   ₹${x.amount.toLocaleString('en-IN')} invested
+   RETURNS: 3Y=${pv(x.cagr_3y)} 5Y=${pv(x.cagr_5y)} 10Y=${pv(x.cagr_10y)} Rolling3Y=${pv(x.rolling_3y)}
+   RISK: Sharpe=${nv(x.sharpe)} Sortino=${nv(x.sortino)} MaxDD=${pv(x.max_drawdown)} Vol=${pv(x.volatility)}
+   COST: TER=${pv(x.expense_ratio)} AUM=${cr(x.aum_cr)}
+   QUALITY: Alpha=${nv(x.alpha)} vsCat3Y=${nv(x.vs_cat_3y)}x vsCat5Y=${nv(x.vs_cat_5y)}x
+   PORTFOLIO: PE=${nv(x.pe_ratio)}x CatPE=${nv(x.category_pe)}x Cash=${pv(x.pct_cash)} Top10=${pv(x.top10_conc)}
+   SCORE: ProTrader=${x.score||'N/A'}/100 AMC_SEBI=${x.amc_sebi||'Clean'}`;
+    } else if (x.type === 'stock') {
+      return `${i+1}. [STOCK] ${x.name} (${x.grp||'NSE'}) | ${x.sector||'N/A'}
+   ₹${x.amount.toLocaleString('en-IN')} invested | Price=₹${nv(x.price)}
+   QUALITY: ROE=${pv(x.roe)} D/E=${nv(x.debtToEq)}x OpMgn=${pv(x.opMargin)}
+   GROWTH: EPS=${pv(x.earGrowth)} Rev=${pv(x.revGrowth)}
+   VALUE: PE=${nv(x.pe)}x PEG=${x.pe&&x.earGrowth>0?(+x.pe/+x.earGrowth).toFixed(2):'N/A'} FrHigh=${pv(x.pctFromHigh)}
+   TREND: 200DMA=₹${nv(x.dma200)} GoldCross=${x.goldenCross?'YES':'NO'} RSI=${nv(x.rsi)}
+   SIGNALS: MACD=${x.macdBull?'Bullish':'Bearish'} OBV=${x.obvRising?'Rising':'Falling'} BullDiv=${x.bullishDiv?'YES':'NO'}
+   SCORE: ProTrader=${x.score||'N/A'}/100 52W=${pv(x.wk52Change)}`;
+    } else {
+      return `${i+1}. [CRYPTO] ${x.name} | ₹${x.amount.toLocaleString('en-IN')} | 3Y ret=${pv(x.ret)}`;
+    }
+  }).join('\n\n');
+
+  const anchor = items.map(x => {
+    const cat = x.cat || (x.type==='crypto' ? 'crypto' : 'default_'+x.type);
+    const a = VARSITY_CAGR_ANCHORS[cat] || VARSITY_CAGR_ANCHORS['default_'+x.type] || VARSITY_CAGR_ANCHORS['default_mf'];
+    const hist = parseFloat(x.cagr_3y || x.cagr_5y || x.ret) || a.base;
+    const mr = years >= 30 ? a.meanReversion30y : years >= 20 ? a.meanReversion20y : 0;
+    const adj = Math.max(a.low, Math.min(a.high, hist - mr));
+    return `${x.name}: hist=${hist.toFixed(1)}% anchor=${adj.toFixed(1)}% (Varsity ${cat} base=${a.base}%, mr${years}Y=${mr}%)`;
+  }).join('\n');
+
+  const system = `${agent.persona}
+
+VARSITY-DERIVED CAGR ANCHORS for this portfolio (pre-computed for your reference):
+${anchor}
+
+Your task: Analyze each asset and estimate its realistic CAGR over ${years} years.
+Use the historical data as your primary anchor. Apply your lens (${agent.name}).
+Do NOT ignore the anchors. Do NOT default to 12% for everything.
+
+Respond ONLY in this exact JSON — no markdown, no preamble:
+{
+  "agent": "${agent.id}",
+  "items": [
+    {
+      "id": "asset identifier",
+      "cagr": 19.5,
+      "confidence": 0.8,
+      "key_insight": "One specific sentence from your ${agent.id} perspective referencing actual data",
+      "red_flag": "Specific concern or null"
+    }
+  ],
+  "portfolio_view": "One sentence on overall portfolio from ${agent.id} lens",
+  "biggest_risk": "Single most important risk you see"
+}
+Return exactly ${items.length} items in the same order as input.`;
+
+  const raw = await callAnthropicAgent(system, itemsText, 1400);
+  const clean = raw.replace(/```json|```/g,'').trim();
+  return JSON.parse(clean);
+}
+
+// Synthesis — aggregate 5 agents into final verdict
+async function aipSynthesise(agentResults, items, years) {
+  const total = items.reduce((s,a) => s+a.amount, 0);
+
+  // Weighted CAGR per item
+  const itemCAGRs = items.map((item, i) => {
+    let weightedCAGR = 0, totalWeight = 0, insights = [], redFlags = [];
+    agentResults.forEach(ar => {
+      const agentItem = ar.result.items && ar.result.items[i];
+      if (!agentItem || !agentItem.cagr) return;
+      const conf = agentItem.confidence || 0.7;
+      weightedCAGR += agentItem.cagr * ar.weight * conf;
+      totalWeight   += ar.weight * conf;
+      if (agentItem.key_insight) insights.push(`${ar.agent.name}: ${agentItem.key_insight}`);
+      if (agentItem.red_flag && agentItem.red_flag !== 'null' && agentItem.red_flag !== null)
+        redFlags.push(agentItem.red_flag);
+    });
+    const finalCAGR = totalWeight > 0 ? weightedCAGR / totalWeight : (item.ret || 14);
+    const proj = Math.round(item.amount * Math.pow(1 + finalCAGR/100, years));
+    return { ...item, cagr: +finalCAGR.toFixed(1), projected: proj, insights, redFlags };
+  });
+
+  // Portfolio-level metrics
+  const totalProj = itemCAGRs.reduce((s,a) => s+a.projected, 0);
+  const blendedCAGR = total > 0 ? +((Math.pow(totalProj/total, 1/years)-1)*100).toFixed(1) : 14;
+  const riskScore = items.reduce((s,a) => {
+    const rw = {'Low':1,'Moderate':2,'High':3,'Very High':4}[a.risk]||2;
+    return s + rw*(a.amount/total);
+  }, 0);
+  const riskLabel = riskScore < 1.8 ? 'Low' : riskScore < 2.5 ? 'Moderate' : riskScore < 3.2 ? 'High' : 'Very High';
+
+  // Expense drag calculation (Varsity Module 11)
+  const avgExpense = items.reduce((s,a) => s + (a.expense_ratio||0.5)*(a.amount/total), 0);
+  const projWithoutDrag = Math.round(total * Math.pow(1 + (blendedCAGR + avgExpense)/100, years));
+  const expenseDragTotal = projWithoutDrag - totalProj;
+
+  // Growth curve — year by year
+  const curveSteps = Math.min(years, 30);
+  const growthCurve = [];
+  for (let y = 0; y <= curveSteps; y++) {
+    const yr = Math.round(y/curveSteps * years);
+    growthCurve.push({ year: yr, value: Math.round(total * Math.pow(1 + blendedCAGR/100, yr)) });
+  }
+
+  // Synthesis prompt
+  const agentSummary = agentResults.map(ar =>
+    `${ar.agent.name}: "${ar.result.portfolio_view || 'N/A'}" | Risk: "${ar.result.biggest_risk || 'N/A'}"`
+  ).join('\n');
+
+  const itemSummary = itemCAGRs.map((it,i) =>
+    `${it.name} (${it.type}): CAGR=${it.cagr}% → ${it.projected>=1e7?'₹'+(it.projected/1e7).toFixed(2)+'Cr':'₹'+(it.projected/1e5).toFixed(2)+'L'} | RedFlags: ${it.redFlags.slice(0,2).join('; ')||'none'}`
+  ).join('\n');
+
+  const system = `You are the MiroFish Synthesis Agent — the final layer after 5 expert agents have debated.
+Your job: synthesize their views into a coherent, actionable portfolio prediction.
+
+Apply Zerodha Varsity principles:
+- Sortino > Sharpe for SIP investors (downside-only risk matters more)
+- Rolling 3Y return > point-to-point (removes recency bias)
+- Expense ratio compounding: small % destroys crores over decades
+- 200 DMA and Golden Cross = trend truth for equities
+- Diversification across market caps reduces but doesn't eliminate risk
+
+The math is already done. Your job is interpretation and final insight.
+
+Respond ONLY in JSON:
+{
+  "portfolio_insight": "2-3 sentences synthesizing all agent views into ONE clear portfolio verdict. Be specific about what's working and what isn't.",
+  "key_risk": "The single most important risk to this specific portfolio",
+  "varsity_lesson": "One actionable Varsity insight this portfolio teaches — specific, not generic",
+  "agent_consensus": "High / Medium / Low — how much did the 5 agents agree?",
+  "rebalance_suggestion": "One concrete rebalance suggestion if needed, or null",
+  "sip_vs_lumpsum": "Is SIP or lumpsum better for this portfolio mix, and why?"
+}`;
+
+  const user = `Portfolio: ${items.length} assets | ₹${total.toLocaleString('en-IN')} total | ${years}Y horizon\n\nPER-ASSET RESULTS:\n${itemSummary}\n\nAGENT VIEWS:\n${agentSummary}\n\nBlended CAGR: ${blendedCAGR}% | Risk: ${riskLabel} | Expense drag over ${years}Y: ₹${expenseDragTotal.toLocaleString('en-IN')}`;
+
+  const raw = await callAnthropicAgent(system, user, 800);
+  const clean = raw.replace(/```json|```/g,'').trim();
+  const synthesis = JSON.parse(clean);
+
+  return {
+    items: itemCAGRs,
+    total_projected: totalProj,
+    portfolio_cagr: blendedCAGR,
+    risk_level: riskLabel,
+    best_case:  Math.round(total * Math.pow(1 + (blendedCAGR+5)/100, years)),
+    worst_case: Math.round(total * Math.pow(1 + (blendedCAGR-6)/100, years)),
+    inflation_adjusted: Math.round(totalProj / Math.pow(1.06, years)),
+    expense_drag: expenseDragTotal,
+    avg_expense_ratio: +avgExpense.toFixed(2),
+    growth_curve: growthCurve,
+    portfolio_insight:    synthesis.portfolio_insight,
+    key_risk:             synthesis.key_risk,
+    varsity_lesson:       synthesis.varsity_lesson,
+    agent_consensus:      synthesis.agent_consensus,
+    rebalance_suggestion: synthesis.rebalance_suggestion,
+    sip_vs_lumpsum:       synthesis.sip_vs_lumpsum,
+    agent_views: agentResults.map(ar => ({
+      agent: ar.agent.name,
+      portfolio_view: ar.result.portfolio_view,
+      biggest_risk:   ar.result.biggest_risk,
+    })),
+  };
+}
+
+// Main endpoint — replaces the old simple portfolio-predict
+app.post('/api/mirofish/portfolio-predict-v2', async (req, res) => {
+  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
+
+  const { items, years } = req.body;
+  if (!items || !items.length) return res.json({ error: 'No items provided' });
+  if (items.length > 15) return res.json({ error: 'Maximum 15 assets per prediction' });
+
+  const yearsN = Math.max(1, Math.min(40, parseInt(years) || 10));
+
+  try {
+    console.log(`🐟 AIP v2: ${items.length} assets, ${yearsN}Y, ${AIP_AGENTS.length} agents running in parallel`);
+
+    // Run all 5 agents in parallel
+    const agentPromises = AIP_AGENTS.map(async agent => {
+      try {
+        const result = await aipRunAgent(agent, items, yearsN);
+        return { agent, result, weight: agent.weight };
+      } catch(e) {
+        console.log(`🐟 AIP agent ${agent.id} failed: ${e.message}`);
+        return null;
+      }
+    });
+
+    const agentResults = (await Promise.all(agentPromises)).filter(Boolean);
+    if (agentResults.length < 2) return res.json({ error: 'Too few agents succeeded. Check API limits.' });
+
+    console.log(`🐟 AIP v2: ${agentResults.length}/5 agents done, synthesising...`);
+    const result = await aipSynthesise(agentResults, items, yearsN);
+
+    console.log(`🐟 AIP v2 done. Portfolio CAGR: ${result.portfolio_cagr}% → ${result.total_projected.toLocaleString('en-IN')}`);
+    res.json(result);
+
+  } catch(e) {
+    console.log('🐟 AIP v2 error:', e.message);
     res.json({ error: e.message });
   }
 });
