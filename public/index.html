@@ -202,8 +202,8 @@ select option{background:var(--bg3)}
   <div class="logo"><span class="logo-dot"></span>ProTrader</div>
   <span id="market-badge" class="mkt-badge" style="display:none">NSE Open</span>
   <div class="mode-tabs">
-    <button class="mode-tab" onclick="setMode('mf')" id="mode-mf">MutualFunds Recommendation</button>
-    <button class="mode-tab stockrec active" onclick="setMode('stockrec')" id="mode-stockrec">Stocks Recommendation</button>
+    <button class="mode-tab active" onclick="setMode('mf')" id="mode-mf">MutualFunds Recommendation</button>
+    <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stocks Recommendation</button>
     <button class="mode-tab stocks" onclick="checkAccess('stocks')" id="mode-stocks">🔒 Stocks</button>
     <button class="mode-tab crypto" onclick="checkAccess('crypto')" id="mode-crypto">🔒 Crypto</button>
   </div>
@@ -3164,9 +3164,8 @@ function showTokenMsg(text, color) {
 function _init() {
   try { checkTokenStatus(); } catch(e){}
   try { _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000); } catch(e){}
-  // Start with Stocks Recommendation - loads from cache instantly
-  // MF tab polls server for up to 60s which causes blank screen on first load
-  try { setMode("stockrec"); } catch(e){ console.error('setMode error:', e); }
+  // Start with MF Recommendation - loads instantly from in-memory cache
+  try { setMode("mf"); } catch(e){ console.error('setMode error:', e); }
   try { fetchAll(); } catch(e){}
   try { fetchCryptoPrices(); } catch(e){}
   setInterval(function(){ try{ fetchAll(); }catch(e){} }, 15000);
