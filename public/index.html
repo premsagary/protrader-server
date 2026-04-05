@@ -203,6 +203,23 @@ select option{background:var(--bg3)}
 </div>
 <!-- SUB TABS -->
 <div class="subtabs" id="subtabs"></div>
+<!-- TOKEN BANNER — shown when Kite token is expired -->
+<div id="token-banner" style="display:none;background:linear-gradient(135deg,#1a0a00,#2d1500);border-bottom:2px solid #f59e0b;padding:10px 20px;align-items:center;gap:12px;flex-wrap:wrap">
+  <span style="font-size:18px">🔑</span>
+  <div style="flex:1;min-width:200px">
+    <div style="font-weight:700;font-size:13px;color:#f59e0b">Kite Token Expired — Stocks &amp; Crypto trading paused</div>
+    <div style="font-size:11px;color:#92400e;margin-top:2px">Generate a new token from Kite and paste it below, or use the Zerodha login flow</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input id="token-input" type="text" placeholder="Paste access_token here..."
+      style="background:#0d1117;border:1px solid #f59e0b80;border-radius:6px;color:#e2e8f0;padding:7px 12px;font-size:12px;width:300px;font-family:monospace"
+      onkeydown="if(event.key==='Enter') submitToken()"/>
+    <button onclick="submitToken()" style="background:#f59e0b;color:#000;border:none;border-radius:6px;padding:7px 16px;font-weight:700;font-size:12px;cursor:pointer">✓ Update Token</button>
+    <button onclick="window.open('/auth/login','_blank')" style="background:transparent;color:#f59e0b;border:1px solid #f59e0b60;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer">↗ Zerodha Login</button>
+    <button onclick="document.getElementById('token-banner').style.display='none'" style="background:transparent;color:#64748b;border:none;cursor:pointer;font-size:16px;padding:4px">✕</button>
+  </div>
+  <div id="token-msg" style="width:100%;font-size:11px;display:none;margin-top:4px"></div>
+</div>
 <!-- MAIN -->
 <div class="main" id="main-content"></div>
 </div>
@@ -2379,6 +2396,79 @@ function buildStockCard(s, medal){
 }
 
 // ── End Stocks Recommendation ──────────────────────────────────────────────────
+// ── Kite Token Management ─────────────────────────────────────────────────────
+var _tokenCheckInterval = null;
+
+async function checkTokenStatus() {
+  try {
+    var r = await fetch('/api/token/status');
+    var d = await r.json();
+    var banner = document.getElementById('token-banner');
+    if (!banner) return;
+
+    // Show banner if: token expired, OR no token and market open
+    var needsToken = d.tokenExpired || (!d.hasToken && d.marketOpen);
+    banner.style.display = needsToken ? 'flex' : 'none';
+
+    // Update market badge
+    var mb = document.getElementById('market-badge');
+    if (mb) {
+      mb.style.display = d.marketOpen ? 'inline-flex' : 'none';
+      mb.textContent   = d.isWorking ? '● NSE Open' : '⚠ Token Expired';
+      mb.style.color   = d.isWorking ? '#22c55e' : '#f59e0b';
+    }
+
+    // Update logo dot colour
+    var dot = document.querySelector('.logo-dot');
+    if (dot) {
+      dot.style.background = d.isWorking ? '#22c55e' : (d.hasToken ? '#f59e0b' : '#64748b');
+    }
+  } catch(e) {}
+}
+
+async function submitToken() {
+  var input = document.getElementById('token-input');
+  var msg   = document.getElementById('token-msg');
+  var token = (input ? input.value : '').trim();
+  if (!token) { showTokenMsg('⚠ Please paste the access_token', '#f59e0b'); return; }
+  if (token.length < 10) { showTokenMsg('⚠ Token looks too short', '#ef4444'); return; }
+
+  showTokenMsg('Updating token...', '#64748b');
+  try {
+    var r = await fetch('/api/token/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    var d = await r.json();
+    if (d.success) {
+      showTokenMsg('✅ Token updated! Kite reconnecting...', '#22c55e');
+      if (input) input.value = '';
+      setTimeout(function() {
+        document.getElementById('token-banner').style.display = 'none';
+        checkTokenStatus();
+      }, 2500);
+    } else {
+      showTokenMsg('❌ ' + (d.error || 'Update failed'), '#ef4444');
+    }
+  } catch(e) {
+    showTokenMsg('❌ Error: ' + e.message, '#ef4444');
+  }
+}
+
+function showTokenMsg(text, color) {
+  var el = document.getElementById('token-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = color;
+  el.style.display = 'block';
+}
+
+// Check token status on load and every 5 minutes
+checkTokenStatus();
+_tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
+
+// ── Passcode gate for Stocks & Crypto ─────────────────────────────────────────
 var _unlocked = false;
 var _pendingMode = null;
 
