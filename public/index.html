@@ -225,6 +225,7 @@ select option{background:var(--bg3)}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════
 // DATA
@@ -2080,200 +2081,341 @@ async function pollStockRec(){
 
 // ── Deep Stock Analyzer ───────────────────────────────────────────────────────
 var analyzerChart = null;
+var analyzerData  = null;
+var analyzerTab   = '1Y';
 
 async function analyzeStock(){
-  var input = document.getElementById('stock-analyzer-input');
+  var input  = document.getElementById('stock-analyzer-input');
   var result = document.getElementById('stock-analyzer-result');
   if(!input||!result) return;
   var sym = input.value.trim().toUpperCase();
   if(!sym){ input.focus(); return; }
 
-  result.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">'
-    +'<div style="font-size:24px;margin-bottom:8px">⏳</div>Fetching data for '+sym+'...</div>';
   result.style.marginTop='16px';
+  result.innerHTML = '<div style="padding:32px;text-align:center">'
+    +'<div style="font-size:28px;margin-bottom:12px">🔍</div>'
+    +'<div style="font-size:13px;color:var(--text2);margin-bottom:6px">Fetching all data for <b>'+sym+'</b>...</div>'
+    +'<div style="font-size:11px;color:var(--text3)">Kite 1Y/3Y/5Y/MAX candles + hourly + live news — all in parallel</div>'
+    +'<div style="margin-top:16px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:200px;margin-left:auto;margin-right:auto">'
+    +'<div style="height:100%;background:#f59e0b;width:70%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div></div>';
 
   try {
     var r = await fetch('/api/stocks/analyze/'+sym);
     var d = await r.json();
-    if(d.error){ result.innerHTML='<div style="padding:16px;color:var(--red);font-size:12px">❌ '+d.error+'</div>'; return; }
+    if(d.error){ result.innerHTML='<div style="padding:16px;color:var(--red)">❌ '+d.error+'</div>'; return; }
+    analyzerData = d;
+    analyzerTab  = '1Y';
     result.innerHTML = buildAnalyzerUI(d);
-    // Draw chart after DOM is ready
-    setTimeout(function(){ drawAnalyzerChart(d); }, 100);
+    setTimeout(function(){ drawChart(d, analyzerTab); }, 80);
   } catch(e){
-    result.innerHTML='<div style="padding:16px;color:var(--red);font-size:12px">❌ Error: '+e.message+'</div>';
+    result.innerHTML='<div style="padding:16px;color:var(--red)">❌ '+e.message+'</div>';
   }
 }
 
+function fmtN(v,dec,suf){ if(v==null||isNaN(v))return '<span style="color:var(--text4)">—</span>'; return '<span>'+parseFloat(v).toFixed(dec||0)+(suf||'')+'</span>'; }
+function clrN(v,good,bad,neutral){ return v==null?'var(--text4)':v>=good?'var(--green)':v<=bad?'var(--red)':neutral||'var(--text)'; }
+
 function buildAnalyzerUI(d){
-  var vc = d.verdictColor || '#f59e0b';
-  var html = '<div style="margin-top:16px">';
+  var t   = d.tech&&d.tech.primary ? d.tech.primary : {};
+  var vc  = d.verdictColor||'#f59e0b';
+  var px  = d.price;
+  var da  = d.dataAvailable||{};
+  var html= '<div style="margin-top:16px">';
 
-  // ── HEADER: verdict + key numbers ────────────────────────────────────────
-  html += '<div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;margin-bottom:16px">';
-
-  // Left: name + verdict
-  html += '<div>';
-  html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">';
-  html += '<span style="font-weight:800;font-size:18px">'+d.sym+'</span>';
-  html += '<span style="font-size:12px;color:var(--text3)">'+d.name+'</span>';
-  html += '<span style="background:rgba(100,116,139,0.2);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:10px">'+d.sector+'</span>';
-  html += '<span style="background:rgba(100,116,139,0.2);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:10px">'+d.grp+'</span>';
+  // ── TOP BAR ────────────────────────────────────────────────────────────────
+  html += '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">';
+  // Name / price block
+  html += '<div style="flex:1;min-width:200px">';
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">';
+  html += '<span style="font-weight:800;font-size:20px">'+d.sym+'</span>';
+  html += '<span style="color:var(--text3);font-size:12px">'+d.name+'</span>';
+  html += '<span style="background:rgba(100,116,139,.18);color:var(--text3);border-radius:4px;padding:1px 8px;font-size:10px">'+d.sector+'</span>';
+  html += '<span style="background:rgba(100,116,139,.18);color:var(--text3);border-radius:4px;padding:1px 8px;font-size:10px">'+d.grp+'</span>';
   html += '</div>';
-  if(d.price) html += '<div style="font-size:22px;font-weight:700;margin-bottom:4px">₹'+d.price.toFixed(2)+'</div>';
-  html += '</div>';
-
-  // Right: Verdict box
-  html += '<div style="background:'+vc+'18;border:2px solid '+vc+';border-radius:12px;padding:14px 20px;text-align:center;min-width:150px">';
-  html += '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;letter-spacing:.5px">LONG-TERM VERDICT</div>';
-  html += '<div style="font-size:18px;font-weight:800;color:'+vc+'">'+d.verdict+'</div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:4px">'+d.confidence+' confidence</div>';
-  // Bull/bear meter
-  html += '<div style="margin-top:8px;background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">';
-  html += '<div style="height:100%;border-radius:4px;background:'+vc+';width:'+d.bullPct+'%"></div></div>';
-  html += '<div style="font-size:9px;color:var(--text4);margin-top:3px">'+d.bullPct+'% bullish signals</div>';
+  if(px) html += '<div style="font-size:26px;font-weight:800">₹'+px.toFixed(2)+'</div>';
+  // Data availability chips
+  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">';
+  var chips=[['1Y',da.kite1y],['3Y',da.kite3y],['5Y+',da.kite5yw],['MAX',da.kiteMonthly],['Hourly',da.kite1h],['News',da.news],['Fundamentals',da.fundamentals]];
+  chips.forEach(function(c){ html += '<span style="font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;background:'+(c[1]?'rgba(34,197,94,.15)':'rgba(239,68,68,.1)')+';color:'+(c[1]?'var(--green)':'var(--text4)')+'">'+c[0]+'</span>'; });
+  html += '</div></div>';
+  // Verdict box
+  html += '<div style="background:'+vc+'15;border:2px solid '+vc+';border-radius:12px;padding:16px 22px;text-align:center;min-width:170px">';
+  html += '<div style="font-size:28px;margin-bottom:4px">'+d.verdictIcon+'</div>';
+  html += '<div style="font-size:17px;font-weight:800;color:'+vc+'">'+d.verdict+'</div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">'+d.verdictTimeframe+'</div>';
+  html += '<div style="margin-top:10px;background:var(--bg4);border-radius:6px;height:8px;overflow:hidden">';
+  html += '<div style="height:100%;background:'+vc+';width:'+d.bullPct+'%;border-radius:6px"></div></div>';
+  html += '<div style="font-size:9px;color:var(--text4);margin-top:4px">'+d.bullPct+'% bullish  ·  score: '+(d.score>0?'+':'')+d.score+'</div>';
   html += '</div></div>';
 
-  // ── CHART ─────────────────────────────────────────────────────────────────
-  if(d.chartData && d.chartData.length>0){
-    html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-    html += '<div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--text2)">Price Chart — 60 Day</div>';
-    html += '<canvas id="analyzer-chart" height="120"></canvas>';
-    html += '</div>';
-  }
-
-  // ── SIGNALS GRID ──────────────────────────────────────────────────────────
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">';
-
-  // Technical signals
-  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px">';
-  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:var(--blue)">📈 Technical Signals</div>';
-  d.techSignals.forEach(function(s){
-    var sc = s.signal==='bullish'?'var(--green)':s.signal==='bearish'?'var(--red)':'#f59e0b';
-    var icon = s.signal==='bullish'?'▲':s.signal==='bearish'?'▼':'●';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border2)">';
-    html += '<div><div style="font-size:11px;font-weight:600">'+s.name+'</div>'
-      +'<div style="font-size:9px;color:var(--text3)">'+s.detail+'</div></div>';
-    html += '<div style="text-align:right"><div style="font-size:11px;color:'+sc+';font-weight:700">'+icon+' '+s.value+'</div></div>';
-    html += '</div>';
+  // ── CHART WITH TIMEFRAME TABS ─────────────────────────────────────────────
+  html += '<div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:16px">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">';
+  html += '<div style="font-weight:700;font-size:12px;color:var(--text2)">Price Chart</div>';
+  html += '<div style="display:flex;gap:4px">';
+  ['3M','1Y','3Y','5Y','MAX'].forEach(function(tf){
+    var active = tf===analyzerTab;
+    html += '<button onclick="switchChartTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(active?'#f59e0b':'var(--border)')+';background:'+(active?'rgba(245,158,11,.2)':'var(--bg2)')+';color:'+(active?'#f59e0b':'var(--text3)')+';font-size:10px;font-weight:'+(active?'700':'400')+';cursor:pointer">'+tf+'</button>';
   });
+  html += '</div></div>';
+  // Support/resistance legend
+  if(t.supports&&t.supports.length){
+    html += '<div style="font-size:9px;color:var(--text4);margin-bottom:6px">🟢 Support levels  🔴 Resistance levels  🔵 Buy zone</div>';
+  }
+  html += '<canvas id="deep-chart" height="180"></canvas>';
   html += '</div>';
 
-  // Fundamental signals
+  // ── SUPPORT / RESISTANCE / BUY ZONE ──────────────────────────────────────
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">';
+
+  // Supports
   html += '<div style="background:var(--bg3);border-radius:10px;padding:12px">';
-  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:#f59e0b">🏦 Fundamental Signals</div>';
-  if(d.fundSignals.length===0){
-    html += '<div style="font-size:11px;color:var(--text3);padding:20px 0;text-align:center">No fundamental data available for '+d.sym+'</div>';
-  } else {
-    d.fundSignals.forEach(function(s){
-      var sc = s.signal==='bullish'?'var(--green)':s.signal==='bearish'?'var(--red)':'#f59e0b';
-      var icon = s.signal==='bullish'?'▲':s.signal==='bearish'?'▼':'●';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border2)">';
-      html += '<div><div style="font-size:11px;font-weight:600">'+s.name+'</div>'
-        +'<div style="font-size:9px;color:var(--text3)">'+s.detail+'</div></div>';
-      html += '<div style="text-align:right"><div style="font-size:11px;color:'+sc+';font-weight:700">'+icon+' '+s.value+'</div></div>';
+  html += '<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:8px">🟢 Support Levels</div>';
+  if(d.supports&&d.supports.length){
+    d.supports.slice(0,5).forEach(function(s){
+      var dist=px?((px-s.price)/px*100).toFixed(1):null;
+      html += '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border2);font-size:11px">';
+      html += '<span style="font-weight:600;color:var(--green)">₹'+s.price+'</span>';
+      html += '<span style="color:var(--text3)">'+(dist?dist+'% below':'')+(s.strength>3?' ⚡':'')+' </span>';
+      html += '</div>';
+    });
+  } else html += '<div style="font-size:10px;color:var(--text4)">Need more history</div>';
+  html += '</div>';
+
+  // Resistances
+  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px">';
+  html += '<div style="font-weight:700;font-size:11px;color:var(--red);margin-bottom:8px">🔴 Resistance Levels</div>';
+  if(d.resistances&&d.resistances.length){
+    d.resistances.slice(0,5).forEach(function(s){
+      var dist=px?((s.price-px)/px*100).toFixed(1):null;
+      html += '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border2);font-size:11px">';
+      html += '<span style="font-weight:600;color:var(--red)">₹'+s.price+'</span>';
+      html += '<span style="color:var(--text3)">'+(dist?'+'+dist+'%':'')+(s.strength>3?' ⚡':'')+' </span>';
+      html += '</div>';
+    });
+  } else html += '<div style="font-size:10px;color:var(--text4)">Need more history</div>';
+  html += '</div>';
+
+  // Buy zone + targets
+  html += '<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:12px">';
+  html += '<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:8px">🔵 When To Buy</div>';
+  if(d.whenToBuy&&d.whenToBuy.length){
+    d.whenToBuy.forEach(function(w){
+      var pc={'HIGH':'var(--green)','MEDIUM':'#f59e0b','LOW':'var(--text3)'}[w.priority]||'var(--text3)';
+      html += '<div style="padding:5px 0;border-bottom:1px solid rgba(245,158,11,.15)">';
+      html += '<div style="font-size:10px;font-weight:700;color:'+pc+'">'+w.type+'</div>';
+      html += '<div style="font-size:11px;font-weight:600">'+w.price+'</div>';
+      html += '<div style="font-size:9px;color:var(--text3)">'+w.reason+'</div>';
       html += '</div>';
     });
   }
+  if(d.riskReward) html += '<div style="margin-top:6px;font-size:10px;color:#f59e0b;font-weight:700">R:R = '+d.riskReward+'x  ·  Upside: '+(d.upsidePct>0?'+':'')+d.upsidePct+'%</div>';
   html += '</div></div>';
 
-  // ── SENTIMENT ─────────────────────────────────────────────────────────────
-  var sent = d.sentiment;
-  var sentTotal = Math.max(sent.bull+sent.bear+sent.neutral, 1);
+  // ── FULL TECHNICALS ───────────────────────────────────────────────────────
   html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:#8b5cf6">📰 News Sentiment</div>';
-  html += '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">';
-  html += '<span style="color:var(--green);font-weight:700;font-size:13px">▲ '+sent.bull+' Bullish</span>';
-  html += '<span style="color:var(--red);font-weight:700;font-size:13px">▼ '+sent.bear+' Bearish</span>';
-  html += '<span style="color:var(--text3);font-size:13px">● '+sent.neutral+' Neutral</span>';
-  html += '</div>';
-  // Sentiment bar
-  var bullW = Math.round(sent.bull/sentTotal*100);
-  var bearW = Math.round(sent.bear/sentTotal*100);
-  var neutW = 100-bullW-bearW;
-  html += '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:10px">';
-  if(bullW>0) html += '<div style="flex:'+bullW+';background:var(--green)"></div>';
-  if(neutW>0) html += '<div style="flex:'+neutW+';background:var(--text4)"></div>';
-  if(bearW>0) html += '<div style="flex:'+bearW+';background:var(--red)"></div>';
-  html += '</div>';
+  html += '<div style="font-weight:700;font-size:11px;color:var(--blue);margin-bottom:10px">📊 Full Technical Analysis</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">';
 
-  // News items
-  if(d.news.length===0){
-    html += '<div style="font-size:11px;color:var(--text3);padding:8px 0">No recent news found for '+d.sym+'</div>';
+  function tRow(label,val,signal,detail){
+    var sc=signal==='bullish'?'var(--green)':signal==='bearish'?'var(--red)':'#f59e0b';
+    var ic=signal==='bullish'?'▲':signal==='bearish'?'▼':'●';
+    return '<div style="background:var(--bg2);border-radius:7px;padding:8px 10px">'
+      +'<div style="font-size:9px;color:var(--text3)">'+label+'</div>'
+      +'<div style="font-size:12px;font-weight:700;color:'+sc+'">'+ic+' '+val+'</div>'
+      +(detail?'<div style="font-size:9px;color:var(--text4);margin-top:2px">'+detail+'</div>':'')
+      +'</div>';
+  }
+  if(px&&t.dma50)  html+=tRow('50 DMA',    '₹'+(t.dma50||0).toFixed(1),  px>t.dma50?'bullish':'bearish', px>t.dma50?'Above 50DMA':'Below 50DMA');
+  if(px&&t.dma200) html+=tRow('200 DMA',   '₹'+(t.dma200||0).toFixed(1), px>t.dma200?'bullish':'bearish',px>t.dma200?'Uptrend':'Downtrend');
+  if(t.dma50&&t.dma200) html+=tRow('MA Cross', t.goldenCross?'Golden':'Death', t.goldenCross?'bullish':'bearish', t.goldenCross?'50>200 — Bullish':'50<200 — Bearish');
+  if(t.rsi!=null)  html+=tRow('RSI-14',    t.rsi,        t.rsi<35?'bullish':t.rsi>70?'bearish':'neutral', t.rsi<35?'Oversold':t.rsi>70?'Overbought':'Neutral');
+  if(t.macd!=null) html+=tRow('MACD',      t.macd,       t.macdBull?'bullish':'bearish', 'Hist: '+t.macdHist);
+  if(t.stochK!=null) html+=tRow('Stoch %K','%K:'+t.stochK+' %D:'+t.stochD, t.stochK<20?'bullish':t.stochK>80?'bearish':'neutral', t.stochK<20?'Oversold':t.stochK>80?'Overbought':'Neutral');
+  if(t.supertrend) html+=tRow('Supertrend','₹'+(t.supertrend||0).toFixed(1), t.supertrendSignal, t.supertrendSignal==='bullish'?'Price above ST':'Price below ST');
+  if(t.adx!=null)  html+=tRow('ADX',       t.adx,        t.adx>25?'bullish':'neutral',  t.trendStrength+' trend');
+  if(t.bbPct!=null) html+=tRow('BB %B',    (t.bbPct*100).toFixed(0)+'%', t.bbPct<0.2?'bullish':t.bbPct>0.8?'bearish':'neutral', 'Width: '+t.bbWidth+'%');
+  if(t.atrPct!=null) html+=tRow('ATR%',    t.atrPct+'%', 'neutral',                     'Volatility measure');
+  if(t.volTrend)  html+=tRow('Volume',     t.volRatio+'x', t.volTrend==='Accumulation'?'bullish':t.volTrend==='Distribution'?'bearish':'neutral', t.volTrend);
+  if(t.ret1m!=null) html+=tRow('1M Return',(t.ret1m>0?'+':'')+t.ret1m+'%', t.ret1m>0?'bullish':'bearish','');
+  if(t.ret3m!=null) html+=tRow('3M Return',(t.ret3m>0?'+':'')+t.ret3m+'%', t.ret3m>0?'bullish':'bearish','');
+  if(t.ret6m!=null) html+=tRow('6M Return',(t.ret6m>0?'+':'')+t.ret6m+'%', t.ret6m>0?'bullish':'bearish','');
+  if(t.ret1y!=null) html+=tRow('1Y Return',(t.ret1y>0?'+':'')+t.ret1y+'%', t.ret1y>0?'bullish':'bearish','');
+  if(t.wk52Hi)    html+=tRow('52W High',   '₹'+t.wk52Hi,  'neutral', t.pctFromHigh+'% away');
+  if(t.wk52Lo)    html+=tRow('52W Low',    '₹'+t.wk52Lo,  'neutral', '+'+t.pctFromLow+'% from low');
+  html += '</div></div>';
+
+  // ── FUNDAMENTALS ──────────────────────────────────────────────────────────
+  if(d.fund){
+    var f=d.fund;
+    html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:10px">🏦 Fundamentals (Screener.in Q3FY25)</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">';
+    if(f.roe!=null)    html+=tRow('ROE',         f.roe+'%',   f.roe>=20?'bullish':f.roe>=12?'neutral':'bearish', f.roe>=20?'Excellent':f.roe>=12?'Good':'Weak');
+    if(f.de!=null)     html+=tRow('Debt/Equity',  f.de+'x',    f.de<=0.5?'bullish':f.de<=1.5?'neutral':'bearish', f.de<=0.5?'Very Low':f.de<=1.5?'Manageable':'High Risk');
+    if(f.pe!=null)     html+=tRow('P/E Ratio',    f.pe+'x',    f.pe<20?'bullish':f.pe<40?'neutral':'bearish', f.pe<20?'Cheap':f.pe<40?'Fair':'Expensive');
+    if(f.revGr!=null)  html+=tRow('Rev Growth',   f.revGr+'%', f.revGr>=15?'bullish':f.revGr>=5?'neutral':'bearish', f.revGr>=15?'Strong':f.revGr>=5?'Moderate':'Declining');
+    if(f.epsGr!=null)  html+=tRow('EPS Growth',   f.epsGr+'%', f.epsGr>=15?'bullish':f.epsGr>=5?'neutral':'bearish', f.epsGr>=15?'Accelerating':f.epsGr>=5?'Growing':'Declining');
+    if(f.opMgn!=null)  html+=tRow('Op Margin',    f.opMgn+'%', f.opMgn>=20?'bullish':f.opMgn>=10?'neutral':'bearish', f.opMgn>=20?'High Margin':f.opMgn>=10?'Reasonable':'Thin');
+    if(f.pe&&f.epsGr&&f.epsGr>0) {var peg=+(f.pe/f.epsGr).toFixed(2); html+=tRow('PEG Ratio',peg,peg<1?'bullish':peg<2?'neutral':'bearish',peg<1?'Undervalued':peg<2?'Fair':'Overvalued');}
+    html += '</div></div>';
+  }
+
+  // ── TARGETS ───────────────────────────────────────────────────────────────
+  if(d.targets&&d.targets.length){
+    html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:10px">🎯 Price Targets (based on resistance levels)</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    d.targets.slice(0,5).forEach(function(tgt){
+      html += '<div style="background:var(--bg2);border-radius:8px;padding:8px 14px;text-align:center">';
+      html += '<div style="font-size:10px;color:var(--text3)">'+tgt.label+'</div>';
+      html += '<div style="font-size:14px;font-weight:700;color:var(--green)">₹'+tgt.price+'</div>';
+      if(tgt.upside!=null) html += '<div style="font-size:10px;color:var(--text3)">'+(tgt.upside>0?'+':'')+tgt.upside+'%</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  // ── NEWS ─────────────────────────────────────────────────────────────────
+  var s=d.sentiment||{};
+  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+  html += '<div style="font-weight:700;font-size:11px;color:#8b5cf6">📰 News & Sentiment</div>';
+  html += '<div style="display:flex;gap:10px;font-size:11px">';
+  html += '<span style="color:var(--green)">▲ '+s.bull+' Bullish</span>';
+  html += '<span style="color:var(--red)">▼ '+s.bear+' Bearish</span>';
+  html += '<span style="color:var(--text3)">● '+(s.neutral||0)+' Neutral</span>';
+  html += '</div></div>';
+  // Sentiment bar
+  var tot=Math.max((s.bull||0)+(s.bear||0)+(s.neutral||0),1);
+  var bW=Math.round((s.bull||0)/tot*100), beW=Math.round((s.bear||0)/tot*100), nW=100-bW-beW;
+  html += '<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;margin-bottom:10px">';
+  if(bW)  html += '<div style="flex:'+bW+';background:var(--green)"></div>';
+  if(nW>0)html += '<div style="flex:'+nW+';background:var(--text4)"></div>';
+  if(beW) html += '<div style="flex:'+beW+';background:var(--red)"></div>';
+  html += '</div>';
+  if(!d.news||!d.news.length){
+    html += '<div style="font-size:11px;color:var(--text3)">No specific news found. Check Moneycontrol or ET directly.</div>';
   } else {
-    d.news.slice(0,6).forEach(function(n){
-      var nc = n.sentiment==='bullish'?'var(--green)':n.sentiment==='bearish'?'var(--red)':'var(--text3)';
-      var ni = n.sentiment==='bullish'?'▲':n.sentiment==='bearish'?'▼':'●';
-      html += '<div style="padding:7px 0;border-bottom:1px solid var(--border2)">';
-      html += '<div style="display:flex;gap:6px;align-items:flex-start">';
-      html += '<span style="color:'+nc+';font-size:11px;margin-top:1px;flex-shrink:0">'+ni+'</span>';
-      html += '<div>';
-      if(n.link) html += '<a href="'+n.link+'" target="_blank" style="font-size:11px;color:var(--text);font-weight:500;text-decoration:none;line-height:1.4">'+n.title+'</a>';
-      else html += '<div style="font-size:11px;color:var(--text);font-weight:500;line-height:1.4">'+n.title+'</div>';
-      html += '<div style="font-size:9px;color:var(--text3);margin-top:2px">'+n.source+' · '+n.timeAgo+'</div>';
-      if(n.desc) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.4">'+n.desc.slice(0,150)+'...</div>';
-      html += '</div></div></div>';
+    d.news.forEach(function(n){
+      var nc=n.sentiment==='bullish'?'var(--green)':n.sentiment==='bearish'?'var(--red)':'var(--text3)';
+      html += '<div style="padding:7px 0;border-bottom:1px solid var(--border2);display:flex;gap:8px">';
+      html += '<span style="color:'+nc+';font-size:11px;flex-shrink:0;margin-top:1px">'+(n.sentiment==='bullish'?'▲':n.sentiment==='bearish'?'▼':'●')+'</span>';
+      html += '<div style="flex:1">';
+      if(n.link) html += '<a href="'+n.link+'" target="_blank" style="font-size:11px;color:var(--text);font-weight:500;text-decoration:none">'+n.title+'</a>';
+      else html += '<div style="font-size:11px;font-weight:500">'+n.title+'</div>';
+      html += '<div style="font-size:9px;color:var(--text3);margin-top:2px">'+n.src+' · '+n.timeAgo+'</div>';
+      if(n.desc) html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">'+n.desc.slice(0,160)+'…</div>';
+      html += '</div></div>';
     });
   }
   html += '</div>';
 
-  // ── SUMMARY ───────────────────────────────────────────────────────────────
-  html += '<div style="background:'+vc+'12;border:1px solid '+vc+'40;border-radius:10px;padding:14px">';
-  html += '<div style="font-weight:700;font-size:12px;margin-bottom:8px;color:'+vc+'">💡 Long-Term Investment Summary</div>';
-  var summaryParts=[];
+  // ── VERDICT SUMMARY ───────────────────────────────────────────────────────
+  html += '<div style="background:'+vc+'12;border:1px solid '+vc+'40;border-radius:12px;padding:16px">';
+  html += '<div style="font-weight:700;font-size:13px;color:'+vc+';margin-bottom:12px">'+d.verdictIcon+' Long-Term Investment Verdict: '+d.verdict+'</div>';
+  // Auto-generate bullets
+  var bullets=[];
   if(d.fund){
-    if(d.fund.roe>=20) summaryParts.push('Strong ROE of '+d.fund.roe+'% signals excellent capital efficiency.');
-    else if(d.fund.roe<10) summaryParts.push('Weak ROE of '+d.fund.roe+'% — management not generating strong returns.');
-    if(d.fund.de<=0.5) summaryParts.push('Very low debt (D/E '+d.fund.de+'x) means financial resilience.');
-    else if(d.fund.de>2) summaryParts.push('High debt (D/E '+d.fund.de+'x) adds risk — watch interest coverage.');
-    if(d.fund.epsGr>=20) summaryParts.push('EPS growing at '+d.fund.epsGr+'% — earnings momentum is strong.');
-    else if(d.fund.epsGr!=null&&d.fund.epsGr<0) summaryParts.push('Earnings declining ('+d.fund.epsGr+'%) — not ideal for long-term entry.');
+    if(d.fund.roe>=20) bullets.push({t:'Quality',c:'var(--green)',m:'ROE of '+d.fund.roe+'% — excellent capital efficiency, management creates strong shareholder value.'});
+    else if(d.fund.roe<10) bullets.push({t:'Quality',c:'var(--red)',m:'ROE of '+d.fund.roe+'% is weak — capital allocation needs improvement.'});
+    if(d.fund.de<=0.5) bullets.push({t:'Balance Sheet',c:'var(--green)',m:'Very low debt (D/E '+d.fund.de+'x) — financially strong, can weather downturns.'});
+    else if(d.fund.de>2)  bullets.push({t:'Risk',c:'var(--red)',m:'High debt (D/E '+d.fund.de+'x) — interest burden increases risk during slowdowns.'});
+    if(d.fund.epsGr>=20) bullets.push({t:'Growth',c:'var(--green)',m:'EPS growing at '+d.fund.epsGr+'% — strong earnings momentum, market will reward this.'});
+    else if(d.fund.epsGr!=null&&d.fund.epsGr<0) bullets.push({t:'Concern',c:'var(--red)',m:'Earnings declining ('+d.fund.epsGr+'%) — not ideal for long-term accumulation.'});
+    if(d.fund.pe<15) bullets.push({t:'Valuation',c:'var(--green)',m:'Trading at just '+d.fund.pe+'x earnings — attractively valued for long-term entry.'});
+    else if(d.fund.pe>50&&d.fund.epsGr<20) bullets.push({t:'Valuation',c:'var(--red)',m:'P/E of '+d.fund.pe+'x without matching EPS growth — expensive, wait for correction.'});
   }
-  if(d.tech.goldenCross) summaryParts.push('Golden cross active — long-term uptrend confirmed by moving averages.');
-  else if(d.tech.goldenCross===false) summaryParts.push('Death cross active — long-term trend is bearish.');
-  if(d.tech.rsi!=null&&d.tech.rsi<35) summaryParts.push('RSI at '+d.tech.rsi+' — oversold territory, potentially a good entry point.');
-  if(d.tech.change52w!=null&&d.tech.change52w>20) summaryParts.push('Up '+d.tech.change52w+'% in the past year — strong price momentum.');
-  if(sent.score>30) summaryParts.push('News sentiment is predominantly bullish ('+sent.bull+' positive vs '+sent.bear+' negative stories).');
-  else if(sent.score<-30) summaryParts.push('News sentiment is negative — '+sent.bear+' bearish stories recently.');
-  if(summaryParts.length===0) summaryParts.push('Insufficient data for a detailed fundamental analysis.');
-  summaryParts.forEach(function(p){
-    html += '<div style="font-size:11px;color:var(--text2);line-height:1.6;padding:2px 0">• '+p+'</div>';
-  });
-  html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid '+vc+'30">';
-  html += '<span style="font-size:12px;font-weight:800;color:'+vc+'">Verdict: '+d.verdict+'</span>';
-  html += '<span style="font-size:10px;color:var(--text3);margin-left:10px">Composite score: '+(d.composite*100).toFixed(0)+'% bullish · '+d.confidence+' confidence</span>';
-  html += '</div></div>';
+  if(t.goldenCross===true)  bullets.push({t:'Technicals',c:'var(--green)',m:'Golden cross confirmed — 50DMA crossed above 200DMA, classic long-term buy signal.'});
+  if(t.goldenCross===false) bullets.push({t:'Technicals',c:'var(--red)',m:'Death cross active — 50DMA below 200DMA, long-term trend is bearish.'});
+  if(t.rsi<35)   bullets.push({t:'Opportunity',c:'var(--green)',m:'RSI at '+t.rsi+' — oversold zone, historically a good accumulation window.'});
+  if(t.supertrendSignal==='bullish') bullets.push({t:'Trend',c:'var(--green)',m:'Supertrend bullish — price above dynamic support, trend followers are long.'});
+  if(t.macdBull) bullets.push({t:'Momentum',c:'var(--green)',m:'MACD bullish crossover — momentum turning positive.'});
+  if(d.buyZone&&d.buyZone.low) bullets.push({t:'Entry',c:'#f59e0b',m:'Ideal buy zone: ₹'+d.buyZone.low+' – ₹'+d.buyZone.high+' (near strongest support). Use SIP if unsure of timing.'});
+  if(d.targets&&d.targets[0]) bullets.push({t:'Target',c:'var(--green)',m:'First target: ₹'+d.targets[0].price+(d.targets[0].upside?' ('+d.targets[0].upside+'% upside)':'')+'  based on next resistance level.'});
+  if(s.score>30) bullets.push({t:'Sentiment',c:'var(--green)',m:'News sentiment strongly positive — '+s.bull+' bullish vs '+s.bear+' bearish recent articles.'});
+  else if(s.score<-30) bullets.push({t:'Sentiment',c:'var(--red)',m:'News sentiment negative — '+s.bear+' bearish articles. Monitor for fundamental changes.'});
+  if(bullets.length===0) bullets.push({t:'Note',c:'var(--text3)',m:'Insufficient Kite data. Token may be expired or stock not in universe.'});
 
-  html += '</div>'; // end analyzer result
+  bullets.forEach(function(b){
+    html += '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid '+vc+'20">';
+    html += '<span style="background:'+b.c+'22;color:'+b.c+';font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;flex-shrink:0;height:fit-content;margin-top:1px">'+b.t+'</span>';
+    html += '<span style="font-size:11px;color:var(--text2);line-height:1.5">'+b.m+'</span></div>';
+  });
+
+  html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid '+vc+'30;font-size:10px;color:var(--text4)">⚠ This is algorithmic analysis, not financial advice. Always do your own research before investing.</div>';
+  html += '</div></div>'; // close summary + outer wrapper
   return html;
 }
 
-function drawAnalyzerChart(d){
-  if(!d.chartData||!d.chartData.length) return;
-  var canvas=document.getElementById('analyzer-chart');
+function switchChartTab(tf){
+  analyzerTab=tf;
+  if(!analyzerData) return;
+  // Rebuild chart tabs UI
+  ['3M','1Y','3Y','5Y','MAX'].forEach(function(t){
+    var btns=document.querySelectorAll('#stock-analyzer-result button');
+    btns.forEach(function(b){ if(b.textContent===t){
+      b.style.borderColor=t===tf?'#f59e0b':'var(--border)';
+      b.style.background=t===tf?'rgba(245,158,11,.2)':'var(--bg2)';
+      b.style.color=t===tf?'#f59e0b':'var(--text3)';
+      b.style.fontWeight=t===tf?'700':'400';
+    }});
+  });
+  drawChart(analyzerData, tf);
+}
+
+function drawChart(d, tf){
+  var canvas=document.getElementById('deep-chart');
   if(!canvas||typeof Chart==='undefined') return;
   if(analyzerChart){analyzerChart.destroy();analyzerChart=null;}
-  var labels=d.chartData.map(function(p){ return new Date(p.t).toLocaleDateString('en-IN',{day:'2-digit',month:'short'}); });
-  var prices=d.chartData.map(function(p){ return p.c; });
-  var minP=Math.min.apply(null,prices), maxP=Math.max.apply(null,prices);
+
+  var data=(d.charts&&d.charts[tf])||[];
+  if(!data.length) return;
+
+  var labels=data.map(function(p){ return new Date(p.t).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:tf==='MAX'||tf==='5Y'?'2-digit':undefined}); });
+  var prices=data.map(function(p){ return p.c; });
+  var minP=Math.min.apply(null,prices)*0.97, maxP=Math.max.apply(null,prices)*1.03;
   var color=prices[prices.length-1]>=prices[0]?'#22c55e':'#ef4444';
+  var t=d.tech&&d.tech.primary?d.tech.primary:{};
+  var px=d.price;
+
+  // Annotations: support/resistance lines
+  var annotations={};
+  if(d.supports) d.supports.slice(0,3).forEach(function(s,i){
+    annotations['sup'+i]={type:'line',yMin:s.price,yMax:s.price,borderColor:'rgba(34,197,94,0.5)',borderWidth:1,borderDash:[4,3],label:{display:true,content:'S₹'+s.price,color:'#22c55e',font:{size:8},position:'start'}};
+  });
+  if(d.resistances) d.resistances.slice(0,3).forEach(function(r,i){
+    annotations['res'+i]={type:'line',yMin:r.price,yMax:r.price,borderColor:'rgba(239,68,68,0.5)',borderWidth:1,borderDash:[4,3],label:{display:true,content:'R₹'+r.price,color:'#ef4444',font:{size:8},position:'end'}};
+  });
+  if(d.buyZone&&d.buyZone.low){
+    annotations.buyZone={type:'box',yMin:d.buyZone.low,yMax:d.buyZone.high,backgroundColor:'rgba(59,130,246,0.08)',borderColor:'rgba(59,130,246,0.3)',borderWidth:1,label:{display:true,content:'Buy Zone',color:'#3b82f6',font:{size:8}}};
+  }
+  if(t.dma50) annotations.dma50={type:'line',yMin:t.dma50,yMax:t.dma50,borderColor:'rgba(245,158,11,0.6)',borderWidth:1.5,label:{display:true,content:'50D',color:'#f59e0b',font:{size:8},position:'start'}};
+  if(t.dma200) annotations.dma200={type:'line',yMin:t.dma200,yMax:t.dma200,borderColor:'rgba(139,92,246,0.6)',borderWidth:1.5,label:{display:true,content:'200D',color:'#8b5cf6',font:{size:8},position:'start'}};
+
   analyzerChart=new Chart(canvas,{
     type:'line',
     data:{
       labels:labels,
-      datasets:[{data:prices,borderColor:color,borderWidth:1.5,pointRadius:0,fill:true,
+      datasets:[{
+        data:prices, borderColor:color, borderWidth:1.5,
+        pointRadius:0, fill:true, tension:0.3,
         backgroundColor:function(ctx){
-          var g=ctx.chart.ctx.createLinearGradient(0,0,0,120);
-          g.addColorStop(0,color+'40');g.addColorStop(1,color+'00');return g;
-        },tension:0.3}]
+          var g=ctx.chart.ctx.createLinearGradient(0,0,0,200);
+          g.addColorStop(0,color+'35'); g.addColorStop(1,color+'00'); return g;
+        }
+      }]
     },
     options:{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,
-        callbacks:{label:function(ctx){return '₹'+ctx.parsed.y.toFixed(2);}}}},
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{mode:'index',intersect:false,callbacks:{label:function(c){return '₹'+c.parsed.y.toFixed(2);}}},
+        annotation:{annotations:annotations}
+      },
       scales:{
-        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:8}},
-        y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},
-          callback:function(v){return '₹'+v.toFixed(0);}},min:minP*0.98,max:maxP*1.02}
+        x:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:tf==='MAX'?8:10}},
+        y:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return '₹'+v.toFixed(0);}},min:minP,max:maxP}
       }
     }
   });
