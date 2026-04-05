@@ -465,7 +465,7 @@ function renderTopBar(){
       stat("Criteria","100 pts","#f59e0b"),
       stat("Pillars","5 factors","#f59e0b"),
       stat("Scope","Long term","var(--green)"),
-      stat("Data","Yahoo Finance","var(--text2)"),
+      stat("Data","Kite + Screener.in","var(--text2)"),
     ].join("");
   } else if(S.mode==="crypto"){
     document.getElementById("topbar-stats").innerHTML=[
@@ -2031,8 +2031,8 @@ async function renderStockRec(forceRefresh){
     stockRecRetries = 0;
     cont.innerHTML = '<div style="text-align:center;padding:80px 0">'
       +'<div style="font-size:32px;margin-bottom:16px">📊</div>'
-      +'<div id="srec-loading-msg" style="font-size:14px;color:var(--text2);margin-bottom:8px">Connecting to Yahoo Finance...</div>'
-      +'<div id="srec-loading-sub" style="font-size:11px;color:var(--text3)">Fetching price + fundamentals for 252 NSE stocks</div>'
+      +'<div id="srec-loading-msg" style="font-size:14px;color:var(--text2);margin-bottom:8px">Connecting to Kite + Screener.in...</div>'
+      +'<div id="srec-loading-sub" style="font-size:11px;color:var(--text3)">Fetching 1yr daily candles for 252 stocks via Kite (~60s first load)</div>'
       +'<div style="margin-top:20px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:300px;margin-left:auto;margin-right:auto">'
       +'<div style="height:100%;background:#f59e0b;border-radius:2px;width:60%;animation:mfpulse 1.5s ease-in-out infinite"></div></div>'
       +'<div style="margin-top:16px"><button class="btn btn-sm" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button></div>'
@@ -2062,8 +2062,8 @@ async function pollStockRec(){
       } else {
         if(cont) cont.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">'
           +'<div style="font-size:24px;margin-bottom:12px">⚠️</div>'
-          +'<div style="margin-bottom:8px">Yahoo Finance is not responding</div>'
-          +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">This may be a temporary block on the server IP. Try again in a few minutes.</div>'
+          +'<div style="margin-bottom:8px">Kite token expired or unavailable</div>'
+          +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Kite token may be expired. Update your token using the banner above.</div>'
           +'<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
           +'</div>';
       }
@@ -2178,12 +2178,11 @@ function renderStockRecPage(){
   html += '<thead>'
     +'<tr style="background:var(--bg3)">'
     +'<th colspan="5" style="text-align:left;padding:5px 10px;color:var(--text3);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border3)">IDENTITY</th>'
-    +'<th colspan="4" style="text-align:center;padding:5px 10px;color:#f59e0b;font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">QUALITY (25)</th>'
-    +'<th colspan="4" style="text-align:center;padding:5px 10px;color:var(--green);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">VALUE (20)</th>'
-    +'<th colspan="3" style="text-align:center;padding:5px 10px;color:var(--blue);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">MOMENTUM (20)</th>'
-    +'<th colspan="3" style="text-align:center;padding:5px 10px;color:#8b5cf6;font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">GROWTH (20)</th>'
-    +'<th colspan="3" style="text-align:center;padding:5px 10px;color:var(--red);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">TECHNICAL (15)</th>'
-    +'<th colspan="2" style="text-align:center;padding:5px 10px;color:var(--text3);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border)">ANALYST</th>'
+    +'<th colspan="3" style="text-align:center;padding:5px 10px;color:#f59e0b;font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">QUALITY (25)</th>'
+    +'<th colspan="3" style="text-align:center;padding:5px 10px;color:var(--green);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">VALUE (20)</th>'
+    +'<th colspan="4" style="text-align:center;padding:5px 10px;color:var(--blue);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">MOMENTUM (20)</th>'
+    +'<th colspan="2" style="text-align:center;padding:5px 10px;color:#8b5cf6;font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border2)">GROWTH (20)</th>'
+    +'<th colspan="4" style="text-align:center;padding:5px 10px;color:var(--red);font-size:9px;letter-spacing:.8px;border-bottom:1px solid var(--border)">TECHNICAL (15)</th>'
     +'</tr>'
     +'<tr style="background:var(--bg2)">'
     // Identity
@@ -2194,22 +2193,20 @@ function renderStockRecPage(){
     +'<th style="text-align:right;padding:5px 8px;color:var(--text3);border-right:2px solid var(--border3)">Price</th>'
     // Quality
     +'<th style="text-align:right;padding:5px 8px;color:#f59e0b">ROE%</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:#f59e0b">ROA%</th>'
     +'<th style="text-align:right;padding:5px 8px;color:#f59e0b">D/E</th>'
     +'<th style="text-align:right;padding:5px 8px;color:#f59e0b;border-right:1px solid var(--border2)">OpMgn%</th>'
     // Value
     +'<th style="text-align:right;padding:5px 8px;color:var(--green)">P/E</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--green)">P/B</th>'
     +'<th style="text-align:right;padding:5px 8px;color:var(--green)">PEG</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--green);border-right:1px solid var(--border2)">Div%</th>'
+    +'<th style="text-align:right;padding:5px 8px;color:var(--green);border-right:1px solid var(--border2)">FrHi%</th>'
     // Momentum
     +'<th style="text-align:right;padding:5px 8px;color:var(--blue)">52W%</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--blue)">FrHi%</th>'
+    +'<th style="text-align:right;padding:5px 8px;color:var(--blue)">6M%</th>'
+    +'<th style="text-align:right;padding:5px 8px;color:var(--blue)">RSI</th>'
     +'<th style="text-align:right;padding:5px 8px;color:var(--blue);border-right:1px solid var(--border2)">Beta</th>'
     // Growth
     +'<th style="text-align:right;padding:5px 8px;color:#8b5cf6">RevGr%</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:#8b5cf6">EpsGr%</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:#8b5cf6;border-right:1px solid var(--border2)">Recmd</th>'
+    +'<th style="text-align:right;padding:5px 8px;color:#8b5cf6;border-right:1px solid var(--border2)">EpsGr%</th>'
     // Technical
     +'<th style="text-align:right;padding:5px 8px;color:var(--red)">50DMA</th>'
     +'<th style="text-align:right;padding:5px 8px;color:var(--red)">200DMA</th>'
@@ -2248,7 +2245,7 @@ function renderStockRecPage(){
     }
 
     var scoreCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
-    var upCol = s.upside!=null?(s.upside>20?'var(--green)':s.upside>10?'#f59e0b':s.upside>0?'var(--text)':'var(--red)'):'var(--text4)';
+    // upside removed - using Kite data
 
     html += '<tr data-ri="'+idx+'" style="'+rowBorder+'border-bottom:1px solid var(--border2);background:'+bg+'">'
       +'<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(s.rank)+'</td>'
@@ -2261,29 +2258,26 @@ function renderStockRecPage(){
       +'<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+s.price.toFixed(1):'—')+'</td>'
       // Quality
       +'<td style="padding:5px 8px;text-align:right">'+roe(s.roe)+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.roa,1)+'</td>'
       +'<td style="padding:5px 8px;text-align:right">'+rv(s.debtToEq,2,'x',s.debtToEq!=null&&s.debtToEq<1?'var(--green)':s.debtToEq!=null&&s.debtToEq<2?'var(--text)':'var(--red)')+'</td>'
       +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rv(s.opMargin,1,'%')+'</td>'
       // Value
       +'<td style="padding:5px 8px;text-align:right">'+pe(s.pe)+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.pb,2)+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.peg,2,'',s.peg!=null&&s.peg<1?'var(--green)':s.peg!=null&&s.peg<2?'var(--text)':'var(--red)')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rv(s.divYield,2,'%')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right">'+(s.pe!=null&&s.earGrowth!=null&&s.earGrowth>0?rv(+(s.pe/s.earGrowth).toFixed(2),2,'',s.pe/s.earGrowth<1?'var(--green)':s.pe/s.earGrowth<2?'var(--text)':'var(--red)'):'<span style="color:var(--text4)">—</span>')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rv(s.pctFromHigh,1,'%',s.pctFromHigh!=null&&s.pctFromHigh>-10?'var(--green)':s.pctFromHigh!=null&&s.pctFromHigh>-20?'#f59e0b':'var(--red)')+'</td>'
       // Momentum
       +'<td style="padding:5px 8px;text-align:right">'+rv(s.wk52Change,1,'%')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.pctFromHigh,1,'%')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right">'+rv(s.change6m,1,'%')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right">'+(s.rsi!=null?'<span style="color:'+(s.rsi>=45&&s.rsi<=65?'var(--green)':s.rsi>75?'var(--red)':'#f59e0b')+'">'+s.rsi+'</span>':'—')+'</td>'
       +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rv(s.beta,2,'','var(--text)')+'</td>'
       // Growth
       +'<td style="padding:5px 8px;text-align:right">'+rv(s.revGrowth,1,'%')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.earGrowth,1,'%')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rec(s.recKey)+'</td>'
+      +'<td style="padding:5px 8px;text-align:right;border-right:1px solid var(--border2)">'+rv(s.earGrowth,1,'%')+'</td>'
       // Technical
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.dma50,1,'',s.price&&s.dma50?s.price>s.dma50?'var(--green)':'var(--red)':'var(--text4)')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right">'+rv(s.dma200,1,'',s.price&&s.dma200?s.price>s.dma200?'var(--green)':'var(--red)':'var(--text4)')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right">'+rv(s.dma50!=null?+s.dma50.toFixed(1):null,1,'',s.price&&s.dma50?s.price>s.dma50?'var(--green)':'var(--red)':'var(--text4)')+'</td>'
+      +'<td style="padding:5px 8px;text-align:right">'+rv(s.dma200!=null?+s.dma200.toFixed(1):null,1,'',s.price&&s.dma200?s.price>s.dma200?'var(--green)':'var(--red)':'var(--text4)')+'</td>'
       +'<td style="padding:5px 8px;text-align:center;border-right:1px solid var(--border2)">'+(s.goldenCross==null?'—':s.goldenCross?'<span style="color:#f59e0b">⚡</span>':'<span style="color:var(--red)">💀</span>')+'</td>'
-      // Analyst
-      +'<td style="padding:5px 8px;text-align:right">'+(s.targetMean?'₹'+s.targetMean.toFixed(1):'—')+'</td>'
-      +'<td style="padding:5px 8px;text-align:right;color:'+upCol+'">'+(s.upside!=null?(s.upside>0?'+':'')+s.upside+'%':'—')+'</td>'
+      // Vol
+      +'<td style="padding:5px 8px;text-align:right">'+(s.volRatio!=null?'<span style="color:'+(s.volRatio>1.2?'var(--green)':s.volRatio>0.8?'var(--text)':'var(--red)')+'">'+s.volRatio+'x</span>':'—')+'</td>'
       +'</tr>';
   });
   html += '</tbody></table></div>';
@@ -2307,7 +2301,7 @@ function renderStockRecPage(){
     {name:'Quality',pts:25,c:'#f59e0b',factors:'ROE · ROA/ROCE · Debt/Equity · Operating Margin · Percentile vs sector peers'},
     {name:'Value',pts:20,c:'var(--green)',factors:'P/E ratio · P/B ratio · PEG (growth-adj value) · Dividend Yield · NSE Value 50 methodology'},
     {name:'Momentum',pts:20,c:'var(--blue)',factors:'52-week price return · % from 52w high · Beta · NSE Momentum index methodology'},
-    {name:'Growth',pts:20,c:'#8b5cf6',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (Yahoo Finance)'},
+    {name:'Growth',pts:20,c:'#8b5cf6',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (Kite + Screener.in)'},
     {name:'Technical',pts:15,c:'var(--red)',factors:'Price vs 50 DMA · Price vs 200 DMA · Golden/Death Cross · Volume accumulation'},
   ];
   pillars.forEach(function(p){
@@ -2317,7 +2311,7 @@ function renderStockRecPage(){
       +'</div>';
   });
   html += '</div>';
-  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: Yahoo Finance v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
+  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: Kite + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
   html += '</div>';
 
   html += '</div>'; // outer wrapper
