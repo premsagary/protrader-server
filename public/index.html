@@ -2102,13 +2102,27 @@ async function analyzeStock(){
   try {
     var r = await fetch('/api/stocks/analyze/'+sym);
     var d = await r.json();
-    if(d.error){ result.innerHTML='<div style="padding:16px;color:var(--red)">❌ '+d.error+'</div>'; return; }
+    if(d.error){
+      result.innerHTML='<div style="padding:20px;text-align:center">'
+        +'<div style="font-size:24px;margin-bottom:10px">⚠️</div>'
+        +'<div style="color:var(--red);font-size:13px;font-weight:600;margin-bottom:6px">'+d.error+'</div>'
+        +'<div style="font-size:11px;color:var(--text3)">Make sure the ticker is correct (e.g. RELIANCE, TCS, HDFCBANK). Kite token must be valid for candle data.</div>'
+        +'</div>';
+      return;
+    }
     analyzerData = d;
     analyzerTab  = '1Y';
-    result.innerHTML = buildAnalyzerUI(d);
-    setTimeout(function(){ drawChart(d, analyzerTab); }, 80);
+    // Wrap in try-catch so UI errors don't show raw JS
+    try {
+      result.innerHTML = buildAnalyzerUI(d);
+      setTimeout(function(){ drawChart(d, analyzerTab); }, 80);
+    } catch(uiErr) {
+      console.error('Analyzer UI error:', uiErr);
+      result.innerHTML='<div style="padding:16px;color:var(--red);font-size:12px">❌ UI error: '+uiErr.message+'<br><br>'
+        +'<pre style="font-size:10px;color:var(--text3);white-space:pre-wrap">'+JSON.stringify(d,null,2).slice(0,500)+'</pre></div>';
+    }
   } catch(e){
-    result.innerHTML='<div style="padding:16px;color:var(--red)">❌ '+e.message+'</div>';
+    result.innerHTML='<div style="padding:20px;text-align:center;color:var(--red)">❌ '+e.message+'</div>';
   }
 }
 
@@ -2432,7 +2446,7 @@ function renderStockRecPage(){
   // ── STOCK ANALYZER SECTION ────────────────────────────────────────────────
   var analyzerHtml = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:24px">';
   analyzerHtml += '<div style="font-weight:700;font-size:14px;margin-bottom:4px">🔍 Deep Stock Analyzer</div>';
-  analyzerHtml += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter any NSE stock ticker — get full technical analysis, fundamentals, news sentiment &amp; a long-term buy/sell recommendation</div>';
+  analyzerHtml += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter any NSE ticker — Kite fetches 1Y/3Y/5Y/MAX candles, computes 15+ indicators, support/resistance, buy zones + live news sentiment. Works for any stock with a Kite instrument token.</div>';
   analyzerHtml += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
   analyzerHtml += '<input id="stock-analyzer-input" type="text" placeholder="e.g. RELIANCE, TCS, INFY, HDFC..." maxlength="20"'
     +' style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:13px;width:260px;font-family:monospace;text-transform:uppercase"'
