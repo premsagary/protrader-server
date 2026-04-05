@@ -1856,6 +1856,16 @@ function mfCardEl(f, rank, cfg, maxS) {
     card.appendChild(dniEl);
   }
 
+  // WATCHLIST badge — small fund, good numbers but unproven at scale
+  if(f.watchlist && !f.dni){
+    var wlEl=div('background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.4);border-radius:6px;padding:5px 10px;margin-bottom:8px;display:flex;align-items:center;gap:6px');
+    var wlIcon=span('font-size:12px'); wlIcon.textContent='📌';
+    var wlText=div('font-size:10px;color:#818cf8;line-height:1.4');
+    wlText.textContent='Watchlist — Fund AUM < ₹5,000 Cr. Strong numbers but unproven at scale. Monitor for 1-2 more years before investing.';
+    app(wlEl,wlIcon,wlText);
+    card.appendChild(wlEl);
+  }
+
   if(f.amc_warning){
     var warn=div('background:rgba(239,68,68,0.1);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5');
     warn.textContent=f.amc_warning;
