@@ -136,6 +136,115 @@ async function dbSet(key, value) {
   } catch(e) { return false; }
 }
 
+// -- Auto-update UNIVERSE from NSE official CSVs --------------------------------
+// NSE publishes index constituents daily. We fetch and update UNIVERSE in memory.
+// Falls back to hardcoded list if NSE unreachable.
+let universeLastUpdate = null;
+let universeUpdateStatus = 'never';
+
+async function refreshUniverseFromNSE() {
+  const urls = {
+    NIFTY50:  'https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv',
+    NEXT50:   'https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv',
+    MIDCAP:   'https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv',
+  };
+
+  const headers = {
+    'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Referer':         'https://www.nseindia.com/',
+    'Connection':      'keep-alive',
+  };
+
+  const newStocks = [];
+  let successCount = 0;
+
+  for (const [grp, url] of Object.entries(urls)) {
+    try {
+      const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) { console.log(`NSE ${grp}: HTTP ${resp.status}`); continue; }
+      const text = await resp.text();
+      const lines = text.trim().split('\n');
+      // NSE CSV: Company Name, Industry, Symbol, Series, ISIN
+      // Skip header row
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g,''));
+        if (cols.length < 3) continue;
+        const name = cols[0];
+        const sym  = cols[2];
+        if (!sym || sym.length < 2) continue;
+        newStocks.push({ sym, n: name, grp });
+      }
+      successCount++;
+      console.log(`NSE ${grp}: ${lines.length - 1} stocks loaded`);
+    } catch(e) {
+      console.log(`NSE ${grp} fetch failed: ${e.message}`);
+    }
+  }
+
+  if (successCount === 0) {
+    console.log('NSE update: all fetches failed - keeping existing UNIVERSE');
+    universeUpdateStatus = `failed at ${new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}`;
+    return false;
+  }
+
+  if (newStocks.length < 100) {
+    console.log(`NSE update: only ${newStocks.length} stocks - too few, keeping existing`);
+    universeUpdateStatus = `partial (${newStocks.length} stocks) - kept old`;
+    return false;
+  }
+
+  // Deduplicate (MIDCAP occasionally overlaps)
+  const seen = new Set();
+  const deduped = newStocks.filter(s => {
+    if (seen.has(s.sym)) return false;
+    seen.add(s.sym); return true;
+  });
+
+  // Merge with existing: preserve any stocks not in NSE lists (e.g. custom additions)
+  // but update grp for stocks that moved between indices
+  const nseSyms = new Set(deduped.map(s => s.sym));
+  const preserved = UNIVERSE.filter(s => !nseSyms.has(s.sym)); // keep extras not in NSE
+  UNIVERSE = [...deduped, ...preserved];
+
+  universeLastUpdate = Date.now();
+  universeUpdateStatus = `updated ${new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} - ${deduped.length} stocks`;
+
+  // Persist to DB so it survives restarts
+  await dbSet('universe_cache', JSON.stringify(deduped));
+  await dbSet('universe_updated_at', Date.now().toString());
+
+  console.log(`NSE universe updated: ${UNIVERSE.length} total (${deduped.length} from NSE + ${preserved.length} custom)`);
+  return true;
+}
+
+async function loadUniverseFromDB() {
+  // On startup: try to load cached universe from DB first (faster than NSE fetch)
+  try {
+    const cached    = await dbGet('universe_cache');
+    const updatedAt = await dbGet('universe_updated_at');
+    if (!cached) return false;
+    const parsed = JSON.parse(cached);
+    if (parsed.length < 100) return false;
+    const ageHours = (Date.now() - parseInt(updatedAt||'0')) / 3600000;
+    if (ageHours > 25) {
+      console.log(`NSE cache is ${ageHours.toFixed(0)}h old - will refresh but using cached for now`);
+    }
+    // Merge: NSE cached + our custom stocks (crypto, etc.)
+    const nseSyms = new Set(parsed.map(s => s.sym));
+    const extras  = UNIVERSE.filter(s => !nseSyms.has(s.sym));
+    UNIVERSE = [...parsed, ...extras];
+    universeLastUpdate = parseInt(updatedAt||'0');
+    universeUpdateStatus = `from DB cache (${ageHours.toFixed(0)}h ago)`;
+    console.log(`NSE universe loaded from DB: ${parsed.length} stocks (cached ${ageHours.toFixed(0)}h ago)`);
+    return true;
+  } catch(e) {
+    console.log('Universe DB load failed:', e.message);
+    return false;
+  }
+}
+
 // -- WebSocket -----------------------------------------------------------------
 const livePrices  = {};
 const subscribers = new Set();
@@ -175,7 +284,7 @@ function startTicker(token) {
 }
 
 // -- Universe - Nifty 50 + Next 50 + Midcap 150 (250 stocks) ------------------
-const UNIVERSE = [
+let UNIVERSE = [
   // -- NIFTY 50 --
   {sym:"RELIANCE",   n:"Reliance Industries",       grp:"NIFTY50"},
   {sym:"TCS",        n:"Tata Consultancy Svcs",     grp:"NIFTY50"},
@@ -1744,9 +1853,35 @@ app.get("/health", (req,res)=>res.json({
   status:"ok", ticker:tickerOn?"connected":"not connected",
   hasToken:!!process.env.KITE_ACCESS_TOKEN, marketOpen:isMarketOpen(),
   prices:Object.keys(livePrices).length,
+  universe:{ total:UNIVERSE.length, nifty50:UNIVERSE.filter(s=>s.grp==='NIFTY50').length,
+    next50:UNIVERSE.filter(s=>s.grp==='NEXT50').length, midcap:UNIVERSE.filter(s=>s.grp==='MIDCAP').length,
+    lastUpdate:universeUpdateStatus },
 }));
 
-// -- Token management endpoints ------------------------------------------------
+// Universe status endpoint
+app.get("/api/universe/status", (req,res)=>{
+  const n50  = UNIVERSE.filter(s=>s.grp==='NIFTY50');
+  const nx50 = UNIVERSE.filter(s=>s.grp==='NEXT50');
+  const mc   = UNIVERSE.filter(s=>s.grp==='MIDCAP');
+  res.json({
+    total:UNIVERSE.length,
+    nifty50:{count:n50.length, stocks:n50.map(s=>s.sym)},
+    next50:{count:nx50.length, stocks:nx50.map(s=>s.sym)},
+    midcap:{count:mc.length, stocks:mc.map(s=>s.sym)},
+    lastUpdate:universeLastUpdate?new Date(universeLastUpdate).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):null,
+    status:universeUpdateStatus,
+    source:'NSE official index CSV files (auto-updated daily 8AM IST)',
+  });
+});
+
+// Force refresh universe (admin endpoint)
+app.post("/api/universe/refresh", async(req,res)=>{
+  res.json({message:'Universe refresh started...'});
+  const ok = await refreshUniverseFromNSE();
+  console.log(`Manual universe refresh: ${ok?'success':'failed'}`);
+});
+
+
 app.get("/api/token/status", (req,res)=>{
   const hasToken   = !!process.env.KITE_ACCESS_TOKEN;
   const marketOpen = isMarketOpen();
@@ -2533,6 +2668,8 @@ app.get('/api/stocks/score', async(req,res)=>{
         : 'Never',
       market_open: isMarketOpen(),
       data_source: 'Kite historical daily candles + static fundamentals (Screener.in Q3FY25)',
+      universe_status: universeUpdateStatus,
+      universe_total: UNIVERSE.length,
     });
   } catch(e){ res.status(500).json({error:e.message,stocks:[]}); }
 });
@@ -3527,6 +3664,15 @@ async function start() {
   let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
   if (token) process.env.KITE_ACCESS_TOKEN = token;
 
+  // Load universe from DB cache first (instant), then refresh from NSE in background
+  const loadedFromDB = await loadUniverseFromDB();
+  if (!loadedFromDB) {
+    console.log('No DB cache - fetching NSE index lists live...');
+    await refreshUniverseFromNSE();
+  } else {
+    setTimeout(()=>{ refreshUniverseFromNSE(); }, 30000); // refresh in background 30s after start
+  }
+
   initKite(token||null);
   if (token) {
     tokenValid = true; // assume valid - will be set false if Kite rejects it
@@ -3542,6 +3688,8 @@ async function start() {
   cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
   // Refresh instrument tokens daily at 9:00 AM
   cron.schedule("0 9 * * 1-5", ()=>refreshInstruments(), {timezone:"Asia/Kolkata"});
+  // Auto-update UNIVERSE from NSE every day at 8:00 AM (before market opens)
+  cron.schedule("0 8 * * 1-5", ()=>{ refreshUniverseFromNSE(); }, {timezone:"Asia/Kolkata"});
 
   // Crypto: start immediately, run 24/7 every 15 minutes
   console.log("₿ Starting crypto engine - 24/7...");
