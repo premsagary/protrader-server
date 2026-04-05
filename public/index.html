@@ -221,7 +221,16 @@ select option{background:var(--bg3)}
   <div id="token-msg" style="width:100%;font-size:11px;display:none;margin-top:4px"></div>
 </div>
 <!-- MAIN -->
-<div class="main" id="main-content"></div>
+<div class="main" id="main-content">
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:16px">
+    <div style="font-size:32px">📊</div>
+    <div style="font-size:14px;color:var(--text2);font-weight:600">ProTrader</div>
+    <div style="font-size:12px;color:var(--text3)">Loading...</div>
+    <div style="width:200px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden">
+      <div style="height:100%;width:60%;background:var(--green);border-radius:2px;animation:mfpulse 1.2s ease-in-out infinite"></div>
+    </div>
+  </div>
+</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -3116,15 +3125,46 @@ function showTokenMsg(text, color) {
 }
 
 // Check token status on load and every 5 minutes
-document.addEventListener('DOMContentLoaded', function() {
-  checkTokenStatus();
-  _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
-  setMode("mf");
-  fetchAll();
-  fetchCryptoPrices();
-  setInterval(fetchAll, 15000);
-  setInterval(fetchCryptoPrices, 30000);
-});
+// Init — guaranteed to run after all CDN scripts load
+function _init() {
+  try {
+    checkTokenStatus();
+    _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
+    setMode("mf");
+    fetchAll();
+    fetchCryptoPrices();
+    setInterval(fetchAll, 15000);
+    setInterval(fetchCryptoPrices, 30000);
+  } catch(e) {
+    console.error('Init error:', e);
+    // Still try to render something
+    try { setMode("mf"); } catch(e2) {}
+  }
+}
+
+// Wait for Chart.js CDN to load before init
+// Chart.js is loaded via <script src> tags just before this script
+function _waitForChartAndInit() {
+  if (typeof Chart !== 'undefined') {
+    _init();
+  } else {
+    // Chart.js not ready yet — poll every 50ms (max 3s)
+    var attempts = 0;
+    var poll = setInterval(function() {
+      attempts++;
+      if (typeof Chart !== 'undefined' || attempts > 60) {
+        clearInterval(poll);
+        _init();
+      }
+    }, 50);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _waitForChartAndInit);
+} else {
+  _waitForChartAndInit();
+}
 
 
 function checkAccess(mode) {
