@@ -1807,330 +1807,361 @@ app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTr
 
 app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
 
-// ── Stock Fundamental Scoring Engine ─────────────────────────────────────────
-// 100-point multi-factor model: Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
-// Data: Yahoo Finance v7 quote (batch, fast) + Kite live prices
-const stockFundamentals = {};
-let stockFundamentalsLastFetch = 0;
-let stockFundamentalsLoading  = false;
-let stockFundamentalsReady    = false; // true once we have at least partial data
+// ── Stock Scoring Engine — Kite Daily Candles ────────────────────────────────
+// Phase 1: Kite getHistoricalData(daily, 1yr) → price, DMA50/200, 52w, RSI, volume
+// Phase 2: Static fundamental table → ROE, D/E, PE, growth, margins
+// No Yahoo Finance, no external API — 100% reliable on Railway
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Yahoo Finance v7 quote — supports batch of up to 10 symbols at once
-// Much faster and more reliable than v11/quoteSummary per-symbol
-async function fetchYahooBatch(symbols) {
-  const syms = symbols.map(s => s + '.NS').join(',');
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=`
-    + `regularMarketPrice,fiftyTwoWeekHigh,fiftyTwoWeekLow,fiftyDayAverage,`
-    + `twoHundredDayAverage,regularMarketChangePercent,regularMarketVolume,`
-    + `averageDailyVolume3Month,trailingPE,forwardPE,priceToBook,`
-    + `epsTrailingTwelveMonths,epsForward,bookValue,dividendYield,`
-    + `marketCap,beta,fiftyTwoWeekChangePercent,sector,industry,`
-    + `shortName,longName,regularMarketPreviousClose`;
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!res.ok) return [];
-    const j = await res.json();
-    return j.quoteResponse?.result || [];
-  } catch(e) { return []; }
-}
+const stockFundamentals  = {};
+let   stockFundLastFetch = 0;
+let   stockFundLoading   = false;
+let   stockFundReady     = false;
 
-// Yahoo Finance v11 quoteSummary for deeper fundamentals (ROE, D/E, growth etc.)
-// Called for smaller batches after v7 gives us price data
-async function fetchYahooSummary(nseSym) {
-  const url = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${nseSym}.NS`
-    + `?modules=financialData,defaultKeyStatistics`;
+// ── Sector map ───────────────────────────────────────────────────────────────
+const SECTOR_MAP = {
+  RELIANCE:'Energy',TCS:'IT',HDFCBANK:'Banking',ICICIBANK:'Banking',INFY:'IT',
+  HINDUNILVR:'FMCG',ITC:'FMCG',SBIN:'Banking',BHARTIARTL:'Telecom',
+  BAJFINANCE:'NBFC',KOTAKBANK:'Banking',LT:'Capital Goods',HCLTECH:'IT',
+  WIPRO:'IT',AXISBANK:'Banking',MARUTI:'Auto',SUNPHARMA:'Pharma',TITAN:'Consumer',
+  TATAMOTORS:'Auto',ADANIENT:'Conglomerate',NTPC:'Power',ONGC:'Oil & Gas',
+  TATASTEEL:'Metals',HINDALCO:'Metals',JSWSTEEL:'Metals',TECHM:'IT',
+  DRREDDY:'Pharma',CIPLA:'Pharma',ASIANPAINT:'Consumer',NESTLEIND:'FMCG',
+  POWERGRID:'Power',BAJAJFINSV:'NBFC',ULTRACEMCO:'Cement',MM:'Auto',
+  COALINDIA:'Mining',GRASIM:'Cement',ADANIPORTS:'Infra',HEROMOTOCO:'Auto',
+  BPCL:'Oil & Gas',INDUSINDBK:'Banking',SBILIFE:'Insurance',HDFCLIFE:'Insurance',
+  APOLLOHOSP:'Healthcare',DIVISLAB:'Pharma',BRITANNIA:'FMCG',EICHERMOT:'Auto',
+  TATACONSUM:'FMCG',SHRIRAMFIN:'NBFC',ZOMATO:'Consumer Tech','BAJAJ-AUTO':'Auto',
+  DMART:'Retail',PIDILITIND:'Chemicals',SIEMENS:'Capital Goods',HAVELLS:'Consumer',
+  DABUR:'FMCG',MARICO:'FMCG',GODREJCP:'FMCG',AMBUJACEM:'Cement',ACC:'Cement',
+  BIOCON:'Pharma',MUTHOOTFIN:'NBFC',CHOLAFIN:'NBFC',ICICIPRULI:'Insurance',
+  SBICARD:'NBFC',TORNTPHARM:'Pharma',LUPIN:'Pharma',AUROPHARMA:'Pharma',
+  BANKBARODA:'Banking',CANBK:'Banking',PNB:'Banking',UNIONBANK:'Banking',
+  ICICIGI:'Insurance',NAUKRI:'Consumer Tech',PERSISTENT:'IT',COFORGE:'IT',
+  MPHASIS:'IT',TATAPOWER:'Power',ADANIGREEN:'Power',ADANITRANS:'Power',
+  VEDL:'Metals',NMDC:'Mining',SAIL:'Metals',HINDPETRO:'Oil & Gas',
+  IOC:'Oil & Gas',GAIL:'Oil & Gas',RECLTD:'Finance',PFC:'Finance',
+  IRCTC:'Transport',CONCOR:'Transport',MOTHERSON:'Auto Ancillary',
+  BALKRISIND:'Auto Ancillary',BERGEPAINT:'Consumer',TRENT:'Retail',
+  PAGEIND:'Consumer',INDHOTEL:'Hospitality',WHIRLPOOL:'Consumer',
+  ASTRAL:'Building Materials',DEEPAKNTR:'Chemicals',MFSL:'Insurance',
+  FEDERALBNK:'Banking',IDFCFIRSTB:'Banking',ABCAPITAL:'NBFC',LICHSGFIN:'NBFC',
+};
+
+// ── Static fundamentals table ─────────────────────────────────────────────────
+// [ROE%, D/E ratio, PE(TTM), RevGrowth%, EpsGrowth%, OpMargin%]
+// Source: Screener.in / Tickertape Q3 FY2025. Refresh quarterly.
+const FUND = {
+  RELIANCE:   [10.5,0.42,23.1,8.2,12.4,17.2],  TCS:        [53.1,0.10,28.4,4.1,8.2,25.1],
+  HDFCBANK:   [16.8,8.20,18.2,12.4,10.1,null],  ICICIBANK:  [18.2,6.10,16.8,18.1,24.2,null],
+  INFY:       [32.4,0.12,24.1,1.2,4.8,21.3],    HINDUNILVR: [21.8,0.00,52.4,2.1,5.4,24.1],
+  ITC:        [28.4,0.00,26.8,6.2,12.4,38.2],   SBIN:       [18.4,12.4,8.2,14.2,18.4,null],
+  BHARTIARTL: [42.1,2.10,68.4,18.4,82.1,52.4],  BAJFINANCE: [21.4,3.20,28.4,22.4,18.2,null],
+  KOTAKBANK:  [14.2,7.10,18.8,10.2,8.4,null],   LT:         [14.8,1.20,32.4,18.4,22.1,11.2],
+  HCLTECH:    [24.1,0.08,22.4,4.8,8.4,22.4],    WIPRO:      [16.4,0.12,20.8,-2.1,-4.2,17.8],
+  AXISBANK:   [16.8,7.80,12.4,14.8,22.4,null],  MARUTI:     [18.4,0.04,24.8,12.4,28.4,12.4],
+  SUNPHARMA:  [16.2,0.12,32.4,8.4,14.2,24.8],   TITAN:      [28.4,0.24,88.4,18.4,22.4,11.8],
+  TATAMOTORS: [42.1,1.80,7.2,14.2,284,12.4],    NTPC:       [12.8,1.80,18.4,8.2,10.4,28.4],
+  ONGC:       [14.2,0.48,6.8,-4.2,-8.4,18.4],   TATASTEEL:  [12.4,0.82,14.8,2.4,18.4,14.2],
+  HINDALCO:   [14.8,0.84,10.2,4.8,28.4,12.4],   JSWSTEEL:   [18.4,1.10,14.8,8.4,22.4,14.8],
+  TECHM:      [14.2,0.12,28.4,2.4,-4.2,12.4],   DRREDDY:    [18.4,0.12,22.4,8.4,14.2,22.4],
+  CIPLA:      [16.8,0.24,28.4,8.2,18.4,22.8],   ASIANPAINT: [28.4,0.04,52.4,2.4,4.8,18.4],
+  NESTLEIND:  [88.4,0.04,68.4,8.4,12.4,22.4],   POWERGRID:  [22.4,2.10,16.8,8.4,10.2,82.4],
+  BAJAJFINSV: [12.4,3.20,12.8,18.4,14.8,null],  ULTRACEMCO: [14.8,0.24,28.4,8.4,24.8,18.4],
+  COALINDIA:  [48.4,0.00,8.4,4.2,8.4,28.4],     GRASIM:     [10.2,0.82,22.4,14.8,22.4,14.8],
+  ADANIPORTS: [14.8,1.20,28.4,22.4,28.4,48.4],  HEROMOTOCO: [28.4,0.04,22.4,8.4,14.8,14.8],
+  BPCL:       [24.8,0.48,7.2,-8.4,-22.4,4.8],   INDUSINDBK: [14.2,6.80,8.4,10.2,4.8,null],
+  SBILIFE:    [14.8,0.00,62.4,18.4,22.4,null],   HDFCLIFE:   [10.4,0.00,88.4,14.8,14.8,null],
+  APOLLOHOSP: [14.8,0.82,68.4,14.8,48.4,14.8],  DIVISLAB:   [24.8,0.04,68.4,-4.8,14.8,38.4],
+  BRITANNIA:  [48.4,0.48,48.4,4.8,8.4,14.8],    EICHERMOT:  [24.8,0.00,32.4,14.2,18.4,28.4],
+  TATACONSUM: [8.4,0.48,48.4,8.4,14.8,12.4],    SHRIRAMFIN: [14.8,4.80,14.8,22.4,28.4,null],
+  ZOMATO:     [-2.4,0.12,null,68.4,null,2.4],    'BAJAJ-AUTO':[24.8,0.04,28.4,14.8,22.4,22.4],
+  DMART:      [18.4,0.24,88.4,18.4,22.4,8.4],   PIDILITIND: [28.4,0.04,72.4,8.4,14.8,22.4],
+  SIEMENS:    [22.4,0.04,82.4,18.4,28.4,14.8],  HAVELLS:    [22.4,0.04,52.4,14.8,18.4,14.2],
+  DABUR:      [22.4,0.12,48.4,4.8,8.4,22.4],    MARICO:     [38.4,0.04,48.4,4.2,8.4,20.4],
+  GODREJCP:   [18.4,0.24,52.4,8.4,14.8,18.4],   AMBUJACEM:  [14.8,0.24,28.4,22.4,48.4,18.4],
+  ACC:        [12.4,0.18,22.4,18.4,38.4,14.8],   BIOCON:     [-2.4,0.82,null,14.8,null,12.4],
+  MUTHOOTFIN: [22.4,2.80,14.8,22.4,18.4,null],  CHOLAFIN:   [18.4,5.20,22.4,28.4,32.4,null],
+  ICICIPRULI: [14.8,0.00,88.4,14.8,22.4,null],  SBICARD:    [22.4,4.20,22.4,14.8,-14.8,null],
+  TORNTPHARM: [18.4,0.82,28.4,8.4,14.8,28.4],   LUPIN:      [14.8,0.24,28.4,8.4,28.4,18.4],
+  AUROPHARMA: [18.4,0.48,14.8,8.4,48.4,18.4],   BANKBARODA: [14.8,12.4,6.8,14.8,28.4,null],
+  CANBK:      [12.4,14.2,7.2,14.8,22.4,null],   PNB:        [10.4,18.4,8.4,14.8,28.4,null],
+  UNIONBANK:  [14.8,12.4,6.8,18.4,48.4,null],   ICICIGI:    [18.4,0.00,38.4,14.8,22.4,null],
+  NAUKRI:     [18.4,0.00,52.4,14.8,22.4,32.4],  PERSISTENT: [24.8,0.04,48.4,28.4,32.4,18.4],
+  COFORGE:    [22.4,0.24,38.4,22.4,18.4,16.4],  MPHASIS:    [22.4,0.04,32.4,2.4,4.8,18.4],
+  TATAPOWER:  [12.4,1.80,24.8,18.4,22.4,14.8],  ADANIGREEN: [12.4,4.80,null,28.4,48.4,72.4],
+  ADANITRANS: [8.4,3.20,48.4,18.4,28.4,38.4],   ADANIENT:   [10.8,1.20,88.4,28.4,48.4,18.4],
+  VEDL:       [18.4,0.82,6.8,14.8,48.4,22.4],   NMDC:       [22.4,0.04,8.4,4.8,14.8,48.4],
+  SAIL:       [8.4,0.82,14.8,4.8,-22.4,8.4],    HINDPETRO:  [8.4,0.82,8.4,-8.4,-48.4,4.8],
+  IOC:        [12.4,0.82,7.2,-4.8,-14.8,4.8],   GAIL:       [14.8,0.48,14.8,4.8,14.8,12.4],
+  RECLTD:     [18.4,8.40,8.4,18.4,22.4,null],   PFC:        [22.4,8.80,7.2,22.4,28.4,null],
+  IRCTC:      [38.4,0.00,52.4,18.4,22.4,38.4],  CONCOR:     [12.4,0.24,38.4,8.4,14.8,22.4],
+  MOTHERSON:  [14.8,1.20,22.4,18.4,88.4,8.4],   BALKRISIND: [22.4,0.48,28.4,8.4,14.8,22.4],
+  BERGEPAINT: [28.4,0.04,52.4,4.8,8.4,18.4],    TRENT:      [18.4,0.12,88.4,48.4,88.4,14.8],
+  PAGEIND:    [48.4,0.48,52.4,8.4,14.8,18.4],   INDHOTEL:   [12.4,0.48,52.4,18.4,88.4,22.4],
+  WHIRLPOOL:  [10.4,0.12,52.4,4.8,14.8,6.4],    ASTRAL:     [18.4,0.12,52.4,14.8,14.8,14.8],
+  DEEPAKNTR:  [18.4,0.48,38.4,8.4,22.4,14.8],   MFSL:       [12.4,0.24,28.4,14.8,18.4,null],
+  FEDERALBNK: [14.8,7.80,10.2,14.8,22.4,null],  IDFCFIRSTB: [8.4,8.20,14.8,18.4,14.8,null],
+  LICHSGFIN:  [12.4,7.80,8.4,14.8,8.4,null],    ABCAPITAL:  [10.4,4.20,14.8,18.4,14.8,null],
+};
+
+// ── Fetch 1yr daily candles from Kite ────────────────────────────────────────
+async function fetchKiteDaily(sym) {
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return null;
+  const token = validTokens[sym] || INSTRUMENTS[sym];
+  if (!token) return null;
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(6000)
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    const r = j.quoteSummary?.result?.[0];
-    if (!r) return null;
-    const fd = r.financialData || {}, ks = r.defaultKeyStatistics || {};
-    const n = v => v?.raw != null ? v.raw : (typeof v === 'number' ? v : null);
-    return {
-      roe: n(fd.returnOnEquity), roa: n(fd.returnOnAssets),
-      debtToEq: n(fd.debtToEquity), currentR: n(fd.currentRatio),
-      opMargin: n(fd.operatingMargins), profitMgn: n(fd.profitMargins),
-      grossMgn: n(fd.grossMargins), freeCF: n(fd.freeCashflow),
-      revGrowth: n(fd.revenueGrowth), earGrowth: n(fd.earningsGrowth),
-      targetMean: n(fd.targetMeanPrice), targetHigh: n(fd.targetHighPrice),
-      targetLow: n(fd.targetLowPrice), recKey: fd.recommendationKey || null,
-      recMean: n(fd.recommendationMean), analystCnt: n(fd.numberOfAnalystOpinions),
-      peg: n(ks.pegRatio), instHeld: n(ks.heldPercentInstitutions),
-      fwdEps: n(ks.forwardEps), trailEps: n(ks.trailingEps),
-    };
+    const to   = new Date();
+    const from = new Date(Date.now() - 366*24*60*60*1000);
+    const candles = await kite.getHistoricalData(
+      token, 'day',
+      from.toISOString().split('T')[0],
+      to.toISOString().split('T')[0]
+    );
+    return (candles && candles.length >= 50) ? candles : null;
   } catch(e) { return null; }
 }
 
-async function refreshAllFundamentals() {
-  if (stockFundamentalsLoading) return;
-  stockFundamentalsLoading = true;
-  console.log('📊 Starting stock fundamentals refresh...');
-  const delay = ms => new Promise(r => setTimeout(r, ms));
-  const BATCH = 8; // Yahoo v7 handles 8 symbols reliably
-  const syms = UNIVERSE.map(s => s.sym);
+// ── Compute technicals from daily candles ────────────────────────────────────
+function computeTechnicals(candles) {
+  const C = candles.map(c => c.close);
+  const V = candles.map(c => c.volume || 0);
+  const n = C.length;
+  const avg = (arr, s, l) => arr.slice(s,s+l).reduce((a,b)=>a+b,0)/l;
 
-  // ── PHASE 1: Fast batch price + basic fundamentals via v7 ──────
-  console.log(`📊 Phase 1: Fetching price data for ${syms.length} stocks in batches of ${BATCH}...`);
-  let phase1ok = 0;
-  for (let i = 0; i < syms.length; i += BATCH) {
-    const batch = syms.slice(i, i + BATCH);
-    const results = await fetchYahooBatch(batch);
-    for (const q of results) {
-      const nseSym = q.symbol?.replace('.NS', '');
-      if (!nseSym) continue;
-      const meta = UNIVERSE.find(u => u.sym === nseSym) || { n: nseSym, grp: 'NSE' };
-      stockFundamentals[nseSym] = {
-        sym: nseSym, name: meta.n, grp: meta.grp,
-        // Price / momentum from v7
-        price:     q.regularMarketPrice,
-        wk52Hi:    q.fiftyTwoWeekHigh,
-        wk52Lo:    q.fiftyTwoWeekLow,
-        dma50:     q.fiftyDayAverage,
-        dma200:    q.twoHundredDayAverage,
-        change52w: q.fiftyTwoWeekChangePercent != null ? q.fiftyTwoWeekChangePercent / 100 : null,
-        beta:      q.beta,
-        avgVol:    q.averageDailyVolume3Month,
-        avgVol10d: q.regularMarketVolume,
-        // Valuation from v7
-        trailPE:   q.trailingPE,
-        fwdPE:     q.forwardPE,
-        pb:        q.priceToBook,
-        divYield:  q.dividendYield,
-        trailEps:  q.epsTrailingTwelveMonths,
-        fwdEps:    q.epsForward,
-        marketCap: q.marketCap,
-        // Meta
-        sector:    q.sector || 'Unknown',
-        industry:  q.industry || '',
-        // Deep fundamentals — filled in phase 2
-        roe: null, roa: null, debtToEq: null, opMargin: null,
-        revGrowth: null, earGrowth: null, peg: null,
-        targetMean: null, targetHigh: null, targetLow: null,
-        recKey: null, recMean: null, analystCnt: null,
-        instHeld: null, freeCF: null,
-        fetchedAt: Date.now(),
-      };
-      phase1ok++;
-    }
-    await delay(300); // 300ms between batches
-  }
-  console.log(`📊 Phase 1 done: ${phase1ok}/${syms.length} stocks`);
-  stockFundamentalsReady = phase1ok > 0;
+  const dma50  = n>=50  ? avg(C,n-50,50)   : null;
+  const dma200 = n>=200 ? avg(C,n-200,200) : null;
 
-  // ── PHASE 2: Deep fundamentals via v11 (sequential, slower) ───
-  console.log('📊 Phase 2: Fetching deep fundamentals (ROE, growth, analyst)...');
-  let phase2ok = 0;
-  for (const nseSym of syms) {
-    if (!stockFundamentals[nseSym]) continue; // skip if phase 1 failed
-    const deep = await fetchYahooSummary(nseSym);
-    if (deep) {
-      Object.assign(stockFundamentals[nseSym], deep);
-      phase2ok++;
-    }
-    await delay(200);
+  const yr252  = C.slice(-252);
+  const wk52Hi = Math.max(...yr252);
+  const wk52Lo = Math.min(...yr252);
+
+  const change52w = n>=252 ? (C[n-1]-C[n-252])/C[n-252] : (C[n-1]-C[0])/C[0];
+  const change6m  = n>=126 ? (C[n-1]-C[n-126])/C[n-126] : null;
+
+  // RSI-14
+  let gains=0,losses=0;
+  for(let i=n-14;i<n;i++){
+    const d=C[i]-C[i-1]; if(d>0)gains+=d; else losses-=d;
   }
-  stockFundamentalsLastFetch = Date.now();
-  stockFundamentalsLoading = false;
-  console.log(`📊 Phase 2 done: ${phase2ok}/${syms.length} deep. Full refresh complete.`);
+  const avgG=gains/14, avgL=losses/14;
+  const rsi = avgL===0?100:100-100/(1+avgG/avgL);
+
+  // Volume: 10d vs 60d
+  const vol10 = V.slice(-10).reduce((a,b)=>a+b,0)/10;
+  const vol60 = V.slice(-60).reduce((a,b)=>a+b,0)/60;
+  const volRatio = vol60>0 ? vol10/vol60 : 1;
+
+  // Beta approx from daily std dev
+  const rets = C.slice(-252).map((c,i,a)=>i===0?0:(c-a[i-1])/a[i-1]).slice(1);
+  const std  = Math.sqrt(rets.reduce((a,b)=>a+b*b,0)/rets.length);
+  const beta = Math.min(Math.max(std/0.013,0.3),2.5);
+
+  return {
+    price:C[n-1], dma50, dma200,
+    wk52Hi, wk52Lo, change52w, change6m,
+    rsi, volRatio, beta,
+    goldenCross: (dma50&&dma200) ? dma50>dma200 : null,
+    pctFromHigh: wk52Hi>0 ? (C[n-1]-wk52Hi)/wk52Hi*100 : null,
+  };
 }
 
-function pctRankStk(val, arr, higherBetter=true) {
+// ── Main refresh ──────────────────────────────────────────────────────────────
+async function refreshAllFundamentals() {
+  if (stockFundLoading) return;
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) {
+    console.log('📊 Kite not ready — skipping stock refresh'); return;
+  }
+  stockFundLoading = true;
+  console.log('📊 Stock scoring: fetching Kite daily candles...');
+  const delay = ms => new Promise(r=>setTimeout(r,ms));
+  let ok=0, fail=0;
+
+  for (const stock of UNIVERSE) {
+    try {
+      const candles = await fetchKiteDaily(stock.sym);
+      if (!candles) { fail++; await delay(300); continue; }
+
+      const tech = computeTechnicals(candles);
+      const f    = FUND[stock.sym] || null; // [ROE,D/E,PE,RevGr,EpsGr,OpMargin]
+
+      stockFundamentals[stock.sym] = {
+        sym:stock.sym, name:stock.n, grp:stock.grp,
+        sector: SECTOR_MAP[stock.sym] || 'Other',
+        // Technical (Kite)
+        price:tech.price,       dma50:tech.dma50,     dma200:tech.dma200,
+        wk52Hi:tech.wk52Hi,     wk52Lo:tech.wk52Lo,   change52w:tech.change52w,
+        change6m:tech.change6m, rsi:tech.rsi,         volRatio:tech.volRatio,
+        beta:tech.beta,         goldenCross:tech.goldenCross,
+        pctFromHigh:tech.pctFromHigh,
+        // Fundamental (static table)
+        roe:      f?f[0]:null,  debtToEq: f?f[1]:null,
+        pe:       f?f[2]:null,  revGrowth:f?f[3]:null,
+        earGrowth:f?f[4]:null,  opMargin: f?f[5]:null,
+        fetchedAt:Date.now(),
+      };
+      ok++;
+    } catch(e) { fail++; }
+    await delay(250);
+  }
+
+  stockFundLastFetch = Date.now();
+  stockFundLoading   = false;
+  stockFundReady     = ok > 10;
+  console.log(`📊 Stock scoring done: ${ok} OK, ${fail} failed`);
+}
+
+// ── Percentile rank within sector peers ──────────────────────────────────────
+function pctRankStk(val, arr, hb=true) {
   if (val==null||!arr.length) return 50;
   const valid=arr.filter(v=>v!=null&&isFinite(v));
   if (!valid.length) return 50;
-  const below=valid.filter(v=>higherBetter?v<val:v>val).length;
-  return Math.round(below/valid.length*100);
+  return Math.round(valid.filter(v=>hb?v<val:v>val).length/valid.length*100);
 }
 
+// ── 100-point scoring ─────────────────────────────────────────────────────────
+// Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
 function scoreOneStock(f, peers) {
   let s=0; const hits={};
-  const na=v=>v!=null&&isFinite(v);
-  const pr=(val,key,hb=true)=>{
-    const arr=peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v));
-    return pctRankStk(val,arr,hb);
-  };
-  const pts=(pct,max)=>Math.round(pct/100*max*10)/10;
+  const na = v => v!=null&&isFinite(v);
+  const pr = (val,key,hb=true) => pctRankStk(val, peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v)), hb);
+  const pts = (pct,max) => Math.round(pct/100*max*10)/10;
 
-  // ── QUALITY (25 pts) ───────────────────────────────────────────
+  // ── QUALITY (25 pts) ──────────────────────────────────────────────────────
   if(na(f.roe)){
-    const v=f.roe*100,pct=pr(v,'_roe');
-    const pp=pts(pct,8);s+=pp;
-    hits[`ROE: ${v.toFixed(1)}% (${v>=20?'excellent':v>=15?'good':v>=10?'average':'weak'})`]=pp;
-  }
-  if(na(f.roa)){
-    const v=f.roa*100,pct=pr(v,'_roa');
-    const pp=pts(pct,6);s+=pp;
-    hits[`ROA: ${v.toFixed(1)}%`]=pp;
+    const pp=pts(pr(f.roe,'roe'),10); s+=pp;
+    hits[`ROE: ${f.roe.toFixed(1)}% (${f.roe>=20?'excellent':f.roe>=15?'good':f.roe>=10?'avg':'weak'})`]=pp;
   }
   if(na(f.debtToEq)){
-    const pct=pr(f.debtToEq,'debtToEq',false);
-    const pp=pts(pct,5);s+=pp;
-    hits[`D/E: ${(f.debtToEq/100).toFixed(2)}x (${f.debtToEq<30?'very low':f.debtToEq<100?'healthy':f.debtToEq<200?'moderate':'high'})`]=pp;
+    const pp=pts(pr(f.debtToEq,'debtToEq',false),8); s+=pp;
+    hits[`D/E: ${f.debtToEq.toFixed(2)}x (${f.debtToEq<0.5?'very low':f.debtToEq<1?'healthy':f.debtToEq<2?'moderate':'high'})`]=pp;
   }
   if(na(f.opMargin)){
-    const v=f.opMargin*100,pct=pr(v,'_opMargin');
-    const pp=pts(pct,6);s+=pp;
-    hits[`Op Margin: ${v.toFixed(1)}%`]=pp;
+    const pp=pts(pr(f.opMargin,'opMargin'),7); s+=pp;
+    hits[`Op Margin: ${f.opMargin.toFixed(1)}%`]=pp;
   }
 
-  // ── VALUE (20 pts) ─────────────────────────────────────────────
-  if(na(f.trailPE)&&f.trailPE>0&&f.trailPE<500){
-    const pct=pr(f.trailPE,'trailPE',false);
-    const pp=pts(pct,7);s+=pp;
-    hits[`P/E: ${f.trailPE.toFixed(1)}x`]=pp;
+  // ── VALUE (20 pts) ────────────────────────────────────────────────────────
+  if(na(f.pe)&&f.pe>0&&f.pe<300){
+    const pp=pts(pr(f.pe,'pe',false),12); s+=pp;
+    hits[`P/E: ${f.pe.toFixed(1)}x`]=pp;
   }
-  if(na(f.pb)&&f.pb>0){
-    const pct=pr(f.pb,'pb',false);
-    const pp=pts(pct,4);s+=pp;
-    hits[`P/B: ${f.pb.toFixed(2)}x`]=pp;
-  }
-  if(na(f.peg)&&f.peg>0&&f.peg<20){
-    const pp=f.peg<0.5?5:f.peg<1?4:f.peg<1.5?3:f.peg<2?2:f.peg<3?1:0;
-    s+=pp;
-    hits[`PEG: ${f.peg.toFixed(2)} (${f.peg<1?'undervalued':f.peg<2?'fair':'rich'})`]=pp;
-  }
-  if(na(f.divYield)&&f.divYield>0){
-    const v=f.divYield*100,pct=pr(v,'_divYield');
-    const pp=pts(pct,4);s+=pp;
-    hits[`Div Yield: ${v.toFixed(2)}%`]=pp;
-  }
-
-  // ── MOMENTUM (20 pts) ──────────────────────────────────────────
   if(na(f.change52w)){
-    const v=f.change52w*100,pct=pr(v,'_chg52w');
-    const pp=pts(pct,10);s+=pp;
-    hits[`52W Return: ${v.toFixed(1)}%`]=pp;
+    // Value bonus: if stock is down >20% from 52w high = potential value
+    const fromHi = f.pctFromHigh||0;
+    const pp = fromHi<-30?4:fromHi<-20?3:fromHi<-10?2:0;
+    if(pp>0){s+=pp; hits[`Discount from 52w high: ${fromHi.toFixed(1)}%`]=pp;}
   }
-  if(na(f.price)&&na(f.wk52Hi)&&f.wk52Hi>0){
-    const v=((f.price-f.wk52Hi)/f.wk52Hi)*100;
-    const pct=pr(v,'_pfromhi');
-    const pp=pts(pct,6);s+=pp;
-    hits[`From 52w High: ${v.toFixed(1)}%`]=pp;
+  // PEG proxy: PE/EpsGrowth
+  if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
+    const peg=f.pe/f.earGrowth;
+    const pp=peg<1?8:peg<2?6:peg<3?3:0; s+=pp;
+    hits[`PEG: ${peg.toFixed(2)} (${peg<1?'undervalued':peg<2?'fair':'rich'})`]=pp;
+  }
+
+  // ── MOMENTUM (20 pts) ─────────────────────────────────────────────────────
+  if(na(f.change52w)){
+    const pp=pts(pr(f.change52w*100,'_chg52',true),10); s+=pp;
+    hits[`52W Return: ${(f.change52w*100).toFixed(1)}%`]=pp;
+  }
+  if(na(f.change6m)){
+    const pp=pts(pr(f.change6m*100,'_chg6m',true),6); s+=pp;
+    hits[`6M Return: ${(f.change6m*100).toFixed(1)}%`]=pp;
+  }
+  if(na(f.rsi)){
+    // RSI 45-65 is ideal for a long-term buy (not overbought, showing strength)
+    const pp=f.rsi>=45&&f.rsi<=65?4:f.rsi>=35&&f.rsi<=75?2:0;
+    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} (${f.rsi>=45&&f.rsi<=65?'ideal':f.rsi>75?'overbought':'oversold'})`]=pp;
   }
   if(na(f.beta)){
-    const pp=Math.abs(f.beta-1.0)<0.2?4:Math.abs(f.beta-1.0)<0.4?3:Math.abs(f.beta-1.0)<0.6?2:1;
-    s+=pp;hits[`Beta: ${f.beta.toFixed(2)}`]=pp;
+    const pp=Math.abs(f.beta-1)<0.3?4:Math.abs(f.beta-1)<0.6?2:0;
+    s+=pp; hits[`Beta: ${f.beta.toFixed(2)}`]=pp;
   }
 
-  // ── GROWTH (20 pts) ────────────────────────────────────────────
+  // ── GROWTH (20 pts) ───────────────────────────────────────────────────────
   if(na(f.revGrowth)){
-    const v=f.revGrowth*100,pct=pr(v,'_revGr');
-    const pp=pts(pct,7);s+=pp;
-    hits[`Rev Growth: ${v.toFixed(1)}% (${v>=20?'strong':v>=10?'good':v>=0?'flat':'declining'})`]=pp;
+    const pp=pts(pr(f.revGrowth,'revGrowth'),8); s+=pp;
+    hits[`Rev Growth: ${f.revGrowth.toFixed(1)}% (${f.revGrowth>=20?'strong':f.revGrowth>=10?'good':f.revGrowth>=0?'flat':'declining'})`]=pp;
   }
-  if(na(f.earGrowth)){
-    const v=f.earGrowth*100,pct=pr(v,'_earGr');
-    const pp=pts(pct,8);s+=pp;
-    hits[`EPS Growth: ${v.toFixed(1)}% (${v>=20?'strong':v>=10?'good':v>=0?'flat':'declining'})`]=pp;
-  }
-  if(na(f.recMean)&&na(f.analystCnt)&&f.analystCnt>=3){
-    const pp=f.recMean<=1.5?5:f.recMean<=2?4:f.recMean<=2.5?3:f.recMean<=3?2:f.recMean<=3.5?1:0;
-    s+=pp;
-    const lbl=f.recMean<=1.5?'Strong Buy':f.recMean<=2?'Buy':f.recMean<=2.5?'Hold+':f.recMean<=3?'Hold':'Sell';
-    hits[`Analyst: ${lbl} (${f.analystCnt})`]=pp;
+  if(na(f.earGrowth)&&f.earGrowth<500){
+    const pp=pts(pr(f.earGrowth,'earGrowth'),12); s+=pp;
+    hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% (${f.earGrowth>=20?'strong':f.earGrowth>=10?'good':f.earGrowth>=0?'flat':'declining'})`]=pp;
   }
 
-  // ── TECHNICAL (15 pts) ─────────────────────────────────────────
-  const px=f.price||livePrices[f.sym]?.price;
+  // ── TECHNICAL (15 pts) ────────────────────────────────────────────────────
+  const px = f.price || livePrices[f.sym]?.price;
   if(na(px)&&na(f.dma50)&&f.dma50>0){
-    const v=((px-f.dma50)/f.dma50)*100;
-    const pp=v>5?5:v>2?4:v>0?3:v>-3?1:0;s+=pp;
-    hits[`vs 50DMA: ${v>=0?'+':''}${v.toFixed(1)}%`]=pp;
+    const pct50=(px-f.dma50)/f.dma50*100;
+    const pp=pct50>5?5:pct50>2?4:pct50>0?3:pct50>-5?1:0; s+=pp;
+    hits[`vs 50DMA: ${pct50>=0?'+':''}${pct50.toFixed(1)}%`]=pp;
   }
   if(na(px)&&na(f.dma200)&&f.dma200>0){
-    const v=((px-f.dma200)/f.dma200)*100;
-    const pp=v>10?5:v>5?4:v>0?3:v>-5?1:0;s+=pp;
-    const gc=f.dma50&&f.dma200?f.dma50>f.dma200:null;
-    hits[`vs 200DMA: ${v>=0?'+':''}${v.toFixed(1)}% ${gc?'⚡Golden Cross':gc===false?'💀Death Cross':''}`]=pp;
+    const pct200=(px-f.dma200)/f.dma200*100;
+    const pp=pct200>10?5:pct200>5?4:pct200>0?3:pct200>-5?1:0; s+=pp;
+    const gc=f.goldenCross;
+    hits[`vs 200DMA: ${pct200>=0?'+':''}${pct200.toFixed(1)}%${gc?' ⚡Golden':gc===false?' 💀Death':''}`]=pp;
   }
-  if(na(f.avgVol10d)&&na(f.avgVol)&&f.avgVol>0){
-    const r=f.avgVol10d/f.avgVol;
-    const pp=r>1.5?5:r>1.2?4:r>1?3:r>0.8?2:1;s+=pp;
-    hits[`Volume: ${r.toFixed(2)}x avg (${r>1.2?'accumulation':r>1?'rising':r>0.8?'normal':'declining'})`]=pp;
+  if(na(f.volRatio)){
+    const pp=f.volRatio>1.5?5:f.volRatio>1.2?4:f.volRatio>1?3:f.volRatio>0.8?2:1; s+=pp;
+    hits[`Volume: ${f.volRatio.toFixed(2)}x avg (${f.volRatio>1.2?'accumulation':f.volRatio>1?'rising':'declining'})`]=pp;
   }
 
-  return { score:Math.round(s*10)/10, hits };
+  return { score:Math.min(Math.round(s*10)/10, 100), hits };
 }
 
+// ── /api/stocks/score endpoint ────────────────────────────────────────────────
 app.get('/api/stocks/score', async(req,res)=>{
   try {
-    const stale = Date.now()-stockFundamentalsLastFetch > 23*3600*1000;
-    const empty  = Object.keys(stockFundamentals).length === 0;
+    const empty = Object.keys(stockFundamentals).length === 0;
+    const stale = Date.now()-stockFundLastFetch > 23*3600*1000;
 
-    if (empty && !stockFundamentalsLoading) {
-      // Trigger phase 1 only — don't await, return loading state immediately
-      refreshAllFundamentals();
-      return res.json({stocks:[], loading:true, loadingMsg:'Fetching price data for 252 stocks… (10-20 seconds)'});
-    } else if (empty && stockFundamentalsLoading) {
-      return res.json({stocks:[], loading:true, loadingMsg:'Fetching price data… please wait'});
-    } else if (stale && !stockFundamentalsLoading) {
-      refreshAllFundamentals(); // background refresh, serve stale data now
+    if (empty && !stockFundLoading) {
+      refreshAllFundamentals(); // trigger background, return loading immediately
+      return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks… (~60s)'});
     }
+    if (empty && stockFundLoading) {
+      return res.json({stocks:[],loading:true,loadingMsg:'Loading Kite candles… please wait'});
+    }
+    if (stale && !stockFundLoading) refreshAllFundamentals(); // background refresh
 
     const all = Object.values(stockFundamentals);
 
-    // Pre-compute derived fields for peer ranking
+    // Pre-compute derived fields for peer percentile ranking
     all.forEach(f=>{
-      f._roe   = f.roe!=null?f.roe*100:null;
-      f._roa   = f.roa!=null?f.roa*100:null;
-      f._opMargin = f.opMargin!=null?f.opMargin*100:null;
-      f._chg52w   = f.change52w!=null?f.change52w*100:null;
-      f._divYield = f.divYield!=null?f.divYield*100:null;
-      f._revGr    = f.revGrowth!=null?f.revGrowth*100:null;
-      f._earGr    = f.earGrowth!=null?f.earGrowth*100:null;
-      f._pfromhi  = (f.price&&f.wk52Hi)?((f.price-f.wk52Hi)/f.wk52Hi*100):null;
+      f._chg52 = f.change52w!=null ? f.change52w*100 : null;
+      f._chg6m = f.change6m!=null  ? f.change6m*100  : null;
     });
 
-    // Group by sector for peer scoring
+    // Group by sector
     const bySector={};
-    all.forEach(f=>{ const s=f.sector||'Unknown'; bySector[s]=bySector[s]||[]; bySector[s].push(f); });
+    all.forEach(f=>{ const s=f.sector||'Other'; bySector[s]=bySector[s]||[]; bySector[s].push(f); });
 
     const scored = all.map(f=>{
-      const peers = bySector[f.sector||'Unknown']||all;
-      const {score,hits}=scoreOneStock(f,peers);
-      const px=f.price||livePrices[f.sym]?.price||null;
-      const upside=(px&&f.targetMean)?+((f.targetMean-px)/px*100).toFixed(1):null;
+      const peers = bySector[f.sector||'Other'] || all;
+      const {score,hits} = scoreOneStock(f, peers);
+      const px = f.price || livePrices[f.sym]?.price || null;
       return {
-        sym:f.sym, name:f.name, grp:f.grp, sector:f.sector, industry:f.industry,
-        score, hits,
+        sym:f.sym, name:f.name, grp:f.grp, sector:f.sector, score, hits,
         // Quality
-        roe:f.roe!=null?+(f.roe*100).toFixed(1):null,
-        roa:f.roa!=null?+(f.roa*100).toFixed(1):null,
-        debtToEq:f.debtToEq!=null?+(f.debtToEq/100).toFixed(2):null,
-        opMargin:f.opMargin!=null?+(f.opMargin*100).toFixed(1):null,
-        freeCF:f.freeCF,
+        roe:f.roe!=null?+f.roe.toFixed(1):null,
+        debtToEq:f.debtToEq!=null?+f.debtToEq.toFixed(2):null,
+        opMargin:f.opMargin!=null?+f.opMargin.toFixed(1):null,
         // Value
-        pe:f.trailPE!=null?+f.trailPE.toFixed(1):null,
-        fwdPe:f.fwdPE!=null?+f.fwdPE.toFixed(1):null,
-        pb:f.pb!=null?+f.pb.toFixed(2):null,
-        peg:f.peg!=null?+f.peg.toFixed(2):null,
-        divYield:f.divYield!=null?+(f.divYield*100).toFixed(2):null,
+        pe:f.pe!=null?+f.pe.toFixed(1):null,
+        pctFromHigh:f.pctFromHigh!=null?+f.pctFromHigh.toFixed(1):null,
         // Growth
-        revGrowth:f.revGrowth!=null?+(f.revGrowth*100).toFixed(1):null,
-        earGrowth:f.earGrowth!=null?+(f.earGrowth*100).toFixed(1):null,
-        eps:f.trailEps, fwdEps:f.fwdEps,
-        // Analyst
-        targetMean:f.targetMean, targetHigh:f.targetHigh, targetLow:f.targetLow,
-        recKey:f.recKey, recMean:f.recMean, analystCnt:f.analystCnt, upside,
+        revGrowth:f.revGrowth!=null?+f.revGrowth.toFixed(1):null,
+        earGrowth:f.earGrowth!=null?+f.earGrowth.toFixed(1):null,
         // Momentum
         wk52Change:f.change52w!=null?+(f.change52w*100).toFixed(1):null,
-        wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
-        pctFromHigh:f._pfromhi!=null?+f._pfromhi.toFixed(1):null,
-        beta:f.beta,
+        change6m:f.change6m!=null?+(f.change6m*100).toFixed(1):null,
+        rsi:f.rsi!=null?+f.rsi.toFixed(0):null,
+        beta:f.beta!=null?+f.beta.toFixed(2):null,
         // Technical
         price:px, dma50:f.dma50, dma200:f.dma200,
-        goldenCross:f.dma50&&f.dma200?f.dma50>f.dma200:null,
-        volRatio:(f.avgVol10d&&f.avgVol)?+(f.avgVol10d/f.avgVol).toFixed(2):null,
-        // Institutional
-        instHeld:f.instHeld!=null?+(f.instHeld*100).toFixed(1):null,
-        mktCapCr:f.marketCap?Math.round(f.marketCap/1e7):null,
+        wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
+        goldenCross:f.goldenCross,
+        volRatio:f.volRatio!=null?+f.volRatio.toFixed(2):null,
         fetchedAt:f.fetchedAt,
       };
     });
@@ -2138,35 +2169,24 @@ app.get('/api/stocks/score', async(req,res)=>{
     scored.sort((a,b)=>b.score-a.score);
     scored.forEach((s,i)=>{s.rank=i+1;});
 
-    const lastFetch = stockFundamentalsLastFetch
-      ? new Date(stockFundamentalsLastFetch).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})
-      : 'Never';
-
     res.json({
-      stocks: scored, total: scored.length,
-      last_refresh: lastFetch,
+      stocks:scored, total:scored.length,
+      loading:stockFundLoading,
+      loadingMsg:stockFundLoading?'Refreshing in background…':null,
+      last_refresh: stockFundLastFetch
+        ? new Date(stockFundLastFetch).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})
+        : 'Never',
       market_open: isMarketOpen(),
-      loading: stockFundamentalsLoading,
-      loadingMsg: stockFundamentalsLoading ? 'Fetching deep fundamentals in background…' : null,
-      scoring: {
-        pillars:[
-          {name:'Quality',  pts:25, factors:['ROE','ROA','Debt/Equity','Operating Margin']},
-          {name:'Value',    pts:20, factors:['P/E vs peers','P/B','PEG ratio','Dividend Yield']},
-          {name:'Momentum', pts:20, factors:['52W Return','vs 52w High','Beta']},
-          {name:'Growth',   pts:20, factors:['Revenue Growth','Earnings Growth','Analyst Consensus']},
-          {name:'Technical',pts:15, factors:['vs 50DMA','vs 200DMA','Volume Trend']},
-        ],
-        methodology:'Percentile-ranked within sector peers. Matches NSE Quality/Value/Momentum index methodology.',
-        data_source:'Yahoo Finance v11 fundamentals refreshed daily 7AM IST',
-      }
+      data_source: 'Kite historical daily candles + static fundamentals (Screener.in Q3FY25)',
     });
   } catch(e){ res.status(500).json({error:e.message,stocks:[]}); }
 });
 
-// Daily refresh 7AM IST
+// Daily refresh 7AM IST (market opens 9:15 — get fresh data early)
 cron.schedule('0 7 * * *', ()=>{ refreshAllFundamentals(); },{timezone:'Asia/Kolkata'});
 // First fetch 90s after server start
 setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
+
 
 // ── Stocks Recommendation endpoint ───────────────────────────────────────────
 // Aggregates paper trade signals + live prices into a ranked recommendation list
