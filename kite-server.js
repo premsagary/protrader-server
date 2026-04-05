@@ -1937,6 +1937,107 @@ const FUND = {
   DEEPAKNTR:  [18.4,0.48,38.4,8.4,22.4,14.8],   MFSL:       [12.4,0.24,28.4,14.8,18.4,null],
   FEDERALBNK: [14.8,7.80,10.2,14.8,22.4,null],  IDFCFIRSTB: [8.4,8.20,14.8,18.4,14.8,null],
   LICHSGFIN:  [12.4,7.80,8.4,14.8,8.4,null],    ABCAPITAL:  [10.4,4.20,14.8,18.4,14.8,null],
+
+  // -- NIFTY NEXT 50 & MIDCAP ADDITIONS --
+  HAL:        [28.4,0.12,38.2,18.4,22.4,18.2],  BEL:        [28.1,0.08,52.4,18.2,32.4,22.4],
+  BHEL:       [4.2,0.42,282.4,8.4,-82.4,2.4],   COCHINSHIP: [22.4,0.18,28.4,12.4,18.4,22.1],
+  GRSE:       [18.4,0.22,32.4,14.2,22.1,18.2],  MAZDOCK:    [24.2,0.08,48.4,22.4,42.4,20.2],
+  MIDHANI:    [12.4,0.12,42.4,8.4,12.4,18.4],   HAL:        [28.4,0.12,38.2,18.4,22.4,18.2],
+  LICI:       [82.4,22.4,12.4,8.4,12.4,null],   NYKAA:      [8.4,0.24,182.4,22.4,null,8.4],
+  DMART:      [14.8,0.24,88.4,18.4,8.4,8.2],    IRCTC:      [38.4,0.00,52.4,18.4,18.2,38.4],
+  BSE:        [22.4,0.00,48.4,32.4,42.4,52.4],  CDSL:       [32.4,0.00,62.4,18.4,22.4,58.4],
+  MCX:        [18.4,0.00,42.4,12.4,82.4,48.4],  ANGELONE:   [28.4,0.82,18.4,22.4,18.2,38.4],
+  "5PAISA":     [12.4,1.20,28.4,18.4,12.4,22.4],  CARTRADE:   [8.4,0.00,82.4,18.4,null,22.4],
+  ZOMATO:     [8.4,0.12,382.4,68.4,null,8.4],   NAUKRI:     [22.4,0.00,58.4,18.4,12.4,32.4],
+  IXIGO:      [12.4,0.08,182.4,28.4,null,12.4], EASEMYTRIP: [8.4,0.12,82.4,18.4,null,8.4],
+  RATEGAIN:   [12.4,0.08,82.4,28.4,18.4,18.4],  MAPMYINDIA: [14.2,0.00,82.4,18.4,8.4,22.4],
+  LATENTVIEW: [22.4,0.00,62.4,28.4,18.4,28.4],  HAPPSTMNDS: [18.4,0.00,52.4,18.4,8.4,18.4],
+  COFORGE:    [24.4,0.24,52.4,22.4,18.4,14.2],  MPHASIS:    [22.4,0.12,32.4,8.4,4.8,16.2],
+  KPITTECH:   [32.4,0.08,82.4,48.4,52.4,18.4],  CYIENT:     [18.4,0.12,28.4,14.8,12.4,14.2],
+  LTTS:       [26.4,0.04,38.4,12.4,8.4,18.4],   ZENSAR:     [18.4,0.08,28.4,8.4,4.8,16.2],
+  MASTEK:     [22.4,0.12,24.4,8.4,8.4,14.8],    HEXAWARE:   [24.4,0.08,32.4,18.4,12.4,16.2],
+  NEWGEN:     [28.4,0.12,38.4,22.4,28.4,22.4],  TANLA:      [32.4,0.00,18.4,8.4,8.4,28.4],
+  PERSISTENT: [24.4,0.04,58.4,28.4,32.4,18.4],  ROUTE:      [18.4,0.08,42.4,18.4,22.4,18.4],
+  APOLLOHOSP: [14.8,0.68,82.4,14.8,28.4,12.4],  FORTIS:     [8.4,0.42,182.4,14.8,82.4,8.4],
+  MAXHEALTH:  [12.4,0.58,82.4,18.4,42.4,12.4],  METROPOLIS: [22.4,0.12,42.4,8.4,8.4,22.4],
+  THYROCARE:  [14.8,0.08,52.4,8.4,8.4,28.4],    STARHEALTH: [12.4,0.42,28.4,14.8,8.4,null],
+  ALKEM:      [22.4,0.08,28.4,8.4,12.4,18.4],   AJANTPHARM: [18.4,0.08,28.4,12.4,14.8,24.4],
+  IPCALAB:    [14.8,0.18,28.4,8.4,8.4,18.4],    LAURUSLABS: [12.4,0.62,82.4,8.4,-28.4,14.8],
+  NATPHARMA:  [14.8,0.12,18.4,8.4,8.4,14.8],    TORNTPHARM: [22.4,0.42,28.4,8.4,12.4,22.4],
+  PFIZER:     [22.4,0.00,32.4,8.4,12.4,28.4],   SANOFI:     [18.4,0.00,28.4,4.8,8.4,22.4],
+  GLAXO:      [18.4,0.00,48.4,8.4,18.4,22.4],   ABBOTINDIA: [28.4,0.00,52.4,8.4,12.4,24.4],
+  BIOCON:     [4.8,0.82,182.4,12.4,-18.4,12.4], DIVISLAB:   [18.4,0.04,48.4,4.8,8.4,32.4],
+  TATAMOTORS: [14.8,1.20,8.4,8.4,228.4,10.2],   ASHOKLEY:   [22.4,0.62,18.4,8.4,12.4,14.8],
+  ESCORTS:    [14.8,0.08,28.4,8.4,8.4,14.8],    MOTHERSON:  [8.4,0.82,52.4,18.4,182.4,6.4],
+  APOLLOTYRE: [12.4,0.62,12.4,8.4,12.4,14.8],   CEATLTD:    [14.8,0.82,14.8,8.4,28.4,12.4],
+  MRF:        [14.8,0.18,28.4,8.4,28.4,14.8],   BALKRISIND: [22.4,0.42,28.4,8.4,4.8,22.4],
+  JKTYRE:     [18.4,1.20,8.4,8.4,18.4,12.4],    EXIDEIND:   [12.4,0.08,28.4,8.4,22.4,12.4],
+  SUNDRMFAST: [18.4,0.18,28.4,8.4,12.4,14.8],   SCHAEFFLER: [22.4,0.04,42.4,8.4,12.4,18.4],
+  SKFINDIA:   [22.4,0.04,42.4,8.4,8.4,14.8],    TIMKEN:     [22.4,0.08,48.4,8.4,12.4,18.4],
+  ELGIEQUIP:  [22.4,0.12,42.4,12.4,18.4,18.4],  KIRLOSENG:  [18.4,0.28,28.4,12.4,18.4,14.8],
+  KEC:        [14.8,1.20,42.4,22.4,182.4,8.4],  KALPATPOWR: [18.4,1.20,22.4,22.4,28.4,12.4],
+  POLYCAB:    [22.4,0.12,42.4,18.4,28.4,12.4],  KEI:        [22.4,0.28,52.4,22.4,32.4,10.2],
+  HAVELLS:    [22.4,0.04,62.4,14.8,18.4,12.4],  CROMPTON:   [18.4,0.12,42.4,4.8,8.4,14.8],
+  VGUARD:     [14.8,0.12,42.4,12.4,18.4,8.4],   ORIENTELEC: [12.4,0.28,28.4,8.4,8.4,8.4],
+  BLUESTARCO: [18.4,0.28,82.4,18.4,42.4,8.4],   VOLTAS:     [12.4,0.08,82.4,8.4,42.4,6.4],
+  SYMPHONY:   [18.4,0.00,42.4,4.8,-8.4,18.4],   WHIRLPOOL:  [8.4,0.04,82.4,4.8,182.4,6.4],
+  SUPREME:    [22.4,0.08,48.4,8.4,18.4,18.4],   ASTRAL:     [18.4,0.08,62.4,8.4,4.8,18.4],
+  SUPREMEIND: [22.4,0.08,48.4,8.4,18.4,18.4],   APLAPOLLO:  [18.4,0.62,28.4,8.4,8.4,8.4],
+  FINOLEX:    [14.8,0.08,18.4,4.8,8.4,14.8],    FINPIPE:    [18.4,0.08,22.4,8.4,12.4,18.4],
+  POLYCAB:    [22.4,0.12,42.4,18.4,28.4,12.4],  RATNAMANI:  [22.4,0.08,28.4,12.4,18.4,14.8],
+  WELCORP:    [12.4,0.62,18.4,8.4,22.4,8.4],    JINDALSAW:  [14.8,0.82,8.4,8.4,12.4,12.4],
+  SAIL:       [4.8,0.82,8.4,4.8,-28.4,4.8],     NMDC:       [22.4,0.04,8.4,4.8,8.4,42.4],
+  NALCO:      [14.8,0.04,12.4,8.4,12.4,22.4],   NATIONALUM: [12.4,0.04,12.4,8.4,8.4,18.4],
+  HINDCOPPER: [8.4,0.12,42.4,12.4,8.4,14.8],    MOIL:       [14.8,0.00,18.4,8.4,18.4,38.4],
+  GRAPHITE:   [8.4,0.04,28.4,-8.4,-42.4,14.8],  HEG:        [8.4,0.04,28.4,-4.8,-28.4,18.4],
+  DEEPAKNTR:  [18.4,0.12,28.4,4.8,8.4,18.4],    GNFC:       [14.8,0.28,8.4,4.8,8.4,18.4],
+  AARTIIND:   [12.4,0.82,22.4,4.8,-18.4,12.4],  ALKYLAMINE: [14.8,0.08,28.4,4.8,-28.4,18.4],
+  FINEORG:    [18.4,0.04,28.4,4.8,-8.4,22.4],   VINATIORGA: [18.4,0.08,22.4,8.4,-8.4,22.4],
+  GALAXYSURF: [12.4,0.04,18.4,4.8,8.4,12.4],    SOLARIS:    [14.8,0.04,22.4,8.4,12.4,18.4],
+  KAJARIACER: [18.4,0.04,22.4,4.8,8.4,18.4],    CERA:       [18.4,0.04,28.4,8.4,8.4,22.4],
+  KALYANKJIL: [14.8,0.62,42.4,22.4,28.4,4.8],   SENCO:      [12.4,0.82,22.4,22.4,18.4,4.8],
+  MANYAVAR:   [18.4,0.08,52.4,8.4,8.4,28.4],    RELAXO:     [12.4,0.04,82.4,4.8,4.8,12.4],
+  BATA:       [14.8,0.04,52.4,4.8,4.8,18.4],    PAGEIND:    [58.4,0.04,82.4,4.8,4.8,18.4],
+  RAYMOND:    [8.4,0.82,28.4,8.4,28.4,8.4],     ARVIND:     [8.4,0.82,12.4,8.4,8.4,8.4],
+  TRIDENT:    [8.4,0.62,12.4,4.8,-8.4,8.4],     WELSPUNIND: [8.4,0.82,8.4,8.4,8.4,8.4],
+  KPRMILL:    [18.4,0.62,18.4,12.4,12.4,18.4],  JYOTICNC:   [22.4,0.28,82.4,28.4,42.4,22.4],
+  CRAFTSMAN:  [14.8,0.82,22.4,12.4,12.4,14.8],  BOSCHLTD:   [18.4,0.04,52.4,8.4,22.4,14.8],
+  CUMMINSIND: [24.4,0.04,42.4,14.8,22.4,18.4],  THERMAX:    [18.4,0.12,52.4,14.8,18.4,12.4],
+  GRINDWELL:  [22.4,0.04,42.4,12.4,8.4,18.4],   VSTTILLERS: [18.4,0.04,22.4,4.8,8.4,18.4],
+  JUBLFOOD:   [12.4,0.42,82.4,8.4,42.4,18.4],   UNITDSPR:   [18.4,0.42,42.4,8.4,12.4,12.4],
+  MINDA:      [14.8,0.42,42.4,18.4,28.4,10.2],  SONACOMS:   [22.4,0.28,42.4,18.4,18.4,18.4],
+  BEL:        [28.1,0.08,52.4,18.2,32.4,22.4],  DATAPATTNS: [22.4,0.00,52.4,28.4,22.4,28.4],
+  SOLARINDS:  [18.4,0.28,52.4,22.4,18.4,18.4],  PRAJ:       [22.4,0.08,42.4,18.4,22.4,14.8],
+  INOXWIND:   [8.4,1.20,82.4,28.4,null,6.4],    SUZLON:     [14.8,0.42,82.4,42.4,182.4,8.4],
+  TATAPOWER:  [8.4,1.82,28.4,14.8,28.4,22.4],   TORNTPOWER: [12.4,1.82,28.4,8.4,12.4,28.4],
+  CESC:       [14.8,0.82,18.4,4.8,18.4,22.4],   HBLPOWER:   [18.4,0.12,42.4,22.4,42.4,14.8],
+  GMRINFRA:   [4.8,2.80,null,22.4,null,18.4],   IRB:        [8.4,2.80,28.4,18.4,28.4,38.4],
+  SADBHAV:    [4.8,2.80,null,4.8,null,14.8],    CONCOR:     [12.4,0.24,38.4,8.4,14.8,22.4],
+  NMDC:       [22.4,0.04,8.4,4.8,8.4,42.4],     GICRE:      [8.4,0.28,12.4,8.4,8.4,null],
+  NIACL:      [8.4,0.28,14.8,8.4,12.4,null],    HOMEFIRST:  [14.8,7.80,28.4,22.4,22.4,null],
+  AAVAS:      [14.8,5.20,18.4,18.4,18.4,null],  APTUS:      [14.8,4.80,22.4,22.4,22.4,null],
+  CREDITACC:  [12.4,4.80,18.4,22.4,-8.4,null],  SPANDANA:   [12.4,4.20,8.4,14.8,-42.4,null],
+  UJJIVANSFB: [12.4,6.20,8.4,18.4,-8.4,null],   SURYODAY:   [8.4,6.80,8.4,14.8,-22.4,null],
+  EQUITASBNK: [8.4,7.20,12.4,14.8,-18.4,null],  DCBBANK:    [8.4,6.80,8.4,8.4,-8.4,null],
+  CSBBANK:    [8.4,8.20,8.4,12.4,8.4,null],     KARURVYSYA: [18.4,7.80,8.4,12.4,28.4,null],
+  SOUTHBANK:  [8.4,12.4,8.4,8.4,8.4,null],      RBLBANK:    [8.4,9.20,8.4,8.4,-28.4,null],
+  PNBHOUSING: [12.4,8.80,12.4,14.8,28.4,null],  SHRIRAMFIN: [18.4,3.80,18.4,18.4,18.4,null],
+  MUTHOOTFIN: [22.4,2.80,18.4,14.8,18.4,null],  CHOLAFIN:   [14.8,4.20,28.4,22.4,22.4,null],
+  SBICARD:    [14.8,4.80,18.4,8.4,-8.4,null],   LICSGFIN:   [12.4,7.80,8.4,14.8,8.4,null],
+  MFSL:       [12.4,0.28,18.4,12.4,8.4,null],   HDFCLIFE:   [12.4,0.28,82.4,12.4,12.4,null],
+  SBILIFE:    [14.8,0.28,62.4,14.8,18.4,null],  ICICIGI:    [14.8,0.28,28.4,8.4,18.4,null],
+  ICICIPRULI: [12.4,0.28,62.4,8.4,8.4,null],    ABCAPITAL:  [8.4,0.82,18.4,12.4,8.4,null],
+  CANFINHOME: [14.8,8.80,8.4,14.8,8.4,null],    PCJEWELLER: [4.8,1.20,18.4,8.4,null,4.8],
+  VMART:      [4.8,0.42,82.4,8.4,-18.4,4.8],    TRENT:      [28.4,0.12,182.4,28.4,52.4,14.8],
+  INDHOTEL:   [14.8,0.42,82.4,22.4,182.4,22.4], EASEMYTRIP: [8.4,0.12,82.4,18.4,null,8.4],
+  PARAS:      [14.8,0.12,28.4,8.4,8.4,18.4],    IDEAFORGE:  [4.8,0.28,null,8.4,null,4.8],
+  AIAENG:     [14.8,0.04,28.4,4.8,4.8,22.4],    AKZOINDIA:  [18.4,0.04,42.4,4.8,18.4,14.8],
+  KANSAINER:  [22.4,0.04,32.4,8.4,12.4,14.8],   BERGEPAINT: [22.4,0.04,52.4,4.8,8.4,14.8],
+  PIDILITIND: [22.4,0.04,82.4,8.4,14.8,22.4],   MARICO:     [28.4,0.08,48.4,4.8,8.4,18.4],
+  GODREJCP:   [14.8,0.08,42.4,8.4,4.8,14.8],    DABUR:      [22.4,0.12,42.4,4.8,4.8,18.4],
+  TATACONSUM: [8.4,0.12,52.4,8.4,4.8,12.4],     BRITANNIA:  [48.4,0.42,52.4,4.8,8.4,14.8],
+  NESTLEIND:  [82.4,0.04,62.4,4.8,12.4,22.4],   HINDUNILVR: [21.8,0.00,52.4,2.1,4.8,22.4],
+
 };
 
 // -- Fetch 1yr daily candles from Kite ----------------------------------------
@@ -2053,95 +2154,110 @@ function pctRankStk(val, arr, hb=true) {
   return Math.round(valid.filter(v=>hb?v<val:v>val).length/valid.length*100);
 }
 
-// -- 100-point scoring ---------------------------------------------------------
-// Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
+// -- 100-point Master Checklist Scoring (same logic as Deep Analyzer) ----------
 function scoreOneStock(f, peers) {
   let s=0; const hits={};
   const na = v => v!=null&&isFinite(v);
   const pr = (val,key,hb=true) => pctRankStk(val, peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v)), hb);
-  const pts = (pct,max) => Math.round(pct/100*max*10)/10;
+  const px = f.price || livePrices[f.sym]?.price;
 
-  // -- QUALITY (25 pts) ------------------------------------------------------
-  if(na(f.roe)){
-    const pp=pts(pr(f.roe,'roe'),10); s+=pp;
-    hits[`ROE: ${f.roe.toFixed(1)}% (${f.roe>=20?'excellent':f.roe>=15?'good':f.roe>=10?'avg':'weak'})`]=pp;
+  // -- TREND (25 pts) --------------------------------------------------------
+  // Above 200 DMA (8pts)
+  if(na(px)&&na(f.dma200)){
+    const above=px>f.dma200;
+    const pp=above?8:0; s+=pp;
+    hits[`200DMA: ${above?'Above':'Below'} (${f.dma200?.toFixed(0)})`]=pp;
   }
-  if(na(f.debtToEq)){
-    const pp=pts(pr(f.debtToEq,'debtToEq',false),8); s+=pp;
-    hits[`D/E: ${f.debtToEq.toFixed(2)}x (${f.debtToEq<0.5?'very low':f.debtToEq<1?'healthy':f.debtToEq<2?'moderate':'high'})`]=pp;
+  // Golden Cross (7pts)
+  if(f.goldenCross!=null){
+    const pp=f.goldenCross?7:0; s+=pp;
+    hits[f.goldenCross?'Golden Cross':'Death Cross']=pp;
   }
-  if(na(f.opMargin)){
-    const pp=pts(pr(f.opMargin,'opMargin'),7); s+=pp;
-    hits[`Op Margin: ${f.opMargin.toFixed(1)}%`]=pp;
+  // vs 50DMA (5pts)
+  if(na(px)&&na(f.dma50)){
+    const a50=px>f.dma50;
+    const pp=a50?5:0; s+=pp;
+    hits[`50DMA: ${a50?'Above':'Below'}`]=pp;
   }
-
-  // -- VALUE (20 pts) --------------------------------------------------------
-  if(na(f.pe)&&f.pe>0&&f.pe<300){
-    const pp=pts(pr(f.pe,'pe',false),12); s+=pp;
-    hits[`P/E: ${f.pe.toFixed(1)}x`]=pp;
-  }
-  if(na(f.change52w)){
-    // Value bonus: if stock is down >20% from 52w high = potential value
-    const fromHi = f.pctFromHigh||0;
-    const pp = fromHi<-30?4:fromHi<-20?3:fromHi<-10?2:0;
-    if(pp>0){s+=pp; hits[`Discount from 52w high: ${fromHi.toFixed(1)}%`]=pp;}
-  }
-  // PEG proxy: PE/EpsGrowth
-  if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
-    const peg=f.pe/f.earGrowth;
-    const pp=peg<1?8:peg<2?6:peg<3?3:0; s+=pp;
-    hits[`PEG: ${peg.toFixed(2)} (${peg<1?'undervalued':peg<2?'fair':'rich'})`]=pp;
+  // Not overextended from 200DMA (5pts)
+  if(na(px)&&na(f.dma200)){
+    const pct200=(px-f.dma200)/f.dma200*100;
+    const pp=pct200>0&&pct200<=25?5:pct200>25?2:1; s+=pp;
+    hits[`vs 200DMA: ${pct200>=0?'+':''}${pct200.toFixed(1)}%`]=pp;
   }
 
   // -- MOMENTUM (20 pts) -----------------------------------------------------
-  if(na(f.change52w)){
-    const pp=pts(pr(f.change52w*100,'_chg52',true),10); s+=pp;
-    hits[`52W Return: ${(f.change52w*100).toFixed(1)}%`]=pp;
-  }
-  if(na(f.change6m)){
-    const pp=pts(pr(f.change6m*100,'_chg6m',true),6); s+=pp;
-    hits[`6M Return: ${(f.change6m*100).toFixed(1)}%`]=pp;
-  }
+  // RSI zone (6pts)
   if(na(f.rsi)){
-    // RSI 45-65 is ideal for a long-term buy (not overbought, showing strength)
-    const pp=f.rsi>=45&&f.rsi<=65?4:f.rsi>=35&&f.rsi<=75?2:0;
-    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} (${f.rsi>=45&&f.rsi<=65?'ideal':f.rsi>75?'overbought':'oversold'})`]=pp;
+    const pp=f.rsi>=40&&f.rsi<=65?6:f.rsi>=35&&f.rsi<=70?4:f.rsi<35?3:0;
+    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)}`]=pp;
   }
-  if(na(f.beta)){
-    const pp=Math.abs(f.beta-1)<0.3?4:Math.abs(f.beta-1)<0.6?2:0;
-    s+=pp; hits[`Beta: ${f.beta.toFixed(2)}`]=pp;
+  // 52W return percentile (7pts)
+  if(na(f.change52w)){
+    const pp=Math.round(pr(f.change52w*100,'_chg52')/100*7*10)/10; s+=pp;
+    hits[`52W: ${(f.change52w*100).toFixed(1)}%`]=pp;
   }
-
-  // -- GROWTH (20 pts) -------------------------------------------------------
-  if(na(f.revGrowth)){
-    const pp=pts(pr(f.revGrowth,'revGrowth'),8); s+=pp;
-    hits[`Rev Growth: ${f.revGrowth.toFixed(1)}% (${f.revGrowth>=20?'strong':f.revGrowth>=10?'good':f.revGrowth>=0?'flat':'declining'})`]=pp;
+  // 6M return (4pts)
+  if(na(f.change6m)){
+    const pp=Math.round(pr(f.change6m*100,'_chg6m')/100*4*10)/10; s+=pp;
+    hits[`6M: ${(f.change6m*100).toFixed(1)}%`]=pp;
   }
-  if(na(f.earGrowth)&&f.earGrowth<500){
-    const pp=pts(pr(f.earGrowth,'earGrowth'),12); s+=pp;
-    hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% (${f.earGrowth>=20?'strong':f.earGrowth>=10?'good':f.earGrowth>=0?'flat':'declining'})`]=pp;
-  }
-
-  // -- TECHNICAL (15 pts) ----------------------------------------------------
-  const px = f.price || livePrices[f.sym]?.price;
-  if(na(px)&&na(f.dma50)&&f.dma50>0){
-    const pct50=(px-f.dma50)/f.dma50*100;
-    const pp=pct50>5?5:pct50>2?4:pct50>0?3:pct50>-5?1:0; s+=pp;
-    hits[`vs 50DMA: ${pct50>=0?'+':''}${pct50.toFixed(1)}%`]=pp;
-  }
-  if(na(px)&&na(f.dma200)&&f.dma200>0){
-    const pct200=(px-f.dma200)/f.dma200*100;
-    const pp=pct200>10?5:pct200>5?4:pct200>0?3:pct200>-5?1:0; s+=pp;
-    const gc=f.goldenCross;
-    hits[`vs 200DMA: ${pct200>=0?'+':''}${pct200.toFixed(1)}%${gc?' ⚡Golden':gc===false?' 💀Death':''}`]=pp;
-  }
+  // Volume accumulation (3pts)
   if(na(f.volRatio)){
-    const pp=f.volRatio>1.5?5:f.volRatio>1.2?4:f.volRatio>1?3:f.volRatio>0.8?2:1; s+=pp;
-    hits[`Volume: ${f.volRatio.toFixed(2)}x avg (${f.volRatio>1.2?'accumulation':f.volRatio>1?'rising':'declining'})`]=pp;
+    const pp=f.volRatio>1.3?3:f.volRatio>1.1?2:f.volRatio>0.9?1:0;
+    s+=pp; hits[`Vol: ${f.volRatio.toFixed(2)}x`]=pp;
+  }
+
+  // -- QUALITY / FUNDAMENTALS (35 pts) ----------------------------------------
+  // ROE (10pts)
+  if(na(f.roe)){
+    const pp=f.roe>=20?10:f.roe>=15?8:f.roe>=12?5:f.roe>=8?2:0; s+=pp;
+    hits[`ROE: ${f.roe.toFixed(1)}%`]=pp;
+  }
+  // D/E (8pts)
+  if(na(f.debtToEq)){
+    const pp=f.debtToEq<=0.3?8:f.debtToEq<=0.7?6:f.debtToEq<=1.5?3:f.debtToEq<=3?1:0; s+=pp;
+    hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp;
+  }
+  // EPS Growth (10pts)
+  if(na(f.earGrowth)&&f.earGrowth<500){
+    const pp=f.earGrowth>=25?10:f.earGrowth>=15?8:f.earGrowth>=8?5:f.earGrowth>=0?2:0; s+=pp;
+    hits[`EPS Gr: ${f.earGrowth.toFixed(1)}%`]=pp;
+  }
+  // PE valuation (5pts)
+  if(na(f.pe)&&f.pe>0&&f.pe<400){
+    const pp=f.pe<15?5:f.pe<25?4:f.pe<40?2:0; s+=pp;
+    hits[`P/E: ${f.pe.toFixed(1)}x`]=pp;
+  }
+  // Op Margin (4pts) - sector relative
+  if(na(f.opMargin)){
+    const pp=Math.round(pr(f.opMargin,'opMargin')/100*4*10)/10; s+=pp;
+    hits[`Op Mgn: ${f.opMargin.toFixed(1)}%`]=pp;
+  }
+  // PEG (bonus - up to 3pts)
+  if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
+    const peg=f.pe/f.earGrowth;
+    const pp=peg<1?3:peg<2?2:peg<3?1:0; s+=pp;
+    hits[`PEG: ${peg.toFixed(2)}`]=pp;
+  }
+
+  // -- VALUE (discount) (10 pts) ----------------------------------------------
+  if(na(f.pctFromHigh)){
+    const d=Math.abs(f.pctFromHigh);
+    const pp=d>=30?4:d>=20?3:d>=10?2:d>=5?1:0;
+    if(pp>0){s+=pp;hits[`Discount: ${f.pctFromHigh?.toFixed(1)}% from 52wHi`]=pp;}
+  }
+  if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
+    // PE/ROE ratio - lower is better quality at price
+    const perRoe=f.pe/f.roe;
+    const pp=perRoe<1?4:perRoe<2?3:perRoe<3?2:0; s+=pp;
+    if(pp>0)hits[`PE/ROE: ${perRoe.toFixed(2)}`]=pp;
   }
 
   return { score:Math.min(Math.round(s*10)/10, 100), hits };
 }
+
+
 
 // -- /api/stocks/score endpoint ------------------------------------------------
 app.get('/api/stocks/score', async(req,res)=>{
