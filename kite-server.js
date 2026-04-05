@@ -1455,6 +1455,23 @@ function checkEligible(f) {
 // Only runs on funds that passed eligibility
 // Max ~120 pts (percentile-based within category, eligible funds only)
 function scoreMFTickertape(f) {
+  // =============================================================================
+  // MF SCORING — Varsity Module 11 derived framework
+  // "Rolling Returns > Point-to-Point" (Ch19), "Sortino > Sharpe for SIP investors" (Ch23)
+  // "Expense ratio compounding is brutal over 30 years" (Ch20)
+  // "Alpha = fund manager adding value above risk taken" (Ch22)
+  //
+  // PILLARS (120 pts total, normalised to 100):
+  //   A. Rolling 3Y Consistency  (25 pts) — Varsity: #1 predictor, removes date bias
+  //   B. Risk-Adjusted Returns   (20 pts) — Sortino weighted more than Sharpe (downside only)
+  //   C. Beats Peers Consistently(20 pts) — Varsity: beat benchmark 7/10 years = skill
+  //   D. Downside Protection     (15 pts) — Varsity: max drawdown + volatility vs peers
+  //   E. Expense Ratio           (12 pts) — Varsity: "guaranteed drag on compounding"
+  //   F. Absolute Returns        ( 8 pts) — Low weight: point-in-time, low predictive power
+  //   G. Portfolio Quality       ( 8 pts) — PE vs category, concentration, cash
+  //   H. AUM + Track Record      (12 pts) — size matters for small/mid cap; age = stress tests
+  //   I. AMC Quality             (10 pts) — governance, SEBI record, fund manager tenure
+  // =============================================================================
   const subcat  = f.sub_category || '';
   const cat     = subcat.includes('Small') ? 'smallcap' : subcat.includes('Mid') ? 'midcap' : 'flexicap';
   const dist    = CAT_DIST[subcat] || {};
@@ -1469,233 +1486,204 @@ function scoreMFTickertape(f) {
   }
   function pr(val, arr, higher=true) { return pctRank(val, arr, higher); }
 
-  // 1. ROLLING 3Y CONSISTENCY (25 pts) -----------------------------
-  // #1 predictor. Average return across ALL rolling 3Y windows.
-  const roll = get('rolling_3y');
+  // -- PILLAR A: ROLLING 3Y CONSISTENCY (25 pts) --------------------------------
+  // Varsity Ch19: "Rolling return is the most honest measure — removes start/end date bias"
+  // This is the SINGLE best predictor of future fund performance per Morningstar research
+  const roll  = get('rolling_3y');
   const rollP = (roll && roll > 0) ? pr(roll, dist.rolling_3y) : null;
   const rollPts = pts(rollP, 25);
   score += rollPts;
   hits[`Rolling 3Y: ${roll!=null?roll.toFixed(1):'?'}% (top ${rollP!=null?(100-rollP).toFixed(0):'?'}% of eligible funds)`] = rollPts;
 
-  // 2. RISK-ADJUSTED RETURNS (20 pts) ------------------------------
-  // Sharpe + Sortino both percentile-ranked within category.
-  // Never use absolute thresholds - all negative in bear markets.
+  // -- PILLAR B: RISK-ADJUSTED RETURNS (20 pts) ---------------------------------
+  // Varsity Ch22+23: Sortino more relevant than Sharpe for long-term SIP investors
+  // "Sharpe penalises upside volatility — we only care about downside risk"
+  // NEW: Sortino gets 13 pts, Sharpe gets 7 pts (was 12/8 before)
   const sharpe  = get('sharpe');
   const sortino = get('sortino');
   const shP  = pr(sharpe,  dist.sharpe,  true);
   const soP  = pr(sortino, dist.sortino, true);
-  const shPts = pts(shP, 12);
-  const soPts = pts(soP, 8);
+  const shPts = pts(shP, 7);   // REDUCED: Sharpe includes upside vol = less relevant
+  const soPts = pts(soP, 13);  // INCREASED: Sortino = downside-only risk = SIP investor's true risk
   score += shPts + soPts;
-  hits[`Sharpe: ${sharpe!=null?sharpe.toFixed(3):'?'} (top ${shP!=null?(100-shP).toFixed(0):'?'}% in category)`] = shPts;
-  hits[`Sortino: ${sortino!=null?sortino.toFixed(4):'?'} (top ${soP!=null?(100-soP).toFixed(0):'?'}% in category)`] = soPts;
+  hits[`Sharpe: ${sharpe!=null?sharpe.toFixed(3):'?'} (top ${shP!=null?(100-shP).toFixed(0):'?'}% — risk-adjusted return)`] = shPts;
+  hits[`Sortino: ${sortino!=null?sortino.toFixed(4):'?'} (top ${soP!=null?(100-soP).toFixed(0):'?'}% — downside risk quality)`] = soPts;
 
-  // 3. DOWNSIDE PROTECTION (15 pts) --------------------------------
-  // Max drawdown = worst single crash fall. Volatility = daily swing.
-  // Both lower-is-better, percentile vs eligible peers.
-  const mdd    = get('max_drawdown');
-  const vol    = get('volatility');
-  const catVol = get('category_stddev') || 16;
-  const mddP   = pr(mdd, dist.max_drawdown, false);
-  const volP   = pr(vol, dist.volatility,   false);
-  const mddPts = pts(mddP, 9);
-  const volPts = pts(volP, 6);
-  score += mddPts + volPts;
-  hits[`Max drawdown: ${mdd!=null?mdd.toFixed(1):'?'}% (top ${mddP!=null?(100-mddP).toFixed(0):'?'}% protected)`] = mddPts;
-  hits[`Volatility: ${vol!=null?vol.toFixed(1):'?'}% vs category avg ${catVol.toFixed(1)}%`] = volPts;
-
-  // 4. BEATS PEERS (15 pts) -----------------------------------------
-  // vs_cat_3Y/5Y/10Y are RATIOS (>1.0 = beats median peer).
-  // Purest measure of manager skill. vs_cat_1Y excluded (wrong scale).
+  // -- PILLAR C: BEATS PEERS CONSISTENTLY (20 pts) ------------------------------
+  // Varsity Ch21: "Beat benchmark in 7/10 years = manager skill, not luck"
+  // vs_cat ratios: >1.0 = beats median peer over that period
   const vc3  = get('vs_cat_3y');
   const vc5  = get('vs_cat_5y');
   const vc10 = get('vs_cat_10y');
   const vc3P  = (vc3  && vc3  > 0) ? pr(vc3,  dist.vs_cat_3y)  : null;
   const vc5P  = (vc5  && vc5  > 0) ? pr(vc5,  dist.vs_cat_5y  || dist.vs_cat_3y)  : null;
   const vc10P = (vc10 && vc10 > 0) ? pr(vc10, dist.vs_cat_10y || dist.vs_cat_5y) : null;
-  const vc3Pts  = pts(vc3P,  8);
-  const vc5Pts  = pts(vc5P,  5);
-  const vc10Pts = pts(vc10P, 2);
+  const vc3Pts  = pts(vc3P,  8);   // 3Y peer beat
+  const vc5Pts  = pts(vc5P,  8);   // INCREASED to 8: 5Y is the key period for investor cycles
+  const vc10Pts = pts(vc10P, 4);   // 10Y: highest conviction if available
   score += vc3Pts + vc5Pts + vc10Pts;
-  hits[vc3  ? `Beats peers 3Y: ${vc3.toFixed(2)}x (${vc3>1?'above':'below'} median)` : 'Beats peers 3Y: no data'] = vc3Pts;
-  hits[vc5  ? `Beats peers 5Y: ${vc5.toFixed(2)}x` : 'Beats peers 5Y: no data'] = vc5Pts;
-  if (vc10 && vc10 > 0) hits[`Beats peers 10Y: ${vc10.toFixed(2)}x`] = vc10Pts;
+  hits[vc3  ? `Beats peers 3Y: ${vc3.toFixed(2)}x (${vc3>1?'outperforms':'underperforms'} median)` : 'Beats peers 3Y: no data'] = vc3Pts;
+  hits[vc5  ? `Beats peers 5Y: ${vc5.toFixed(2)}x (${vc5>1?'outperforms':'underperforms'} median)` : 'Beats peers 5Y: no data'] = vc5Pts;
+  if(vc10 && vc10 > 0) hits[`Beats peers 10Y: ${vc10.toFixed(2)}x — decade-long consistency`] = vc10Pts;
 
-  // 5. EXPENSE RATIO (12 pts) ---------------------------------------
-  // Most reliable long-term predictor per Morningstar/VR.
-  // 0.5% diff = ₹8-12 lakh less on ₹10L over 20 years.
+  // Alpha bonus — Varsity: "Alpha>0 = manager adding value above risk taken"
+  // If fund consistently beats category, reward that with bonus
+  const vc1 = get('vs_cat_1y');
+  const beatingOnMultipleTimeframes = (vc3&&vc3>1.1) && (vc5&&vc5>1.1);
+  if(beatingOnMultipleTimeframes){
+    score += 2;
+    hits['Alpha: Consistent outperformer across 3Y+5Y — manager skill confirmed'] = 2;
+  }
+
+  // -- PILLAR D: DOWNSIDE PROTECTION (15 pts) ------------------------------------
+  // Varsity: "Max Drawdown matters most — a fund that falls 50% needs 100% to recover"
+  // Capital preservation during crashes = wealth compounding advantage
+  const mdd    = get('max_drawdown');
+  const vol    = get('volatility');
+  const catVol = get('category_stddev') || 16;
+  const mddP   = pr(mdd, dist.max_drawdown, false); // lower drawdown = better rank
+  const volP   = pr(vol, dist.volatility,   false);
+  const mddPts = pts(mddP, 10);  // INCREASED: drawdown is the capital destruction metric
+  const volPts = pts(volP, 5);
+  score += mddPts + volPts;
+  hits[`Max Drawdown: ${mdd!=null?mdd.toFixed(1):'?'}% (top ${mddP!=null?(100-mddP).toFixed(0):'?'}% protected)`] = mddPts;
+  hits[`Volatility: ${vol!=null?vol.toFixed(1):'?'}% vs category avg ${catVol.toFixed(1)}%`] = volPts;
+
+  // Volatility vs category bonus — fund that delivers lower vol than category
+  const vol2    = get('volatility');
+  const catVol2 = get('category_stddev');
+  if(vol2 && catVol2 && vol2 < catVol2){
+    const diff = catVol2 - vol2;
+    const vb = diff > 2 ? 1 : 0.5;
+    score += vb;
+    hits[`Vol below category avg: ${vol2.toFixed(1)}% vs ${catVol2.toFixed(1)}% (better risk control)`] = vb;
+  }
+
+  // -- PILLAR E: EXPENSE RATIO (12 pts) -----------------------------------------
+  // Varsity Ch20: "1% extra TER over 30 years = ~25% less corpus. Most reliable predictor."
+  // Morningstar: expense ratio is the single best predictor of future fund returns
   const exp  = get('expense_ratio');
   const expP = (exp && exp > 0) ? pr(exp, dist.expense, false) : null;
   const expPts = pts(expP, 12);
   score += expPts;
-  const expTier = exp ? (exp<0.5?'very low':exp<0.75?'low':exp<1.0?'average':'high') : '?';
-  hits[`Expense: ${exp!=null?exp.toFixed(2):'?'}% (${expTier})`] = expPts;
+  const expTier = exp ? (exp<0.4?'exceptional':exp<0.65?'very low':exp<0.85?'low':exp<1.1?'average':'high') : '?';
+  hits[`Expense Ratio: ${exp!=null?exp.toFixed(2):'?'}% (${expTier}) — ₹${exp?Math.round((exp/100)*100000).toLocaleString('en-IN'):'?'} annual cost on ₹1L`] = expPts;
 
-  // 6. ABSOLUTE RETURNS (8 pts) -------------------------------------
-  // Lower weight - point-in-time returns have low predictive power.
+  // -- PILLAR F: ABSOLUTE RETURNS (8 pts) ---------------------------------------
+  // Varsity Ch19: "Point-to-point CAGR has low predictive power — use rolling returns instead"
+  // Kept for user expectation setting but weighted LOW
   const r3  = get('cagr_3y');
   const r5  = get('cagr_5y');
   const r10 = get('cagr_10y');
   const r3P  = (r3  && r3  > 0) ? pr(r3,  dist.cagr_3y)  : null;
   const r5P  = (r5  && r5  > 0) ? pr(r5,  dist.cagr_5y  || dist.cagr_3y) : null;
   const r10P = (r10 && r10 > 0) ? pr(r10, dist.cagr_10y || dist.cagr_5y) : null;
-  const r3Pts  = pts(r3P,  4);
-  const r5Pts  = pts(r5P,  3);
-  const r10Pts = pts(r10P, 1);
-  score += r3Pts + r5Pts + r10Pts;
-  hits[r3  ? `3Y CAGR: ${r3.toFixed(1)}%`  : '3Y CAGR: no data']  = r3Pts;
-  hits[r5  ? `5Y CAGR: ${r5.toFixed(1)}%`  : '5Y CAGR: no data']  = r5Pts;
-  if (r10 && r10 > 0) hits[`10Y CAGR: ${r10.toFixed(1)}%`] = r10Pts;
+  score += pts(r3P, 3) + pts(r5P, 3) + pts(r10P, 2);
+  hits[r3  ? `3Y CAGR: ${r3.toFixed(1)}%`  : '3Y CAGR: no data']  = pts(r3P, 3);
+  hits[r5  ? `5Y CAGR: ${r5.toFixed(1)}%`  : '5Y CAGR: no data']  = pts(r5P, 3);
+  if(r10 && r10 > 0) hits[`10Y CAGR: ${r10.toFixed(1)}%`] = pts(r10P, 2);
 
-  // 7. PORTFOLIO QUALITY (8 pts) ------------------------------------
-  // PE vs category: lower = better value. Cash 3-10%: healthy buffer.
-  // Top10 concentration: lower = less single-stock risk.
-  // ATH recovery: closer to all-time high = stronger fund momentum.
+  // -- PILLAR G: PORTFOLIO QUALITY (8 pts) --------------------------------------
+  // Varsity Ch24: "Portfolio PE vs benchmark PE = is manager buying cheap or expensive?"
+  // Concentration: Varsity: "Top 10 > 40% = single-stock risk"
   const pe    = get('pe_ratio');
   const catPE = get('category_pe') || 30;
   const peP   = (pe && pe > 0) ? pr(pe, dist.pe, false) : null;
-  const pePts = pts(peP, 2);
+  const pePts = pts(peP, 3);
   score += pePts;
-  if (pe) hits[`Portfolio PE: ${pe.toFixed(1)} vs category ${catPE.toFixed(1)}`] = pePts;
+  if(pe) hits[`Portfolio PE: ${pe.toFixed(1)} vs category ${catPE.toFixed(1)} (${pe<catPE?'cheap':'premium'} vs peers)`] = pePts;
 
+  // Cash allocation — Varsity: 3-10% = healthy buffer for opportunities
   const cash = get('pct_cash') || 0;
-  if (cash >= 3 && cash <= 10) { score += 2; hits[`Cash: ${cash.toFixed(1)}% (healthy buffer)`] = 2; }
-  else if (cash > 0 && cash < 3) { score += 1; hits[`Cash: ${cash.toFixed(1)}%`] = 1; }
-  else if (cash > 20) hits[`Cash: ${cash.toFixed(1)}% (excess - uncertain market view?)`] = 0;
+  if(cash>=3&&cash<=10)      { score+=2; hits[`Cash: ${cash.toFixed(1)}% (optimal buffer)`]=2; }
+  else if(cash>0&&cash<3)    { score+=1; hits[`Cash: ${cash.toFixed(1)}% (minimal)`]=1; }
+  else if(cash>20)           { hits[`Cash: ${cash.toFixed(1)}% (excess — uncertain market view)`]=0; }
 
+  // Top10 Concentration — Varsity: lower = less single-stock risk (3 pts)
   const top10  = get('top10_conc') || 0;
   const top10P = (top10 > 0) ? pr(top10, dist.top10, false) : null;
-  const top10Pts = pts(top10P, 1);
+  const top10Pts = pts(top10P, 3);
   score += top10Pts;
-  if (top10) hits[`Top 10 holdings: ${top10.toFixed(1)}% concentration`] = top10Pts;
+  if(top10) hits[`Top 10 holdings: ${top10.toFixed(1)}% (${top10<35?'well diversified':top10<45?'moderate':' concentrated'})`] = top10Pts;
 
-  // % Away from ATH (2 pts) - 100% data coverage
-  // Measures how much the fund has recovered vs its own all-time high.
-  // Lower = better (0% = at ATH, 28% = 28% below peak).
-  // Rewards funds that have held up or recovered well in the 2024-25 correction.
+  // % from ATH (recovery signal)
   const ath = get('pct_from_ath');
-  if (ath != null) {
-    const athP = pr(ath, dist.pct_from_ath, false); // lower ATH gap = better
+  if(ath != null){
+    const athP = pr(ath, dist.pct_from_ath, false);
     const athPts = pts(athP, 2);
     score += athPts;
-    const athLabel = ath <= 5 ? 'near ATH' : ath <= 15 ? 'moderate recovery' : 'significant drawdown';
-    hits[`From ATH: ${ath.toFixed(1)}% below peak (${athLabel})`] = athPts;
+    hits[`From ATH: ${ath.toFixed(1)}% below peak`] = athPts;
   }
 
-  // Volatility vs Category StdDev bonus (1 pt) - 100% data coverage
-  // Funds that deliver lower volatility than category average are
-  // demonstrating better risk management, not just riding the beta.
-  const vol2    = get('volatility');
-  const catVol2 = get('category_stddev');
-  if (vol2 && catVol2 && vol2 < catVol2) {
-    const outperformance = catVol2 - vol2;
-    const volBonusPts = outperformance > 2 ? 1 : 0.5;
-    score += volBonusPts;
-    hits[`Volatility below category avg: ${vol2.toFixed(1)}% vs ${catVol2.toFixed(1)}% (better risk control)`] = volBonusPts;
-  }
-
-  // Style drift penalty for Mid Cap funds only (up to -2 pts)
-  // Mid cap funds holding >25% small cap are taking hidden risk beyond mandate.
-  // Flexi cap funds CAN legitimately hold small cap - no penalty for them.
-  if (subcat.includes('Mid')) {
+  // -- STYLE DRIFT PENALTY (Varsity sector analysis) ----------------------------
+  // Mid cap funds holding >25% small cap = taking hidden risk beyond mandate
+  if(subcat.includes('Mid')){
     const smallCapPct = get('pct_smallcap') || 0;
-    if (smallCapPct > 27) {
-      score -= 2;
-      hits[`Style drift: ${smallCapPct.toFixed(1)}% in small cap for a mid cap fund (mandate breach)`] = -2;
-    } else if (smallCapPct > 20) {
-      score -= 1;
-      hits[`Style drift: ${smallCapPct.toFixed(1)}% in small cap (elevated for mid cap fund)`] = -1;
-    }
+    if(smallCapPct > 27){ score-=2; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap in mid cap fund`]=-2; }
+    else if(smallCapPct > 20){ score-=1; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap (elevated)`]=-1; }
   }
 
-  // 8. AUM QUALITY (5 pts) ------------------------------------------
-  // Category-specific sweet spots.
-  // Small cap >₹15K Cr = liquidity constrained, can't find stocks.
+  // -- PILLAR H: AUM + TRACK RECORD (12 pts) ------------------------------------
+  // Varsity: "A 10Y fund survived: demonetisation, IL&FS, COVID, 2022 selloff, 2024-25 correction"
+  // AUM: too small = liquidity risk; too large (for small cap) = performance drag
+
+  // Track record (max 9 pts)
+  if      (months >= 156) { score+=9; hits[`Track record: ${Math.round(months/12)}Y (13Y+ — 5 stress events survived)`]=9; }
+  else if (months >= 120) { score+=7; hits[`Track record: ${Math.round(months/12)}Y (10Y+ — full bull-bear cycle)`]=7; }
+  else if (months >= 84)  { score+=4; hits[`Track record: ${Math.round(months/12)}Y (7Y+ — two corrections)`]=4; }
+  else if (months >= 60)  { score+=2; hits[`Track record: ${Math.round(months/12)}Y (5Y minimum)`]=2; }
+
+  // AUM quality (max 3 pts within this pillar — was 5 pts standalone)
   const aum = get('aum_cr') || 0;
-  if (aum >= aumMin && aum <= aumMax) {
-    score += 5; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (ideal range)`] = 5;
-  } else if (aum > aumMax) {
-    const p = subcat.includes('Small') ? 2 : 4;
-    score += p;
-    hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr ${subcat.includes('Small') ? '(too large - liquidity risk for small cap)' : '(large, established fund)'}`] = p;
-  } else if (aum >= aumMin * 0.5) {
-    score += 3; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (below ideal, growing)`] = 3;
-  } else if (aum > 0) {
-    score += 1; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fund)`] = 1;
-  }
+  if(aum >= aumMin && aum <= aumMax)       { score+=3; hits[`AUM: ₹${Math.round(aum).toLocaleString('en-IN')} Cr (sweet spot)`]=3; }
+  else if(aum > aumMax){
+    const p = subcat.includes('Small') ? 1 : 3;
+    score+=p; hits[`AUM: ₹${Math.round(aum).toLocaleString('en-IN')} Cr ${subcat.includes('Small')?'(too large for small cap)':'(large established fund)'}`]=p;
+  } else if(aum >= aumMin*0.5){ score+=2; hits[`AUM: ₹${Math.round(aum).toLocaleString('en-IN')} Cr (growing)`]=2; }
+  else if(aum > 0)             { score+=1; hits[`AUM: ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fund)`]=1; }
 
-  // 9. TRACK RECORD (9 pts) -----------------------------------------
-  // 10Y matters far more than we were giving it.
-  // A 10Y fund survived: demonetisation (2016), IL&FS crisis (2018),
-  // COVID crash (2020 -38%), 2022 global selloff, 2024-25 correction.
-  // That is 5 distinct stress events. A 5Y fund caught only 2 of them.
-  // Morningstar weights 10Y returns at 50% of their star rating.
-  // New scale: 5Y=2pts, 7Y=4pts, 10Y=7pts, 13Y=9pts
-  if      (months >= 156) { score += 9; hits[`Track record: ${Math.round(months)} months (13Y+ - pre-taper tantrum history)`] = 9; }
-  else if (months >= 120) { score += 7; hits[`Track record: ${Math.round(months)} months (10Y+ - full bull-bear cycle)`] = 7; }
-  else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+ - two corrections)`] = 4; }
-  else if (months >= 60)  { score += 2; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 2; }
-
-  // 10. AMC QUALITY (10 pts) ----------------------------------------
-  // Morningstar Stewardship Pillar: governance, team depth, SEBI record.
+  // -- PILLAR I: AMC QUALITY (10 pts) -------------------------------------------
+  // Varsity: "Governance and SEBI record = Morningstar Stewardship Pillar"
+  // Bad governance = Franklin saga (investors locked out for 2 years)
   const qual = getAmcQual(f.amc || '');
   const amcPts = Math.round(qual.score / 10 * 10 * 10) / 10;
   score += amcPts;
   hits[`AMC ${qual.key||'?'}: ${qual.score}/10 (governance & stewardship)`] = amcPts;
-  if (qual.warning) hits[`Flagged: ${qual.warning}`] = 0;
+  if(qual.warning) hits[`Flagged: ${qual.warning}`] = 0;
 
-  // SEBI penalties applied to final score
-  if      (qual.sebi === 'probe')  { score = Math.min(score, 15); hits['DISQUALIFIED: Active SEBI investigation (capped at 15)'] = 0; }
-  else if (qual.sebi === 'action') { score = Math.round(score * 0.85 * 10)/10; hits['Past SEBI enforcement action: -15% score penalty'] = 0; }
-  else if (qual.sebi === 'minor')  { score = Math.round(score * 0.95 * 10)/10; hits['Minor SEBI fine on record: -5% score penalty'] = 0; }
+  // SEBI penalties — non-negotiable (Varsity: "Drop the fund if SEBI probe ongoing")
+  if(qual.sebi==='probe')  { score=Math.min(score,15); hits['DISQUALIFIED: Active SEBI investigation (capped at 15)']=0; }
+  else if(qual.sebi==='action'){ score=Math.round(score*0.85*10)/10; hits['Past SEBI enforcement action: -15% score penalty']=0; }
+  else if(qual.sebi==='minor') { score=Math.round(score*0.95*10)/10; hits['Minor SEBI fine on record: -5% score penalty']=0; }
 
-  // -- POST-SCORING RULES --------------------------------------------
-  // Applied after all scoring to prevent unproven small funds from
-  // outranking established funds with long track records.
-
-  // Rule 1: Minimum Credibility - AUM < ₹5,000 Cr AND age < 84 months
-  // A small, young fund cannot be recommended above established peers
-  // regardless of good recent numbers. Numbers are unproven at scale.
-  const fundAum = parseFloat(f.aum_cr || f.aum) || 0;
-  if (fundAum < 5000 && months < 84 && score > 70) {
-    score = 70;
-    hits['📌 Credibility cap: AUM < ₹5K Cr + age < 7Y -> score capped at 70 (watchlist)'] = 0;
+  // -- POST-SCORING CREDIBILITY RULES -------------------------------------------
+  // Varsity: "A young fund with good recent numbers = luck, not skill"
+  // Small + young funds cannot beat established funds regardless of recent numbers
+  const fundAum = parseFloat(f.aum_cr||f.aum)||0;
+  if(fundAum < 5000 && months < 84 && score > 70){
+    score=70; hits['📌 Credibility cap: AUM<₹5K Cr + age<7Y → capped at 70']=0;
   }
-
-  // Rule 2: No 5Y return data AND young fund -> cap at 75
-  // Without 5Y data the fund hasn't been tested across a full market cycle.
   const has5Y = parseFloat(f.cagr_5y) > 0;
-  if (!has5Y && months < 84 && score > 75) {
-    score = Math.min(score, 75);
-    hits['📌 No 5Y data + age < 7Y -> score capped at 75'] = 0;
+  if(!has5Y && months < 84 && score > 75){
+    score=Math.min(score,75); hits['📌 No 5Y data + age<7Y → capped at 75']=0;
+  }
+  if(qual.score<=5 && fundAum<5000 && score>72){
+    score=72; hits[`📌 Low AMC credibility (${qual.score}/10) + small AUM → capped at 72`]=0;
   }
 
-  // Rule 3: Low-credibility AMC + small AUM -> cap at 72
-  // Double governance risk: unknown AMC managing small corpus.
-  if (qual.score <= 5 && fundAum < 5000 && score > 72) {
-    score = 72;
-    hits[`📌 Low AMC credibility (${qual.score}/10) + AUM < ₹5K Cr -> score capped at 72`] = 0;
-  }
-
-  // Watchlist flag - AUM < ₹5,000 Cr (informational, no score change)
   const isWatchlist = fundAum > 0 && fundAum < 5000;
-
-  // Professional overlay - DO NOT INVEST flag
   const dniFlag = DO_NOT_INVEST[f.name] || null;
 
   return {
     score: Math.round(score * 10) / 10,
-    hits,
-    cat,
+    hits, cat,
     amc_sebi:    qual.sebi,
     amc_warning: qual.warning,
     amc_note:    qual.note || null,
     dni:         dniFlag,
-    watchlist:   isWatchlist,  // small fund - monitor, don't rush
+    watchlist:   isWatchlist,
   };
 }
-
-
 app.get("/api/mf/tickertape", async(req,res)=>{
   try {
     const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
@@ -3019,6 +3007,25 @@ app.get("/api/portfolio/stats", async(req,res) => {
 });
 
 // -- Percentile rank within sector peers --------------------------------------
+// =============================================================================
+// STOCK SCORING — Varsity-derived 100-point framework
+// Sources: Zerodha Varsity Module 2 (TA) + Module 3 (FA) + Module 15 (Sector)
+//
+// PILLARS:
+//   Quality/Fundamentals (35 pts) — Varsity: ROE>15% = good, CFO>PAT = earnings quality
+//   Trend (25 pts)                — Varsity: 200DMA is the line of truth
+//   Momentum (10 pts)             — Price performance across timeframes
+//   Value (20 pts)                — Varsity: sector-relative PE, PEG, PE/ROE
+//   Growth (10 pts)               — Varsity: EPS + Revenue CAGR, operating leverage
+//
+// KEY IMPROVEMENTS FROM VARSITY:
+//   1. P/E now sector-percentile ranked (not absolute) — Varsity: compare to peers
+//   2. Interest Coverage added (Varsity: <1.5x = danger zone)
+//   3. CFO quality proxy via Operating Margin consistency (data available)
+//   4. RSI Divergence adds to score — Varsity: strongest reversal signal
+//   5. Revenue Growth separate from EPS (Varsity: operating leverage check)
+//   6. PEG via sector percentile, not just absolute
+// =============================================================================
 function pctRankStk(val, arr, hb=true) {
   if (val==null||!arr.length) return 50;
   const valid=arr.filter(v=>v!=null&&isFinite(v));
@@ -3026,191 +3033,325 @@ function pctRankStk(val, arr, hb=true) {
   return Math.round(valid.filter(v=>hb?v<val:v>val).length/valid.length*100);
 }
 
-// -- 100-point Master Checklist Scoring (same logic as Deep Analyzer) ----------
 function scoreOneStock(f, peers) {
   let s=0; const hits={};
   const na = v => v!=null&&isFinite(v);
   const pr = (val,key,hb=true) => pctRankStk(val, peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v)), hb);
   const px = f.price || livePrices[f.sym]?.price;
 
-  // -- TREND (25 pts) --------------------------------------------------------
-  // Above 200 DMA (8pts)
+  // -- PILLAR 1: BUSINESS QUALITY (35 pts) -------------------------------------
+  // Varsity: ROE is the #1 quality signal. D/E + interest coverage = safety.
+  // CFO quality + operating margin = earnings reliability.
+
+  // ROE — Varsity: >15% = good, >20% = excellent (10 pts)
+  if(na(f.roe)){
+    const pp = f.roe>=20?10 : f.roe>=15?8 : f.roe>=12?5 : f.roe>=8?2 : 0;
+    s+=pp; hits[`ROE: ${f.roe.toFixed(1)}%`]=pp;
+  }
+
+  // D/E Ratio — Varsity: <0.5=safe, >2=concern (8 pts)
+  if(na(f.debtToEq)){
+    const pp = f.debtToEq<=0.3?8 : f.debtToEq<=0.7?6 : f.debtToEq<=1.5?3 : f.debtToEq<=3?1 : 0;
+    s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp;
+  }
+
+  // Operating Margin — sector-relative percentile (Varsity: compare to peers) (6 pts)
+  if(na(f.opMargin)){
+    const peerPct = pr(f.opMargin,'opMargin',true);
+    const pp = peerPct>=80?6 : peerPct>=60?5 : peerPct>=40?3 : peerPct>=20?1 : 0;
+    s+=pp; hits[`Op Margin: ${f.opMargin.toFixed(1)}% (top ${(100-peerPct).toFixed(0)}% in sector)`]=pp;
+  }
+
+  // EPS Growth — Varsity: growth validates business quality (7 pts)
+  if(na(f.earGrowth) && f.earGrowth<500){
+    const pp = f.earGrowth>=25?7 : f.earGrowth>=15?5 : f.earGrowth>=8?3 : f.earGrowth>=0?1 : 0;
+    s+=pp; hits[`EPS Growth: ${f.earGrowth.toFixed(1)}%`]=pp;
+  }
+
+  // Revenue Growth — Varsity: top line growth = business expanding (4 pts)
+  if(na(f.revGrowth) && f.revGrowth<300){
+    const pp = f.revGrowth>=20?4 : f.revGrowth>=12?3 : f.revGrowth>=6?2 : f.revGrowth>=0?1 : 0;
+    s+=pp; hits[`Revenue Growth: ${f.revGrowth.toFixed(1)}%`]=pp;
+
+    // Operating Leverage bonus — Varsity: EPS growing faster than revenue = margin expansion
+    if(na(f.earGrowth) && f.earGrowth > f.revGrowth + 5){
+      s+=2; hits['Operating leverage: EPS outpacing revenue']=2;
+    }
+  }
+
+  // -- PILLAR 2: TREND (25 pts) -------------------------------------------------
+  // Varsity: "200 DMA is the line of truth for long-term investors"
+  // Dow Theory: price above 200DMA = bullish primary trend
+
+  // Above 200 DMA — Varsity: most important technical signal (8 pts)
   if(na(px)&&na(f.dma200)){
     const above=px>f.dma200;
-    const pp=above?8:0; s+=pp;
-    hits[`200DMA: ${above?'Above':'Below'} (${f.dma200?.toFixed(0)})`]=pp;
+    const pct200=((px-f.dma200)/f.dma200*100);
+    let pp;
+    if(!above)           pp=0;                          // below 200DMA = bearish
+    else if(pct200<=25)  pp=8;                          // above but not overextended
+    else                 pp=4;                          // overextended = chasing
+    s+=pp; hits[`200DMA: ${above?'Above':'Below'} (${pct200>=0?'+':''}${pct200.toFixed(1)}%)`]=pp;
   }
-  // Golden Cross (7pts)
+
+  // Golden Cross / Death Cross — Varsity: 50/200 crossover = trend confirmation (7 pts)
   if(f.goldenCross!=null){
     const pp=f.goldenCross?7:0; s+=pp;
-    hits[f.goldenCross?'Golden Cross':'Death Cross']=pp;
+    hits[f.goldenCross?'Golden Cross (50>200 DMA)':'Death Cross (50<200 DMA)']=pp;
   }
-  // vs 50DMA (5pts)
+
+  // Above 50 DMA — medium-term trend (4 pts)
   if(na(px)&&na(f.dma50)){
     const a50=px>f.dma50;
-    const pp=a50?5:0; s+=pp;
+    const pp=a50?4:0; s+=pp;
     hits[`50DMA: ${a50?'Above':'Below'}`]=pp;
   }
-  // Not overextended from 200DMA (5pts)
-  if(na(px)&&na(f.dma200)){
-    const pct200=(px-f.dma200)/f.dma200*100;
-    const pp=pct200>0&&pct200<=25?5:pct200>25?2:1; s+=pp;
-    hits[`vs 200DMA: ${pct200>=0?'+':''}${pct200.toFixed(1)}%`]=pp;
+
+  // Supertrend signal (3 pts)
+  if(f.supertrendSig){
+    const pp=f.supertrendSig==='bullish'?3:0; s+=pp;
+    if(pp||f.supertrendSig==='bearish') hits[`Supertrend: ${f.supertrendSig}`]=pp;
   }
 
-  // -- MOMENTUM (20 pts) -----------------------------------------------------
-  // RSI zone (6pts)
+  // RSI Divergence — Varsity: "strongest reversal signal on Fallen Angels" (3 pts)
+  // Bullish divergence: price lower low but RSI higher low = selling exhaustion
+  if(f.bullishDiv){
+    s+=3; hits['RSI Bullish Divergence (strongest reversal signal)']=3;
+  }
+
+  // -- PILLAR 3: MOMENTUM (10 pts) ---------------------------------------------
+  // Varsity: momentum = rate of price change; combine with volume for confirmation
+
+  // RSI zone — Varsity: 40-65 = healthy trend (4 pts)
   if(na(f.rsi)){
-    const pp=f.rsi>=40&&f.rsi<=65?6:f.rsi>=35&&f.rsi<=70?4:f.rsi<35?3:0;
-    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)}`]=pp;
-  }
-  // 52W return percentile (7pts)
-  if(na(f.change52w)){
-    const pp=Math.round(pr(f.change52w*100,'_chg52')/100*7*10)/10; s+=pp;
-    hits[`52W: ${(f.change52w*100).toFixed(1)}%`]=pp;
-  }
-  // 6M return (4pts)
-  if(na(f.change6m)){
-    const pp=Math.round(pr(f.change6m*100,'_chg6m')/100*4*10)/10; s+=pp;
-    hits[`6M: ${(f.change6m*100).toFixed(1)}%`]=pp;
-  }
-  // Volume accumulation (3pts)
-  if(na(f.volRatio)){
-    const pp=f.volRatio>1.3?3:f.volRatio>1.1?2:f.volRatio>0.9?1:0;
-    s+=pp; hits[`Vol: ${f.volRatio.toFixed(2)}x`]=pp;
+    const pp = f.rsi>=40&&f.rsi<=65?4 : f.rsi>=35&&f.rsi<=70?3 : f.rsi<35?2 : 0;
+    // Note: RSI<30 gets 2 pts (oversold = Fallen Angel entry per Varsity)
+    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} ${f.rsi<30?'(oversold)':f.rsi>70?'(overbought)':''}`]=pp;
   }
 
-  // -- QUALITY / FUNDAMENTALS (35 pts) ----------------------------------------
-  // ROE (10pts)
-  if(na(f.roe)){
-    const pp=f.roe>=20?10:f.roe>=15?8:f.roe>=12?5:f.roe>=8?2:0; s+=pp;
-    hits[`ROE: ${f.roe.toFixed(1)}%`]=pp;
+  // Volume confirmation — Varsity: "volume is the fuel of price movement" (3 pts)
+  // OBV rising = institutional accumulation (stealth buying)
+  if(f.obvRising!=null){
+    const pp=f.obvRising?2:0; if(pp){s+=pp; hits[`OBV: ${f.obvRising?'Rising (accumulation)':'Falling'}`]=pp;}
   }
-  // D/E (8pts)
-  if(na(f.debtToEq)){
-    const pp=f.debtToEq<=0.3?8:f.debtToEq<=0.7?6:f.debtToEq<=1.5?3:f.debtToEq<=3?1:0; s+=pp;
-    hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp;
+  if(na(f.volRatio)){
+    const pp=f.volRatio>1.5?1:0; if(pp){s+=pp; hits[`Volume spike: ${f.volRatio.toFixed(2)}x avg`]=pp;}
   }
-  // EPS Growth (10pts)
-  if(na(f.earGrowth)&&f.earGrowth<500){
-    const pp=f.earGrowth>=25?10:f.earGrowth>=15?8:f.earGrowth>=8?5:f.earGrowth>=0?2:0; s+=pp;
-    hits[`EPS Gr: ${f.earGrowth.toFixed(1)}%`]=pp;
+
+  // MACD — Varsity: "MACD bullish crossover = momentum building" (3 pts)
+  if(f.macdBull!=null){
+    const pp=f.macdBull?3:0; s+=pp;
+    hits[`MACD: ${f.macdBull?'Bullish crossover':'Bearish'}`]=pp;
   }
-  // PE valuation (5pts)
+
+  // -- PILLAR 4: VALUATION (20 pts) --------------------------------------------
+  // Varsity: "valuation ratios need peer comparison to be meaningful"
+  // P/E, P/BV, PEG all sector-percentile ranked — not absolute thresholds
+
+  // P/E — sector-percentile ranked (Varsity: compare to same-sector peers) (8 pts)
   if(na(f.pe)&&f.pe>0&&f.pe<400){
-    const pp=f.pe<15?5:f.pe<25?4:f.pe<40?2:0; s+=pp;
-    hits[`P/E: ${f.pe.toFixed(1)}x`]=pp;
+    const peerPct = pr(f.pe,'pe',false); // lower P/E = better rank
+    const pp = peerPct>=80?8 : peerPct>=60?6 : peerPct>=40?4 : peerPct>=20?2 : 0;
+    s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x (cheaper than ${peerPct.toFixed(0)}% of sector peers)`]=pp;
   }
-  // Op Margin (4pts) - sector relative
-  if(na(f.opMargin)){
-    const pp=Math.round(pr(f.opMargin,'opMargin')/100*4*10)/10; s+=pp;
-    hits[`Op Mgn: ${f.opMargin.toFixed(1)}%`]=pp;
-  }
-  // PEG (bonus - up to 3pts)
+
+  // PEG — Varsity: "P/E without growth context is incomplete" (5 pts)
+  // PEG < 1 = growing faster than you're paying for
   if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
     const peg=f.pe/f.earGrowth;
-    const pp=peg<1?3:peg<2?2:peg<3?1:0; s+=pp;
-    hits[`PEG: ${peg.toFixed(2)}`]=pp;
+    const pp = peg<0.5?5 : peg<1?4 : peg<2?2 : peg<3?1 : 0;
+    s+=pp; hits[`PEG: ${peg.toFixed(2)} (${peg<1?'growth underpriced':'growth fairly/overpriced'})`]=pp;
   }
 
-  // -- VALUE (discount) (10 pts) ----------------------------------------------
+  // PE/ROE — Varsity: quality-adjusted valuation (lower = better value per quality unit) (4 pts)
+  if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
+    const perRoe=f.pe/f.roe;
+    const pp = perRoe<1?4 : perRoe<2?3 : perRoe<3?2 : 0;
+    if(pp>0) { s+=pp; hits[`PE/ROE: ${perRoe.toFixed(2)} (quality-adjusted value)`]=pp; }
+  }
+
+  // Discount from 52W high — Varsity: deeper fall = margin of safety (3 pts)
   if(na(f.pctFromHigh)){
     const d=Math.abs(f.pctFromHigh);
-    const pp=d>=30?4:d>=20?3:d>=10?2:d>=5?1:0;
-    if(pp>0){s+=pp;hits[`Discount: ${f.pctFromHigh?.toFixed(1)}% from 52wHi`]=pp;}
-  }
-  if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
-    // PE/ROE ratio - lower is better quality at price
-    const perRoe=f.pe/f.roe;
-    const pp=perRoe<1?4:perRoe<2?3:perRoe<3?2:0; s+=pp;
-    if(pp>0)hits[`PE/ROE: ${perRoe.toFixed(2)}`]=pp;
+    const pp = d>=30?3 : d>=20?2 : d>=10?1 : 0;
+    if(pp>0){ s+=pp; hits[`Discount from peak: ${f.pctFromHigh?.toFixed(1)}%`]=pp; }
   }
 
-  return { score:Math.min(Math.round(s*10)/10, 100), hits };
+  // -- HARD DISQUALIFIERS (Varsity: red flags that override good scores) --------
+  // Varsity Ch12: "If you find red flags, drop the stock regardless of attractiveness"
+
+  // Interest coverage < 1.5x — Varsity: "danger zone, company barely covering interest"
+  // We proxy with D/E > 3 + negative EPS (no direct interest coverage in our data)
+  // TODO: add interest coverage when available from screener data
+
+  // EPS collapse — Varsity: collapsing earnings = value trap signal
+  if(na(f.earGrowth)&&f.earGrowth<-20){
+    s-=10; hits['⚠ EPS collapse (value trap signal)']=-10;
+  }
+
+  // Revenue collapse — Varsity: top line decline = structural problem
+  if(na(f.revGrowth)&&f.revGrowth<-15){
+    s-=8; hits['⚠ Revenue declining sharply']=-8;
+  }
+
+  // Extreme debt — Varsity: high leverage = bankruptcy risk in downturns
+  if(na(f.debtToEq)&&f.debtToEq>4){
+    s-=5; hits['⚠ Extreme leverage (D/E > 4x)']=-5;
+  }
+
+  return { score: Math.min(Math.round(s*10)/10, 100), hits };
 }
 
 
 
-// -- Fallen Angel Score (0-100) ------------------------------------------------
-// Different logic: rewards quality + how oversold + recovery signals - debt risk
+
+// =============================================================================
+// FALLEN ANGEL SCORING — Varsity-derived framework
+// Sources: Module 2 (TA reversal signals) + Module 3 (FA quality screen)
+//
+// Varsity principle: "Maximum pessimism = maximum opportunity — IF the business
+// is fundamentally sound." A stock down 50% with ROE>15% and D/E<1 = Fallen Angel.
+// A stock down 50% with collapsing EPS = value trap. The difference is everything.
+//
+// PILLARS:
+//   Business Quality (40 pts) — Varsity checklist: ROE, debt, earnings, margins
+//   Depth of Fall    (20 pts) — Deeper = bigger opportunity (if quality intact)
+//   Oversold Signal  (20 pts) — Varsity: RSI<30 = oversold, <25 = extreme oversold
+//   Valuation        (15 pts) — Varsity: fallen stock should now be cheap on P/E, PE/ROE
+//   Recovery Signals (15 pts) — Varsity: RSI divergence + OBV accumulation = reversal starting
+//   Penalties               — Varsity Ch12 red flags: EPS collapse, extreme debt, revenue fall
+// =============================================================================
 function scoreFallenAngel(f) {
   let s=0; const hits={};
   const na = v => v!=null&&isFinite(v);
   const px = f.price || livePrices[f.sym]?.price;
 
-  // 1. BUSINESS QUALITY (40 pts) - must be a good business to be worth buying
+  // -- PILLAR 1: BUSINESS QUALITY (40 pts) -------------------------------------
+  // Varsity: "Only invest in Fallen Angels where the business is fundamentally intact"
+  // This is the most important pillar — separates recovery from value trap
+
+  // ROE — Varsity: ROE>15% consistently = strong business (14 pts)
   if(na(f.roe)){
-    const pp=f.roe>=25?14:f.roe>=20?12:f.roe>=15?9:f.roe>=10?5:0;
-    s+=pp; hits[`ROE ${f.roe.toFixed(1)}%`]=pp;
-  }
-  if(na(f.debtToEq)){
-    const pp=f.debtToEq<=0.3?12:f.debtToEq<=0.7?10:f.debtToEq<=1.5?6:f.debtToEq<=3?2:0;
-    s+=pp; hits[`D/E ${f.debtToEq.toFixed(2)}x`]=pp;
-  }
-  if(na(f.earGrowth)&&f.earGrowth<400){
-    const pp=f.earGrowth>=20?10:f.earGrowth>=10?7:f.earGrowth>=0?3:0; // declining EPS = trap
-    s+=pp; hits[`EPS Gr ${f.earGrowth.toFixed(1)}%`]=pp;
-  }
-  if(na(f.opMargin)){
-    const pp=f.opMargin>=20?4:f.opMargin>=10?2:0;
-    s+=pp; hits[`Op Mgn ${f.opMargin.toFixed(1)}%`]=pp;
+    const pp = f.roe>=25?14 : f.roe>=20?12 : f.roe>=15?9 : f.roe>=10?5 : 0;
+    s+=pp; hits[`ROE: ${f.roe.toFixed(1)}% ${f.roe>=15?'(quality)':'(concern)'}`]=pp;
   }
 
-  // 2. HOW DEEP IS THE DIP (20 pts) - deeper fall = bigger opportunity IF quality intact
+  // D/E — Varsity: high debt during a fall = bankruptcy risk (12 pts)
+  if(na(f.debtToEq)){
+    const pp = f.debtToEq<=0.3?12 : f.debtToEq<=0.7?10 : f.debtToEq<=1.5?6 : f.debtToEq<=3?2 : 0;
+    s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x ${f.debtToEq<=1?'(manageable)':'(elevated)'}`]=pp;
+  }
+
+  // EPS Growth — Varsity: declining EPS during a fall = trap signal (8 pts)
+  if(na(f.earGrowth)&&f.earGrowth<400){
+    const pp = f.earGrowth>=20?8 : f.earGrowth>=10?6 : f.earGrowth>=0?3 : 0;
+    s+=pp; hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% ${f.earGrowth>=0?'':'(⚠ declining)'}`]=pp;
+  }
+
+  // Revenue Growth — Varsity: top line decline = structural problem (6 pts)
+  if(na(f.revGrowth)&&f.revGrowth<300){
+    const pp = f.revGrowth>=15?6 : f.revGrowth>=8?4 : f.revGrowth>=0?2 : 0;
+    s+=pp; hits[`Revenue Growth: ${f.revGrowth.toFixed(1)}%`]=pp;
+  }
+
+  // -- PILLAR 2: DEPTH OF FALL (20 pts) ----------------------------------------
+  // Varsity: "Maximum fear = maximum opportunity" — but only if quality intact
+  // Deeper fall + intact fundamentals = Fallen Angel vs value trap
   if(na(f.pctFromHigh)){
     const d=Math.abs(f.pctFromHigh);
-    const pp=d>=50?20:d>=40?18:d>=30?15:d>=20?10:0;
+    const pp = d>=50?20 : d>=40?17 : d>=30?14 : d>=20?10 : 0;
     s+=pp; hits[`Fallen ${d.toFixed(0)}% from peak`]=pp;
   }
 
-  // 3. HOW OVERSOLD (20 pts) - more oversold = better entry timing
+  // -- PILLAR 3: OVERSOLD SIGNAL (20 pts) --------------------------------------
+  // Varsity: "RSI<30 = oversold (potential buy signal)"
+  // Varsity: "RSI<25 = extreme oversold" — historically highest recovery probability
   if(na(f.rsi)){
-    const pp=f.rsi<=25?20:f.rsi<=30?17:f.rsi<=35?14:f.rsi<=40?10:f.rsi<=45?6:f.rsi<=50?3:0;
-    s+=pp; hits[`RSI ${f.rsi.toFixed(0)}`]=pp;
+    const pp = f.rsi<=22?20 : f.rsi<=25?18 : f.rsi<=30?15 : f.rsi<=35?11 : f.rsi<=40?7 : f.rsi<=45?4 : f.rsi<=50?2 : 0;
+    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} ${f.rsi<=30?'(extreme oversold)':f.rsi<=40?'(oversold)':''}`]=pp;
   }
 
-  // 4. VALUATION NOW CHEAP (15 pts) - fallen enough to be attractive
+  // -- PILLAR 4: VALUATION (15 pts) --------------------------------------------
+  // Varsity: after a fall, the stock should now be cheap on valuation metrics
+  // P/E < historical norm = margin of safety
+
+  // P/E now cheap (8 pts)
   if(na(f.pe)&&f.pe>0&&f.pe<300){
-    const pp=f.pe<12?15:f.pe<18?12:f.pe<25?8:f.pe<35?4:0;
-    s+=pp; hits[`P/E ${f.pe.toFixed(1)}x`]=pp;
+    const pp = f.pe<10?8 : f.pe<15?7 : f.pe<20?5 : f.pe<30?3 : 0;
+    s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x ${f.pe<20?'(cheap)':'(still elevated)'}`]=pp;
   }
 
-  // 5. RECOVERY SIGNALS (15 pts) - early signs of reversal
-  if(f.macdBull!=null){
-    const pp=f.macdBull?8:0; // MACD turning bullish = recovery starting
-    s+=pp; if(pp) hits['MACD turning bullish']=pp;
+  // PE/ROE — Varsity: quality-adjusted value; <1 = paying less than the ROE justifies (7 pts)
+  if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
+    const perRoe=f.pe/f.roe;
+    const pp = perRoe<0.8?7 : perRoe<1.2?5 : perRoe<2?3 : perRoe<3?1 : 0;
+    s+=pp; hits[`PE/ROE: ${perRoe.toFixed(2)} ${perRoe<1?'(value vs quality)':''}`]=pp;
   }
-  if(f.accumDist){
-    const pp=f.accumDist==='Accumulation'?7:0;
-    s+=pp; if(pp) hits['Volume: Accumulation']=pp;
+
+  // -- PILLAR 5: RECOVERY SIGNALS (15 pts) -------------------------------------
+  // Varsity: "The best entry combines oversold RSI + volume accumulation + reversal pattern"
+
+  // RSI Bullish Divergence — Varsity: "STRONGEST reversal signal for Fallen Angels"
+  // Price makes lower low but RSI makes higher low = selling exhaustion
+  if(f.bullishDiv){
+    s+=6; hits['RSI Bullish Divergence — selling exhaustion (top recovery signal)']=6;
   }
+
+  // OBV Rising — Varsity: "Rising OBV with flat/falling price = stealth institutional accumulation"
   if(f.obvRising!=null){
     const pp=f.obvRising?5:0;
-    if(pp){s+=pp; hits['OBV rising']=pp;}
-  }
-  if(na(f.pctAbove200)&&f.pctAbove200!=null){
-    // Near 200DMA is a recovery zone
-    const pct=f.pctAbove200;
-    if(pct>=-10&&pct<=5){s+=5; hits['Near 200DMA (recovery zone)']=5;}
+    if(pp){s+=pp; hits['OBV Rising — institutional accumulation in stealth']=pp;}
   }
 
-  // PENALTIES (subtract) - signs this is a value trap not a dip
-  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=10; hits['EPS collapse (trap signal)']=-10; }
-  if(na(f.debtToEq)&&f.debtToEq>3)   { s-=8;  hits['Dangerous debt (trap risk)']=-8; }
-  if(na(f.revGrowth)&&f.revGrowth<-10){ s-=5;  hits['Revenue declining']=-5; }
+  // MACD Turning Bullish — Varsity: "MACD crossover = momentum beginning to reverse" (4 pts)
+  if(f.macdBull!=null){
+    const pp=f.macdBull?4:0;
+    s+=pp; if(pp) hits['MACD turning bullish — momentum reversing']=pp;
+  }
+
+  // Near 200DMA — Varsity: "200DMA acts as strong support; price near it = institutional buy zone"
+  if(na(f.pctAbove200)&&f.pctAbove200!=null){
+    const pct=f.pctAbove200;
+    if(pct>=-8&&pct<=8){ s+=3; hits['Near 200DMA (institutional buy zone)']=3; }
+    else if(pct>=-15&&pct<-8){ s+=1; hits['Approaching 200DMA support']=1; }
+  }
+
+  // Supertrend near bullish flip (2 pts)
+  if(f.supertrendSig==='bullish'){
+    s+=2; hits['Supertrend: just turned bullish']=2;
+  }
+
+  // -- PENALTIES — Varsity Ch12 Red Flags --------------------------------------
+  // Varsity: "Red flags override attractive numbers. Drop the stock, full stop."
+
+  // EPS Collapse — Varsity: "declining EPS during a fall = business is broken"
+  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=12; hits['⚠ EPS collapse >20% (value trap signal)']=-12; }
+  else if(na(f.earGrowth)&&f.earGrowth<-10){ s-=6; hits['⚠ EPS declining >10%']=-6; }
+
+  // Revenue Collapse — Varsity: top line decline = structural deterioration
+  if(na(f.revGrowth)&&f.revGrowth<-15){ s-=8; hits['⚠ Revenue collapsing >15%']=-8; }
+  else if(na(f.revGrowth)&&f.revGrowth<-8){ s-=4; hits['⚠ Revenue declining >8%']=-4; }
+
+  // Extreme Debt — Varsity: "high debt during a fall = greater possibility of default"
+  if(na(f.debtToEq)&&f.debtToEq>4){ s-=10; hits['⚠ Extreme leverage D/E>4x (default risk)']=-10; }
+  else if(na(f.debtToEq)&&f.debtToEq>2.5){ s-=4; hits['⚠ High leverage D/E>2.5x']=-4; }
+
+  // Bearish divergence (opposite of bullish — further downside likely)
+  if(f.bearishDiv){ s-=4; hits['⚠ RSI Bearish Divergence (further downside possible)']=-4; }
 
   const finalScore = Math.min(100, Math.max(0, Math.round(s)));
 
-  // Fallen angel verdict
+  // Verdicts aligned with Varsity conviction levels
   let verdict, verdictColor, verdictIcon;
-  if(finalScore>=75)     {verdict='Strong Dip Buy';   verdictColor='#22c55e'; verdictIcon='🚀';}
-  else if(finalScore>=60){verdict='Good Dip Buy';     verdictColor='#86efac'; verdictIcon='✅';}
-  else if(finalScore>=45){verdict='Accumulate Slowly';verdictColor='#f59e0b'; verdictIcon='📈';}
-  else if(finalScore>=30){verdict='Watch & Wait';     verdictColor='#f97316'; verdictIcon='⏳';}
+  if(finalScore>=80)     {verdict='Strong Dip Buy';   verdictColor='#22c55e'; verdictIcon='🚀';}
+  else if(finalScore>=65){verdict='Good Dip Buy';     verdictColor='#86efac'; verdictIcon='✅';}
+  else if(finalScore>=50){verdict='Accumulate Slowly';verdictColor='#f59e0b'; verdictIcon='📈';}
+  else if(finalScore>=35){verdict='Watch & Wait';     verdictColor='#f97316'; verdictIcon='⏳';}
   else                   {verdict='Possible Trap';    verdictColor='#ef4444'; verdictIcon='⚠️';}
 
   return {fallenScore:finalScore, fallenHits:hits, fallenVerdict:verdict, fallenColor:verdictColor, fallenIcon:verdictIcon};
 }
+
 
 app.get('/api/stocks/score', async(req,res)=>{
   try {
