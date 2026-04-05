@@ -2234,9 +2234,8 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     const fund   = FUND[sym]||null;
     const sector = SECTOR_MAP[sym]||'Other';
     const token  = validTokens[sym]||INSTRUMENTS[sym];
-    if(!token) console.log(`📊 ${sym}: no token, partial analysis`);
 
-    // -- ALL DATA IN PARALLEL -------------------------------------------------
+    // ALL DATA IN PARALLEL
     const [r1y,r3y,r10w,rMax,r1h,rNews] = await Promise.allSettled([
       (async()=>{ if(!kite||!token)return null;
         const t=new Date(),f=new Date(Date.now()-366*864e5);
@@ -2246,18 +2245,18 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
         const t=new Date(),f=new Date(Date.now()-3*366*864e5);
         return kite.getHistoricalData(token,'day',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
       })(),
-      (async()=>{ if(!kite||!token)return null;  // 10Y weekly
+      (async()=>{ if(!kite||!token)return null;
         const t=new Date(),f=new Date(Date.now()-10*366*864e5);
         return kite.getHistoricalData(token,'week',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
       })(),
-      (async()=>{ if(!kite||!token)return null;  // FULL HISTORY from 1994
+      (async()=>{ if(!kite||!token)return null;
         return kite.getHistoricalData(token,'month','1994-01-01',new Date().toISOString().split('T')[0]);
       })(),
-      (async()=>{ if(!kite||!token)return null;  // 6M hourly
+      (async()=>{ if(!kite||!token)return null;
         const t=new Date(),f=new Date(Date.now()-180*864e5);
         return kite.getHistoricalData(token,'60minute',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
       })(),
-      (async()=>{  // news from 4 feeds
+      (async()=>{
         const feeds=[
           {url:'https://economictimes.indiatimes.com/markets/stocks/rss.cms',src:'ET Markets'},
           {url:'https://www.moneycontrol.com/rss/MCtopnews.xml',src:'Moneycontrol'},
@@ -2279,9 +2278,10 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
               if(!title)return;
               const txt=(title+' '+desc).toUpperCase();
               const nm=meta.n.toUpperCase();
-              if(!txt.includes(sym)&&!txt.includes(nm.slice(0,6))&&!txt.includes(nm.split(' ')[0]))return;
-              const bull=['RISE','SURGE','JUMP','GAIN','RALLY','BUY','BULLISH','PROFIT','GROWTH','RECORD','OUTPERFORM','UPGRADE','TARGET RAISED','STRONG','BEAT','EXPAND','WIN','ACQUIRE'].some(w=>txt.includes(w));
-              const bear=['FALL','DROP','DECLINE','SLIP','SELL','BEARISH','LOSS','WEAK','UNDERPERFORM','DOWNGRADE','TARGET CUT','CRASH','MISS','FRAUD','PROBE','PENALTY','WARN','CONCERN'].some(w=>txt.includes(w));
+              const nameWords=nm.split(/\s+/).filter(w=>w.length>=4);
+              if(!txt.includes(sym)&&!nameWords.some(w=>txt.includes(w))&&!txt.includes(nm.slice(0,5)))return;
+              const bull=['RISE','SURGE','JUMP','GAIN','RALLY','BUY','BULLISH','PROFIT','GROWTH','RECORD','OUTPERFORM','UPGRADE','TARGET RAISED','STRONG','BEAT','EXPAND','WIN','ACQUIRE','ORDER','CONTRACT'].some(w=>txt.includes(w));
+              const bear=['FALL','DROP','DECLINE','SLIP','SELL','BEARISH','LOSS','WEAK','UNDERPERFORM','DOWNGRADE','TARGET CUT','CRASH','MISS','FRAUD','PROBE','PENALTY','WARN','CONCERN','DEBT'].some(w=>txt.includes(w));
               const sentiment=bull&&!bear?'bullish':bear&&!bull?'bearish':'neutral';
               const mins=pub?Math.round((Date.now()-new Date(pub))/60000):9999;
               const timeAgo=mins<60?`${mins}m ago`:mins<1440?`${Math.round(mins/60)}h ago`:`${Math.round(mins/1440)}d ago`;
@@ -2302,11 +2302,10 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     const c1h  = r1h.status==='fulfilled'  && r1h.value  ? r1h.value  : [];
     const news = rNews.status==='fulfilled'&& rNews.value? rNews.value: [];
 
-    // Best candle set for primary analysis
-    const candles = c3y.length>=50 ? c3y : c1y.length>=50 ? c1y : [];
-    const px = candles.length ? candles[candles.length-1].close : livePrices[sym]?.price||null;
+    const candles = c3y.length>=50?c3y : c1y.length>=50?c1y : c10w.length>=30?c10w : cMax.length>=12?cMax:[];
+    const px = candles.length?candles[candles.length-1].close : livePrices[sym]?.price||null;
 
-    // -- FULL TECHNICAL ENGINE -------------------------------------------------
+    // FULL TECHNICAL ENGINE
     function fullTech(cans){
       if(!cans||cans.length<20) return {};
       const C=cans.map(c=>c.close), H=cans.map(c=>c.high), L=cans.map(c=>c.low), V=cans.map(c=>c.volume||0);
@@ -2315,35 +2314,26 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       const calcEma=(arr,p)=>{const k=2/(p+1);let e=arr[0];return arr.map(v=>{e=v*k+e*(1-k);return e;});};
       const sma=(p)=>n>=p?avgArr(C,n-p,p):null;
 
-      // Moving Averages - all of them
       const dma9=sma(9),dma20=sma(20),dma50=sma(50),dma100=sma(100),dma150=sma(150),dma200=sma(200);
       const e9=calcEma(C,9),e12=calcEma(C,12),e20=calcEma(C,20),e21=calcEma(C,21);
       const e26=calcEma(C,26),e50=calcEma(C,50),e200=calcEma(C,200);
       const ema9=e9[n-1],ema20=e20[n-1],ema21=e21[n-1],ema50=e50[n-1],ema200=e200[n-1];
 
-      // MACD (12,26,9)
       const macdLine=e12.map((v,i)=>v-e26[i]);
       const signalLine=calcEma(macdLine,9);
       const macdVal=macdLine[n-1],sigVal=signalLine[n-1],macdHist=+(macdVal-sigVal).toFixed(2);
       const macdBull=macdVal>sigVal;
-      // MACD histogram trend (expanding or shrinking)
-      const macdHistPrev=macdLine[n-2]-signalLine[n-2];
-      const macdMomentum=Math.abs(macdHist)>Math.abs(macdHistPrev)?'expanding':'shrinking';
+      const macdMomentum=Math.abs(macdHist)>Math.abs(macdLine[n-2]-signalLine[n-2])?'expanding':'shrinking';
 
-      // RSI variants
       const calcRSI=(c,p)=>{if(c.length<p+1)return 50;let g=0,ls=0;for(let i=c.length-p;i<c.length;i++){const d=c[i]-c[i-1];if(d>0)g+=d;else ls-=d;}return ls===0?100:100-100/(1+g/p/(ls/p));};
       const rsi7=calcRSI(C,7),rsi14=calcRSI(C,14),rsi21=calcRSI(C,21);
 
-      // Stochastic RSI
-      const stochRSI=(()=>{if(n<28)return {k:50,d:50};
-        const rsiArr=[];for(let i=14;i<n;i++){let g=0,ls=0;for(let j=i-13;j<=i;j++){const d=C[j]-C[j-1];if(d>0)g+=d;else ls-=d;}rsiArr.push(ls===0?100:100-100/(1+g/14/(ls/14)));}
-        const r=rsiArr.slice(-14);
-        const lo=Math.min(...r),hi=Math.max(...r);
-        const k=hi===lo?50:(r[r.length-1]-lo)/(hi-lo)*100;
-        return {k:+k.toFixed(1),d:+k.toFixed(1)};
+      const stochRSI=(()=>{if(n<28)return{k:50,d:50};
+        const ra=[];for(let i=14;i<n;i++){let g=0,ls=0;for(let j=i-13;j<=i;j++){const d=C[j]-C[j-1];if(d>0)g+=d;else ls-=d;}ra.push(ls===0?100:100-100/(1+g/14/(ls/14)));}
+        const r=ra.slice(-14),lo=Math.min(...r),hi=Math.max(...r);
+        const k=hi===lo?50:(r[r.length-1]-lo)/(hi-lo)*100;return{k:+k.toFixed(1),d:+k.toFixed(1)};
       })();
 
-      // Stochastic (14,3,3)
       let stochK=50,stochD=50;
       if(n>=14){
         const lo14=Math.min(...L.slice(n-14)),hi14=Math.max(...H.slice(n-14));
@@ -2357,33 +2347,25 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
         stochD=kArr.slice(-3).reduce((a,b)=>a+b,0)/Math.min(3,kArr.length);
       }
 
-      // Bollinger Bands (20,2)
       const bbMid=dma20||C[n-1];
       const bbStd=n>=20?Math.sqrt(C.slice(n-20).reduce((a,v)=>a+(v-bbMid)**2,0)/20):0;
       const bbUpper=+(bbMid+2*bbStd).toFixed(2),bbLower=+(bbMid-2*bbStd).toFixed(2);
       const bbWidth=bbMid>0?+((bbUpper-bbLower)/bbMid*100).toFixed(1):0;
       const bbPct=bbUpper>bbLower?+((C[n-1]-bbLower)/(bbUpper-bbLower)).toFixed(3):0.5;
-      const bbSqueeze=bbWidth<2.5; // historically precedes big moves
+      const bbSqueeze=bbWidth<2.5;
 
-      // Keltner Channel (20,2xATR)
       const atrArr=n>=2?cans.slice(1).map((c,i)=>Math.max(c.high-c.low,Math.abs(c.high-cans[i].close),Math.abs(c.low-cans[i].close))):[];
       const atr14=atrArr.length>=14?atrArr.slice(-14).reduce((a,b)=>a+b,0)/14:0;
       const kcUpper=+(bbMid+2*atr14).toFixed(2),kcLower=+(bbMid-2*atr14).toFixed(2);
-      // Squeeze Momentum: BB inside KC = squeeze
       const sqzMomentum=bbLower>kcLower&&bbUpper<kcUpper;
-
-      // ATR
       const atrPct=C[n-1]>0?+(atr14/C[n-1]*100).toFixed(2):0;
 
-      // Williams %R (14)
       let willR=-50;
       if(n>=14){const hi14=Math.max(...H.slice(n-14)),lo14=Math.min(...L.slice(n-14));willR=hi14===lo14?-50:(hi14-C[n-1])/(hi14-lo14)*-100;}
 
-      // CCI (20)
       let cci=0;
-      if(n>=20){const tp=cans.slice(n-20).map(c=>(c.high+c.low+c.close)/3);const tpMean=tp.reduce((a,b)=>a+b,0)/20;const md=tp.reduce((a,v)=>a+Math.abs(v-tpMean),0)/20;cci=md>0?(tp[19]-tpMean)/(0.015*md):0;}
+      if(n>=20){const tp=cans.slice(n-20).map(c=>(c.high+c.low+c.close)/3);const tm=tp.reduce((a,b)=>a+b,0)/20;const md=tp.reduce((a,v)=>a+Math.abs(v-tm),0)/20;cci=md>0?(tp[19]-tm)/(0.015*md):0;}
 
-      // ADX (14)
       let adx=25,adxPlus=0,adxMinus=0;
       if(n>=15){
         let pdm=0,ndm=0,tr14=0;
@@ -2397,22 +2379,18 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       }
       const trendStrength=adx>35?'Very Strong':adx>25?'Strong':adx>20?'Moderate':'Weak/Sideways';
 
-      // Supertrend (10,3)
       let supertrendVal=null,supertrendSig='neutral';
       try{
         let st=C[0],trend=1;
         for(let i=1;i<n;i++){
-          const atri=atrArr[i-1]||atr14;
-          const mid=(H[i]+L[i])/2;
+          const atri=atrArr[i-1]||atr14;const mid=(H[i]+L[i])/2;
           const up=mid+3*atri,dn=mid-3*atri;
           if(trend===1){st=Math.max(st,dn);}else{st=Math.min(st,up);}
-          if(C[i]<st&&trend===1){trend=-1;st=up;}
-          else if(C[i]>st&&trend===-1){trend=1;st=dn;}
+          if(C[i]<st&&trend===1){trend=-1;st=up;}else if(C[i]>st&&trend===-1){trend=1;st=dn;}
         }
         supertrendVal=+st.toFixed(2);supertrendSig=trend===1?'bullish':'bearish';
       }catch(e){}
 
-      // Parabolic SAR (simplified)
       let sar=L[0],sarBull=true;
       try{
         let af=0.02,ep=H[0];
@@ -2422,96 +2400,84 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
           else{if(C[i]<ep){ep=C[i];af=Math.min(af+0.02,0.2);}if(H[i]>sar){sarBull=true;sar=ep;ep=H[i];af=0.02;}}
         }
       }catch(e){}
-      const sarSignal=sarBull?'bullish':'bearish';
 
-      // Ichimoku Cloud (9,26,52)
       let ichimoku={};
       if(n>=52){
         const tenkan=(Math.max(...H.slice(n-9))+Math.min(...L.slice(n-9)))/2;
         const kijun=(Math.max(...H.slice(n-26))+Math.min(...L.slice(n-26)))/2;
         const senkouA=(tenkan+kijun)/2;
         const senkouB=(Math.max(...H.slice(n-52))+Math.min(...L.slice(n-52)))/2;
-        const chikou=C[n-1];
         ichimoku={tenkan:+tenkan.toFixed(2),kijun:+kijun.toFixed(2),senkouA:+senkouA.toFixed(2),senkouB:+senkouB.toFixed(2),
-          aboveCloud:C[n-1]>Math.max(senkouA,senkouB),
-          tenkanAboveKijun:tenkan>kijun,
+          aboveCloud:C[n-1]>Math.max(senkouA,senkouB),tenkanAboveKijun:tenkan>kijun,
           bullish:C[n-1]>Math.max(senkouA,senkouB)&&tenkan>kijun};
       }
 
-      // Fibonacci levels (based on 52w range)
       const yr=C.slice(-252);
       const wk52Hi=yr.length?Math.max(...yr):C[n-1],wk52Lo=yr.length?Math.min(...yr):C[n-1];
       const fibRange=wk52Hi-wk52Lo;
-      const fibs={
-        r236:+(wk52Lo+0.236*fibRange).toFixed(2), r382:+(wk52Lo+0.382*fibRange).toFixed(2),
-        r500:+(wk52Lo+0.500*fibRange).toFixed(2), r618:+(wk52Lo+0.618*fibRange).toFixed(2),
-        r786:+(wk52Lo+0.786*fibRange).toFixed(2), r1000:+wk52Hi.toFixed(2),
-      };
+      const fibs={r236:+(wk52Lo+0.236*fibRange).toFixed(2),r382:+(wk52Lo+0.382*fibRange).toFixed(2),r500:+(wk52Lo+0.500*fibRange).toFixed(2),r618:+(wk52Lo+0.618*fibRange).toFixed(2),r786:+(wk52Lo+0.786*fibRange).toFixed(2),r1000:+wk52Hi.toFixed(2)};
 
-      // Volume analysis
       const vol10=V.slice(-10).reduce((a,b)=>a+b,0)/10;
       const vol20=V.slice(-20).reduce((a,b)=>a+b,0)/20;
-      const vol50=V.slice(-50).reduce((a,b)=>a+b,0)/50;
+      const vol50=n>=50?V.slice(-50).reduce((a,b)=>a+b,0)/50:vol20;
       const volRatio20=vol20>0?+(vol10/vol20).toFixed(2):1;
-      const volRatio50=vol50>0?+(vol10/vol50).toFixed(2):1;
-      const volTrend=volRatio20>1.3?'Accumulation (Strong)':volRatio20>1.1?'Rising':volRatio20<0.7?'Distribution':volRatio20<0.9?'Declining':'Normal';
+      const volTrend=volRatio20>1.3?'Accumulation':volRatio20>1.1?'Rising':volRatio20<0.7?'Distribution':volRatio20<0.9?'Declining':'Normal';
 
-      // On Balance Volume (OBV)
-      let obv=0;
-      const obvArr=[0];
+      let obv=0;const obvArr=[0];
       for(let i=1;i<n;i++){obv+=C[i]>C[i-1]?V[i]:C[i]<C[i-1]?-V[i]:0;obvArr.push(obv);}
-      const obvTrend=obvArr[n-1]>obvArr[n-20]?'Rising (bullish)':'Falling (bearish)';
+      const obvTrend=obvArr[n-1]>obvArr[Math.max(0,n-20)]?'Rising (bullish)':'Falling (bearish)';
 
-      // VWAP (current session approximate)
-      const vwapArr=cans.slice(-20).map((c,i,a)=>{
-        const tp=(c.high+c.low+c.close)/3;
-        const cumTP=a.slice(0,i+1).reduce((s,x)=>s+(x.high+x.low+x.close)/3*(x.volume||1),0);
-        const cumV=a.slice(0,i+1).reduce((s,x)=>s+(x.volume||1),0);
-        return cumV>0?cumTP/cumV:tp;
-      });
+      const vwapArr=cans.slice(-20).map((_,i,a)=>{const cumTP=a.slice(0,i+1).reduce((s,x)=>s+(x.high+x.low+x.close)/3*(x.volume||1),0);const cumV=a.slice(0,i+1).reduce((s,x)=>s+(x.volume||1),0);return cumV>0?cumTP/cumV:(a[i].high+a[i].low+a[i].close)/3;});
       const vwap=vwapArr[vwapArr.length-1];
 
-      // Rate of Change (ROC) - momentum oscillator
       const roc10=n>=11?+((C[n-1]-C[n-11])/C[n-11]*100).toFixed(2):null;
       const roc20=n>=21?+((C[n-1]-C[n-21])/C[n-21]*100).toFixed(2):null;
 
-      // Money Flow Index (MFI-14)
       let mfi=50;
-      if(n>=15){
-        let posFlow=0,negFlow=0;
-        for(let i=n-14;i<n;i++){
-          const tp=(H[i]+L[i]+C[i])/3,tpPrev=(H[i-1]+L[i-1]+C[i-1])/3;
-          const mfv=tp*V[i];
-          if(tp>tpPrev)posFlow+=mfv;else if(tp<tpPrev)negFlow+=mfv;
-        }
-        mfi=negFlow===0?100:100-100/(1+posFlow/negFlow);
+      if(n>=15){let pf=0,nf=0;for(let i=n-14;i<n;i++){const tp=(H[i]+L[i]+C[i])/3,tp0=(H[i-1]+L[i-1]+C[i-1])/3,mv=tp*V[i];if(tp>tp0)pf+=mv;else if(tp<tp0)nf+=mv;}mfi=nf===0?100:100-100/(1+pf/nf);}
+
+      // Weekly higher highs/lows check (last 20 candles)
+      let weeklyTrend='sideways';
+      if(n>=20){
+        const recent=C.slice(-20);
+        const firstHalf=recent.slice(0,10),secondHalf=recent.slice(10);
+        const fMax=Math.max(...firstHalf),sMax=Math.max(...secondHalf);
+        const fMin=Math.min(...firstHalf),sMin=Math.min(...secondHalf);
+        if(sMax>fMax&&sMin>fMin) weeklyTrend='uptrend';
+        else if(sMax<fMax&&sMin<fMin) weeklyTrend='downtrend';
       }
 
-      // Commodity Channel Index (CCI)
-      const cciSignal=cci>100?'overbought':cci<-100?'oversold':'neutral';
+      // 200 DMA trending up or down
+      const dma200_30ago=n>=230?avgArr(C,n-230,200):null;
+      const dma200Trend=dma200&&dma200_30ago?(dma200>dma200_30ago?'rising':'falling'):null;
 
-      // Returns
+      // Accumulation/Distribution pattern
+      const upDays=V.slice(-20).filter((_,i)=>C[Math.max(0,n-20+i)]>(i>0?C[n-20+i-1]:C[n-20]));
+      const downDays=V.slice(-20).filter((_,i)=>C[Math.max(0,n-20+i)]<(i>0?C[n-20+i-1]:C[n-20]));
+      const accumDist=upDays.reduce((a,b)=>a+b,0)>downDays.reduce((a,b)=>a+b,0)?'Accumulation':'Distribution';
+
       const ret1m=n>=21?+((C[n-1]-C[n-21])/C[n-21]*100).toFixed(1):null;
       const ret3m=n>=63?+((C[n-1]-C[n-63])/C[n-63]*100).toFixed(1):null;
       const ret6m=n>=126?+((C[n-1]-C[n-126])/C[n-126]*100).toFixed(1):null;
-      const ret1y=n>=252?+((C[n-1]-C[n-252])/C[n-252]*100).toFixed(1):yr.length>1?+((C[n-1]-yr[0])/yr[0]*100).toFixed(1):null;
+      const ret1y=yr.length>1?+((C[n-1]-yr[0])/yr[0]*100).toFixed(1):null;
       const ret3y=n>=756?+((C[n-1]-C[n-756])/C[n-756]*100).toFixed(1):null;
       const pctFromHigh=wk52Hi>0?+((C[n-1]-wk52Hi)/wk52Hi*100).toFixed(1):0;
       const pctFromLow=wk52Lo>0?+((C[n-1]-wk52Lo)/wk52Lo*100).toFixed(1):0;
+      const pctAbove200=dma200?+((C[n-1]-dma200)/dma200*100).toFixed(1):null;
 
-      // Beta (annualised daily std dev relative to ~13% market)
       const dailyRets=C.slice(-252).map((c,i,a)=>i===0?0:(c-a[i-1])/a[i-1]).slice(1);
-      const std=dailyRets.length?Math.sqrt(dailyRets.reduce((a,b)=>a+b*b,0)/dailyRets.length):0.013;
-      const beta=+Math.min(Math.max(std/0.013,0.3),3.0).toFixed(2);
-      const annualVol=+(std*Math.sqrt(252)*100).toFixed(1);
+      const stdDev=dailyRets.length?Math.sqrt(dailyRets.reduce((a,b)=>a+b*b,0)/dailyRets.length):0.013;
+      const beta=+Math.min(Math.max(stdDev/0.013,0.3),3.0).toFixed(2);
+      const annualVol=+(stdDev*Math.sqrt(252)*100).toFixed(1);
 
-      // Supports & Resistances via pivot clustering
+      // Overextension check
+      const overextended=pctAbove200!=null&&pctAbove200>30;
+
+      // Support & Resistance
       const pivots=[];
-      const data=cans.slice(-500);
-      const dn=data.length;
+      const data=cans.slice(-500);const dn=data.length;
       for(let i=5;i<dn-5;i++){
-        const win=data.slice(i-5,i+6);
-        if(win.length<6)continue;
+        const win=data.slice(i-5,i+6);if(win.length<6)continue;
         const isHi=data[i].high>=Math.max(...win.map(c=>c.high));
         const isLo=data[i].low<=Math.min(...win.map(c=>c.low));
         if(isHi)pivots.push({price:data[i].high,type:'resistance',strength:0});
@@ -2522,10 +2488,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       for(let i=0;i<pivots.length;i++){
         if(used.has(i))continue;
         const cluster=[pivots[i]];
-        for(let j=i+1;j<pivots.length;j++){
-          if(used.has(j))continue;
-          if(Math.abs(pivots[j].price-pivots[i].price)/pivots[i].price<0.015){cluster.push(pivots[j]);used.add(j);}
-        }
+        for(let j=i+1;j<pivots.length;j++){if(used.has(j))continue;if(Math.abs(pivots[j].price-pivots[i].price)/pivots[i].price<0.015){cluster.push(pivots[j]);used.add(j);}}
         used.add(i);
         const avgP=cluster.reduce((a,c)=>a+c.price,0)/cluster.length;
         levels.push({price:+avgP.toFixed(2),strength:cluster.length,type:avgP<C[n-1]?'support':'resistance'});
@@ -2533,92 +2496,69 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       const supports=levels.filter(l=>l.type==='support').sort((a,b)=>b.price-a.price).slice(0,6);
       const resistances=levels.filter(l=>l.type==='resistance').sort((a,b)=>a.price-b.price).slice(0,6);
 
-      // Buy zone & targets
       const strongSup=supports[0]?.price||null;
       const nextRes=resistances[0]?.price||null;
       const buyZoneLow=strongSup?+(strongSup*0.99).toFixed(2):null;
       const buyZoneHigh=strongSup?+(strongSup*1.02).toFixed(2):null;
-      const idealBuy=strongSup?+strongSup.toFixed(2):null;
       const dma50BuyZone=dma50?{low:+(dma50*0.98).toFixed(2),high:+(dma50*1.01).toFixed(2)}:null;
       const dma200BuyZone=dma200?{low:+(dma200*0.97).toFixed(2),high:+(dma200*1.01).toFixed(2)}:null;
       const upsidePct=nextRes&&C[n-1]?+((nextRes-C[n-1])/C[n-1]*100).toFixed(1):null;
-      const riskReward=idealBuy&&nextRes&&C[n-1]&&C[n-1]>idealBuy?+((nextRes-C[n-1])/(C[n-1]-idealBuy)).toFixed(2):null;
+      const riskReward=strongSup&&nextRes&&C[n-1]&&C[n-1]>strongSup?+((nextRes-C[n-1])/(C[n-1]-strongSup)).toFixed(2):null;
 
-      // Candlestick patterns (last 3 candles)
+      // Candlestick patterns
       const patterns=[];
       if(n>=3){
         const [c3,c2,c1]=[cans[n-3],cans[n-2],cans[n-1]];
         const body1=Math.abs(c1.close-c1.open),range1=c1.high-c1.low;
         const body2=Math.abs(c2.close-c2.open);
-        const isDoji=range1>0&&body1/range1<0.1;
-        const isHammer=c1.close>c1.open&&(c1.open-c1.low)>2*body1&&(c1.high-c1.close)<body1;
-        const isEngulfBull=c2.close<c2.open&&c1.close>c1.open&&c1.close>c2.open&&c1.open<c2.close;
-        const isEngulfBear=c2.close>c2.open&&c1.close<c1.open&&c1.close<c2.open&&c1.open>c2.close;
-        const isMorningStar=c3.close<c3.open&&body2<Math.abs(c3.close-c3.open)*0.3&&c1.close>c1.open&&c1.close>(c3.open+c3.close)/2;
-        if(isDoji)patterns.push({name:'Doji',signal:'neutral',desc:'Indecision - market at crossroads'});
-        if(isHammer)patterns.push({name:'Hammer',signal:'bullish',desc:'Potential reversal - buyers stepped in at lows'});
-        if(isEngulfBull)patterns.push({name:'Bullish Engulfing',signal:'bullish',desc:'Strong reversal signal - bulls took control'});
-        if(isEngulfBear)patterns.push({name:'Bearish Engulfing',signal:'bearish',desc:'Strong reversal - bears took control'});
-        if(isMorningStar)patterns.push({name:'Morning Star',signal:'bullish',desc:'3-candle bottom reversal pattern'});
+        if(range1>0&&body1/range1<0.1) patterns.push({name:'Doji',signal:'neutral',desc:'Indecision - market at crossroads'});
+        if(c1.close>c1.open&&(c1.open-c1.low)>2*body1&&(c1.high-c1.close)<body1) patterns.push({name:'Hammer',signal:'bullish',desc:'Buyers stepped in at lows - potential reversal'});
+        if(c2.close<c2.open&&c1.close>c1.open&&c1.close>c2.open&&c1.open<c2.close) patterns.push({name:'Bullish Engulfing',signal:'bullish',desc:'Strong reversal - bulls took full control'});
+        if(c2.close>c2.open&&c1.close<c1.open&&c1.close<c2.open&&c1.open>c2.close) patterns.push({name:'Bearish Engulfing',signal:'bearish',desc:'Strong reversal - bears took full control'});
+        if(c3.close<c3.open&&body2<Math.abs(c3.close-c3.open)*0.3&&c1.close>c1.open&&c1.close>(c3.open+c3.close)/2) patterns.push({name:'Morning Star',signal:'bullish',desc:'3-candle bottom reversal pattern'});
       }
 
       return {
         price:C[n-1],
-        // All MAs
         dma9,dma20,dma50,dma100,dma150,dma200,
         ema9,ema20,ema21,ema50,ema200,
         goldenCross:dma50&&dma200?dma50>dma200:null,
-        above20,above50,above200,ema9_21Bull:ema9>ema21,
-        // MACD
+        above20:dma20?C[n-1]>dma20:null,
+        above50:dma50?C[n-1]>dma50:null,
+        above200:dma200?C[n-1]>dma200:null,
+        dma200Trend,pctAbove200,overextended,weeklyTrend,accumDist,
         macd:+macdVal.toFixed(2),macdSignal:+sigVal.toFixed(2),macdHist,macdBull,macdMomentum,
-        // RSI
         rsi7:+rsi7.toFixed(1),rsi14:+rsi14.toFixed(1),rsi21:+rsi21.toFixed(1),
         stochRsiK:stochRSI.k,stochRsiD:stochRSI.d,
-        // Stochastic
         stochK:+stochK.toFixed(1),stochD:+stochD.toFixed(1),
-        // Bands
         bbUpper,bbLower,bbMid:+(bbMid||0).toFixed(2),bbWidth,bbPct,bbSqueeze,sqzMomentum,
         kcUpper,kcLower,
-        // Trend
         adx:+adx.toFixed(1),adxPlus:+adxPlus.toFixed(1),adxMinus:+adxMinus.toFixed(1),trendStrength,
         supertrend:supertrendVal,supertrendSig,
-        sarSignal,sar:+sar.toFixed(2),
-        // Ichimoku
-        ichimoku,
-        // Oscillators
-        cci:+cci.toFixed(1),cciSignal,
-        willR:+willR.toFixed(1),
-        roc10,roc20,
+        sarSignal:sarBull?'bullish':'bearish',sar:+sar.toFixed(2),
+        ichimoku,fibs,
+        cci:+cci.toFixed(1),cciSignal:cci>100?'overbought':cci<-100?'oversold':'neutral',
+        willR:+willR.toFixed(1),roc10,roc20,
         mfi:+mfi.toFixed(1),
-        // Volume
-        volRatio20,volRatio50,volTrend,obvTrend,
-        vwap:+vwap.toFixed(2),
-        atr:+atr14.toFixed(2),atrPct,
-        // Fibonacci
-        fibs,wk52Hi,wk52Lo,
-        // Returns
+        volRatio20,volTrend,obvTrend,vwap:+vwap.toFixed(2),
+        atr:+atr14.toFixed(2),atrPct,annualVol,beta,
+        wk52Hi,wk52Lo,
         ret1m,ret3m,ret6m,ret1y,ret3y,
         pctFromHigh,pctFromLow,
-        beta,annualVol,
-        // S/R & buy zone
         supports,resistances,
-        buyZoneLow,buyZoneHigh,idealBuy,
-        dma50BuyZone,dma200BuyZone,
-        upsidePct,riskReward,
-        patterns,
-        // Chart candles
+        buyZoneLow,buyZoneHigh,idealBuy:strongSup?+strongSup.toFixed(2):null,
+        dma50BuyZone,dma200BuyZone,upsidePct,riskReward,patterns,
         candles:cans.slice(-365).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
       };
     }
 
     const safeCompute=(cans)=>{try{return fullTech(cans);}catch(e){console.error(`tech err ${sym}:`,e.message);return {};}};
-    const tech1y  = safeCompute(candles);
-    const techWeek= safeCompute(c10w.length>30?c10w:null);
-    const techMax = safeCompute(cMax.length>12?cMax:null);
-    const tech1h  = safeCompute(c1h.length>20?c1h:null);
-    const t=tech1y;
+    const techCandles=c3y.length>=50?c3y:c1y.length>=50?c1y:c10w.length>=30?c10w:candles;
+    const t  = safeCompute(techCandles);
+    const tw = safeCompute(c10w.length>30?c10w:null);
+    const tm = safeCompute(cMax.length>12?cMax:null);
+    const th = safeCompute(c1h.length>20?c1h:null);
 
-    // Chart data for all timeframes
     const charts={
       '3M': c1h.slice(-500).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
       '1Y': c1y.slice(-365).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
@@ -2627,144 +2567,188 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       'MAX':cMax.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
     };
 
-    // -- FUNDAMENTALS (from static table) --------------------------------------
-    const fundAnalysis=fund?{
+    // FUNDAMENTALS
+    const f=fund?{
       roe:fund[0],de:fund[1],pe:fund[2],revGr:fund[3],epsGr:fund[4],opMgn:fund[5],
       peg:fund[2]&&fund[4]&&fund[4]>0?+(fund[2]/fund[4]).toFixed(2):null,
-      roePeer:fund[0]>=20?'Excellent':fund[0]>=15?'Good':fund[0]>=10?'Average':'Weak',
-      dePeer:fund[1]<=0.3?'Debt-free':fund[1]<=0.7?'Very Low':fund[1]<=1.5?'Manageable':fund[1]<=3?'High':'Dangerous',
-      pePeer:fund[2]<15?'Cheap':fund[2]<25?'Fair':fund[2]<40?'Premium':'Expensive',
-      growthPeer:fund[3]>=25?'Hypergrowth':fund[3]>=15?'Strong':fund[3]>=8?'Moderate':fund[3]>=0?'Slow':'Declining',
+      roePeer:fund[0]>=20?'Excellent (>20%)':fund[0]>=15?'Good (15-20%)':fund[0]>=10?'Average (10-15%)':'Weak (<10%)',
+      dePeer:fund[1]<=0.3?'Near debt-free':fund[1]<=0.7?'Very low debt':fund[1]<=1.5?'Manageable':fund[1]<=3?'High debt':'Dangerous',
+      pePeer:fund[2]<15?'Cheap (<15x)':fund[2]<25?'Fair (15-25x)':fund[2]<40?'Premium (25-40x)':'Expensive (>40x)',
+      growthPeer:fund[3]>=25?'Hypergrowth (>25%)':fund[3]>=15?'Strong (15-25%)':fund[3]>=8?'Moderate (8-15%)':fund[3]>=0?'Slow (<8%)':'Declining',
     }:null;
 
-    // -- NEWS SENTIMENT ---------------------------------------------------------
+    // NEWS SENTIMENT
     const bull=news.filter(n=>n.sentiment==='bullish').length;
     const bear=news.filter(n=>n.sentiment==='bearish').length;
     const neut=news.filter(n=>n.sentiment==='neutral').length;
     const sentScore=news.length?Math.round((bull-bear)/news.length*100):0;
 
-    // -- COMPOSITE SCORING (institutional grade) -------------------------------
-    const signals=[];
-    // Trend signals
-    if(t.goldenCross!=null)  signals.push({s:t.goldenCross?1:-1,w:10,n:'Golden/Death Cross'});
-    if(t.above200!=null)     signals.push({s:t.above200?1:-1,w:8,n:'Price vs 200DMA'});
-    if(t.above50!=null)      signals.push({s:t.above50?1:-1,w:6,n:'Price vs 50DMA'});
-    if(t.supertrendSig)      signals.push({s:t.supertrendSig==='bullish'?1:-1,w:7,n:'Supertrend'});
-    if(t.ichimoku?.bullish!=null) signals.push({s:t.ichimoku.bullish?1:-1,w:8,n:'Ichimoku Cloud'});
-    if(t.sarSignal)          signals.push({s:t.sarSignal==='bullish'?1:-1,w:5,n:'Parabolic SAR'});
-    // Momentum
-    if(t.macdBull!=null)     signals.push({s:t.macdBull?1:-1,w:7,n:'MACD'});
-    if(t.rsi14!=null)        signals.push({s:t.rsi14<40?1:t.rsi14>65?-1:0,w:6,n:'RSI-14'});
-    if(t.stochK!=null)       signals.push({s:t.stochK<25?1:t.stochK>75?-1:0,w:5,n:'Stochastic'});
-    if(t.mfi!=null)          signals.push({s:t.mfi<30?1:t.mfi>70?-1:0,w:5,n:'MFI'});
-    if(t.willR!=null)        signals.push({s:t.willR<-80?1:t.willR>-20?-1:0,w:4,n:'Williams %R'});
-    // Volume
-    if(t.volTrend)           signals.push({s:t.volTrend.includes('Accum')?1:t.volTrend.includes('Distrib')?-1:0,w:6,n:'Volume'});
-    if(t.obvTrend)           signals.push({s:t.obvTrend.includes('Rising')?1:-1,w:5,n:'OBV'});
-    // Fundamentals
-    if(fundAnalysis){
-      if(fundAnalysis.roe!=null) signals.push({s:fundAnalysis.roe>=18?1:fundAnalysis.roe<8?-1:0,w:12,n:'ROE'});
-      if(fundAnalysis.de!=null)  signals.push({s:fundAnalysis.de<0.5?1:fundAnalysis.de>2.5?-1:0,w:8,n:'Debt/Equity'});
-      if(fundAnalysis.pe!=null)  signals.push({s:fundAnalysis.pe<20?1:fundAnalysis.pe>50?-1:0,w:8,n:'PE Valuation'});
-      if(fundAnalysis.epsGr!=null&&fundAnalysis.epsGr<500) signals.push({s:fundAnalysis.epsGr>=20?1:fundAnalysis.epsGr<0?-1:0,w:12,n:'EPS Growth'});
-      if(fundAnalysis.revGr!=null) signals.push({s:fundAnalysis.revGr>=15?1:fundAnalysis.revGr<0?-1:0,w:8,n:'Revenue Growth'});
+    // ================================================================
+    // MASTER CHECKLIST SCORING (based on the 23-point framework)
+    // ================================================================
+    const checklist={};
+
+    // 1. TREND (Critical) - 25 pts
+    checklist.abv200     ={pass:t.above200===true,   pts:t.above200===true?8:0,  max:8,  label:'Price above 200 DMA',      detail:t.above200===true?`Yes - trading above DMA200 (${t.dma200?.toFixed(0)})`:`No - below DMA200 (${t.dma200?.toFixed(0)}). Risk zone.`};
+    checklist.dma200up   ={pass:t.dma200Trend==='rising',pts:t.dma200Trend==='rising'?6:0,max:6,label:'200 DMA trending up',detail:t.dma200Trend==='rising'?'Yes - long-term trend is up':'No - 200DMA is falling. Downtrend.'};
+    checklist.goldenX    ={pass:t.goldenCross===true, pts:t.goldenCross===true?6:0,max:6, label:'Golden Cross (50>200 DMA)', detail:t.goldenCross===true?'Yes - 50DMA above 200DMA. Long-term bullish.':'No - Death Cross. Bears in control.'};
+    checklist.weeklyHL   ={pass:t.weeklyTrend==='uptrend',pts:t.weeklyTrend==='uptrend'?5:0,max:5,label:'Weekly higher highs/lows',detail:t.weeklyTrend==='uptrend'?'Yes - price making higher highs and higher lows':t.weeklyTrend==='downtrend'?'No - lower highs, lower lows (downtrend)':'Sideways - no clear direction'};
+
+    // 2. MOMENTUM
+    checklist.rsiZone    ={pass:t.rsi14>=40&&t.rsi14<=65,pts:t.rsi14>=40&&t.rsi14<=65?4:t.rsi14<40?3:0,max:4,label:`RSI-14 at ${t.rsi14?.toFixed(0)}`,detail:t.rsi14<35?'Oversold - potential buy zone (RSI<35)':t.rsi14>=40&&t.rsi14<=65?'Healthy zone (40-65) - good for entry':t.rsi14>70?'Overbought (>70) - avoid chasing':'Near accumulation zone'};
+    checklist.macdBull   ={pass:t.macdBull===true,pts:t.macdBull?3:0,max:3,label:'MACD bullish',detail:t.macdBull?`MACD (${t.macd}) above signal - momentum positive`:`MACD bearish - momentum weak`};
+    checklist.superT     ={pass:t.supertrendSig==='bullish',pts:t.supertrendSig==='bullish'?3:0,max:3,label:'Supertrend bullish',detail:t.supertrendSig==='bullish'?`Price above Supertrend (${t.supertrend}) - trend confirmed`:`Below Supertrend (${t.supertrend}) - sell signal`};
+
+    // 3. VOLUME
+    checklist.volAccum   ={pass:t.accumDist==='Accumulation',pts:t.accumDist==='Accumulation'?3:0,max:3,label:'Volume: Accumulation',detail:t.accumDist==='Accumulation'?'More volume on up days - institutions buying':'More volume on down days - distribution/selling'};
+    checklist.obvRising  ={pass:t.obvTrend?.includes('Rising'),pts:t.obvTrend?.includes('Rising')?2:0,max:2,label:'OBV rising',detail:t.obvTrend||'N/A'};
+
+    // 4. OVEREXTENSION CHECK
+    const overExt=t.overextended;
+    checklist.overext    ={pass:!overExt,pts:!overExt?3:0,max:3,label:'Not overextended',detail:overExt?`Caution: ${t.pctAbove200}% above 200DMA - wait for pullback`:`Price is ${t.pctAbove200}% from 200DMA - not overextended`};
+
+    // 5. SUPPORT/BUY ZONE
+    const nearSupport=t.buyZoneLow&&px&&px>=t.buyZoneLow*0.98&&px<=t.buyZoneHigh*1.02;
+    const nearDma200=t.dma200&&px&&Math.abs(px-t.dma200)/t.dma200<0.05;
+    const nearDma50=t.dma50&&px&&Math.abs(px-t.dma50)/t.dma50<0.03;
+    checklist.nearBuy    ={pass:nearSupport||nearDma200||nearDma50,pts:nearSupport||nearDma200||nearDma50?4:0,max:4,label:'Near support/buy zone',detail:nearDma200?`Near 200DMA (${t.dma200?.toFixed(0)}) - institutional buy zone`:nearDma50?`Near 50DMA (${t.dma50?.toFixed(0)}) - momentum buy zone`:nearSupport?`Near support zone (${t.buyZoneLow}-${t.buyZoneHigh})`:`Not near key support. Current: ${px?.toFixed(0)}, nearest support: ${t.supports?.[0]?.price||'N/A'}`};
+
+    // 6. RISK:REWARD
+    checklist.rrRatio    ={pass:t.riskReward>=2,pts:t.riskReward>=2?3:t.riskReward>=1?1:0,max:3,label:`R:R ratio ${t.riskReward||'N/A'}x`,detail:t.riskReward>=2?`Good R:R of ${t.riskReward}x - risk ${px&&t.supports?.[0]?.price?(px-t.supports[0].price).toFixed(0):'?'}, target ${t.resistances?.[0]?.price||'?'}`:t.riskReward?`R:R of ${t.riskReward}x - minimum 2x preferred`:'Cannot calculate R:R'};
+
+    // 7. FUNDAMENTALS (from static data)
+    checklist.roeCheck   ={pass:f&&f.roe>=15,pts:f?f.roe>=20?8:f.roe>=15?6:f.roe>=10?3:0:0,max:8,label:`ROE: ${f?f.roe+'%':'N/A'}`,detail:f?`${f.roePeer}. ${f.roe>=15?'Management creating shareholder value.':'Below 15% threshold - weak returns on equity.'}`:'No fundamental data'};
+    checklist.debtCheck  ={pass:f&&f.de<=1,pts:f?f.de<=0.3?6:f.de<=0.7?5:f.de<=1?3:0:0,max:6,label:`Debt/Equity: ${f?f.de+'x':'N/A'}`,detail:f?`${f.dePeer}. ${f.de<=1?'Healthy balance sheet.':'High leverage increases risk.'}`:'N/A'};
+    checklist.peCheck    ={pass:f&&f.pe<40,pts:f?f.pe<15?5:f.pe<25?4:f.pe<40?2:0:0,max:5,label:`P/E: ${f?f.pe+'x':'N/A'}`,detail:f?`${f.pePeer} vs market`:'N/A'};
+    checklist.growthCheck={pass:f&&f.epsGr>=10,pts:f&&f.epsGr<400?f.epsGr>=25?6:f.epsGr>=15?5:f.epsGr>=10?3:f.epsGr>=0?1:0:0,max:6,label:`EPS Growth: ${f?f.epsGr+'%':'N/A'}`,detail:f?`${f.epsGr>=15?'Strong earnings growth - key long-term driver':f.epsGr>=0?'Modest growth':'Earnings declining - red flag'}`:'N/A'};
+    checklist.marginCheck={pass:f&&f.opMgn>=15,pts:f?f.opMgn>=20?3:f.opMgn>=15?2:f.opMgn>=10?1:0:0,max:3,label:`Op Margin: ${f?f.opMgn+'%':'N/A'}`,detail:f?`${f.opMgn>=20?'High margin business - pricing power':'${f.opMgn>=10?"Reasonable margins":"Thin margins - vulnerable to cost pressure"}'}`:'N/A'};
+
+    // 8. SENTIMENT
+    checklist.newsCheck  ={pass:sentScore>=0,pts:sentScore>30?3:sentScore>0?2:sentScore===0?1:0,max:3,label:`News: ${bull}B/${bear}Be/${neut}N`,detail:news.length>0?`${sentScore>0?'Positive':'Negative'} news flow. ${bull} bullish, ${bear} bearish articles found.`:'No recent news found in feeds'};
+
+    // TOTAL SCORE
+    const totalPts=Object.values(checklist).reduce((a,c)=>a+c.pts,0);
+    const maxPts=Object.values(checklist).reduce((a,c)=>a+c.max,0);
+    const pctScore=Math.round(totalPts/maxPts*100);
+    const passCount=Object.values(checklist).filter(c=>c.pass).length;
+    const totalChecks=Object.keys(checklist).length;
+
+    // VERDICT
+    let verdict,verdictColor,verdictIcon,action,timeframe;
+    if(pctScore>=75)     {verdict='Strong Buy';    verdictColor='#22c55e';verdictIcon='🚀';action='BUY NOW';timeframe='Excellent setup - all major criteria met';}
+    else if(pctScore>=60){verdict='Buy';           verdictColor='#86efac';verdictIcon='✅';action='BUY';timeframe='Good long-term opportunity, accumulate';}
+    else if(pctScore>=45){verdict='Accumulate';    verdictColor='#f59e0b';verdictIcon='📈';action='ACCUMULATE ON DIPS';timeframe='Mixed signals - buy in parts near support';}
+    else if(pctScore>=30){verdict='Hold / Watch';  verdictColor='#f97316';verdictIcon='⏳';action='WAIT';timeframe='Wait for better entry or trend reversal';}
+    else if(pctScore>=15){verdict='Avoid for Now'; verdictColor='#ef4444';verdictIcon='⚠️';action='AVOID';timeframe='Too many red flags - protect capital';}
+    else                 {verdict='Do Not Buy';    verdictColor='#dc2626';verdictIcon='🚫';action='DO NOT BUY';timeframe='Multiple critical failures - stay away';}
+
+    // STAGGERED BUYING PLAN
+    let buyPlan=null;
+    if(pctScore>=45&&px&&t.supports?.length){
+      const s1=t.supports[0]?.price,s2=t.supports[1]?.price;
+      buyPlan={
+        tranche1:{pct:30,price:`${px?.toFixed(0)} (current)`,when:'First buy - current price if near support'},
+        tranche2:{pct:30,price:s1?s1.toFixed(0):'5% below current',when:'On dip to support'},
+        tranche3:{pct:40,price:s2?s2.toFixed(0):'10% below current',when:'Deeper correction - best value'},
+        stopLoss:s2?(s2*0.95).toFixed(0):`${(px*0.88).toFixed(0)}`,
+        target1:t.resistances?.[0]?.price?.toFixed(0)||'N/A',
+        target2:t.resistances?.[1]?.price?.toFixed(0)||'N/A',
+      };
     }
-    // Candlestick
-    if(t.patterns) t.patterns.forEach(p=>signals.push({s:p.signal==='bullish'?1:p.signal==='bearish'?-1:0,w:4,n:p.name}));
-    // Sentiment
-    if(news.length>3) signals.push({s:sentScore>0?1:sentScore<0?-1:0,w:6,n:'News Sentiment'});
 
-    const totalW=signals.reduce((a,s)=>a+s.w,0)||1;
-    const composite=signals.reduce((a,s)=>a+s.s*s.w,0)/totalW;
-    const bullPct=Math.max(0,Math.min(100,Math.round((composite+1)/2*100)));
-    const score=Math.round(composite*100);
+    // PLAIN ENGLISH ANALYSIS - all 23 points
+    const analysis=[];
 
-    // -- VERDICT & PLAIN ENGLISH EXPLANATION -----------------------------------
-    let verdict,verdictColor,verdictIcon,shortVerdict;
-    if(score>=50)     {verdict='Strong Buy';    verdictColor='#22c55e';verdictIcon='🚀';shortVerdict='sb';}
-    else if(score>=20){verdict='Buy';           verdictColor='#86efac';verdictIcon='✅';shortVerdict='b';}
-    else if(score>=5) {verdict='Accumulate';    verdictColor='#f59e0b';verdictIcon='📈';shortVerdict='acc';}
-    else if(score>=-5){verdict='Hold / Watch';  verdictColor='#f97316';verdictIcon='⏳';shortVerdict='hold';}
-    else if(score>=-25){verdict='Avoid for Now';verdictColor='#ef4444';verdictIcon='⚠️';shortVerdict='avoid';}
-    else              {verdict='Do Not Buy';    verdictColor='#dc2626';verdictIcon='🚫';shortVerdict='dnb';}
-
-    // Plain English reasons - what a common person can understand
-    const reasons=[];
     // Trend
-    if(t.goldenCross===true)  reasons.push({emoji:'📈',type:'Positive',text:`The 50-day average crossed above the 200-day average (Golden Cross). This is one of the most reliable long-term bullish signals. Big institutions use this as a buy trigger.`});
-    if(t.goldenCross===false) reasons.push({emoji:'📉',type:'Concern',text:`The 50-day average is below the 200-day average (Death Cross). This means the stock is in a long-term downtrend. Risky to buy until this reverses.`});
-    if(t.above200===true)     reasons.push({emoji:'✅',type:'Positive',text:`Stock is trading above its 200-day moving average (₹${t.dma200?.toFixed(1)}). This is the most important long-term health indicator - being above it means the stock is fundamentally healthy.`});
-    if(t.above200===false)    reasons.push({emoji:'⚠️',type:'Concern',text:`Stock is trading BELOW its 200-day moving average (₹${t.dma200?.toFixed(1)}). This is a warning sign. Most mutual funds and institutions won't buy a stock in this condition.`});
+    if(t.above200===true) analysis.push({cat:'Trend',icon:'📈',signal:'positive',title:'Above 200-Day Moving Average',text:`The stock is trading at ${px?.toFixed(0)}, which is ABOVE its 200-day average of ${t.dma200?.toFixed(0)}. This is the most important long-term health signal. Being above the 200 DMA means the stock is in a long-term uptrend. Most big institutions like mutual funds won't even look at stocks below this level.`});
+    else if(t.above200===false) analysis.push({cat:'Trend',icon:'📉',signal:'negative',title:'Below 200-Day Moving Average - Warning',text:`The stock is at ${px?.toFixed(0)}, BELOW its 200-day average of ${t.dma200?.toFixed(0)}. This is a major red flag. The long-term trend is down. Most professional investors avoid buying stocks in this condition. Wait for the price to recover above ${t.dma200?.toFixed(0)} before considering entry.`});
+    if(t.dma200Trend) analysis.push({cat:'Trend',icon:t.dma200Trend==='rising'?'📈':'📉',signal:t.dma200Trend==='rising'?'positive':'negative',title:`200 DMA is ${t.dma200Trend==='rising'?'rising':'falling'}`,text:t.dma200Trend==='rising'?'The 200-day moving average itself is trending upward. This means the long-term trend is strengthening over time - a very bullish sign for patient investors.':'The 200-day average is trending downward. Even if price bounces, the underlying trend is still negative. This is not a good time for long-term buying.'});
+    if(t.goldenCross===true) analysis.push({cat:'Trend',icon:'⭐',signal:'positive',title:'Golden Cross - Major Buy Signal',text:`The 50-day average (${t.dma50?.toFixed(0)}) has crossed ABOVE the 200-day average (${t.dma200?.toFixed(0)}). This is called a "Golden Cross" - one of the most reliable long-term buy signals in technical analysis. When this happens, major institutions often start accumulating. Historically, stocks in Golden Cross tend to outperform over the next 6-12 months.`});
+    else if(t.goldenCross===false) analysis.push({cat:'Trend',icon:'💀',signal:'negative',title:'Death Cross - Major Warning',text:`The 50-day average (${t.dma50?.toFixed(0)}) is BELOW the 200-day average (${t.dma200?.toFixed(0)}). This is called a "Death Cross" - a confirmed long-term downtrend. This is NOT a time to buy. Wait for the Golden Cross to form before entering.`});
+
     // RSI
     if(t.rsi14!=null){
-      if(t.rsi14<35)  reasons.push({emoji:'🟢',type:'Opportunity',text:`RSI is at ${t.rsi14} - this means the stock is oversold (beaten down too much). Historically, stocks with RSI below 35 tend to bounce back. This could be a good entry opportunity.`});
-      else if(t.rsi14>70) reasons.push({emoji:'🔴',type:'Caution',text:`RSI is at ${t.rsi14} - the stock is overbought (ran up too fast). Buying now means you might be chasing. Better to wait for a pullback to below 60 for a safer entry.`});
-      else            reasons.push({emoji:'⚖️',type:'Neutral',text:`RSI is at ${t.rsi14} - neutral zone. Not overbought, not oversold. Momentum is balanced.`});
+      if(t.rsi14<35) analysis.push({cat:'Momentum',icon:'🟢',signal:'positive',title:`RSI at ${t.rsi14?.toFixed(0)} - Oversold (Buy Zone)`,text:`RSI of ${t.rsi14?.toFixed(0)} means the stock has been beaten down too much. Like a rubber band stretched too far, it tends to snap back. This is historically one of the better times to buy - when fear is high and RSI is below 35. Not a guarantee, but the odds improve.`});
+      else if(t.rsi14>70) analysis.push({cat:'Momentum',icon:'🔴',signal:'negative',title:`RSI at ${t.rsi14?.toFixed(0)} - Overbought (Avoid)`,text:`RSI of ${t.rsi14?.toFixed(0)} means the stock has run up too fast. Buying now means you're chasing. Wait for RSI to cool down below 60 before entering. Stocks with RSI above 70 often correct 10-20% before resuming.`});
+      else analysis.push({cat:'Momentum',icon:'⚖️',signal:'neutral',title:`RSI at ${t.rsi14?.toFixed(0)} - Neutral Zone`,text:`RSI of ${t.rsi14?.toFixed(0)} is in the neutral zone (40-65). Momentum is balanced - not overbought or oversold. This is a healthy condition for a stock in an uptrend. Entry is reasonable if other signals are positive.`});
     }
-    // Supertrend
-    if(t.supertrendSig==='bullish') reasons.push({emoji:'🟢',type:'Positive',text:`Supertrend indicator is bullish (price above ₹${t.supertrend}). This algorithmic trend-following indicator is widely used by professional traders to confirm buy signals.`});
-    if(t.supertrendSig==='bearish') reasons.push({emoji:'🔴',type:'Concern',text:`Supertrend is bearish (price below ₹${t.supertrend}). The stock is in a confirmed downtrend. Short-term traders would be shorting this, not buying.`});
+
+    // Volume & Accumulation
+    analysis.push({cat:'Volume',icon:t.accumDist==='Accumulation'?'🏦':'📤',signal:t.accumDist==='Accumulation'?'positive':'negative',title:`Volume Pattern: ${t.accumDist}`,text:t.accumDist==='Accumulation'?`More shares are being bought on up-days than sold on down-days. This is the classic sign of institutional accumulation - big money is quietly building positions. When smart money buys silently like this, retail investors often don't notice until the stock moves up sharply.`:`More shares are being sold on down-days than bought on up-days. This is distribution - someone big is offloading. When smart money is selling, retail investors are often buying. Be careful.`});
+
+    // Overextension
+    if(overExt) analysis.push({cat:'Valuation Risk',icon:'⚠️',signal:'negative',title:`Overextended - ${t.pctAbove200}% Above 200 DMA`,text:`The stock is ${t.pctAbove200}% above its 200-day average. When stocks run this far above their long-term average, they almost always pull back. Don't chase. Wait for a correction back toward the 200 DMA (${t.dma200?.toFixed(0)}) before buying. Patience is rewarded here.`});
+
+    // Near support
+    if(nearDma200) analysis.push({cat:'Entry Timing',icon:'🎯',signal:'positive',title:'Near 200 DMA - Institutional Buy Zone',text:`Price is very close to its 200-day moving average of ${t.dma200?.toFixed(0)}. This is where long-term investors and institutions typically step in to buy. Historically, stocks that bounce off the 200 DMA in an uptrend go on to make new highs. If other signals are positive, this is a strong buy area.`});
+    else if(nearDma50) analysis.push({cat:'Entry Timing',icon:'🎯',signal:'positive',title:'Near 50 DMA - Continuation Buy Zone',text:`Price is near its 50-day average of ${t.dma50?.toFixed(0)}, which is a classic "dip buy" zone in an uptrend. Stocks in uptrends regularly dip to their 50 DMA and then resume higher.`});
+    else if(nearSupport) analysis.push({cat:'Entry Timing',icon:'🎯',signal:'positive',title:`Near Key Support (${t.buyZoneLow}-${t.buyZoneHigh})`,text:`Price is near a strong historical support zone. This is where buyers have repeatedly stepped in over months/years. The more times a support level holds, the stronger it becomes.`});
+
     // Fundamentals
-    if(fundAnalysis){
-      if(fundAnalysis.roe>=20) reasons.push({emoji:'💰',type:'Quality',text:`ROE (Return on Equity) is ${fundAnalysis.roe}% - excellent! This means for every ₹100 of shareholder money, the company earns ₹${fundAnalysis.roe}. Top companies like TCS, Nestlé maintain ROE above 20%.`});
-      else if(fundAnalysis.roe<10) reasons.push({emoji:'⚠️',type:'Concern',text:`ROE is only ${fundAnalysis.roe}% - weak. The company isn't generating good returns on the capital invested. Compare with industry peers before investing.`});
-      if(fundAnalysis.de!=null){
-        if(fundAnalysis.de<0.3) reasons.push({emoji:'💪',type:'Quality',text:`Debt is almost nil (D/E ratio: ${fundAnalysis.de}x). A debt-free company can survive recessions, invest in growth, and doesn't have interest payments eating profits. This is a huge positive for long-term investors.`});
-        else if(fundAnalysis.de>2) reasons.push({emoji:'🚨',type:'Risk',text:`High debt (D/E ratio: ${fundAnalysis.de}x). The company owes more than twice its equity. During slowdowns or interest rate hikes, high-debt companies suffer the most. This is a serious risk factor.`});
+    if(f){
+      if(f.roe>=15) analysis.push({cat:'Quality',icon:'💰',signal:'positive',title:`ROE ${f.roe}% - ${f.roePeer}`,text:`Return on Equity of ${f.roe}% means for every ₹100 of your money in the company, it generates ₹${f.roe} of profit. Above 15% is the threshold for a quality business. Compare: Infosys has ~30%, HDFC Bank ~16%. This shows management can put capital to work efficiently.`});
+      else analysis.push({cat:'Quality',icon:'⚠️',signal:'negative',title:`ROE ${f.roe}% - ${f.roePeer}`,text:`ROE of ${f.roe}% is below the 15% threshold. The company isn't generating strong returns on shareholder capital. Look for improvement trend before investing.`});
+
+      if(f.de<=0.7) analysis.push({cat:'Balance Sheet',icon:'💪',signal:'positive',title:`Low Debt (D/E: ${f.de}x) - ${f.dePeer}`,text:`Debt-to-equity of ${f.de}x is excellent. A company with low debt can survive recessions, doesn't need to keep paying interest, and can invest in growth opportunities. During market downturns, low-debt companies suffer much less than highly leveraged ones.`});
+      else if(f.de>2) analysis.push({cat:'Balance Sheet',icon:'🚨',signal:'negative',title:`High Debt (D/E: ${f.de}x) - Risky`,text:`Debt-to-equity of ${f.de}x is dangerous. When interest rates rise or business slows, high-debt companies can spiral quickly. This is a serious risk factor, especially in uncertain times.`});
+
+      if(f.epsGr!=null&&f.epsGr<400){
+        if(f.epsGr>=15) analysis.push({cat:'Growth',icon:'🚀',signal:'positive',title:`EPS Growing ${f.epsGr}% - ${f.growthPeer}`,text:`Earnings per share growing at ${f.epsGr}% is strong. A stock price ultimately follows earnings over time. If a company compounds earnings at ${f.epsGr}% annually, the stock will likely follow. This is the engine of long-term wealth creation.`});
+        else if(f.epsGr<0) analysis.push({cat:'Growth',icon:'📉',signal:'negative',title:`EPS Declining ${f.epsGr}% - Red Flag`,text:`Earnings are shrinking. Stock prices eventually follow earnings. If the company keeps earning less, the stock price will likely fall over time. This needs to reverse before long-term investing makes sense.`});
       }
-      if(fundAnalysis.epsGr!=null&&fundAnalysis.epsGr<400){
-        if(fundAnalysis.epsGr>=25) reasons.push({emoji:'🚀',type:'Growth',text:`EPS (Earnings Per Share) growing at ${fundAnalysis.epsGr}% - hypergrowth! The company is compounding earnings rapidly. At this rate, even a high PE makes sense because future earnings will justify today's price.`});
-        else if(fundAnalysis.epsGr<0) reasons.push({emoji:'📉',type:'Risk',text:`Earnings are declining (${fundAnalysis.epsGr}%). A stock is worth the present value of future earnings - if earnings are shrinking, the stock price usually follows. Be careful.`});
-      }
-      if(fundAnalysis.pe!=null){
-        if(fundAnalysis.pe<15) reasons.push({emoji:'🏷️',type:'Value',text:`PE ratio of ${fundAnalysis.pe}x is cheap relative to the market. You're paying ₹${fundAnalysis.pe} for every ₹1 of earnings. If earnings grow, this stock could re-rate significantly higher. Classic value investment.`});
-        else if(fundAnalysis.pe>50&&(fundAnalysis.epsGr||0)<20) reasons.push({emoji:'⚠️',type:'Valuation',text:`PE ratio of ${fundAnalysis.pe}x is expensive. You're paying ₹${fundAnalysis.pe} for ₹1 of earnings but EPS growth doesn't justify this premium. Any disappointment in results could cause sharp correction.`});
-      }
+
+      if(f.pe<25) analysis.push({cat:'Valuation',icon:'🏷️',signal:'positive',title:`P/E ${f.pe}x - ${f.pePeer}`,text:`You're paying ₹${f.pe} for every ₹1 of annual earnings. At this P/E, the stock isn't expensive. ${f.peg!=null?`PEG ratio of ${f.peg} (P/E divided by growth) - ${f.peg<1?'below 1.0 suggests undervalued relative to growth':'above 1.0 - fair to slightly expensive for growth rate'}.`:''}`});
+      else if(f.pe>40) analysis.push({cat:'Valuation',icon:'💸',signal:'negative',title:`P/E ${f.pe}x - ${f.pePeer}`,text:`You're paying ₹${f.pe} for every ₹1 of earnings. This is expensive. High P/E stocks can fall sharply on any earnings disappointment. Make sure the growth rate justifies this premium.`});
     }
-    // Price action
-    if(t.pctFromHigh<-30) reasons.push({emoji:'💡',type:'Opportunity',text:`Stock is ${Math.abs(t.pctFromHigh)}% below its 52-week high (peak: ₹${t.wk52Hi?.toFixed(1)}). Significant correction has already happened. This could represent long-term value if fundamentals are intact.`});
-    if(t.macdBull&&t.macdMomentum==='expanding') reasons.push({emoji:'⚡',type:'Momentum',text:`MACD is bullish with expanding histogram - momentum is accelerating upward. This is often seen at the beginning of a new uptrend, not the end.`});
+
     // Ichimoku
-    if(t.ichimoku?.bullish) reasons.push({emoji:'☁️',type:'Positive',text:`Price is above the Ichimoku Cloud - one of the strongest trend confirmation signals used by Japanese institutional traders. All Ichimoku components are aligned bullishly.`});
-    // Volume
-    if(t.volTrend?.includes('Accum')) reasons.push({emoji:'🏦',type:'Institutional',text:`Volume is significantly above average (${t.volRatio20}x normal). Rising price with rising volume is the #1 sign that institutions (mutual funds, FIIs) are accumulating this stock.`});
-    // Buy zone
-    if(t.idealBuy&&px&&Math.abs(px-t.idealBuy)/px<0.03) reasons.push({emoji:'🎯',type:'Timing',text:`Current price (₹${px?.toFixed(1)}) is near the ideal buy zone (₹${t.buyZoneLow}-₹${t.buyZoneHigh}) based on historical support. This is the zone where buyers have historically stepped in. Good entry area for long-term accumulation.`});
+    if(t.ichimoku?.tenkan){
+      const ich=t.ichimoku;
+      analysis.push({cat:'Advanced',icon:ich.bullish?'☁️':'⛈️',signal:ich.bullish?'positive':'negative',title:ich.bullish?'Ichimoku: Fully Bullish':'Ichimoku: Bearish Cloud',text:ich.bullish?`Price is above the Ichimoku Cloud (${ich.senkouA?.toFixed(0)}-${ich.senkouB?.toFixed(0)}) and the fast signal (Tenkan ${ich.tenkan?.toFixed(0)}) is above the slow signal (Kijun ${ich.kijun?.toFixed(0)}). Japanese institutions use this as a complete bullish confirmation.`:`Price is ${ich.aboveCloud?'above':'inside or below'} the Ichimoku cloud. The signals are mixed or bearish. Japanese traders treat being below the cloud as a full sell signal.`});
+    }
+
+    // Candlestick patterns
+    if(t.patterns?.length){
+      t.patterns.forEach(p=>analysis.push({cat:'Pattern',icon:p.signal==='bullish'?'🕯️':'🕯️',signal:p.signal,title:`Candlestick: ${p.name}`,text:p.desc}));
+    }
+
     // Sentiment
-    if(bull>bear&&news.length>2) reasons.push({emoji:'📰',type:'Sentiment',text:`News sentiment is positive - ${bull} bullish vs ${bear} bearish recent stories. Positive news flow means analysts and media have a favorable view, which attracts retail and institutional buying.`});
-    else if(bear>bull&&news.length>2) reasons.push({emoji:'📰',type:'Concern',text:`News sentiment is negative - ${bear} bearish vs ${bull} bullish recent stories. Negative news flow can weigh on the stock. Monitor developments before investing.`});
+    if(news.length>0) analysis.push({cat:'News',icon:sentScore>0?'📰':'📰',signal:sentScore>0?'positive':sentScore<0?'negative':'neutral',title:`News Sentiment: ${sentScore>0?'Positive':'Negative'} (${bull}B/${bear}Be)`,text:sentScore>20?`News flow is positive - ${bull} bullish vs ${bear} bearish articles recently. Positive analyst coverage and news usually precedes institutional buying.`:`News flow is mixed/negative - ${bear} bearish articles recently. Monitor for any fundamental changes before investing.`});
 
-    // When to buy advice
-    const whenToBuy=[];
-    if(t.buyZoneLow&&t.buyZoneHigh) whenToBuy.push({type:'Support Zone',priority:'HIGH',price:`₹${t.buyZoneLow}-₹${t.buyZoneHigh}`,why:'Strongest historical support - highest probability of bounce'});
-    if(t.dma50BuyZone) whenToBuy.push({type:'50-DMA Zone',priority:'HIGH',price:`₹${t.dma50BuyZone.low}-₹${t.dma50BuyZone.high}`,why:'Institutional buying zone - professional traders use 50DMA as entry'});
-    if(t.dma200BuyZone) whenToBuy.push({type:'200-DMA Zone',priority:'MEDIUM',price:`₹${t.dma200BuyZone.low}-₹${t.dma200BuyZone.high}`,why:'Long-term value zone - where Warren Buffett type investors accumulate'});
-    if(t.fibs) whenToBuy.push({type:'Fibonacci 61.8%',priority:'MEDIUM',price:`₹${t.fibs.r618}`,why:'Golden ratio retracement - used by technical traders worldwide'});
-    if(t.rsi14>60) whenToBuy.push({type:'RSI Pullback',priority:'LOW',price:`Wait for RSI < 50`,why:`RSI at ${t.rsi14} is elevated - better entry on cooling`});
-    if(t.rsi14<35) whenToBuy.push({type:'NOW (RSI Oversold)',priority:'HIGH',price:`₹${px?.toFixed(1)} - current price`,why:`RSI ${t.rsi14} is oversold - historically strong entry zone`});
+    // Risk:Reward
+    if(t.riskReward) analysis.push({cat:'Risk',icon:t.riskReward>=2?'✅':'⚠️',signal:t.riskReward>=2?'positive':'neutral',title:`Risk:Reward = ${t.riskReward}x`,text:t.riskReward>=2?`For every ₹1 you risk, you stand to gain ₹${t.riskReward}. Entry around ${px?.toFixed(0)}, stop loss at ${t.supports?.[0]?.price?.toFixed(0)||'support'}, target at ${t.resistances?.[0]?.price?.toFixed(0)||'resistance'}. A ratio above 2x is the minimum institutional traders require.`:`Risk:Reward of ${t.riskReward}x is below the preferred 2x minimum. The potential gain doesn't adequately compensate for the risk.`});
 
-    // Price targets
+    // Buy targets
     const targets=[];
     (t.resistances||[]).slice(0,5).forEach((r,i)=>targets.push({label:`T${i+1}`,price:r.price,upside:px?+((r.price-px)/px*100).toFixed(1):null,strength:r.strength}));
     if(t.wk52Hi) targets.push({label:'52W High',price:t.wk52Hi,upside:px?+((t.wk52Hi-px)/px*100).toFixed(1):null,strength:0});
 
+    const whenToBuy=[];
+    if(t.buyZoneLow&&t.buyZoneHigh) whenToBuy.push({type:'Support Zone',priority:'HIGH',price:`${t.buyZoneLow}-${t.buyZoneHigh}`,why:'Strongest historical support'});
+    if(t.dma50BuyZone) whenToBuy.push({type:'50-DMA Zone',priority:'HIGH',price:`${t.dma50BuyZone.low}-${t.dma50BuyZone.high}`,why:'Institutional momentum buy zone'});
+    if(t.dma200BuyZone) whenToBuy.push({type:'200-DMA Zone',priority:'MEDIUM',price:`${t.dma200BuyZone.low}-${t.dma200BuyZone.high}`,why:'Long-term value buy zone'});
+    if(t.fibs) whenToBuy.push({type:'Fibonacci 61.8%',priority:'MEDIUM',price:`${t.fibs.r618}`,why:'Golden ratio support'});
+    if(t.rsi14<35) whenToBuy.push({type:'NOW - RSI Oversold',priority:'HIGH',price:`${px?.toFixed(0)} (current)`,why:`RSI ${t.rsi14} in oversold territory`});
+
     res.json({
       sym,name:meta.n,grp:meta.grp,sector,price:px,
-      tech:t,techWeek,techMax,
-      charts,
-      fund:fundAnalysis,
+      tech:t,techWeek:tw,techMax:tm,
+      charts,fund:f,
       news,sentiment:{bull,bear,neutral:neut,score:sentScore},
       supports:t.supports||[],resistances:t.resistances||[],
       whenToBuy,targets,
       buyZone:{low:t.buyZoneLow,high:t.buyZoneHigh},
-      idealBuy:t.idealBuy,upsidePct:t.upsidePct,riskReward:t.riskReward,
+      idealBuy:t.supports?.[0]?.price||null,
+      upsidePct:t.upsidePct,riskReward:t.riskReward,
       fibs:t.fibs,ichimoku:t.ichimoku,patterns:t.patterns||[],
-      verdict,verdictColor,verdictIcon,score,bullPct,
-      reasons,
+      checklist,totalPts,maxPts,pctScore,passCount,totalChecks,
+      verdict,verdictColor,verdictIcon,action,verdictTimeframe:timeframe,
+      analysis,buyPlan,
       dataAvailable:{
         kite1y:c1y.length>0,kite3y:c3y.length>0,kite10w:c10w.length>0,
         kiteMax:cMax.length>0,maxCandles:cMax.length,
         kite1h:c1h.length>0,news:news.length>0,fundamentals:!!fund,
+        candlesUsed:techCandles.length,
       },
     });
   } catch(e){
@@ -2772,6 +2756,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     res.status(500).json({error:e.message});
   }
 });
+
 
 
 
