@@ -2080,7 +2080,7 @@ async function pollStockRec(){
 }
 
 // -- Deep Stock Analyzer -------------------------------------------------------
-var analyzerChart=null,analyzerData=null,analyzerTab='1Y';
+var analyzerChart=null,analyzerData=null,analyzerTab='3Y';
 
 async function analyzeStock(){
   var input=document.getElementById('stock-analyzer-input');
@@ -2090,10 +2090,11 @@ async function analyzeStock(){
   if(!sym){input.focus();return;}
   result.style.marginTop='16px';
   result.innerHTML='<div style="padding:32px;text-align:center">'
-    +'<div style="font-size:28px;margin-bottom:12px">🔍</div>'
-    +'<div style="font-size:13px;color:var(--text2);margin-bottom:6px">Deep analysis for <b>'+sym+'</b>...</div>'
-    +'<div style="font-size:11px;color:var(--text3)">Fetching MAX history + all technicals + news in parallel</div>'
-    +'<div style="margin-top:14px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:180px;margin-left:auto;margin-right:auto">'
+    +'<div style="font-size:32px;margin-bottom:12px">🔍</div>'
+    +'<div style="font-size:14px;color:var(--text2);font-weight:600;margin-bottom:6px">Analyzing <b>'+sym+'</b>...</div>'
+    +'<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Fetching MAX history + all 23 checklist items</div>'
+    +'<div style="font-size:11px;color:var(--text3)">Running institutional-grade analysis...</div>'
+    +'<div style="margin-top:16px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:180px;margin-left:auto;margin-right:auto">'
     +'<div style="height:100%;background:#f59e0b;width:70%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div></div>';
   try{
     var r=await fetch('/api/stocks/analyze/'+sym);
@@ -2104,15 +2105,17 @@ async function analyzeStock(){
         +'<div style="font-size:11px;color:var(--text3)">Try: RELIANCE, TCS, HDFCBANK, INFY, TATAMOTORS</div></div>';
       return;
     }
-    analyzerData=d; analyzerTab='1Y';
+    analyzerData=d;
+    var da=d.dataAvailable||{};
+    analyzerTab=da.kiteMax&&d.charts&&d.charts['MAX']&&d.charts['MAX'].length>24?'MAX'
+              :da.kite10w&&d.charts&&d.charts['10Y']&&d.charts['10Y'].length>50?'10Y'
+              :da.kite3y&&d.charts&&d.charts['3Y']&&d.charts['3Y'].length>50?'3Y':'1Y';
     try{ result.innerHTML=buildUI(d); setTimeout(function(){drawChart(d,analyzerTab);},80); }
-    catch(e){ result.innerHTML='<div style="padding:16px;color:var(--red)">UI Error: '+e.message+'</div>'; }
+    catch(e){ result.innerHTML='<div style="padding:16px;color:var(--red)">UI Error: '+e.message+'</div>'; console.error(e); }
   }catch(e){result.innerHTML='<div style="padding:16px;color:var(--red)">'+e.message+'</div>';}
 }
 
-function sig(v,good,warn){ return v==null?'-':v>=good?'<span style="color:var(--green)">'+v+'</span>':v>=warn?'<span style="color:#f59e0b">'+v+'</span>':'<span style="color:var(--red)">'+v+'</span>'; }
-function chg(v){ if(v==null)return'-'; var c=v>0?'var(--green)':v<0?'var(--red)':'var(--text3)'; return'<span style="color:'+c+'">'+(v>0?'+':'')+v+'%</span>'; }
-function price(v){ return v!=null?'₹'+parseFloat(v).toFixed(2):'-'; }
+function px_(v){ return v!=null?'Rs.'+parseFloat(v).toFixed(2):'--'; }
 function sigBox(label,val,signal,detail){
   var c=signal==='bullish'?'var(--green)':signal==='bearish'?'var(--red)':'#f59e0b';
   var ic=signal==='bullish'?'▲':signal==='bearish'?'▼':'●';
@@ -2135,105 +2138,156 @@ function buildUI(d){
   html+='<b style="font-size:20px">'+d.sym+'</b>';
   html+='<span style="color:var(--text3);font-size:12px">'+d.name+'</span>';
   html+='<span style="background:rgba(100,116,139,.2);color:var(--text3);border-radius:4px;padding:1px 8px;font-size:10px">'+d.sector+'</span>';
-  html+='<span style="background:rgba(100,116,139,.2);color:var(--text3);border-radius:4px;padding:1px 8px;font-size:10px">'+d.grp+'</span>';
-  html+='</div>';
-  if(px) html+='<div style="font-size:26px;font-weight:800;margin-bottom:8px">₹'+px.toFixed(2)+'</div>';
-  // Data chips
+  html+='<span style="background:rgba(100,116,139,.2);color:var(--text3);border-radius:4px;padding:1px 8px;font-size:10px">'+d.grp+'</span></div>';
+  if(px) html+='<div style="font-size:26px;font-weight:800;margin-bottom:8px">Rs.'+px.toFixed(2)+'</div>';
   html+='<div style="display:flex;gap:4px;flex-wrap:wrap">';
-  [['1Y',da.kite1y],['3Y',da.kite3y],['10Y',da.kite10w],['MAX '+(da.maxCandles||0)+'mo',da.kiteMax],['Hourly',da.kite1h],['News',da.news],['Fundamentals',da.fundamentals]]
+  [['1Y',da.kite1y],['3Y',da.kite3y],['10Y',da.kite10w],['MAX '+(da.maxCandles||0)+'mo',da.kiteMax],['Hourly',da.kite1h],['News',da.news],['Fundamentals',da.fundamentals],['Candles: '+(da.candlesUsed||0),da.candlesUsed>100]]
     .forEach(function(c){html+='<span style="font-size:9px;padding:2px 7px;border-radius:10px;font-weight:600;background:'+(c[1]?'rgba(34,197,94,.15)':'rgba(239,68,68,.1)')+';color:'+(c[1]?'var(--green)':'var(--text4)')+'">'+c[0]+'</span>';});
   html+='</div></div>';
-  // Verdict box
-  html+='<div style="background:'+vc+'15;border:2px solid '+vc+';border-radius:12px;padding:16px 20px;text-align:center;min-width:180px">';
-  html+='<div style="font-size:28px;margin-bottom:4px">'+d.verdictIcon+'</div>';
-  html+='<div style="font-size:17px;font-weight:800;color:'+vc+'">'+d.verdict+'</div>';
-  html+='<div style="margin-top:10px;background:var(--bg4);border-radius:6px;height:8px;overflow:hidden">';
-  html+='<div style="height:100%;background:'+vc+';width:'+d.bullPct+'%;border-radius:6px"></div></div>';
-  html+='<div style="font-size:9px;color:var(--text4);margin-top:4px">'+d.bullPct+'% bullish · score: '+(d.score>0?'+':'')+d.score+'</div>';
+
+  // Verdict + Score
+  html+='<div style="background:'+vc+'15;border:2px solid '+vc+';border-radius:12px;padding:16px 20px;text-align:center;min-width:190px">';
+  html+='<div style="font-size:30px;margin-bottom:4px">'+d.verdictIcon+'</div>';
+  html+='<div style="font-size:19px;font-weight:800;color:'+vc+'">'+d.verdict+'</div>';
+  html+='<div style="font-size:10px;color:var(--text3);margin:4px 0">'+d.verdictTimeframe+'</div>';
+  html+='<div style="font-size:22px;font-weight:800;color:'+vc+';margin:8px 0">'+d.pctScore+'<span style="font-size:13px">/100</span></div>';
+  html+='<div style="font-size:10px;color:var(--text3)">'+d.passCount+'/'+d.totalChecks+' criteria passed</div>';
+  html+='<div style="margin-top:8px;background:var(--bg4);border-radius:6px;height:8px;overflow:hidden">';
+  html+='<div style="height:100%;background:'+vc+';width:'+d.pctScore+'%;border-radius:6px"></div></div>';
+  html+='<div style="margin-top:8px;background:'+vc+';color:#000;border-radius:8px;padding:6px 12px;font-weight:800;font-size:13px">'+d.action+'</div>';
   html+='</div></div>';
 
   // -- CHART -----------------------------------------------------------------
   html+='<div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:16px">';
   html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
-  html+='<div style="font-weight:700;font-size:12px;color:var(--text2)">Price Chart - All History</div>';
+  html+='<div style="font-weight:700;font-size:12px">Price Chart - Full History</div>';
   html+='<div style="display:flex;gap:4px">';
   ['3M','1Y','3Y','10Y','MAX'].forEach(function(tf){
     var a=tf===analyzerTab;
     html+='<button onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'#f59e0b':'var(--border)')+';background:'+(a?'rgba(245,158,11,.2)':'var(--bg2)')+';color:'+(a?'#f59e0b':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?700:400)+'">'+tf+'</button>';
   });
   html+='</div></div>';
-  html+='<div style="font-size:9px;color:var(--text4);margin-bottom:6px">🟢 Support  🔴 Resistance  🔵 Buy Zone  🟡 50DMA  🟣 200DMA</div>';
+  html+='<div style="font-size:9px;color:var(--text4);margin-bottom:6px">Green=Support  Red=Resistance  Blue=Buy Zone  Orange=50DMA  Purple=200DMA</div>';
   html+='<div style="position:relative;height:300px;width:100%"><canvas id="deep-chart" style="position:absolute;top:0;left:0;width:100%;height:100%"></canvas></div>';
   html+='</div>';
 
-  // -- PLAIN ENGLISH VERDICT -------------------------------------------------
-  html+='<div style="background:'+vc+'12;border:1px solid '+vc+'40;border-radius:12px;padding:16px;margin-bottom:16px">';
-  html+='<div style="font-weight:700;font-size:13px;color:'+vc+';margin-bottom:12px">'+d.verdictIcon+' Why '+d.verdict+' - Plain English Explanation</div>';
-  if(d.reasons&&d.reasons.length){
-    d.reasons.forEach(function(r){
-      var tc={'Positive':'var(--green)','Opportunity':'var(--green)','Quality':'#f59e0b','Growth':'var(--green)','Momentum':'var(--blue)','Institutional':'var(--blue)','Timing':'#f59e0b','Value':'var(--green)','Concern':'var(--red)','Risk':'var(--red)','Caution':'#f59e0b','Neutral':'var(--text3)','Sentiment':'#8b5cf6'}[r.type]||'var(--text3)';
-      html+='<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid '+vc+'20">';
-      html+='<span style="font-size:16px;flex-shrink:0">'+r.emoji+'</span>';
-      html+='<div><span style="background:'+tc+'22;color:'+tc+';font-size:9px;font-weight:700;padding:1px 7px;border-radius:4px">'+r.type+'</span>';
-      html+='<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-top:4px">'+r.text+'</div></div></div>';
+  // -- MASTER CHECKLIST SCORECARD --------------------------------------------
+  html+='<div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:16px">';
+  html+='<div style="font-weight:700;font-size:12px;margin-bottom:12px">📋 Master Checklist (23-Point Institutional Framework)</div>';
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
+  var cl=d.checklist||{};
+  Object.keys(cl).forEach(function(k){
+    var c=cl[k];
+    var gc=c.pass?'var(--green)':'var(--red)';
+    var gi=c.pass?'✅':'❌';
+    if(c.pts>0&&!c.pass) gi='⚠️'; // partial
+    var pct=c.max>0?Math.round(c.pts/c.max*100):0;
+    html+='<div style="background:var(--bg2);border-radius:8px;padding:8px 10px;border-left:3px solid '+gc+'">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
+    html+='<div style="font-size:10px;font-weight:600;color:var(--text2);flex:1">'+gi+' '+c.label+'</div>';
+    html+='<div style="font-size:10px;font-weight:700;color:'+gc+';flex-shrink:0;margin-left:6px">'+c.pts+'/'+c.max+'</div></div>';
+    html+='<div style="font-size:9px;color:var(--text4);margin-top:3px;line-height:1.4">'+c.detail+'</div>';
+    html+='</div>';
+  });
+  html+='</div>';
+  // Total bar
+  html+='<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">';
+  html+='<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;margin-bottom:6px">';
+  html+='<span>Total Score</span><span style="color:'+vc+'">'+d.totalPts+' / '+d.maxPts+' points ('+d.pctScore+'%)</span></div>';
+  html+='<div style="height:8px;background:var(--bg4);border-radius:4px;overflow:hidden">';
+  html+='<div style="height:100%;background:'+vc+';width:'+d.pctScore+'%;border-radius:4px"></div></div>';
+  html+='</div></div>';
+
+  // -- PLAIN ENGLISH ANALYSIS ------------------------------------------------
+  html+='<div style="background:'+vc+'10;border:1px solid '+vc+'40;border-radius:12px;padding:16px;margin-bottom:16px">';
+  html+='<div style="font-weight:700;font-size:13px;color:'+vc+';margin-bottom:4px">'+d.verdictIcon+' Our Verdict: '+d.verdict+'</div>';
+  html+='<div style="font-size:11px;color:var(--text3);margin-bottom:14px">'+d.verdictTimeframe+'</div>';
+  if(d.analysis&&d.analysis.length){
+    d.analysis.forEach(function(a){
+      var sc={'positive':'var(--green)','negative':'var(--red)','neutral':'#f59e0b'}[a.signal]||'var(--text3)';
+      html+='<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid '+vc+'20">';
+      html+='<div style="flex-shrink:0;font-size:18px">'+a.icon+'</div>';
+      html+='<div style="flex:1">';
+      html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">';
+      html+='<span style="font-size:10px;font-weight:700;color:'+sc+';background:'+sc+'18;padding:2px 8px;border-radius:4px">'+a.cat+'</span>';
+      html+='<span style="font-size:11px;font-weight:700;color:var(--text)">'+a.title+'</span></div>';
+      html+='<div style="font-size:11px;color:var(--text2);line-height:1.7">'+a.text+'</div>';
+      html+='</div></div>';
     });
-  } else {
-    html+='<div style="font-size:11px;color:var(--text3)">Insufficient data - update Kite token and retry during market hours for full analysis.</div>';
   }
   html+='</div>';
 
-  // -- SUPPORT / RESISTANCE / BUY ZONE --------------------------------------
+  // -- STAGGERED BUYING PLAN -------------------------------------------------
+  if(d.buyPlan){
+    var bp=d.buyPlan;
+    html+='<div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:12px;padding:14px;margin-bottom:16px">';
+    html+='<div style="font-weight:700;font-size:12px;color:var(--green);margin-bottom:10px">📐 Staggered Buying Plan (Institutional Approach)</div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">';
+    [['1st Buy (30%)',bp.tranche1.price,bp.tranche1.when],
+     ['2nd Buy (30%)',bp.tranche2.price,bp.tranche2.when],
+     ['3rd Buy (40%)',bp.tranche3.price,bp.tranche3.when]].forEach(function(tr){
+      html+='<div style="background:var(--bg3);border-radius:8px;padding:8px 10px;text-align:center">';
+      html+='<div style="font-size:10px;color:var(--green);font-weight:700">'+tr[0]+'</div>';
+      html+='<div style="font-size:12px;font-weight:700;margin:4px 0">Rs.'+tr[1]+'</div>';
+      html+='<div style="font-size:9px;color:var(--text4)">'+tr[2]+'</div></div>';
+    });
+    html+='</div>';
+    html+='<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px">';
+    html+='<span style="color:var(--red)">🛑 Stop Loss: Rs.'+bp.stopLoss+'</span>';
+    html+='<span style="color:var(--green)">🎯 Target 1: Rs.'+bp.target1+'</span>';
+    html+='<span style="color:var(--green)">🎯 Target 2: Rs.'+bp.target2+'</span>';
+    html+='</div></div>';
+  }
+
+  // -- SUPPORT / RESISTANCE / WHEN TO BUY ------------------------------------
   html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">';
-  // Supports
   html+='<div style="background:var(--bg3);border-radius:10px;padding:12px">';
-  html+='<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:8px">🟢 Support Levels</div>';
+  html+='<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:8px">Support Levels</div>';
   if(d.supports&&d.supports.length){
     d.supports.slice(0,6).forEach(function(s){
       var dist=px?((px-s.price)/px*100).toFixed(1):null;
       html+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border2);font-size:11px">';
-      html+='<b style="color:var(--green)">'+price(s.price)+'</b>';
-      html+='<span style="color:var(--text3)">'+(dist?dist+'%':'')+(s.strength>4?' ⚡':'')+'</span></div>';
+      html+='<b style="color:var(--green)">Rs.'+s.price+'</b>';
+      html+='<span style="color:var(--text3)">'+(dist?dist+'% below':'')+(s.strength>4?' ⚡':'')+'</span></div>';
     });
-  } else html+='<div style="font-size:10px;color:var(--text4)">Need more data</div>';
+  } else html+='<div style="font-size:10px;color:var(--text4)">Need more candle history</div>';
   html+='</div>';
-  // Resistances
   html+='<div style="background:var(--bg3);border-radius:10px;padding:12px">';
-  html+='<div style="font-weight:700;font-size:11px;color:var(--red);margin-bottom:8px">🔴 Resistance Levels</div>';
+  html+='<div style="font-weight:700;font-size:11px;color:var(--red);margin-bottom:8px">Resistance Levels</div>';
   if(d.resistances&&d.resistances.length){
     d.resistances.slice(0,6).forEach(function(s){
       var dist=px?((s.price-px)/px*100).toFixed(1):null;
       html+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border2);font-size:11px">';
-      html+='<b style="color:var(--red)">'+price(s.price)+'</b>';
+      html+='<b style="color:var(--red)">Rs.'+s.price+'</b>';
       html+='<span style="color:var(--text3)">'+(dist?'+'+dist+'%':'')+(s.strength>4?' ⚡':'')+'</span></div>';
     });
-  } else html+='<div style="font-size:10px;color:var(--text4)">Need more data</div>';
+  } else html+='<div style="font-size:10px;color:var(--text4)">Need more candle history</div>';
   html+='</div>';
-  // When to buy
   html+='<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:12px">';
-  html+='<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:8px">🎯 When To Buy</div>';
+  html+='<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:8px">When To Buy</div>';
   if(d.whenToBuy&&d.whenToBuy.length){
     d.whenToBuy.slice(0,5).forEach(function(w){
       var pc={'HIGH':'var(--green)','MEDIUM':'#f59e0b','LOW':'var(--text3)'}[w.priority];
       html+='<div style="padding:5px 0;border-bottom:1px solid rgba(245,158,11,.15)">';
       html+='<div style="font-size:9px;font-weight:700;color:'+pc+'">'+w.type+' ('+w.priority+')</div>';
-      html+='<div style="font-size:10px;font-weight:600">'+w.price+'</div>';
+      html+='<div style="font-size:10px;font-weight:600">Rs.'+w.price+'</div>';
       html+='<div style="font-size:9px;color:var(--text4)">'+w.why+'</div></div>';
     });
   }
-  if(d.riskReward) html+='<div style="margin-top:6px;font-size:10px;color:#f59e0b;font-weight:700">R:R = '+d.riskReward+'x · Upside: '+(d.upsidePct>0?'+':'')+d.upsidePct+'%</div>';
+  if(d.riskReward) html+='<div style="margin-top:6px;font-size:10px;color:#f59e0b;font-weight:700">R:R = '+d.riskReward+'x</div>';
   html+='</div></div>';
 
-  // -- FIBONACCI LEVELS ------------------------------------------------------
+  // -- FIBONACCI -------------------------------------------------------------
   if(d.fibs){
     html+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-    html+='<div style="font-weight:700;font-size:11px;color:#8b5cf6;margin-bottom:8px">📐 Fibonacci Retracement Levels (52W range)</div>';
+    html+='<div style="font-weight:700;font-size:11px;color:#8b5cf6;margin-bottom:8px">Fibonacci Retracement (52W range)</div>';
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
     [['23.6%',d.fibs.r236],['38.2%',d.fibs.r382],['50%',d.fibs.r500],['61.8%',d.fibs.r618],['78.6%',d.fibs.r786],['100%',d.fibs.r1000]].forEach(function(fb){
       var near=px&&Math.abs(px-fb[1])/px<0.03;
       html+='<div style="background:'+(near?'rgba(139,92,246,.2)':'var(--bg2)')+';border:1px solid '+(near?'#8b5cf6':'var(--border)')+';border-radius:8px;padding:6px 10px;text-align:center">';
       html+='<div style="font-size:9px;color:#8b5cf6">'+fb[0]+'</div>';
-      html+='<div style="font-size:11px;font-weight:600'+(near?';color:#8b5cf6':'')+'">'+price(fb[1])+'</div>';
-      if(near) html+='<div style="font-size:8px;color:#8b5cf6"><- Near here</div>';
+      html+='<div style="font-size:11px;font-weight:600">Rs.'+fb[1]+'</div>';
+      if(near) html+='<div style="font-size:8px;color:#8b5cf6">Near here</div>';
       html+='</div>';
     });
     html+='</div></div>';
@@ -2241,78 +2295,99 @@ function buildUI(d){
 
   // -- ALL TECHNICALS --------------------------------------------------------
   html+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-  html+='<div style="font-weight:700;font-size:11px;color:var(--blue);margin-bottom:10px">📊 Complete Technical Analysis (All Indicators)</div>';
+  html+='<div style="font-weight:700;font-size:11px;color:var(--blue);margin-bottom:10px">Complete Technical Analysis</div>';
 
-  // Moving Averages section
-  html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;margin-top:4px;text-transform:uppercase;letter-spacing:.5px">Moving Averages</div>';
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
-  if(px&&t.dma9)   html+=sigBox('DMA 9',  price(t.dma9),  px>t.dma9?'bullish':'bearish', px>t.dma9?'Price above':'Price below');
-  if(px&&t.dma20)  html+=sigBox('DMA 20', price(t.dma20), px>t.dma20?'bullish':'bearish', px>t.dma20?'Price above':'Price below');
-  if(px&&t.dma50)  html+=sigBox('DMA 50', price(t.dma50), px>t.dma50?'bullish':'bearish', px>t.dma50?'Institutional support':'Below support');
-  if(px&&t.dma100) html+=sigBox('DMA 100',price(t.dma100),px>t.dma100?'bullish':'bearish', '');
-  if(px&&t.dma150) html+=sigBox('DMA 150',price(t.dma150),px>t.dma150?'bullish':'bearish', '');
-  if(px&&t.dma200) html+=sigBox('DMA 200',price(t.dma200),px>t.dma200?'bullish':'bearish', px>t.dma200?'Long-term uptrend':'Long-term downtrend');
-  if(t.dma50&&t.dma200) html+=sigBox('MA Cross',t.goldenCross?'Golden Cross':'Death Cross',t.goldenCross?'bullish':'bearish',t.goldenCross?'50>200 - Strong buy signal':'50<200 - Bearish');
-  if(px&&t.ema20)  html+=sigBox('EMA 20', price(t.ema20), px>t.ema20?'bullish':'bearish', 'Dynamic support/resistance');
-  if(px&&t.ema50)  html+=sigBox('EMA 50', price(t.ema50), px>t.ema50?'bullish':'bearish', '');
-  if(px&&t.ema200) html+=sigBox('EMA 200',price(t.ema200),px>t.ema200?'bullish':'bearish', 'Long-term EMA');
-  html+='</div>';
+  function techSection(title, boxes){
+    var h='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">'+title+'</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
+    var count=0;
+    boxes.forEach(function(b){ if(b){h+=b;count++;} });
+    if(!count) h+='<div style="font-size:10px;color:var(--text4);padding:4px">Need more data</div>';
+    return h+'</div>';
+  }
 
-  // Oscillators
-  html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Oscillators</div>';
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
-  if(t.rsi7!=null)   html+=sigBox('RSI-7',   t.rsi7,   t.rsi7<35?'bullish':t.rsi7>70?'bearish':'neutral', t.rsi7<35?'Oversold':t.rsi7>70?'Overbought':'Neutral');
-  if(t.rsi14!=null)  html+=sigBox('RSI-14',  t.rsi14,  t.rsi14<40?'bullish':t.rsi14>65?'bearish':'neutral', t.rsi14<40?'Oversold':t.rsi14>65?'Overbought':'Neutral');
-  if(t.rsi21!=null)  html+=sigBox('RSI-21',  t.rsi21,  t.rsi21<40?'bullish':t.rsi21>65?'bearish':'neutral', 'Slow RSI');
-  if(t.stochRsiK!=null) html+=sigBox('StochRSI %K',t.stochRsiK+'%',t.stochRsiK<20?'bullish':t.stochRsiK>80?'bearish':'neutral', 'RSI of RSI');
-  if(t.stochK!=null) html+=sigBox('Stoch %K', '%K:'+t.stochK+' %D:'+t.stochD?.toFixed(1), t.stochK<25?'bullish':t.stochK>75?'bearish':'neutral', t.stochK<25?'Oversold':t.stochK>75?'Overbought':'Neutral');
-  if(t.macd!=null)   html+=sigBox('MACD',     t.macd,   t.macdBull?'bullish':'bearish', 'Hist:'+t.macdHist+' ('+t.macdMomentum+')');
-  if(t.cci!=null)    html+=sigBox('CCI-20',   t.cci?.toFixed(0), t.cciSignal==='oversold'?'bullish':t.cciSignal==='overbought'?'bearish':'neutral', t.cciSignal);
-  if(t.willR!=null)  html+=sigBox('Williams%R',t.willR?.toFixed(0)+'%', t.willR<-80?'bullish':t.willR>-20?'bearish':'neutral', t.willR<-80?'Oversold':t.willR>-20?'Overbought':'Neutral');
-  if(t.roc10!=null)  html+=sigBox('ROC-10',   (t.roc10>0?'+':'')+t.roc10+'%', t.roc10>0?'bullish':'bearish', 'Rate of change');
-  if(t.mfi!=null)    html+=sigBox('MFI-14',   t.mfi?.toFixed(0), t.mfi<30?'bullish':t.mfi>70?'bearish':'neutral', t.mfi<30?'Oversold (buy)':t.mfi>70?'Overbought':'Neutral');
-  html+='</div>';
+  var maBoxes=[
+    px&&t.dma9   ?sigBox('DMA 9',   'Rs.'+t.dma9?.toFixed(1),   px>t.dma9?'bullish':'bearish',   px>t.dma9?'Above':'Below'):null,
+    px&&t.dma20  ?sigBox('DMA 20',  'Rs.'+t.dma20?.toFixed(1),  px>t.dma20?'bullish':'bearish',  ''):null,
+    px&&t.dma50  ?sigBox('DMA 50',  'Rs.'+t.dma50?.toFixed(1),  px>t.dma50?'bullish':'bearish',  px>t.dma50?'Inst. support':'Below support'):null,
+    px&&t.dma100 ?sigBox('DMA 100', 'Rs.'+t.dma100?.toFixed(1), px>t.dma100?'bullish':'bearish', ''):null,
+    px&&t.dma150 ?sigBox('DMA 150', 'Rs.'+t.dma150?.toFixed(1), px>t.dma150?'bullish':'bearish', ''):null,
+    px&&t.dma200 ?sigBox('DMA 200', 'Rs.'+t.dma200?.toFixed(1), px>t.dma200?'bullish':'bearish', px>t.dma200?'Long-term up':'Downtrend'):null,
+    t.dma50&&t.dma200?sigBox('MA Cross',t.goldenCross?'Golden':'Death',t.goldenCross?'bullish':'bearish',t.goldenCross?'50>200 bullish':'50<200 bearish'):null,
+    t.dma200Trend?sigBox('200DMA Trend',t.dma200Trend==='rising'?'Rising':'Falling',t.dma200Trend==='rising'?'bullish':'bearish','Long-term direction'):null,
+    px&&t.ema20  ?sigBox('EMA 20',  'Rs.'+t.ema20?.toFixed(1),  px>t.ema20?'bullish':'bearish',  'Dynamic S/R'):null,
+    px&&t.ema50  ?sigBox('EMA 50',  'Rs.'+t.ema50?.toFixed(1),  px>t.ema50?'bullish':'bearish',  ''):null,
+    px&&t.ema200 ?sigBox('EMA 200', 'Rs.'+t.ema200?.toFixed(1), px>t.ema200?'bullish':'bearish', 'Long-term EMA'):null,
+  ];
+  html+=techSection('Moving Averages', maBoxes);
 
-  // Trend & Volatility
-  html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Trend & Volatility</div>';
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
-  if(t.adx!=null)        html+=sigBox('ADX',         t.adx?.toFixed(1),          t.adx>25?'bullish':'neutral', t.trendStrength);
-  if(t.supertrendSig)    html+=sigBox('Supertrend',  price(t.supertrend),         t.supertrendSig, t.supertrendSig==='bullish'?'Price above ST':'Price below ST');
-  if(t.sarSignal)        html+=sigBox('Parabolic SAR',price(t.sar),               t.sarSignal, t.sarSignal==='bullish'?'SAR below price':'SAR above price');
-  if(t.bbSqueeze!=null)  html+=sigBox('BB Squeeze',  t.bbSqueeze?'Active':'No',   t.bbSqueeze?'neutral':'neutral', 'Precedes big move');
-  if(t.sqzMomentum!=null)html+=sigBox('Sqz Momentum',t.sqzMomentum?'Squeeze':'Normal','neutral', t.sqzMomentum?'Volatility compressed':'Normal');
-  if(t.bbPct!=null)      html+=sigBox('BB %B',       (t.bbPct*100)?.toFixed(0)+'%',t.bbPct<0.2?'bullish':t.bbPct>0.8?'bearish':'neutral','BB Width:'+t.bbWidth+'%');
-  if(t.atrPct!=null)     html+=sigBox('ATR%',        t.atrPct+'%',                'neutral', 'Daily volatility');
-  if(t.annualVol!=null)  html+=sigBox('Annual Vol',  t.annualVol+'%',             t.annualVol<25?'bullish':t.annualVol>50?'bearish':'neutral','Annualised volatility');
-  if(t.beta!=null)       html+=sigBox('Beta',        t.beta,                       Math.abs(t.beta-1)<0.4?'bullish':'neutral', t.beta<0.8?'Low risk':t.beta>1.5?'High risk':'Market-like');
-  html+='</div>';
+  var oscBoxes=[
+    t.rsi7!=null  ?sigBox('RSI-7',    t.rsi7?.toFixed(1),  t.rsi7<35?'bullish':t.rsi7>70?'bearish':'neutral',  t.rsi7<35?'Oversold':t.rsi7>70?'Overbought':'Neutral'):null,
+    t.rsi14!=null ?sigBox('RSI-14',   t.rsi14?.toFixed(1), t.rsi14<40?'bullish':t.rsi14>65?'bearish':'neutral', t.rsi14<40?'Oversold':t.rsi14>65?'Overbought':'Neutral'):null,
+    t.rsi21!=null ?sigBox('RSI-21',   t.rsi21?.toFixed(1), t.rsi21<40?'bullish':t.rsi21>65?'bearish':'neutral', 'Slow RSI'):null,
+    t.stochRsiK!=null?sigBox('StochRSI',t.stochRsiK+'%',   t.stochRsiK<20?'bullish':t.stochRsiK>80?'bearish':'neutral', 'RSI of RSI'):null,
+    t.stochK!=null?sigBox('Stoch %K', '%K:'+t.stochK+' %D:'+(t.stochD?.toFixed(1)||''), t.stochK<25?'bullish':t.stochK>75?'bearish':'neutral', ''):null,
+    t.macd!=null  ?sigBox('MACD',     t.macd?.toFixed(2),  t.macdBull?'bullish':'bearish', 'Hist:'+t.macdHist+' '+t.macdMomentum):null,
+    t.cci!=null   ?sigBox('CCI-20',   t.cci?.toFixed(0),   t.cciSignal==='oversold'?'bullish':t.cciSignal==='overbought'?'bearish':'neutral', t.cciSignal):null,
+    t.willR!=null ?sigBox('Williams%R',t.willR?.toFixed(0)+'%',t.willR<-80?'bullish':t.willR>-20?'bearish':'neutral', t.willR<-80?'Oversold':t.willR>-20?'Overbought':'Neutral'):null,
+    t.roc10!=null ?sigBox('ROC-10',   (t.roc10>0?'+':'')+t.roc10+'%', t.roc10>0?'bullish':'bearish', 'Rate of change'):null,
+    t.mfi!=null   ?sigBox('MFI-14',   t.mfi?.toFixed(0),   t.mfi<30?'bullish':t.mfi>70?'bearish':'neutral', 'Vol-weighted RSI'):null,
+  ];
+  html+=techSection('Oscillators', oscBoxes);
 
-  // Volume
-  html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Volume & Flow</div>';
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
-  if(t.volRatio20!=null) html+=sigBox('Vol/20DAvg',  t.volRatio20+'x',             t.volRatio20>1.2?'bullish':t.volRatio20<0.8?'bearish':'neutral', t.volTrend);
-  if(t.obvTrend)         html+=sigBox('OBV Trend',   t.obvTrend.split('(')[0],     t.obvTrend.includes('Rising')?'bullish':'bearish', 'On-balance volume');
-  if(t.vwap&&px)         html+=sigBox('VWAP',        price(t.vwap),                px>t.vwap?'bullish':'bearish', px>t.vwap?'Above VWAP':'Below VWAP');
-  if(t.mfi!=null)        html+=sigBox('Money Flow',  t.mfi?.toFixed(0),            t.mfi>60?'bullish':t.mfi<40?'bearish':'neutral', 'Volume-weighted RSI');
-  html+='</div>';
+  var trendBoxes=[
+    t.adx!=null        ?sigBox('ADX',          t.adx?.toFixed(1),          t.adx>25?'bullish':'neutral',     t.trendStrength):null,
+    t.supertrendSig    ?sigBox('Supertrend',    'Rs.'+t.supertrend?.toFixed(1), t.supertrendSig,              t.supertrendSig==='bullish'?'Above ST':'Below ST'):null,
+    t.sarSignal        ?sigBox('Parabolic SAR', 'Rs.'+t.sar?.toFixed(1),    t.sarSignal,                      t.sarSignal==='bullish'?'SAR below':'SAR above'):null,
+    t.bbPct!=null      ?sigBox('BB %B',         (t.bbPct*100)?.toFixed(0)+'%',t.bbPct<0.2?'bullish':t.bbPct>0.8?'bearish':'neutral','Width:'+t.bbWidth+'%'):null,
+    t.bbSqueeze!=null  ?sigBox('BB Squeeze',    t.bbSqueeze?'Active':'No',  'neutral',                        'Precedes big move'):null,
+    t.sqzMomentum!=null?sigBox('Sqz Mom',       t.sqzMomentum?'Squeeze':'Normal','neutral',                   'Volatility'):null,
+    t.atrPct!=null     ?sigBox('ATR%',          t.atrPct+'%',               'neutral',                        'Daily volatility'):null,
+    t.annualVol!=null  ?sigBox('Annual Vol',    t.annualVol+'%',            t.annualVol<25?'bullish':t.annualVol>50?'bearish':'neutral','Yearly vol'):null,
+    t.beta!=null       ?sigBox('Beta',          t.beta?.toString(),         Math.abs(t.beta-1)<0.4?'bullish':'neutral', t.beta<0.8?'Low risk':t.beta>1.5?'High risk':'Market-like'):null,
+    t.pctAbove200!=null?sigBox('vs 200DMA',     (t.pctAbove200>0?'+':'')+t.pctAbove200+'%',t.pctAbove200>0&&t.pctAbove200<20?'bullish':t.pctAbove200>30?'neutral':'bearish',t.overextended?'OVEREXTENDED':'Normal range'):null,
+  ];
+  html+=techSection('Trend & Volatility', trendBoxes);
+
+  var volBoxes=[
+    t.volRatio20!=null?sigBox('Vol/20D Avg', t.volRatio20+'x',          t.volRatio20>1.2?'bullish':t.volRatio20<0.8?'bearish':'neutral', t.volTrend):null,
+    t.accumDist?       sigBox('Accum/Dist',  t.accumDist,               t.accumDist==='Accumulation'?'bullish':'bearish', 'Vol pattern'):null,
+    t.obvTrend?        sigBox('OBV',         t.obvTrend.split('(')[0],  t.obvTrend.includes('Rising')?'bullish':'bearish', 'On-balance vol'):null,
+    px&&t.vwap?        sigBox('VWAP',        'Rs.'+t.vwap?.toFixed(1),  px>t.vwap?'bullish':'bearish', px>t.vwap?'Above VWAP':'Below VWAP'):null,
+    t.mfi!=null?       sigBox('MFI Flow',    t.mfi?.toFixed(0),         t.mfi>60?'bullish':t.mfi<40?'bearish':'neutral', 'Money flow'):null,
+  ];
+  html+=techSection('Volume & Accumulation', volBoxes);
 
   // Ichimoku
   if(t.ichimoku&&t.ichimoku.tenkan){
-    html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Ichimoku Cloud</div>';
-    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-bottom:12px">';
     var ich=t.ichimoku;
-    html+=sigBox('Tenkan (9)',    price(ich.tenkan), ich.tenkanAboveKijun?'bullish':'bearish', 'Fast signal line');
-    html+=sigBox('Kijun (26)',   price(ich.kijun),  ich.tenkanAboveKijun?'bullish':'bearish', 'Slow signal line');
-    html+=sigBox('Senkou A',     price(ich.senkouA),'neutral','Cloud boundary 1');
-    html+=sigBox('Senkou B',     price(ich.senkouB),'neutral','Cloud boundary 2');
-    html+=sigBox('Cloud Status', ich.aboveCloud?'Above Cloud':'Below Cloud', ich.aboveCloud?'bullish':'bearish', ich.aboveCloud?'Bullish zone':'Bearish zone');
-    html+=sigBox('Overall',      ich.bullish?'Bullish':'Bearish', ich.bullish?'bullish':'bearish', 'All components aligned');
-    html+='</div>';
+    var ichBoxes=[
+      sigBox('Tenkan (9)',  'Rs.'+ich.tenkan?.toFixed(1), ich.tenkanAboveKijun?'bullish':'bearish', 'Fast line'),
+      sigBox('Kijun (26)',  'Rs.'+ich.kijun?.toFixed(1),  ich.tenkanAboveKijun?'bullish':'bearish', 'Slow line'),
+      sigBox('Senkou A',    'Rs.'+ich.senkouA?.toFixed(1),'neutral', 'Cloud edge 1'),
+      sigBox('Senkou B',    'Rs.'+ich.senkouB?.toFixed(1),'neutral', 'Cloud edge 2'),
+      sigBox('Cloud',       ich.aboveCloud?'Above':'Below',ich.aboveCloud?'bullish':'bearish', 'vs Ichimoku cloud'),
+      sigBox('Overall',     ich.bullish?'Bullish':'Bearish',ich.bullish?'bullish':'bearish', 'All signals'),
+    ];
+    html+=techSection('Ichimoku Cloud', ichBoxes);
   }
 
-  // Candlestick patterns
+  // Returns
+  var retBoxes=[
+    t.ret1m!=null?sigBox('1M Return',(t.ret1m>0?'+':'')+t.ret1m+'%',t.ret1m>0?'bullish':'bearish',''):null,
+    t.ret3m!=null?sigBox('3M Return',(t.ret3m>0?'+':'')+t.ret3m+'%',t.ret3m>0?'bullish':'bearish',''):null,
+    t.ret6m!=null?sigBox('6M Return',(t.ret6m>0?'+':'')+t.ret6m+'%',t.ret6m>0?'bullish':'bearish',''):null,
+    t.ret1y!=null?sigBox('1Y Return',(t.ret1y>0?'+':'')+t.ret1y+'%',t.ret1y>0?'bullish':'bearish',''):null,
+    t.ret3y!=null?sigBox('3Y Return',(t.ret3y>0?'+':'')+t.ret3y+'%',t.ret3y>0?'bullish':'bearish',''):null,
+    t.wk52Hi?sigBox('52W High','Rs.'+t.wk52Hi,'neutral',t.pctFromHigh+'% away'):null,
+    t.wk52Lo?sigBox('52W Low','Rs.'+t.wk52Lo,'neutral','+'+t.pctFromLow+'% above'):null,
+    t.weeklyTrend?sigBox('Weekly Trend',t.weeklyTrend,t.weeklyTrend==='uptrend'?'bullish':t.weeklyTrend==='downtrend'?'bearish':'neutral','Higher highs/lows'):null,
+  ];
+  html+=techSection('Price Performance', retBoxes);
+
+  // Patterns
   if(d.patterns&&d.patterns.length){
-    html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Candlestick Patterns (Recent)</div>';
+    html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Candlestick Patterns</div>';
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">';
     d.patterns.forEach(function(p){
       var c=p.signal==='bullish'?'var(--green)':p.signal==='bearish'?'var(--red)':'#f59e0b';
@@ -2322,43 +2397,32 @@ function buildUI(d){
     });
     html+='</div>';
   }
-
-  // Returns
-  html+='<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Price Performance</div>';
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px">';
-  if(t.ret1m!=null)       html+=sigBox('1M Return',  (t.ret1m>0?'+':'')+t.ret1m+'%',t.ret1m>0?'bullish':'bearish','');
-  if(t.ret3m!=null)       html+=sigBox('3M Return',  (t.ret3m>0?'+':'')+t.ret3m+'%',t.ret3m>0?'bullish':'bearish','');
-  if(t.ret6m!=null)       html+=sigBox('6M Return',  (t.ret6m>0?'+':'')+t.ret6m+'%',t.ret6m>0?'bullish':'bearish','');
-  if(t.ret1y!=null)       html+=sigBox('1Y Return',  (t.ret1y>0?'+':'')+t.ret1y+'%',t.ret1y>0?'bullish':'bearish','');
-  if(t.ret3y!=null)       html+=sigBox('3Y Return',  (t.ret3y>0?'+':'')+t.ret3y+'%',t.ret3y>0?'bullish':'bearish','');
-  if(t.wk52Hi)            html+=sigBox('52W High',   price(t.wk52Hi),'neutral',t.pctFromHigh+'% away');
-  if(t.wk52Lo)            html+=sigBox('52W Low',    price(t.wk52Lo),'neutral','+'+t.pctFromLow+'% above');
-  html+='</div></div>';
+  html+='</div>';
 
   // -- FUNDAMENTALS ----------------------------------------------------------
   if(f){
     html+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-    html+='<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:10px">🏦 Fundamental Analysis (Screener.in Q3FY25)</div>';
+    html+='<div style="font-weight:700;font-size:11px;color:#f59e0b;margin-bottom:10px">Fundamental Analysis (Screener.in Q3FY25)</div>';
     html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">';
-    if(f.roe!=null)   html+=sigBox('ROE',         f.roe+'%',   f.roe>=20?'bullish':f.roe>=12?'neutral':'bearish', f.roePeer);
-    if(f.de!=null)    html+=sigBox('Debt/Equity',  f.de+'x',    f.de<=0.5?'bullish':f.de<=1.5?'neutral':'bearish', f.dePeer);
-    if(f.pe!=null)    html+=sigBox('P/E Ratio',    f.pe+'x',    f.pe<20?'bullish':f.pe<40?'neutral':'bearish', f.pePeer);
-    if(f.peg!=null)   html+=sigBox('PEG Ratio',    f.peg,       f.peg<1?'bullish':f.peg<2?'neutral':'bearish', f.peg<1?'Undervalued':f.peg<2?'Fair':'Expensive');
-    if(f.revGr!=null) html+=sigBox('Revenue Growth',f.revGr+'%',f.revGr>=15?'bullish':f.revGr>=5?'neutral':'bearish', f.growthPeer);
-    if(f.epsGr!=null) html+=sigBox('EPS Growth',  f.epsGr+'%', f.epsGr>=15?'bullish':f.epsGr>=5?'neutral':'bearish', f.epsGr>=25?'Hypergrowth':f.epsGr>=15?'Strong':f.epsGr>=0?'Moderate':'Declining');
-    if(f.opMgn!=null) html+=sigBox('Op Margin',   f.opMgn+'%', f.opMgn>=20?'bullish':f.opMgn>=10?'neutral':'bearish', f.opMgn>=20?'High margin':f.opMgn>=10?'Reasonable':'Thin');
+    if(f.roe!=null)   html+=sigBox('ROE',          f.roe+'%',   f.roe>=20?'bullish':f.roe>=12?'neutral':'bearish', f.roePeer);
+    if(f.de!=null)    html+=sigBox('Debt/Equity',   f.de+'x',    f.de<=0.5?'bullish':f.de<=1.5?'neutral':'bearish', f.dePeer);
+    if(f.pe!=null)    html+=sigBox('P/E Ratio',     f.pe+'x',    f.pe<20?'bullish':f.pe<40?'neutral':'bearish',     f.pePeer);
+    if(f.peg!=null)   html+=sigBox('PEG Ratio',     f.peg,       f.peg<1?'bullish':f.peg<2?'neutral':'bearish',     f.peg<1?'Undervalued':f.peg<2?'Fair':'Expensive');
+    if(f.revGr!=null) html+=sigBox('Revenue Growth',f.revGr+'%', f.revGr>=15?'bullish':f.revGr>=5?'neutral':'bearish',f.growthPeer);
+    if(f.epsGr!=null) html+=sigBox('EPS Growth',   f.epsGr+'%', f.epsGr>=15?'bullish':f.epsGr>=5?'neutral':'bearish',f.epsGr>=25?'Hypergrowth':f.epsGr>=0?'Growing':'Declining');
+    if(f.opMgn!=null) html+=sigBox('Op Margin',    f.opMgn+'%', f.opMgn>=20?'bullish':f.opMgn>=10?'neutral':'bearish',f.opMgn>=20?'High margin':'Moderate');
     html+='</div></div>';
   }
 
-  // -- PRICE TARGETS ---------------------------------------------------------
+  // -- TARGETS ---------------------------------------------------------------
   if(d.targets&&d.targets.length){
     html+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
-    html+='<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:10px">🎯 Price Targets (based on resistance levels)</div>';
+    html+='<div style="font-weight:700;font-size:11px;color:var(--green);margin-bottom:10px">Price Targets (Resistance Levels)</div>';
     html+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
     d.targets.slice(0,6).forEach(function(tgt){
       html+='<div style="background:var(--bg2);border-radius:8px;padding:8px 14px;text-align:center;min-width:80px">';
       html+='<div style="font-size:10px;color:var(--text3)">'+tgt.label+'</div>';
-      html+='<div style="font-size:14px;font-weight:700;color:var(--green)">'+price(tgt.price)+'</div>';
+      html+='<div style="font-size:14px;font-weight:700;color:var(--green)">Rs.'+tgt.price+'</div>';
       if(tgt.upside!=null) html+='<div style="font-size:10px;color:var(--text3)">'+(tgt.upside>0?'+':'')+tgt.upside+'%</div>';
       html+='</div>';
     });
@@ -2369,8 +2433,8 @@ function buildUI(d){
   var s=d.sentiment||{};
   html+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
   html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
-  html+='<div style="font-weight:700;font-size:11px;color:#8b5cf6">📰 Latest News & Sentiment</div>';
-  html+='<div style="display:flex;gap:10px;font-size:11px"><span style="color:var(--green)">▲ '+s.bull+' Bullish</span><span style="color:var(--red)">▼ '+s.bear+' Bearish</span><span style="color:var(--text3)">● '+(s.neutral||0)+' Neutral</span></div></div>';
+  html+='<div style="font-weight:700;font-size:11px;color:#8b5cf6">News & Sentiment</div>';
+  html+='<div style="display:flex;gap:10px;font-size:11px"><span style="color:var(--green)">▲ '+(s.bull||0)+' Bullish</span><span style="color:var(--red)">▼ '+(s.bear||0)+' Bearish</span><span style="color:var(--text3)">● '+(s.neutral||0)+' Neutral</span></div></div>';
   var tot=Math.max((s.bull||0)+(s.bear||0)+(s.neutral||0),1);
   var bW=Math.round((s.bull||0)/tot*100),beW=Math.round((s.bear||0)/tot*100),nW=100-bW-beW;
   html+='<div style="display:flex;height:6px;border-radius:4px;overflow:hidden;margin-bottom:10px">';
@@ -2379,7 +2443,9 @@ function buildUI(d){
   if(beW)html+='<div style="flex:'+beW+';background:var(--red)"></div>';
   html+='</div>';
   if(!d.news||!d.news.length){
-    html+='<div style="font-size:11px;color:var(--text3);padding:8px 0">No specific news found. Check Moneycontrol, ET Markets directly.</div>';
+    html+='<div style="font-size:11px;color:var(--text3);padding:6px 0">No recent news matched. Check: ';
+    html+='<a href="https://economictimes.indiatimes.com/topic/'+d.sym+'" target="_blank" style="color:var(--blue)">ET Markets</a> · ';
+    html+='<a href="https://www.moneycontrol.com/stocks/cptmarket/compsearchnew.php?search_data='+d.sym+'" target="_blank" style="color:var(--blue)">Moneycontrol</a></div>';
   }else{
     d.news.forEach(function(n){
       var nc=n.sentiment==='bullish'?'var(--green)':n.sentiment==='bearish'?'var(--red)':'var(--text3)';
@@ -2395,7 +2461,7 @@ function buildUI(d){
   }
   html+='</div>';
 
-  html+='<div style="font-size:10px;color:var(--text4);padding:8px 0 16px;text-align:center">⚠️ Algorithmic analysis only - not financial advice. Always consult a SEBI-registered advisor before investing.</div>';
+  html+='<div style="font-size:10px;color:var(--text4);padding:8px 0 16px;text-align:center">Algorithmic analysis only. Not financial advice. Consult a SEBI-registered advisor before investing.</div>';
   html+='</div>';
   return html;
 }
@@ -2422,35 +2488,33 @@ function drawChart(d,tf){
   var prices=data.map(function(p){return p.c;});
   var minP=Math.min.apply(null,prices)*0.97,maxP=Math.max.apply(null,prices)*1.03;
   var color=prices[prices.length-1]>=prices[0]?'#22c55e':'#ef4444';
-  var t=d.tech||{},px=d.price;
+  var t=d.tech||{};
   var labels=data.map(function(p){
     var d2=new Date(p.t);
     if(tf==='MAX'||tf==='10Y') return d2.getFullYear();
     if(tf==='3Y') return d2.toLocaleDateString('en-IN',{month:'short',year:'2-digit'});
     return d2.toLocaleDateString('en-IN',{day:'2-digit',month:'short'});
   });
-  // Annotations
   var ann={};
-  if(d.supports) d.supports.slice(0,4).forEach(function(s,i){ann['s'+i]={type:'line',yMin:s.price,yMax:s.price,borderColor:'rgba(34,197,94,0.5)',borderWidth:1,borderDash:[4,3],label:{display:s.strength>3,content:'S'+price(s.price),color:'#22c55e',font:{size:8},position:'start'}};});
-  if(d.resistances) d.resistances.slice(0,4).forEach(function(r,i){ann['r'+i]={type:'line',yMin:r.price,yMax:r.price,borderColor:'rgba(239,68,68,0.5)',borderWidth:1,borderDash:[4,3],label:{display:r.strength>3,content:'R'+price(r.price),color:'#ef4444',font:{size:8},position:'end'}};});
+  if(d.supports) d.supports.slice(0,4).forEach(function(s,i){ann['s'+i]={type:'line',yMin:s.price,yMax:s.price,borderColor:'rgba(34,197,94,0.5)',borderWidth:1,borderDash:[4,3],label:{display:s.strength>3,content:'S'+s.price,color:'#22c55e',font:{size:8},position:'start'}};});
+  if(d.resistances) d.resistances.slice(0,4).forEach(function(r,i){ann['r'+i]={type:'line',yMin:r.price,yMax:r.price,borderColor:'rgba(239,68,68,0.5)',borderWidth:1,borderDash:[4,3],label:{display:r.strength>3,content:'R'+r.price,color:'#ef4444',font:{size:8},position:'end'}};});
   if(d.buyZone&&d.buyZone.low&&d.buyZone.high) ann.bz={type:'box',yMin:d.buyZone.low,yMax:d.buyZone.high,backgroundColor:'rgba(59,130,246,0.08)',borderColor:'rgba(59,130,246,0.3)',borderWidth:1};
   if(t.dma50&&(tf==='1Y'||tf==='3Y')) ann.d50={type:'line',yMin:t.dma50,yMax:t.dma50,borderColor:'rgba(245,158,11,0.7)',borderWidth:1.5,label:{display:true,content:'50D',color:'#f59e0b',font:{size:8},position:'start'}};
-  if(t.dma200&&(tf==='1Y'||tf==='3Y'||tf==='10Y')) ann.d200={type:'line',yMin:t.dma200,yMax:t.dma200,borderColor:'rgba(139,92,246,0.7)',borderWidth:1.5,label:{display:true,content:'200D',color:'#8b5cf6',font:{size:8},position:'start'}};
+  if(t.dma200&&tf!=='3M') ann.d200={type:'line',yMin:t.dma200,yMax:t.dma200,borderColor:'rgba(139,92,246,0.7)',borderWidth:1.5,label:{display:true,content:'200D',color:'#8b5cf6',font:{size:8},position:'start'}};
   if(d.fibs&&(tf==='1Y'||tf==='3Y')){
-    [['618',d.fibs.r618,'rgba(139,92,246,0.4)'],['382',d.fibs.r382,'rgba(59,130,246,0.4)']].forEach(function(fb,i){
-      ann['fib'+i]={type:'line',yMin:fb[1],yMax:fb[1],borderColor:fb[2],borderWidth:1,borderDash:[2,4],label:{display:true,content:'Fib '+fb[0]+'%',color:fb[2].replace(',0.4)',',1)'),font:{size:8},position:'end'}};
-    });
+    ann.fib618={type:'line',yMin:d.fibs.r618,yMax:d.fibs.r618,borderColor:'rgba(139,92,246,0.4)',borderWidth:1,borderDash:[2,4],label:{display:true,content:'61.8%',color:'#8b5cf6',font:{size:8},position:'end'}};
+    ann.fib382={type:'line',yMin:d.fibs.r382,yMax:d.fibs.r382,borderColor:'rgba(59,130,246,0.4)',borderWidth:1,borderDash:[2,4],label:{display:true,content:'38.2%',color:'#3b82f6',font:{size:8},position:'end'}};
   }
   analyzerChart=new Chart(canvas,{
     type:'line',
     data:{labels:labels,datasets:[{data:prices,borderColor:color,borderWidth:1.5,pointRadius:0,fill:true,tension:0.3,
       backgroundColor:function(ctx){var g=ctx.chart.ctx.createLinearGradient(0,0,0,300);g.addColorStop(0,color+'30');g.addColorStop(1,color+'00');return g;}}]},
     options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:8}},
-      plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,callbacks:{label:function(c){return '₹'+c.parsed.y.toFixed(2);}}},
+      plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,callbacks:{label:function(c){return 'Rs.'+c.parsed.y.toFixed(2);}}},
         annotation:{annotations:ann}},
       scales:{
-        x:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:tf==='MAX'?8:tf==='10Y'?10:10,maxRotation:0}},
-        y:{position:'right',grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return '₹'+v.toFixed(0);}},min:minP,max:maxP}
+        x:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:tf==='MAX'?8:10,maxRotation:0}},
+        y:{position:'right',grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return 'Rs.'+v.toFixed(0);}},min:minP,max:maxP}
       }
     }
   });
