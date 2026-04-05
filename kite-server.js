@@ -1697,13 +1697,10 @@ app.get("/api/mf/funds", async(req,res)=>{
 });
 
 app.post("/api/mf/refresh", async(req,res) => {
-  res.json({message:"MF refresh started (MFAPI background fetch)"});
-  discoverMFUniverse().then(()=>refreshMFData());
+  res.json({message:"MF data is served from Tickertape DB (mf_tickertape table). No live refresh needed — re-run mf_load_v2.sql quarterly."});
 });
 
-// Background MFAPI refresh — runs daily at 6AM as secondary source
-cron.schedule("0 6 * * *", async()=>{ await discoverMFUniverse(); refreshMFData(); }, {timezone:"Asia/Kolkata"});
-setTimeout(async()=>{ await discoverMFUniverse(); refreshMFData(); }, 30000);
+// MF data is static Tickertape CSV loaded into DB — no background refresh needed
 
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get("/api/crypto-prices", async(req,res)=>{
@@ -2078,8 +2075,8 @@ async function scanCrypto() {
         const indStr = Object.entries(bd).map(([k,v])=>`${k}:${v>=0?"+":""}${v}`).join(" ");
         await pool.query(
           `INSERT INTO crypto_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
-           VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,'CRYPTO_MULTI','CRYPTO',$10,'OPEN')`,
-          [coin.sym,coin.name,price,qty,CRYPTO_CONFIG.CAPITAL_PER_TRADE,sl,target,total,indStr]
+           VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,'CRYPTO_MULTI','CRYPTO',$9,$10)`,
+          [coin.sym,coin.name,price,qty,CRYPTO_CONFIG.CAPITAL_PER_TRADE,sl,target,total,indStr,'OPEN']
         );
         openTrades.push({symbol:coin.sym,status:"OPEN"});
         console.log(`  ₿ BUY  ${coin.sym} @ $${price} | Score:${total} | SL:$${sl} | TGT:$${target}`);
