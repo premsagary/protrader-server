@@ -32,7 +32,7 @@ const wss    = new WebSocket.Server({ server });
 app.use(cors());
 app.use(express.json());
 
-// ── DB ────────────────────────────────────────────────────────────────────────
+// – DB ————————————————————————
 const pool = new Pool({
 connectionString: process.env.DATABASE_URL,
 ssl: process.env.DATABASE_URL?.includes(“railway”) ? { rejectUnauthorized: false } : false,
@@ -48,7 +48,7 @@ console.log(“✅ DB ready”);
 } catch(e) { console.error(“DB error:”, e.message); }
 }
 
-// ── Kite ──────────────────────────────────────────────────────────────────────
+// – Kite –––––––––––––––––––––––––––––––––––
 let kite = null;
 function initKite(token) {
 const { KiteConnect } = require(“kiteconnect”);
@@ -57,7 +57,7 @@ if (token) kite.setAccessToken(token);
 return kite;
 }
 
-// ── Persist config in DB (survives Railway restarts) ─────────────────────────
+// – Persist config in DB (survives Railway restarts) ———————––
 async function dbGet(key) {
 try {
 const { rows } = await pool.query(‘SELECT value FROM app_config WHERE key=$1’, [key]);
@@ -74,7 +74,7 @@ return true;
 } catch(e) { return false; }
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────────
+// – WebSocket —————————————————————–
 const livePrices  = {};
 const subscribers = new Set();
 let   tickerOn    = false;
@@ -112,9 +112,9 @@ t.on(“error”, () => { console.log(“Ticker error”); tokenValid = false; }
 t.on(“close”, () => { tickerOn = false; broadcast({ type:“status”, connected:false }); });
 }
 
-// ── Universe - Nifty 50 + Next 50 + Midcap 150 (250 stocks) ──────────────────
+// – Universe - Nifty 50 + Next 50 + Midcap 150 (250 stocks) ——————
 const UNIVERSE = [
-// ── NIFTY 50 ──
+// – NIFTY 50 –
 {sym:“RELIANCE”,   n:“Reliance Industries”,       grp:“NIFTY50”},
 {sym:“TCS”,        n:“Tata Consultancy Svcs”,     grp:“NIFTY50”},
 {sym:“HDFCBANK”,   n:“HDFC Bank”,                 grp:“NIFTY50”},
@@ -165,7 +165,7 @@ const UNIVERSE = [
 {sym:“SHRIRAMFIN”, n:“Shriram Finance”,           grp:“NIFTY50”},
 {sym:“ZOMATO”,     n:“Zomato Ltd”,                grp:“NIFTY50”},
 {sym:“BAJAJ-AUTO”, n:“Bajaj Auto”,                grp:“NIFTY50”},
-// ── NIFTY NEXT 50 ──
+// – NIFTY NEXT 50 –
 {sym:“DMART”,       n:“Avenue Supermarts”,        grp:“NEXT50”},
 {sym:“PIDILITIND”,  n:“Pidilite Industries”,      grp:“NEXT50”},
 {sym:“SIEMENS”,     n:“Siemens Ltd”,              grp:“NEXT50”},
@@ -217,7 +217,7 @@ const UNIVERSE = [
 {sym:“UNITDSPR”,    n:“United Spirits”,           grp:“NEXT50”},
 {sym:“JUBLFOOD”,    n:“Jubilant Foodworks”,       grp:“NEXT50”},
 
-// ── NIFTY MIDCAP 150 ──
+// – NIFTY MIDCAP 150 –
 {sym:“ASTRAL”,      n:“Astral Ltd”,               grp:“MIDCAP”},
 {sym:“SUPREMEIND”,  n:“Supreme Industries”,       grp:“MIDCAP”},
 {sym:“ATUL”,        n:“Atul Ltd”,                 grp:“MIDCAP”},
@@ -419,9 +419,9 @@ const INSTRUMENTS = {
 “MINDAIND”:2277377,“SONACOMS”:5215233,“SOLARINDS”:3240449,“AIAENG”:14849,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── INDICATOR LIBRARY ─────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// – INDICATOR LIBRARY ———————————————————
+// ===============================================================================
 
 function ema(p, n) {
 const k = 2/(n+1); let e = p[0];
@@ -502,9 +502,9 @@ const ndi = atrSum>0 ? last.reduce((s,d)=>s+d.ndm,0)/atrSum*100 : 0;
 return pdi+ndi>0 ? Math.abs(pdi-ndi)/(pdi+ndi)*100 : 0;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── MARKET REGIME DETECTOR ────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// – MARKET REGIME DETECTOR ––––––––––––––––––––––––––
+// ===============================================================================
 
 function detectRegime(candles) {
 if (candles.length < 30) return { regime:“UNKNOWN”, reason:“Not enough data” };
@@ -559,9 +559,9 @@ regime=“RANGING”; reason=“Low ADX, normal volume”; confidence=50;
 return { regime, reason, confidence, adx:adxVal.toFixed(1), rsi:lastRSI.toFixed(1), bw:(lastBB.bw*100).toFixed(2), volSpike:isVolumeSpike };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── STRATEGY LIBRARY ──────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// – STRATEGY LIBRARY –––––––––––––––––––––––––––––
+// ===============================================================================
 
 // Strategy 1: EMA Crossover - for TRENDING markets
 function stratEMACrossover(candles) {
@@ -738,9 +738,9 @@ return { score, signal:score>=5?“BUY”:score<=-4?“SELL”:“NEUTRAL”, de
 sl:score>=5?closes[n]*0.986:null, tgt:score>=5?closes[n]*1.03:null };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── STRATEGY SELECTOR (the brain) ─────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// – STRATEGY SELECTOR (the brain) ———————————————
+// ===============================================================================
 
 function selectAndRunStrategy(candles) {
 const { regime, reason, confidence } = detectRegime(candles);
@@ -788,9 +788,9 @@ sellVotes,
 };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── PAPER TRADING ENGINE ──────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// – PAPER TRADING ENGINE ——————————————————
+// ===============================================================================
 
 const CONFIG = {
 BUY_SCORE:        2.5,
@@ -846,7 +846,7 @@ if (!token){await delay(200);continue;}
   const openPos = openTrades.find(t=>t.symbol===stock.sym);
 
   if (openPos) {
-    // ── Check exit ──
+    // -- Check exit --
     const cmp   = last.close;
     const hitSL = cmp <= parseFloat(openPos.stop_loss);
     const hitTgt= cmp >= parseFloat(openPos.target);
@@ -869,7 +869,7 @@ if (!token){await delay(200);continue;}
              && result.buyVotes >= CONFIG.CONSENSUS_NEEDED
              && result.score >= CONFIG.BUY_SCORE) {
 
-    // ── Check entry ──
+    // -- Check entry --
     const price  = last.close;
     const qty    = Math.max(1,Math.floor(CONFIG.CAPITAL_PER_TRADE/price));
     const sl     = result.sl || +(price*(1-CONFIG.DEFAULT_SL_PCT/100)).toFixed(2);
@@ -910,14 +910,14 @@ await pool.query(
 console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals\n`);
 }
 
-// ── REST API ──────────────────────────────────────────────────────────────────
+// – REST API ——————————————————————
 
 const path = require(“path”);
 
 app.use(express.static(path.join(__dirname,“public”)));
 app.get(”/”, (req,res)=>res.sendFile(path.join(__dirname,“public”,“index.html”)));
 
-// ── Free News via RSS feeds ───────────────────────────────────────────────────
+// – Free News via RSS feeds —————————————————
 app.get(”/api/news”, async(req,res)=>{
 const sym = (req.query.sym||“RELIANCE”).toUpperCase();
 const name = req.query.name||sym;
@@ -991,7 +991,7 @@ return;
 res.json(unique);
 });
 
-// ── Fetch and cache valid instrument tokens from Kite ─────────────────────────
+// – Fetch and cache valid instrument tokens from Kite ———————––
 let validTokens = {}; // sym -> token, populated from Kite instruments API
 
 async function refreshInstruments() {
@@ -1014,12 +1014,12 @@ validTokens = {…INSTRUMENTS};
 
 app.get(”/api/instruments”, (req,res) => res.json(validTokens));
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── MUTUAL FUND DATA ENGINE ────────────────────────────────────────────────────
+// ===============================================================================
+// – MUTUAL FUND DATA ENGINE ––––––––––––––––––––––––––
 // Sources: mfdata.in (ratios, AUM, expense) + mf.captnemo.in (Kuvera metadata)
 //          + mfapi.in (NAV history for calculated returns)
 // Cached in memory, refreshed daily at 6 AM IST
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 
 // Fund universe - AMFI scheme codes (direct growth plans)
 // Fund universe - auto-discovered from MFAPI, populated on startup
@@ -1155,7 +1155,7 @@ if (name.includes(key)) return short;
 return name.split(” “)[0];
 }
 
-// ── Qualitative AMC scores - research-based (updated Apr 2026) ────────────────
+// – Qualitative AMC scores - research-based (updated Apr 2026) ––––––––
 function pctRank(val, arr, higher=true) {
 if (val==null || !arr || !arr.length) return null;
 const below = arr.filter(v => v < val).length;
@@ -1167,8 +1167,8 @@ if (pct==null) return 0;
 return Math.round(pct/100*mx*10)/10;
 }
 
-// ── AMC quality scores (Morningstar Stewardship Pillar) ──────────
-// ── DO NOT INVEST flags - research-based professional overlays ───────
+// – AMC quality scores (Morningstar Stewardship Pillar) –––––
+// – DO NOT INVEST flags - research-based professional overlays —––
 // Funds that pass eligibility filters but have specific disqualifying
 // characteristics. Shown in red on cards with reason.
 const DO_NOT_INVEST = {
@@ -1242,7 +1242,7 @@ const warnings = {
 return { key, score, sebi, warning: warnings[sebi]||null };
 }
 
-// ── Category-specific AUM sweet spots ───────────────────────────
+// – Category-specific AUM sweet spots —————————
 // Small cap >₹15K Cr = can’t find enough small cap stocks to deploy
 const CAT_AUM = {
 ‘Small Cap Fund’:  [1000, 15000],
@@ -1250,11 +1250,11 @@ const CAT_AUM = {
 ‘Flexi Cap Fund’:  [2000, 100000],
 };
 
-// ── Distributions built from ELIGIBLE funds only ─────────────────
+// – Distributions built from ELIGIBLE funds only —————–
 // Populated at startup in /api/mf/funds endpoint
 let CAT_DIST = {};
 
-// ── STEP 1: HARD ELIGIBILITY FILTERS ─────────────────────────────
+// – STEP 1: HARD ELIGIBILITY FILTERS —————————–
 // Any fund failing ANY filter = not scored (shown in table as Not Eligible)
 function checkEligible(f) {
 const reasons = [];
@@ -1273,7 +1273,7 @@ if (exp >= 2.0)    reasons.push(`Expense ratio ${exp.toFixed(2)}% >= 2% (too exp
 return { eligible: reasons.length === 0, reasons };
 }
 
-// ── STEP 2: SCORING ENGINE ────────────────────────────────────────
+// – STEP 2: SCORING ENGINE ––––––––––––––––––––
 // Only runs on funds that passed eligibility
 // Max ~120 pts (percentile-based within category, eligible funds only)
 function scoreMFTickertape(f) {
@@ -1291,7 +1291,7 @@ const n = parseFloat(v); return isNaN(n) ? null : n;
 }
 function pr(val, arr, higher=true) { return pctRank(val, arr, higher); }
 
-// 1. ROLLING 3Y CONSISTENCY (25 pts) ─────────────────────────────
+// 1. ROLLING 3Y CONSISTENCY (25 pts) —————————–
 // #1 predictor. Average return across ALL rolling 3Y windows.
 const roll = get(‘rolling_3y’);
 const rollP = (roll && roll > 0) ? pr(roll, dist.rolling_3y) : null;
@@ -1299,7 +1299,7 @@ const rollPts = pts(rollP, 25);
 score += rollPts;
 hits[`Rolling 3Y: ${roll!=null?roll.toFixed(1):'?'}% (top ${rollP!=null?(100-rollP).toFixed(0):'?'}% of eligible funds)`] = rollPts;
 
-// 2. RISK-ADJUSTED RETURNS (20 pts) ──────────────────────────────
+// 2. RISK-ADJUSTED RETURNS (20 pts) ——————————
 // Sharpe + Sortino both percentile-ranked within category.
 // Never use absolute thresholds - all negative in bear markets.
 const sharpe  = get(‘sharpe’);
@@ -1312,7 +1312,7 @@ score += shPts + soPts;
 hits[`Sharpe: ${sharpe!=null?sharpe.toFixed(3):'?'} (top ${shP!=null?(100-shP).toFixed(0):'?'}% in category)`] = shPts;
 hits[`Sortino: ${sortino!=null?sortino.toFixed(4):'?'} (top ${soP!=null?(100-soP).toFixed(0):'?'}% in category)`] = soPts;
 
-// 3. DOWNSIDE PROTECTION (15 pts) ────────────────────────────────
+// 3. DOWNSIDE PROTECTION (15 pts) ––––––––––––––––
 // Max drawdown = worst single crash fall. Volatility = daily swing.
 // Both lower-is-better, percentile vs eligible peers.
 const mdd    = get(‘max_drawdown’);
@@ -1326,7 +1326,7 @@ score += mddPts + volPts;
 hits[`Max drawdown: ${mdd!=null?mdd.toFixed(1):'?'}% (top ${mddP!=null?(100-mddP).toFixed(0):'?'}% protected)`] = mddPts;
 hits[`Volatility: ${vol!=null?vol.toFixed(1):'?'}% vs category avg ${catVol.toFixed(1)}%`] = volPts;
 
-// 4. BEATS PEERS (15 pts) ─────────────────────────────────────────
+// 4. BEATS PEERS (15 pts) —————————————–
 // vs_cat_3Y/5Y/10Y are RATIOS (>1.0 = beats median peer).
 // Purest measure of manager skill. vs_cat_1Y excluded (wrong scale).
 const vc3  = get(‘vs_cat_3y’);
@@ -1343,7 +1343,7 @@ hits[vc3  ? `Beats peers 3Y: ${vc3.toFixed(2)}x (${vc3>1?'above':'below'} median
 hits[vc5  ? `Beats peers 5Y: ${vc5.toFixed(2)}x` : ‘Beats peers 5Y: no data’] = vc5Pts;
 if (vc10 && vc10 > 0) hits[`Beats peers 10Y: ${vc10.toFixed(2)}x`] = vc10Pts;
 
-// 5. EXPENSE RATIO (12 pts) ───────────────────────────────────────
+// 5. EXPENSE RATIO (12 pts) —————————————
 // Most reliable long-term predictor per Morningstar/VR.
 // 0.5% diff = ₹8-12 lakh less on ₹10L over 20 years.
 const exp  = get(‘expense_ratio’);
@@ -1353,7 +1353,7 @@ score += expPts;
 const expTier = exp ? (exp<0.5?‘very low’:exp<0.75?‘low’:exp<1.0?‘average’:‘high’) : ‘?’;
 hits[`Expense: ${exp!=null?exp.toFixed(2):'?'}% (${expTier})`] = expPts;
 
-// 6. ABSOLUTE RETURNS (8 pts) ─────────────────────────────────────
+// 6. ABSOLUTE RETURNS (8 pts) ———————————––
 // Lower weight - point-in-time returns have low predictive power.
 const r3  = get(‘cagr_3y’);
 const r5  = get(‘cagr_5y’);
@@ -1369,7 +1369,7 @@ hits[r3  ? `3Y CAGR: ${r3.toFixed(1)}%`  : ‘3Y CAGR: no data’]  = r3Pts;
 hits[r5  ? `5Y CAGR: ${r5.toFixed(1)}%`  : ‘5Y CAGR: no data’]  = r5Pts;
 if (r10 && r10 > 0) hits[`10Y CAGR: ${r10.toFixed(1)}%`] = r10Pts;
 
-// 7. PORTFOLIO QUALITY (8 pts) ────────────────────────────────────
+// 7. PORTFOLIO QUALITY (8 pts) ————————————
 // PE vs category: lower = better value. Cash 3-10%: healthy buffer.
 // Top10 concentration: lower = less single-stock risk.
 // ATH recovery: closer to all-time high = stronger fund momentum.
@@ -1430,7 +1430,7 @@ hits[`Style drift: ${smallCapPct.toFixed(1)}% in small cap (elevated for mid cap
 }
 }
 
-// 8. AUM QUALITY (5 pts) ──────────────────────────────────────────
+// 8. AUM QUALITY (5 pts) ——————————————
 // Category-specific sweet spots.
 // Small cap >₹15K Cr = liquidity constrained, can’t find stocks.
 const aum = get(‘aum_cr’) || 0;
@@ -1446,7 +1446,7 @@ score += 3; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (below id
 score += 1; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fund)`] = 1;
 }
 
-// 9. TRACK RECORD (9 pts) ─────────────────────────────────────────
+// 9. TRACK RECORD (9 pts) —————————————–
 // 10Y matters far more than we were giving it.
 // A 10Y fund survived: demonetisation (2016), IL&FS crisis (2018),
 // COVID crash (2020 -38%), 2022 global selloff, 2024-25 correction.
@@ -1458,7 +1458,7 @@ else if (months >= 120) { score += 7; hits[`Track record: ${Math.round(months)} 
 else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+ - two corrections)`] = 4; }
 else if (months >= 60)  { score += 2; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 2; }
 
-// 10. AMC QUALITY (10 pts) ────────────────────────────────────────
+// 10. AMC QUALITY (10 pts) ––––––––––––––––––––
 // Morningstar Stewardship Pillar: governance, team depth, SEBI record.
 const qual = getAmcQual(f.amc || ‘’);
 const amcPts = Math.round(qual.score / 10 * 10 * 10) / 10;
@@ -1471,7 +1471,7 @@ if      (qual.sebi === ‘probe’)  { score = Math.min(score, 15); hits[‘DISQ
 else if (qual.sebi === ‘action’) { score = Math.round(score * 0.85 * 10)/10; hits[‘Past SEBI enforcement action: -15% score penalty’] = 0; }
 else if (qual.sebi === ‘minor’)  { score = Math.round(score * 0.95 * 10)/10; hits[‘Minor SEBI fine on record: -5% score penalty’] = 0; }
 
-// ── POST-SCORING RULES ────────────────────────────────────────────
+// – POST-SCORING RULES ––––––––––––––––––––––
 // Applied after all scoring to prevent unproven small funds from
 // outranking established funds with long track records.
 
@@ -1548,7 +1548,7 @@ const {rows} = await pool.query(“SELECT * FROM mf_tickertape ORDER BY sub_cate
 if (!rows.length) throw new Error(“No rows in mf_tickertape”);
 
 ```
-// ── STEP 1: Map raw DB rows -> fund objects ──────────────────────
+// -- STEP 1: Map raw DB rows -> fund objects ----------------------
 const pf = (v) => v!=null ? parseFloat(v) : null;
 const funds = rows.map(f => ({
   // identity
@@ -1587,13 +1587,13 @@ const funds = rows.map(f => ({
   dataSource: "Tickertape - Apr 4 2026",
 }));
 
-// ── STEP 2: ELIGIBILITY FILTER ──────────────────────────────────
+// -- STEP 2: ELIGIBILITY FILTER ----------------------------------
 // Hard filters - any fail = fund not scored
 // Filters: AUM ≥₹1K Cr, Age ≥5Y, 3Y rolling data exists, expense <2%
 const eligible   = funds.filter(f => checkEligible(f).eligible);
 const ineligible = funds.filter(f => !checkEligible(f).eligible);
 
-// ── STEP 3: BUILD DISTRIBUTIONS FROM ELIGIBLE FUNDS ONLY ────────
+// -- STEP 3: BUILD DISTRIBUTIONS FROM ELIGIBLE FUNDS ONLY --------
 // Critical: distributions must NOT include unproven small/new funds
 CAT_DIST = {};
 const distCols = {
@@ -1621,13 +1621,13 @@ eligible.forEach(f => {
   });
 });
 
-// ── STEP 4: SCORE ELIGIBLE FUNDS ────────────────────────────────
+// -- STEP 4: SCORE ELIGIBLE FUNDS --------------------------------
 const scoredEligible = eligible.map(f => {
   const {score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist} = scoreMFTickertape(f);
   return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist, eligible: true, filter_reasons: []};
 });
 
-// ── STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) ──
+// -- STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) --
 const scoredIneligible = ineligible.map(f => {
   const subcat = f.sub_category || '';
   const cat = subcat.includes('Small') ? 'smallcap' : subcat.includes('Mid') ? 'midcap' : 'flexicap';
@@ -1638,7 +1638,7 @@ const scoredIneligible = ineligible.map(f => {
     eligible: false, filter_reasons: reasons};
 });
 
-// ── STEP 6: SORT - eligible by score desc, ineligible by name ───
+// -- STEP 6: SORT - eligible by score desc, ineligible by name ---
 const allFunds = [...scoredEligible, ...scoredIneligible];
 allFunds.sort((a,b) => {
   if (a.sub_category !== b.sub_category) return a.sub_category.localeCompare(b.sub_category);
@@ -1676,7 +1676,7 @@ res.json({message:“MF data is served from Tickertape DB (mf_tickertape table).
 
 // MF data is static Tickertape CSV loaded into DB - no background refresh needed
 
-// ── Crypto prices proxy ───────────────────────────────────────────────────────
+// – Crypto prices proxy —————————————————––
 app.get(”/api/crypto-prices”, async(req,res)=>{
 // Return cached prices updated by background poller every 60s
 if(Object.keys(cryptoPrices).length > 0) return res.json(cryptoPrices);
@@ -1691,7 +1691,7 @@ hasToken:!!process.env.KITE_ACCESS_TOKEN, marketOpen:isMarketOpen(),
 prices:Object.keys(livePrices).length,
 }));
 
-// ── Token management endpoints ────────────────────────────────────────────────
+// – Token management endpoints ————————————————
 app.get(”/api/token/status”, (req,res)=>{
 const hasToken   = !!process.env.KITE_ACCESS_TOKEN;
 const marketOpen = isMarketOpen();
@@ -1762,18 +1762,18 @@ app.post(”/scan-now”, (req,res)=>{ res.json({message:“Scan started”}); s
 
 app.post(”/scan-now”, (req,res)=>{ res.json({message:“Scan started”}); scanAndTrade(); });
 
-// ── Stock Scoring Engine - Kite Daily Candles ────────────────────────────────
+// – Stock Scoring Engine - Kite Daily Candles ––––––––––––––––
 // Phase 1: Kite getHistoricalData(daily, 1yr) -> price, DMA50/200, 52w, RSI, volume
 // Phase 2: Static fundamental table -> ROE, D/E, PE, growth, margins
 // No Yahoo Finance, no external API - 100% reliable on Railway
-// ─────────────────────────────────────────────────────────────────────────────
+// —————————————————————————–
 
 const stockFundamentals  = {};
 let   stockFundLastFetch = 0;
 let   stockFundLoading   = false;
 let   stockFundReady     = false;
 
-// ── Sector map ───────────────────────────────────────────────────────────────
+// – Sector map —————————————————————
 const SECTOR_MAP = {
 RELIANCE:‘Energy’,TCS:‘IT’,HDFCBANK:‘Banking’,ICICIBANK:‘Banking’,INFY:‘IT’,
 HINDUNILVR:‘FMCG’,ITC:‘FMCG’,SBIN:‘Banking’,BHARTIARTL:‘Telecom’,
@@ -1803,7 +1803,7 @@ ASTRAL:‘Building Materials’,DEEPAKNTR:‘Chemicals’,MFSL:‘Insurance’,
 FEDERALBNK:‘Banking’,IDFCFIRSTB:‘Banking’,ABCAPITAL:‘NBFC’,LICHSGFIN:‘NBFC’,
 };
 
-// ── Static fundamentals table ─────────────────────────────────────────────────
+// – Static fundamentals table ———————————————––
 // [ROE%, D/E ratio, PE(TTM), RevGrowth%, EpsGrowth%, OpMargin%]
 // Source: Screener.in / Tickertape Q3 FY2025. Refresh quarterly.
 const FUND = {
@@ -1860,7 +1860,7 @@ FEDERALBNK: [14.8,7.80,10.2,14.8,22.4,null],  IDFCFIRSTB: [8.4,8.20,14.8,18.4,14
 LICHSGFIN:  [12.4,7.80,8.4,14.8,8.4,null],    ABCAPITAL:  [10.4,4.20,14.8,18.4,14.8,null],
 };
 
-// ── Fetch 1yr daily candles from Kite ────────────────────────────────────────
+// – Fetch 1yr daily candles from Kite ––––––––––––––––––––
 async function fetchKiteDaily(sym) {
 if (!kite || !process.env.KITE_ACCESS_TOKEN) return null;
 const token = validTokens[sym] || INSTRUMENTS[sym];
@@ -1877,7 +1877,7 @@ return (candles && candles.length >= 50) ? candles : null;
 } catch(e) { return null; }
 }
 
-// ── Compute technicals from daily candles ────────────────────────────────────
+// – Compute technicals from daily candles ————————————
 function computeTechnicals(candles) {
 const C = candles.map(c => c.close);
 const V = candles.map(c => c.volume || 0);
@@ -1921,7 +1921,7 @@ pctFromHigh: wk52Hi>0 ? (C[n-1]-wk52Hi)/wk52Hi*100 : null,
 };
 }
 
-// ── Main refresh ──────────────────────────────────────────────────────────────
+// – Main refresh –––––––––––––––––––––––––––––––
 async function refreshAllFundamentals() {
 if (stockFundLoading) return;
 if (!kite || !process.env.KITE_ACCESS_TOKEN) {
@@ -1969,7 +1969,7 @@ stockFundReady     = ok > 10;
 console.log(`📊 Stock scoring done: ${ok} OK, ${fail} failed`);
 }
 
-// ── Percentile rank within sector peers ──────────────────────────────────────
+// – Percentile rank within sector peers –––––––––––––––––––
 function pctRankStk(val, arr, hb=true) {
 if (val==null||!arr.length) return 50;
 const valid=arr.filter(v=>v!=null&&isFinite(v));
@@ -1977,7 +1977,7 @@ if (!valid.length) return 50;
 return Math.round(valid.filter(v=>hb?v<val:v>val).length/valid.length*100);
 }
 
-// ── 100-point scoring ─────────────────────────────────────────────────────────
+// – 100-point scoring ———————————————————
 // Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
 function scoreOneStock(f, peers) {
 let s=0; const hits={};
@@ -1985,7 +1985,7 @@ const na = v => v!=null&&isFinite(v);
 const pr = (val,key,hb=true) => pctRankStk(val, peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v)), hb);
 const pts = (pct,max) => Math.round(pct/100*max*10)/10;
 
-// ── QUALITY (25 pts) ──────────────────────────────────────────────────────
+// – QUALITY (25 pts) ——————————————————
 if(na(f.roe)){
 const pp=pts(pr(f.roe,‘roe’),10); s+=pp;
 hits[`ROE: ${f.roe.toFixed(1)}% (${f.roe>=20?'excellent':f.roe>=15?'good':f.roe>=10?'avg':'weak'})`]=pp;
@@ -1999,7 +1999,7 @@ const pp=pts(pr(f.opMargin,‘opMargin’),7); s+=pp;
 hits[`Op Margin: ${f.opMargin.toFixed(1)}%`]=pp;
 }
 
-// ── VALUE (20 pts) ────────────────────────────────────────────────────────
+// – VALUE (20 pts) ––––––––––––––––––––––––––––
 if(na(f.pe)&&f.pe>0&&f.pe<300){
 const pp=pts(pr(f.pe,‘pe’,false),12); s+=pp;
 hits[`P/E: ${f.pe.toFixed(1)}x`]=pp;
@@ -2017,7 +2017,7 @@ const pp=peg<1?8:peg<2?6:peg<3?3:0; s+=pp;
 hits[`PEG: ${peg.toFixed(2)} (${peg<1?'undervalued':peg<2?'fair':'rich'})`]=pp;
 }
 
-// ── MOMENTUM (20 pts) ─────────────────────────────────────────────────────
+// – MOMENTUM (20 pts) —————————————————–
 if(na(f.change52w)){
 const pp=pts(pr(f.change52w*100,’_chg52’,true),10); s+=pp;
 hits[`52W Return: ${(f.change52w*100).toFixed(1)}%`]=pp;
@@ -2036,7 +2036,7 @@ const pp=Math.abs(f.beta-1)<0.3?4:Math.abs(f.beta-1)<0.6?2:0;
 s+=pp; hits[`Beta: ${f.beta.toFixed(2)}`]=pp;
 }
 
-// ── GROWTH (20 pts) ───────────────────────────────────────────────────────
+// – GROWTH (20 pts) —————————————————––
 if(na(f.revGrowth)){
 const pp=pts(pr(f.revGrowth,‘revGrowth’),8); s+=pp;
 hits[`Rev Growth: ${f.revGrowth.toFixed(1)}% (${f.revGrowth>=20?'strong':f.revGrowth>=10?'good':f.revGrowth>=0?'flat':'declining'})`]=pp;
@@ -2046,7 +2046,7 @@ const pp=pts(pr(f.earGrowth,‘earGrowth’),12); s+=pp;
 hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% (${f.earGrowth>=20?'strong':f.earGrowth>=10?'good':f.earGrowth>=0?'flat':'declining'})`]=pp;
 }
 
-// ── TECHNICAL (15 pts) ────────────────────────────────────────────────────
+// – TECHNICAL (15 pts) ––––––––––––––––––––––––––
 const px = f.price || livePrices[f.sym]?.price;
 if(na(px)&&na(f.dma50)&&f.dma50>0){
 const pct50=(px-f.dma50)/f.dma50*100;
@@ -2067,7 +2067,7 @@ hits[`Volume: ${f.volRatio.toFixed(2)}x avg (${f.volRatio>1.2?'accumulation':f.v
 return { score:Math.min(Math.round(s*10)/10, 100), hits };
 }
 
-// ── /api/stocks/score endpoint ────────────────────────────────────────────────
+// – /api/stocks/score endpoint ————————————————
 app.get(’/api/stocks/score’, async(req,res)=>{
 try {
 const empty = Object.keys(stockFundamentals).length === 0;
@@ -2076,10 +2076,10 @@ const stale = Date.now()-stockFundLastFetch > 23*3600*1000;
 ```
 if (empty && !stockFundLoading) {
   refreshAllFundamentals(); // trigger background, return loading immediately
-  return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks… (~60s)'});
+  return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks... (~60s)'});
 }
 if (empty && stockFundLoading) {
-  return res.json({stocks:[],loading:true,loadingMsg:'Loading Kite candles… please wait'});
+  return res.json({stocks:[],loading:true,loadingMsg:'Loading Kite candles... please wait'});
 }
 if (stale && !stockFundLoading) refreshAllFundamentals(); // background refresh
 
@@ -2131,7 +2131,7 @@ scored.forEach((s,i)=>{s.rank=i+1;});
 res.json({
   stocks:scored, total:scored.length,
   loading:stockFundLoading,
-  loadingMsg:stockFundLoading?'Refreshing in background…':null,
+  loadingMsg:stockFundLoading?'Refreshing in background...':null,
   last_refresh: stockFundLastFetch
     ? new Date(stockFundLastFetch).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})
     : 'Never',
@@ -2151,7 +2151,7 @@ setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
 // First fetch 90s after server start
 setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
 
-// ── Deep Single-Stock Analysis endpoint ───────────────────────────────────────
+// – Deep Single-Stock Analysis endpoint —————————————
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
 app.get(’/api/stocks/analyze/:sym’, async(req,res)=>{
 const sym = req.params.sym.toUpperCase().trim();
@@ -2163,7 +2163,7 @@ const token  = validTokens[sym]||INSTRUMENTS[sym];
 if(!token) console.log(`📊 ${sym}: no token, partial analysis`);
 
 ```
-// ── ALL DATA IN PARALLEL ─────────────────────────────────────────────────
+// -- ALL DATA IN PARALLEL -------------------------------------------------
 const [r1y,r3y,r10w,rMax,r1h,rNews] = await Promise.allSettled([
   (async()=>{ if(!kite||!token)return null;
     const t=new Date(),f=new Date(Date.now()-366*864e5);
@@ -2233,7 +2233,7 @@ const news = rNews.status==='fulfilled'&& rNews.value? rNews.value: [];
 const candles = c3y.length>=50 ? c3y : c1y.length>=50 ? c1y : [];
 const px = candles.length ? candles[candles.length-1].close : livePrices[sym]?.price||null;
 
-// ── FULL TECHNICAL ENGINE ─────────────────────────────────────────────────
+// -- FULL TECHNICAL ENGINE -------------------------------------------------
 function fullTech(cans){
   if(!cans||cans.length<20) return {};
   const C=cans.map(c=>c.close), H=cans.map(c=>c.high), L=cans.map(c=>c.low), V=cans.map(c=>c.volume||0);
@@ -2554,7 +2554,7 @@ const charts={
   'MAX':cMax.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
 };
 
-// ── FUNDAMENTALS (from static table) ──────────────────────────────────────
+// -- FUNDAMENTALS (from static table) --------------------------------------
 const fundAnalysis=fund?{
   roe:fund[0],de:fund[1],pe:fund[2],revGr:fund[3],epsGr:fund[4],opMgn:fund[5],
   peg:fund[2]&&fund[4]&&fund[4]>0?+(fund[2]/fund[4]).toFixed(2):null,
@@ -2564,13 +2564,13 @@ const fundAnalysis=fund?{
   growthPeer:fund[3]>=25?'Hypergrowth':fund[3]>=15?'Strong':fund[3]>=8?'Moderate':fund[3]>=0?'Slow':'Declining',
 }:null;
 
-// ── NEWS SENTIMENT ─────────────────────────────────────────────────────────
+// -- NEWS SENTIMENT ---------------------------------------------------------
 const bull=news.filter(n=>n.sentiment==='bullish').length;
 const bear=news.filter(n=>n.sentiment==='bearish').length;
 const neut=news.filter(n=>n.sentiment==='neutral').length;
 const sentScore=news.length?Math.round((bull-bear)/news.length*100):0;
 
-// ── COMPOSITE SCORING (institutional grade) ───────────────────────────────
+// -- COMPOSITE SCORING (institutional grade) -------------------------------
 const signals=[];
 // Trend signals
 if(t.goldenCross!=null)  signals.push({s:t.goldenCross?1:-1,w:10,n:'Golden/Death Cross'});
@@ -2606,7 +2606,7 @@ const composite=signals.reduce((a,s)=>a+s.s*s.w,0)/totalW;
 const bullPct=Math.max(0,Math.min(100,Math.round((composite+1)/2*100)));
 const score=Math.round(composite*100);
 
-// ── VERDICT & PLAIN ENGLISH EXPLANATION ───────────────────────────────────
+// -- VERDICT & PLAIN ENGLISH EXPLANATION -----------------------------------
 let verdict,verdictColor,verdictIcon,shortVerdict;
 if(score>=50)     {verdict='Strong Buy';    verdictColor='#22c55e';verdictIcon='🚀';shortVerdict='sb';}
 else if(score>=20){verdict='Buy';           verdictColor='#86efac';verdictIcon='✅';shortVerdict='b';}
@@ -2783,7 +2783,7 @@ res.status(500).json({ error: e.message, recommendations: [] });
 }
 });
 
-// ── Reset all paper trades (clean slate) ──────────────────────────────────────
+// – Reset all paper trades (clean slate) –––––––––––––––––––
 app.post(”/reset-trades”, async(req,res)=>{
 try {
 await pool.query(“DELETE FROM paper_trades”);
@@ -2793,7 +2793,7 @@ console.log(“🗑️  Paper trades reset by user”);
 } catch(e){ res.status(500).json({error:e.message}); }
 });
 
-// ── Remove suspicious trades (P&L > 100% return = likely bad token) ──────────
+// – Remove suspicious trades (P&L > 100% return = likely bad token) –––––
 app.post(”/cleanup-trades”, async(req,res)=>{
 try {
 const{rowCount}=await pool.query(
@@ -2838,8 +2838,8 @@ res.status(500).send(`<html><body style="background:#060b14;color:#fca5a5;font-f
 }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ── Timeout-safe fetch (compatible with Node 18) ─────────────────────────────
+// ===============================================================================
+// – Timeout-safe fetch (compatible with Node 18) —————————–
 const cryptoPrices  = {};
 const cryptoCandles = {};
 let   cryptoWSActive = false;
@@ -2850,8 +2850,8 @@ const t = setTimeout(()=>ctrl.abort(), ms);
 return fetch(url, {…opts, signal:ctrl.signal}).finally(()=>clearTimeout(t));
 }
 
-// ── CRYPTO ENGINE - Binance Public API (no account needed) ────────────────────
-// ═══════════════════════════════════════════════════════════════════════════════
+// – CRYPTO ENGINE - Binance Public API (no account needed) ––––––––––
+// ===============================================================================
 
 const CRYPTO_UNIVERSE = [
 {sym:“BTCUSDT”,  name:“Bitcoin”,        base:“BTC”},
@@ -3091,7 +3091,7 @@ scanned++;
 console.log(`₿ Done - scanned:${scanned} skipped:${skipped} signals:${signals}\n`);
 }
 
-// ── Crypto API endpoints ───────────────────────────────────────────────────────
+// – Crypto API endpoints —————————————————––
 app.get(”/crypto/prices”, (req,res) => res.json(cryptoPrices));
 app.get(”/crypto/universe”,(req,res) => res.json(CRYPTO_UNIVERSE));
 
@@ -3109,7 +3109,7 @@ res.json(rows[0]);
 
 app.post(”/crypto/scan-now”, (req,res) => { res.json({message:“Crypto scan started”}); scanCrypto(); });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// – Start ———————————————————————
 async function start() {
 await initDB();
 
