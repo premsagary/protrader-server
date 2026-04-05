@@ -3009,22 +3009,42 @@ function buildStockCard(s, medal){
   h+='<span style="font-size:11px;font-weight:700;color:'+qv.c+';white-space:nowrap">'+qv.t+'</span>';
   h+='</div>';
 
-  // -- STOP LOSS + R:R (Meera: Risk Analyst) ------------------------
+  // -- OVERSOLD SIGNAL BADGES (new: Stochastic + BB %B) --------------------
+  h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
+  if(s.bullishDiv)    h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:1px 7px;font-size:9px;font-weight:700">RSI Div ⬆ (Varsity #1)</span>';
+  if(s.rsi!=null&&s.rsi<=30) h+='<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:4px;padding:1px 7px;font-size:9px">RSI '+s.rsi+' — Oversold</span>';
+  if(s.stochK!=null&&s.stochK<=20) h+='<span style="background:rgba(99,102,241,.12);color:#818cf8;border-radius:4px;padding:1px 7px;font-size:9px">Stoch '+s.stochK.toFixed(0)+' — Oversold</span>';
+  if(s.bbPct!=null&&s.bbPct<=0)   h+='<span style="background:rgba(168,85,247,.12);color:#c084fc;border-radius:4px;padding:1px 7px;font-size:9px">BB %B '+s.bbPct.toFixed(2)+' — Below Band</span>';
+  if(s.obvRising)     h+='<span style="background:rgba(245,158,11,.12);color:#f59e0b;border-radius:4px;padding:1px 7px;font-size:9px">OBV Rising — Accumulation</span>';
+  if(s.macdBull)      h+='<span style="background:rgba(16,185,129,.12);color:#10b981;border-radius:4px;padding:1px 7px;font-size:9px">MACD Bullish</span>';
+  if(s.volRatio!=null&&s.volRatio>=2) h+='<span style="background:rgba(239,68,68,.12);color:#f87171;border-radius:4px;padding:1px 7px;font-size:9px">Vol Climax '+s.volRatio.toFixed(1)+'x</span>';
+  h+='</div>';
+
+  // -- STOP LOSS + TARGET + R:R (Varsity S&R based) -------------------------
   if(s.stopLoss&&s.target&&s.rrRatio){
     var rrCol=s.goodRR?'var(--green)':'#f59e0b';
-    h+='<div style="background:var(--bg3);border-radius:8px;padding:8px 10px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">';
+    h+='<div style="background:var(--bg3);border-radius:8px;padding:8px 10px;margin-bottom:8px">';
+    h+='<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:5px">';
     h+='<div style="text-align:center">';
     h+='<div style="font-size:8px;color:var(--text4)">Stop Loss</div>';
-    h+='<div style="font-size:11px;font-weight:700;color:var(--red)">₹'+s.stopLoss+' <span style="font-size:9px;color:var(--red)">(-'+s.riskPct+'%)</span></div>';
+    h+='<div style="font-size:11px;font-weight:700;color:var(--red)">₹'+s.stopLoss+' <span style="font-size:9px">(-'+s.riskPct+'%)</span></div>';
     h+='</div>';
     h+='<div style="text-align:center">';
     h+='<div style="font-size:8px;color:var(--text4)">Target</div>';
-    h+='<div style="font-size:11px;font-weight:700;color:var(--green)">₹'+s.target+' <span style="font-size:9px;color:var(--green)">(+'+s.rewardPct+'%)</span></div>';
+    h+='<div style="font-size:11px;font-weight:700;color:var(--green)">₹'+s.target+' <span style="font-size:9px">(+'+s.rewardPct+'%)</span></div>';
     h+='</div>';
     h+='<div style="text-align:center;margin-left:auto">';
     h+='<div style="font-size:8px;color:var(--text4)">R:R Ratio</div>';
     h+='<div style="font-size:13px;font-weight:800;color:'+rrCol+'">'+s.rrRatio+'x'+(s.goodRR?' ✓':'')+' </div>';
     h+='</div>';
+    h+='</div>';
+    // Show S&R reasons if available
+    if(s.stopReason||s.targetReason){
+      h+='<div style="font-size:8px;color:var(--text4);border-top:1px solid var(--border2);padding-top:4px;display:flex;gap:10px;flex-wrap:wrap">';
+      if(s.stopReason)  h+='<span>🛑 '+s.stopReason+'</span>';
+      if(s.targetReason)h+='<span>🎯 '+s.targetReason+'</span>';
+      h+='</div>';
+    }
     h+='</div>';
   }
 
@@ -3354,20 +3374,21 @@ async function predictFallenAngel(sym, cardId) {
   var stock=(stockRecData&&stockRecData.stocks||[]).find(function(s){return s.sym===sym;});
   try {
     var resp=await fetch('/api/mirofish/fa-predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      sym:sym, name:stock?stock.name:sym, sector:stock?stock.sector:null,
-      price:stock?stock.price:null, pctFromHigh:stock?stock.pctFromHigh:null,
-      rsi:stock?stock.rsi:null, roe:stock?stock.roe:null,
-      debtToEq:stock?stock.debtToEq:null, pe:stock?stock.pe:null,
-      earGrowth:stock?stock.earGrowth:null, opMargin:stock?stock.opMargin:null,
-      revGrowth:stock?stock.revGrowth:null, macdBull:stock?stock.macdBull:null,
+      sym:s.sym, name:stock?stock.name:s.sym, sector:s.sector, grp:s.grp,
+      price:s.price, pctFromHigh:s.pctFromHigh, wk52Hi:s.wk52Hi, wk52Lo:s.wk52Lo,
+      pctAbove200:s.pctAbove200, dma200:s.dma200, dma50:s.dma50,
+      roe:s.roe, debtToEq:s.debtToEq, pe:s.pe, opMargin:s.opMargin,
+      earGrowth:s.earGrowth, revGrowth:s.revGrowth,
+      rsi:s.rsi, stochK:s.stochK, bbPct:s.bbPct,
+      adx:s.adx, beta:s.beta, annualVol:s.annualVol,
+      macdBull:stock?stock.macdBull:null, macdHist:s.macdHist,
       obvRising:stock?stock.obvRising:null, bullishDiv:stock?stock.bullishDiv:null,
-      supertrend:stock?stock.supertrendSig:null, goldenCross:stock?stock.goldenCross:null,
-      dma200:stock?stock.dma200:null, beta:stock?stock.beta:null,
-      annualVol:stock?stock.annualVol:null, fallenScore:stock?stock.fallenScore:null,
-      fallenVerdict:stock?stock.fallenVerdict:null, stopLoss:stock?stock.stopLoss:null,
-      rrRatio:stock?stock.rrRatio:null, wk52Hi:stock?stock.wk52Hi:null,
-      wk52Lo:stock?stock.wk52Lo:null, pctAbove200:stock?stock.pctAbove200:null,
-      adx:stock?stock.adx:null, grp:stock?stock.grp:null,
+      bearishDiv:stock?stock.bearishDiv:null,
+      volRatio:s.volRatio, supertrendSig:s.supertrendSig,
+      fallenScore:stock?stock.fallenScore:null, fallenVerdict:stock?stock.fallenVerdict:null,
+      stopLoss:stock?stock.stopLoss:null, stopReason:stock?stock.stopReason:null,
+      target:stock?stock.target:null,     targetReason:stock?stock.targetReason:null,
+      rrRatio:stock?stock.rrRatio:null,   goodRR:stock?stock.goodRR:null,
     })});
     var d=await resp.json();
     if(d.error) throw new Error(d.error);
