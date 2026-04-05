@@ -194,8 +194,8 @@ select option{background:var(--bg3)}
   <div class="logo"><span class="logo-dot"></span>ProTrader</div>
   <span id="market-badge" class="mkt-badge" style="display:none">NSE Open</span>
   <div class="mode-tabs">
-    <button class="mode-tab active" onclick="setMode('mf')" id="mode-mf">MutualFunds Recommendation</button>
-    <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stocks Recommendation</button>
+    <button class="mode-tab" onclick="setMode('mf')" id="mode-mf">MutualFunds Recommendation</button>
+    <button class="mode-tab stockrec active" onclick="setMode('stockrec')" id="mode-stockrec">Stocks Recommendation</button>
     <button class="mode-tab stocks" onclick="checkAccess('stocks')" id="mode-stocks">🔒 Stocks</button>
     <button class="mode-tab crypto" onclick="checkAccess('crypto')" id="mode-crypto">🔒 Crypto</button>
   </div>
@@ -222,10 +222,10 @@ select option{background:var(--bg3)}
 </div>
 <!-- MAIN -->
 <div class="main" id="main-content">
-  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:16px">
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:12px">
     <div style="font-size:32px">📊</div>
     <div style="font-size:14px;color:var(--text2);font-weight:600">ProTrader</div>
-    <div style="font-size:12px;color:var(--text3)">Loading...</div>
+    <div style="font-size:12px;color:var(--text3)">Starting up...</div>
     <div style="width:200px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden">
       <div style="height:100%;width:60%;background:var(--green);border-radius:2px;animation:mfpulse 1.2s ease-in-out infinite"></div>
     </div>
@@ -233,8 +233,8 @@ select option{background:var(--bg3)}
 </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" async></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js" async></script>
 <script>
 // =======================================================
 // DATA
@@ -1368,23 +1368,26 @@ async function renderMFPage(){
     var statusEl = document.getElementById("mf-status");
     var subEl = document.getElementById("mf-substatus");
 
-    // Poll until we get real data (server may still be loading)
+    // Try fetching - if server not ready, show retry instead of hanging
     var data = null;
     var attempts = 0;
-    while (attempts < 12) {
+    while (attempts < 3) {
       attempts++;
-      if(statusEl) statusEl.textContent = "Fetching live data... (attempt "+attempts+"/12)";
-      var r = await fetch("/api/mf/funds");
-      if (!r.ok) throw new Error("Server error "+r.status);
-      data = await r.json();
-      if (data.funds && data.funds.length > 0) break;
-      // No data yet - wait 5s and retry
-      if(subEl) subEl.textContent = "Server is loading fund data... "+Math.round(attempts*5)+"s elapsed";
+      if(statusEl) statusEl.textContent = attempts === 1 ? "Loading fund data..." : "Retrying... ("+attempts+"/3)";
+      try {
+        var r = await fetch("/api/mf/funds");
+        if (!r.ok) throw new Error("Server error "+r.status);
+        data = await r.json();
+        if (data.funds && data.funds.length > 0) break;
+      } catch(fetchErr) {
+        if (attempts >= 3) throw fetchErr;
+      }
+      if(subEl) subEl.textContent = "Server warming up... retrying in 5s";
       await new Promise(res=>setTimeout(res,5000));
     }
 
     if (!data || !data.funds || data.funds.length === 0) {
-      throw new Error("No fund data returned after "+Math.round(attempts*5)+"s. Check Railway logs.");
+      throw new Error("Fund data not ready yet");
     }
 
     document.getElementById("mf-loading").style.display="none";
@@ -3125,46 +3128,20 @@ function showTokenMsg(text, color) {
 }
 
 // Check token status on load and every 5 minutes
-// Init — guaranteed to run after all CDN scripts load
+// Init immediately — don't wait for Chart.js (only needed for chart tab)
 function _init() {
-  try {
-    checkTokenStatus();
-    _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
-    setMode("mf");
-    fetchAll();
-    fetchCryptoPrices();
-    setInterval(fetchAll, 15000);
-    setInterval(fetchCryptoPrices, 30000);
-  } catch(e) {
-    console.error('Init error:', e);
-    // Still try to render something
-    try { setMode("mf"); } catch(e2) {}
-  }
+  try { checkTokenStatus(); } catch(e){}
+  try { _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000); } catch(e){}
+  // Start with Stocks Recommendation - loads from cache instantly
+  // MF tab polls server for up to 60s which causes blank screen on first load
+  try { setMode("stockrec"); } catch(e){ console.error('setMode error:', e); }
+  try { fetchAll(); } catch(e){}
+  try { fetchCryptoPrices(); } catch(e){}
+  setInterval(function(){ try{ fetchAll(); }catch(e){} }, 15000);
+  setInterval(function(){ try{ fetchCryptoPrices(); }catch(e){} }, 30000);
 }
 
-// Wait for Chart.js CDN to load before init
-// Chart.js is loaded via <script src> tags just before this script
-function _waitForChartAndInit() {
-  if (typeof Chart !== 'undefined') {
-    _init();
-  } else {
-    // Chart.js not ready yet — poll every 50ms (max 3s)
-    var attempts = 0;
-    var poll = setInterval(function() {
-      attempts++;
-      if (typeof Chart !== 'undefined' || attempts > 60) {
-        clearInterval(poll);
-        _init();
-      }
-    }, 50);
-  }
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', _waitForChartAndInit);
-} else {
-  _waitForChartAndInit();
-}
+_init();
 
 
 function checkAccess(mode) {
