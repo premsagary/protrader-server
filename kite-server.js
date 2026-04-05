@@ -1776,6 +1776,398 @@ app.get("/regime", (req,res)=>{
 
 app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
 
+app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
+
+// ── Stock Fundamental Scoring Engine ─────────────────────────────────────────
+// 100-point multi-factor model: Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
+// Methodology matches NSE Quality/Value/Momentum institutional indices
+const stockFundamentals = {}; // cache keyed by NSE symbol
+let stockFundamentalsLastFetch = 0;
+let stockFundamentalsLoading  = false;
+
+function toYahooSym(s) { return s + '.NS'; }
+
+async function fetchOneFundamental(nseSym) {
+  const ySym = toYahooSym(nseSym);
+  const url = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ySym}`
+    + `?modules=financialData,defaultKeyStatistics,summaryDetail,price,assetProfile`;
+  try {
+    const res = await fetch(url, {
+      headers:{'User-Agent':'Mozilla/5.0 (ProTrader/2.0)'},
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const r = j.quoteSummary?.result?.[0];
+    if (!r) return null;
+    const fd=r.financialData||{}, ks=r.defaultKeyStatistics||{},
+          sd=r.summaryDetail||{}, pr=r.price||{}, ap=r.assetProfile||{};
+    const n=v=>v?.raw!=null?v.raw:(typeof v==='number'?v:null);
+    return {
+      sym:nseSym,
+      // Quality
+      roe:n(fd.returnOnEquity), roa:n(fd.returnOnAssets),
+      debtToEq:n(fd.debtToEquity), currentR:n(fd.currentRatio),
+      opMargin:n(fd.operatingMargins), profitMgn:n(fd.profitMargins),
+      grossMgn:n(fd.grossMargins), freeCF:n(fd.freeCashflow),
+      // Value
+      trailPE:n(sd.trailingPE)||n(ks.trailingPE), fwdPE:n(ks.forwardPE),
+      pb:n(ks.priceToBook), peg:n(ks.pegRatio),
+      divYield:n(sd.dividendYield), evEbitda:n(ks.enterpriseToEbitda),
+      // Growth
+      revGrowth:n(fd.revenueGrowth), earGrowth:n(fd.earningsGrowth),
+      trailEps:n(ks.trailingEps), fwdEps:n(ks.forwardEps),
+      // Analyst
+      targetMean:n(fd.targetMeanPrice), targetHigh:n(fd.targetHighPrice),
+      targetLow:n(fd.targetLowPrice), recKey:fd.recommendationKey||null,
+      recMean:n(fd.recommendationMean), analystCnt:n(fd.numberOfAnalystOpinions),
+      // Momentum / Price
+      price:n(pr.regularMarketPrice)||n(fd.currentPrice),
+      marketCap:n(pr.marketCap)||n(sd.marketCap),
+      wk52Hi:n(sd.fiftyTwoWeekHigh), wk52Lo:n(sd.fiftyTwoWeekLow),
+      dma50:n(sd.fiftyDayAverage), dma200:n(sd.twoHundredDayAverage),
+      change52w:n(ks['52WeekChange']), beta:n(ks.beta),
+      avgVol:n(sd.averageVolume), avgVol10d:n(sd.averageVolume10days),
+      // Institutional
+      instHeld:n(ks.heldPercentInstitutions),
+      // Meta
+      sector:ap.sector||'Unknown', industry:ap.industry||'',
+      fetchedAt:Date.now(),
+    };
+  } catch(e) { return null; }
+}
+
+async function refreshAllFundamentals() {
+  if (stockFundamentalsLoading) return;
+  stockFundamentalsLoading = true;
+  console.log('📊 Fetching stock fundamentals from Yahoo Finance...');
+  const delay = ms => new Promise(r=>setTimeout(r,ms));
+  let ok=0, fail=0;
+  for (const stock of UNIVERSE) {
+    const d = await fetchOneFundamental(stock.sym);
+    if (d) { stockFundamentals[stock.sym]={...d,name:stock.n,grp:stock.grp}; ok++; }
+    else fail++;
+    await delay(150); // ~150ms between calls → ~38s for 252 stocks
+  }
+  stockFundamentalsLastFetch = Date.now();
+  stockFundamentalsLoading   = false;
+  console.log(`📊 Fundamentals done: ${ok} OK, ${fail} failed`);
+}
+
+function pctRankStk(val, arr, higherBetter=true) {
+  if (val==null||!arr.length) return 50;
+  const valid=arr.filter(v=>v!=null&&isFinite(v));
+  if (!valid.length) return 50;
+  const below=valid.filter(v=>higherBetter?v<val:v>val).length;
+  return Math.round(below/valid.length*100);
+}
+
+function scoreOneStock(f, peers) {
+  let s=0; const hits={};
+  const na=v=>v!=null&&isFinite(v);
+  const pr=(val,key,hb=true)=>{
+    const arr=peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v));
+    return pctRankStk(val,arr,hb);
+  };
+  const pts=(pct,max)=>Math.round(pct/100*max*10)/10;
+
+  // ── QUALITY (25 pts) ───────────────────────────────────────────
+  if(na(f.roe)){
+    const v=f.roe*100,pct=pr(v,'_roe');
+    const pp=pts(pct,8);s+=pp;
+    hits[`ROE: ${v.toFixed(1)}% (${v>=20?'excellent':v>=15?'good':v>=10?'average':'weak'})`]=pp;
+  }
+  if(na(f.roa)){
+    const v=f.roa*100,pct=pr(v,'_roa');
+    const pp=pts(pct,6);s+=pp;
+    hits[`ROA: ${v.toFixed(1)}%`]=pp;
+  }
+  if(na(f.debtToEq)){
+    const pct=pr(f.debtToEq,'debtToEq',false);
+    const pp=pts(pct,5);s+=pp;
+    hits[`D/E: ${(f.debtToEq/100).toFixed(2)}x (${f.debtToEq<30?'very low':f.debtToEq<100?'healthy':f.debtToEq<200?'moderate':'high'})`]=pp;
+  }
+  if(na(f.opMargin)){
+    const v=f.opMargin*100,pct=pr(v,'_opMargin');
+    const pp=pts(pct,6);s+=pp;
+    hits[`Op Margin: ${v.toFixed(1)}%`]=pp;
+  }
+
+  // ── VALUE (20 pts) ─────────────────────────────────────────────
+  if(na(f.trailPE)&&f.trailPE>0&&f.trailPE<500){
+    const pct=pr(f.trailPE,'trailPE',false);
+    const pp=pts(pct,7);s+=pp;
+    hits[`P/E: ${f.trailPE.toFixed(1)}x`]=pp;
+  }
+  if(na(f.pb)&&f.pb>0){
+    const pct=pr(f.pb,'pb',false);
+    const pp=pts(pct,4);s+=pp;
+    hits[`P/B: ${f.pb.toFixed(2)}x`]=pp;
+  }
+  if(na(f.peg)&&f.peg>0&&f.peg<20){
+    const pp=f.peg<0.5?5:f.peg<1?4:f.peg<1.5?3:f.peg<2?2:f.peg<3?1:0;
+    s+=pp;
+    hits[`PEG: ${f.peg.toFixed(2)} (${f.peg<1?'undervalued':f.peg<2?'fair':'rich'})`]=pp;
+  }
+  if(na(f.divYield)&&f.divYield>0){
+    const v=f.divYield*100,pct=pr(v,'_divYield');
+    const pp=pts(pct,4);s+=pp;
+    hits[`Div Yield: ${v.toFixed(2)}%`]=pp;
+  }
+
+  // ── MOMENTUM (20 pts) ──────────────────────────────────────────
+  if(na(f.change52w)){
+    const v=f.change52w*100,pct=pr(v,'_chg52w');
+    const pp=pts(pct,10);s+=pp;
+    hits[`52W Return: ${v.toFixed(1)}%`]=pp;
+  }
+  if(na(f.price)&&na(f.wk52Hi)&&f.wk52Hi>0){
+    const v=((f.price-f.wk52Hi)/f.wk52Hi)*100;
+    const pct=pr(v,'_pfromhi');
+    const pp=pts(pct,6);s+=pp;
+    hits[`From 52w High: ${v.toFixed(1)}%`]=pp;
+  }
+  if(na(f.beta)){
+    const pp=Math.abs(f.beta-1.0)<0.2?4:Math.abs(f.beta-1.0)<0.4?3:Math.abs(f.beta-1.0)<0.6?2:1;
+    s+=pp;hits[`Beta: ${f.beta.toFixed(2)}`]=pp;
+  }
+
+  // ── GROWTH (20 pts) ────────────────────────────────────────────
+  if(na(f.revGrowth)){
+    const v=f.revGrowth*100,pct=pr(v,'_revGr');
+    const pp=pts(pct,7);s+=pp;
+    hits[`Rev Growth: ${v.toFixed(1)}% (${v>=20?'strong':v>=10?'good':v>=0?'flat':'declining'})`]=pp;
+  }
+  if(na(f.earGrowth)){
+    const v=f.earGrowth*100,pct=pr(v,'_earGr');
+    const pp=pts(pct,8);s+=pp;
+    hits[`EPS Growth: ${v.toFixed(1)}% (${v>=20?'strong':v>=10?'good':v>=0?'flat':'declining'})`]=pp;
+  }
+  if(na(f.recMean)&&na(f.analystCnt)&&f.analystCnt>=3){
+    const pp=f.recMean<=1.5?5:f.recMean<=2?4:f.recMean<=2.5?3:f.recMean<=3?2:f.recMean<=3.5?1:0;
+    s+=pp;
+    const lbl=f.recMean<=1.5?'Strong Buy':f.recMean<=2?'Buy':f.recMean<=2.5?'Hold+':f.recMean<=3?'Hold':'Sell';
+    hits[`Analyst: ${lbl} (${f.analystCnt})`]=pp;
+  }
+
+  // ── TECHNICAL (15 pts) ─────────────────────────────────────────
+  const px=f.price||livePrices[f.sym]?.price;
+  if(na(px)&&na(f.dma50)&&f.dma50>0){
+    const v=((px-f.dma50)/f.dma50)*100;
+    const pp=v>5?5:v>2?4:v>0?3:v>-3?1:0;s+=pp;
+    hits[`vs 50DMA: ${v>=0?'+':''}${v.toFixed(1)}%`]=pp;
+  }
+  if(na(px)&&na(f.dma200)&&f.dma200>0){
+    const v=((px-f.dma200)/f.dma200)*100;
+    const pp=v>10?5:v>5?4:v>0?3:v>-5?1:0;s+=pp;
+    const gc=f.dma50&&f.dma200?f.dma50>f.dma200:null;
+    hits[`vs 200DMA: ${v>=0?'+':''}${v.toFixed(1)}% ${gc?'⚡Golden Cross':gc===false?'💀Death Cross':''}`]=pp;
+  }
+  if(na(f.avgVol10d)&&na(f.avgVol)&&f.avgVol>0){
+    const r=f.avgVol10d/f.avgVol;
+    const pp=r>1.5?5:r>1.2?4:r>1?3:r>0.8?2:1;s+=pp;
+    hits[`Volume: ${r.toFixed(2)}x avg (${r>1.2?'accumulation':r>1?'rising':r>0.8?'normal':'declining'})`]=pp;
+  }
+
+  return { score:Math.round(s*10)/10, hits };
+}
+
+app.get('/api/stocks/score', async(req,res)=>{
+  try {
+    const stale = Date.now()-stockFundamentalsLastFetch > 23*3600*1000;
+    const empty  = Object.keys(stockFundamentals).length === 0;
+
+    if (empty) {
+      // First request — trigger and wait
+      await refreshAllFundamentals();
+    } else if (stale && !stockFundamentalsLoading) {
+      refreshAllFundamentals(); // background
+    }
+
+    const all = Object.values(stockFundamentals);
+    if (!all.length) {
+      return res.json({stocks:[],loading:true,message:'Loading fundamentals from Yahoo Finance (~40s)…'});
+    }
+
+    // Pre-compute derived fields for peer ranking
+    all.forEach(f=>{
+      f._roe   = f.roe!=null?f.roe*100:null;
+      f._roa   = f.roa!=null?f.roa*100:null;
+      f._opMargin = f.opMargin!=null?f.opMargin*100:null;
+      f._chg52w   = f.change52w!=null?f.change52w*100:null;
+      f._divYield = f.divYield!=null?f.divYield*100:null;
+      f._revGr    = f.revGrowth!=null?f.revGrowth*100:null;
+      f._earGr    = f.earGrowth!=null?f.earGrowth*100:null;
+      f._pfromhi  = (f.price&&f.wk52Hi)?((f.price-f.wk52Hi)/f.wk52Hi*100):null;
+    });
+
+    // Group by sector for peer scoring
+    const bySector={};
+    all.forEach(f=>{ const s=f.sector||'Unknown'; bySector[s]=bySector[s]||[]; bySector[s].push(f); });
+
+    const scored = all.map(f=>{
+      const peers = bySector[f.sector||'Unknown']||all;
+      const {score,hits}=scoreOneStock(f,peers);
+      const px=f.price||livePrices[f.sym]?.price||null;
+      const upside=(px&&f.targetMean)?+((f.targetMean-px)/px*100).toFixed(1):null;
+      return {
+        sym:f.sym, name:f.name, grp:f.grp, sector:f.sector, industry:f.industry,
+        score, hits,
+        // Quality
+        roe:f.roe!=null?+(f.roe*100).toFixed(1):null,
+        roa:f.roa!=null?+(f.roa*100).toFixed(1):null,
+        debtToEq:f.debtToEq!=null?+(f.debtToEq/100).toFixed(2):null,
+        opMargin:f.opMargin!=null?+(f.opMargin*100).toFixed(1):null,
+        freeCF:f.freeCF,
+        // Value
+        pe:f.trailPE!=null?+f.trailPE.toFixed(1):null,
+        fwdPe:f.fwdPE!=null?+f.fwdPE.toFixed(1):null,
+        pb:f.pb!=null?+f.pb.toFixed(2):null,
+        peg:f.peg!=null?+f.peg.toFixed(2):null,
+        divYield:f.divYield!=null?+(f.divYield*100).toFixed(2):null,
+        // Growth
+        revGrowth:f.revGrowth!=null?+(f.revGrowth*100).toFixed(1):null,
+        earGrowth:f.earGrowth!=null?+(f.earGrowth*100).toFixed(1):null,
+        eps:f.trailEps, fwdEps:f.fwdEps,
+        // Analyst
+        targetMean:f.targetMean, targetHigh:f.targetHigh, targetLow:f.targetLow,
+        recKey:f.recKey, recMean:f.recMean, analystCnt:f.analystCnt, upside,
+        // Momentum
+        wk52Change:f.change52w!=null?+(f.change52w*100).toFixed(1):null,
+        wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
+        pctFromHigh:f._pfromhi!=null?+f._pfromhi.toFixed(1):null,
+        beta:f.beta,
+        // Technical
+        price:px, dma50:f.dma50, dma200:f.dma200,
+        goldenCross:f.dma50&&f.dma200?f.dma50>f.dma200:null,
+        volRatio:(f.avgVol10d&&f.avgVol)?+(f.avgVol10d/f.avgVol).toFixed(2):null,
+        // Institutional
+        instHeld:f.instHeld!=null?+(f.instHeld*100).toFixed(1):null,
+        mktCapCr:f.marketCap?Math.round(f.marketCap/1e7):null,
+        fetchedAt:f.fetchedAt,
+      };
+    });
+
+    scored.sort((a,b)=>b.score-a.score);
+    scored.forEach((s,i)=>{s.rank=i+1;});
+
+    const lastFetch = stockFundamentalsLastFetch
+      ? new Date(stockFundamentalsLastFetch).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})
+      : 'Never';
+
+    res.json({
+      stocks: scored, total: scored.length,
+      last_refresh: lastFetch,
+      market_open: isMarketOpen(),
+      loading: stockFundamentalsLoading,
+      scoring: {
+        pillars:[
+          {name:'Quality',  pts:25, factors:['ROE','ROA','Debt/Equity','Operating Margin']},
+          {name:'Value',    pts:20, factors:['P/E vs peers','P/B','PEG ratio','Dividend Yield']},
+          {name:'Momentum', pts:20, factors:['52W Return','vs 52w High','Beta']},
+          {name:'Growth',   pts:20, factors:['Revenue Growth','Earnings Growth','Analyst Consensus']},
+          {name:'Technical',pts:15, factors:['vs 50DMA','vs 200DMA','Volume Trend']},
+        ],
+        methodology:'Percentile-ranked within sector peers. Matches NSE Quality/Value/Momentum index methodology.',
+        data_source:'Yahoo Finance v11 fundamentals refreshed daily 7AM IST',
+      }
+    });
+  } catch(e){ res.status(500).json({error:e.message,stocks:[]}); }
+});
+
+// Daily refresh 7AM IST
+cron.schedule('0 7 * * *', ()=>{ refreshAllFundamentals(); },{timezone:'Asia/Kolkata'});
+// First fetch 90s after server start
+setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
+
+// ── Stocks Recommendation endpoint ───────────────────────────────────────────
+// Aggregates paper trade signals + live prices into a ranked recommendation list
+app.get("/api/stocks/recommendations", async(req,res)=>{
+  try {
+    // Get recent signals — last 7 days of BUY signals with score >= 3
+    const {rows: signals} = await pool.query(`
+      SELECT DISTINCT ON (symbol)
+        symbol, name, type, price as entry_price, signal_score, strategy, regime,
+        indicators, entry_time, stop_loss, target, status, pnl, pnl_pct, exit_reason
+      FROM paper_trades
+      WHERE type = 'BUY'
+        AND entry_time >= NOW() - INTERVAL '7 days'
+        AND signal_score >= 3
+      ORDER BY symbol, entry_time DESC
+    `);
+
+    // Get all open positions
+    const {rows: open} = await pool.query(
+      "SELECT symbol, price as entry_price, stop_loss, target, signal_score, strategy, pnl, pnl_pct, entry_time FROM paper_trades WHERE status='OPEN'"
+    );
+
+    // Get scan log for last regime
+    const {rows: scanLog} = await pool.query(
+      "SELECT * FROM scan_log ORDER BY scanned_at DESC LIMIT 5"
+    );
+
+    // Get last scan stats
+    const lastScan = scanLog[0] || null;
+
+    // Build stock universe metadata
+    const universe = {};
+    UNIVERSE.forEach(s => { universe[s.sym] = { name: s.n, grp: s.grp }; });
+
+    // Enrich signals with live prices
+    const enriched = signals.map(s => {
+      const live = livePrices[s.symbol] || {};
+      const meta = universe[s.symbol] || { name: s.name, grp: 'NSE' };
+      const livePrice = live.price || null;
+      const change = live.change || null;
+      const changePct = livePrice && s.entry_price
+        ? ((livePrice - s.entry_price) / s.entry_price * 100).toFixed(2)
+        : null;
+      const isOpen = open.find(o => o.symbol === s.symbol);
+      return {
+        symbol:       s.symbol,
+        name:         meta.name || s.name,
+        group:        meta.grp,
+        entry_price:  parseFloat(s.entry_price),
+        live_price:   livePrice,
+        change:       change,
+        change_pct:   changePct ? parseFloat(changePct) : null,
+        signal_score: s.signal_score,
+        strategy:     s.strategy,
+        regime:       s.regime,
+        indicators:   s.indicators,
+        stop_loss:    parseFloat(s.stop_loss),
+        target:       parseFloat(s.target),
+        status:       isOpen ? 'OPEN' : s.status,
+        pnl:          isOpen ? parseFloat(isOpen.pnl || 0) : parseFloat(s.pnl || 0),
+        pnl_pct:      isOpen ? parseFloat(isOpen.pnl_pct || 0) : parseFloat(s.pnl_pct || 0),
+        signal_time:  s.entry_time,
+        risk_reward:  s.stop_loss && s.target && s.entry_price
+          ? ((s.target - s.entry_price) / (s.entry_price - s.stop_loss)).toFixed(1)
+          : null,
+      };
+    });
+
+    // Sort: open first, then by signal_score desc
+    enriched.sort((a,b) => {
+      if(a.status==='OPEN' && b.status!=='OPEN') return -1;
+      if(a.status!=='OPEN' && b.status==='OPEN') return 1;
+      return b.signal_score - a.signal_score;
+    });
+
+    res.json({
+      recommendations: enriched,
+      open_count:      open.length,
+      signal_count:    enriched.length,
+      live_prices:     Object.keys(livePrices).length,
+      market_open:     isMarketOpen(),
+      last_scan:       lastScan,
+      universe_size:   UNIVERSE.length,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, recommendations: [] });
+  }
+});
+
 // ── Reset all paper trades (clean slate) ──────────────────────────────────────
 app.post("/reset-trades", async(req,res)=>{
   try {
