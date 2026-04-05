@@ -2930,27 +2930,149 @@ async function checkAndSendAlerts(scoredStocks) {
 
 // -- Stop Loss + R:R calculator (Meera: Risk Analyst) -------------------------
 function computeStopAndTarget(s) {
+  // ============================================================================
+  // STOP LOSS + TARGET — Varsity Module 2 (S&R + Risk Management)
+  //
+  // Varsity: "Stop loss = the price at which you accept you were wrong"
+  // Stop candidates (Varsity-ranked by reliability):
+  //   1. Just below 200DMA (Varsity: "institutional buy zone; breach = trend change")
+  //   2. Just below 52W Low (maximum fear level = hard support)
+  //   3. Just below Fib 61.8% retracement (Varsity: "most respected Fibonacci level")
+  //   4. 1.5× ATR-proxy below entry (volatility-adjusted stop)
+  //   5. Simple 7% stop (fallback)
+  //
+  // Target candidates:
+  //   1. Fib 38.2% retracement from fall (first resistance)
+  //   2. Fib 50% retracement (mid-point)
+  //   3. 200DMA (if below, acts as first target)
+  //   4. 52W High (full recovery target)
+  //
+  // R:R >= 2.0 = Varsity minimum for a worthwhile trade
+  // ============================================================================
+
   const px = s.price;
   if (!px || px <= 0) return null;
-  // Stop loss: 8% below price OR 2% below 200DMA, whichever gives tighter stop
-  const stopPct   = px * 0.92;                                       // 8% stop
-  const stop200   = s.dma200 ? s.dma200 * 0.98 : null;              // 2% below 200DMA
-  // Use 200DMA stop if it's within 15% of current price (not too loose)
-  const stop = stop200 && stop200 > px * 0.85 && stop200 < px ? stop200 : stopPct;
-  // Target: next resistance = 52W high (if above current) or +15%
-  const target = s.wk52Hi && s.wk52Hi > px * 1.05
-    ? Math.min(s.wk52Hi, px * 1.25)   // cap at 25% upside even if 52W high is higher
-    : px * 1.15;
-  const risk    = px - stop;
-  const reward  = target - px;
-  const rrRatio = risk > 0 ? +(reward / risk).toFixed(1) : null;
+
+  // -- STOP LOSS candidates ---------------------------------------------------
+  const stops = [];
+
+  // Candidate 1: 2% below 200DMA — Varsity: "200DMA breach = primary trend change"
+  if (s.dma200 && s.dma200 > 0) {
+    const stop200 = s.dma200 * 0.98;
+    // Only use if stop is below current price and not too far (within 20%)
+    if (stop200 < px && stop200 > px * 0.80) {
+      stops.push({ val: stop200, reason: '200DMA support (Varsity: line of truth)' });
+    }
+  }
+
+  // Candidate 2: 1% below 52W Low — "maximum pessimism level = hard floor support"
+  if (s.wk52Lo && s.wk52Lo > 0 && s.wk52Lo < px) {
+    const stopLow = s.wk52Lo * 0.99;
+    if (stopLow > px * 0.65) { // not too far — must be realistic
+      stops.push({ val: stopLow, reason: '52W Low support' });
+    }
+  }
+
+  // Candidate 3: Fibonacci 61.8% retracement — Varsity: "golden ratio, most respected level"
+  // Retracement from 52W high to current (fall range)
+  if (s.wk52Hi && s.wk52Hi > px && s.wk52Lo && s.wk52Lo < px) {
+    const fibRange = s.wk52Hi - s.wk52Lo;
+    const fib382 = s.wk52Hi - 0.382 * fibRange; // 38.2% retracement from high
+    const fib618 = s.wk52Hi - 0.618 * fibRange; // 61.8% retracement from high
+    // Stop just below the relevant fib level below current price
+    if (fib618 < px && fib618 > px * 0.75) {
+      stops.push({ val: fib618 * 0.99, reason: 'Fib 61.8% support (golden ratio)' });
+    }
+  }
+
+  // Candidate 4: ATR-proxy stop — Varsity: volatility-adjusted stop prevents noise-out
+  // Use annualVol as ATR proxy: daily vol ≈ annualVol / sqrt(252)
+  if (s.annualVol && s.annualVol > 0) {
+    const dailyVol = (s.annualVol / 100) / Math.sqrt(252);
+    const atrProxy = px * dailyVol * 14; // 14-day ATR proxy
+    const stopATR  = px - (1.5 * atrProxy); // 1.5× ATR below entry
+    if (stopATR > 0 && stopATR > px * 0.75) {
+      stops.push({ val: stopATR, reason: '1.5× ATR stop (volatility-adjusted)' });
+    }
+  }
+
+  // Fallback: tight 7% stop (Varsity: "never risk more than 2% of portfolio per trade")
+  stops.push({ val: px * 0.93, reason: '7% trailing stop (fallback)' });
+
+  // Choose the TIGHTEST stop that still gives >= 2:1 R:R
+  // Varsity: "Tighter stop = smaller loss if wrong; bigger stop needed only if wider S&R"
+  stops.sort((a, b) => b.val - a.val); // highest = tightest stop
+
+  // -- TARGET candidates -------------------------------------------------------
+  const targets = [];
+
+  // Target 1: 200DMA (if price is below it — first resistance to reclaim)
+  if (s.dma200 && s.dma200 > px) {
+    targets.push({ val: s.dma200, reason: '200DMA reclaim (primary resistance)' });
+  }
+
+  // Target 2: Fib 38.2% retracement = first meaningful recovery target
+  if (s.wk52Hi && s.wk52Hi > px && s.wk52Lo) {
+    const fibRange = s.wk52Hi - s.wk52Lo;
+    const fib382target = s.wk52Lo + 0.618 * fibRange; // Fib 61.8% up from low = 38.2% down from high
+    if (fib382target > px * 1.05) {
+      targets.push({ val: fib382target, reason: 'Fib 38.2% retracement recovery' });
+    }
+  }
+
+  // Target 3: 52W High = full mean reversion (Fallen Angel thesis: price returns to peak)
+  if (s.wk52Hi && s.wk52Hi > px * 1.08) {
+    // Cap at 50% upside for conservatism — if 52W high implies >50%, use 50%
+    const cappedHigh = Math.min(s.wk52Hi, px * 1.50);
+    targets.push({ val: cappedHigh, reason: '52W High recovery (Fallen Angel mean reversion)' });
+  }
+
+  // Fallback: +15% minimum target
+  targets.push({ val: px * 1.15, reason: '15% recovery target (minimum)' });
+
+  // Pick best target: first one that gives >= 2:1 R:R with best stop
+  // Use tightest stop first, find target that clears 2:1
+  let finalStop   = stops[stops.length - 1]; // fallback 7%
+  let finalTarget = targets[targets.length - 1];
+  let finalRR     = null;
+
+  for (const st of stops) {
+    const risk = px - st.val;
+    if (risk <= 0) continue;
+    for (const tgt of targets.sort((a,b) => a.val - b.val)) {
+      const reward = tgt.val - px;
+      const rr = reward / risk;
+      if (rr >= 2.0) {
+        finalStop   = st;
+        finalTarget = tgt;
+        finalRR     = rr;
+        break;
+      }
+    }
+    if (finalRR) break;
+  }
+
+  // If no 2:1 found, use tightest stop + best target anyway (let UI show bad R:R)
+  if (!finalRR) {
+    finalStop   = stops[0];
+    finalTarget = targets.sort((a,b) => b.val - a.val)[0];
+    const risk   = px - finalStop.val;
+    finalRR      = risk > 0 ? (finalTarget.val - px) / risk : null;
+  }
+
+  const risk      = px - finalStop.val;
+  const reward    = finalTarget.val - px;
+  const rrRatio   = risk > 0 ? +(reward / risk).toFixed(1) : null;
+
   return {
-    stopLoss:  +stop.toFixed(1),
-    target:    +target.toFixed(1),
-    riskPct:   +((risk/px)*100).toFixed(1),
-    rewardPct: +((reward/px)*100).toFixed(1),
+    stopLoss:    +finalStop.val.toFixed(1),
+    stopReason:  finalStop.reason,
+    target:      +finalTarget.val.toFixed(1),
+    targetReason: finalTarget.reason,
+    riskPct:     +((risk / px) * 100).toFixed(1),
+    rewardPct:   +((reward / px) * 100).toFixed(1),
     rrRatio,
-    acceptable: rrRatio != null && rrRatio >= 2.0, // only good trades have R:R >= 2:1
+    acceptable:  rrRatio != null && rrRatio >= 2.0, // Varsity: 2:1 minimum
   };
 }
 
@@ -3222,135 +3344,298 @@ function scoreOneStock(f, peers) {
 //   Penalties               — Varsity Ch12 red flags: EPS collapse, extreme debt, revenue fall
 // =============================================================================
 function scoreFallenAngel(f) {
-  let s=0; const hits={};
-  const na = v => v!=null&&isFinite(v);
+  // ==========================================================================
+  // FALLEN ANGEL SCORING — 100 points
+  // Built entirely from Zerodha Varsity Modules 2 (TA) + 3 (FA) + 15 (Sector)
+  //
+  // A Fallen Angel = HIGH QUALITY business that fell 20%+ from peak
+  // due to market fear / temporary setback — NOT structural breakdown.
+  //
+  // Framework:
+  //   PILLAR 1: Business Quality  (40 pts) — Varsity M3: ROE, D/E, margins, EPS
+  //   PILLAR 2: Depth of Fall     (15 pts) — deeper fall + intact business = more fear = more opportunity
+  //   PILLAR 3: Oversold Signals  (20 pts) — Varsity M2: RSI, Stochastic, BB, ADX
+  //   PILLAR 4: Valuation         (12 pts) — Varsity M3: PE/ROE, PEG, 52W low proximity
+  //   PILLAR 5: Recovery Signals  (13 pts) — Varsity M2: RSI Div, OBV, MACD, Volume, Supertrend
+  //   PENALTIES                   (-30 max) — Varsity Ch12 red flags
+  // ==========================================================================
+
+  let s = 0;
+  const hits = {};
+  const na = v => v != null && isFinite(v);
   const px = f.price || livePrices[f.sym]?.price;
 
-  // -- PILLAR 1: BUSINESS QUALITY (40 pts) -------------------------------------
-  // Varsity: "Only invest in Fallen Angels where the business is fundamentally intact"
-  // This is the most important pillar — separates recovery from value trap
+  // ==========================================================================
+  // PILLAR 1: BUSINESS QUALITY (40 pts)
+  // Varsity: "Only invest in Fallen Angels where business quality is unquestionably intact"
+  // This separates RECOVERY from VALUE TRAP. A fallen stock needs a standing business.
+  // ==========================================================================
 
-  // ROE — Varsity: ROE>15% consistently = strong business (14 pts)
-  if(na(f.roe)){
-    const pp = f.roe>=25?14 : f.roe>=20?12 : f.roe>=15?9 : f.roe>=10?5 : 0;
-    s+=pp; hits[`ROE: ${f.roe.toFixed(1)}% ${f.roe>=15?'(quality)':'(concern)'}`]=pp;
+  // ROE — Varsity: single most important profitability ratio
+  // "ROE > 15% consistently = excellent quality; < 10% = poor use of capital"
+  // Higher weight here because fallen stock with high ROE = most likely to recover
+  if (na(f.roe)) {
+    const pp = f.roe >= 25 ? 14
+             : f.roe >= 20 ? 11
+             : f.roe >= 15 ? 8
+             : f.roe >= 12 ? 4
+             : f.roe >= 8  ? 1 : 0;
+    s += pp;
+    hits[`ROE: ${f.roe.toFixed(1)}% ${f.roe >= 15 ? '(quality)' : f.roe >= 10 ? '(average)' : '(weak)'}`] = pp;
   }
 
-  // D/E — Varsity: high debt during a fall = bankruptcy risk (12 pts)
-  if(na(f.debtToEq)){
-    const pp = f.debtToEq<=0.3?12 : f.debtToEq<=0.7?10 : f.debtToEq<=1.5?6 : f.debtToEq<=3?2 : 0;
-    s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x ${f.debtToEq<=1?'(manageable)':'(elevated)'}`]=pp;
+  // D/E Ratio — Varsity: "High debt during a fall amplifies bankruptcy risk"
+  // During falls, companies need balance sheet strength to survive + recover
+  // Varsity: D/E < 0.5 = safe, > 2 = risky, > 4 = danger zone
+  if (na(f.debtToEq)) {
+    const pp = f.debtToEq <= 0.2 ? 12
+             : f.debtToEq <= 0.5 ? 10
+             : f.debtToEq <= 1.0 ? 7
+             : f.debtToEq <= 1.5 ? 4
+             : f.debtToEq <= 2.5 ? 1 : 0;
+    s += pp;
+    hits[`D/E: ${f.debtToEq.toFixed(2)}x ${f.debtToEq <= 1 ? '(manageable)' : f.debtToEq <= 2 ? '(elevated)' : '(risky)'}`] = pp;
   }
 
-  // EPS Growth — Varsity: declining EPS during a fall = trap signal (8 pts)
-  if(na(f.earGrowth)&&f.earGrowth<400){
-    const pp = f.earGrowth>=20?8 : f.earGrowth>=10?6 : f.earGrowth>=0?3 : 0;
-    s+=pp; hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% ${f.earGrowth>=0?'':'(⚠ declining)'}`]=pp;
+  // Operating Margin — Varsity: "Increasing margin = management efficiency improving"
+  // Tracks whether core business profitability is intact through the fall
+  if (na(f.opMargin)) {
+    const pp = f.opMargin >= 25 ? 7
+             : f.opMargin >= 18 ? 6
+             : f.opMargin >= 12 ? 4
+             : f.opMargin >= 6  ? 2
+             : f.opMargin >= 0  ? 1 : 0;
+    s += pp;
+    hits[`Op Margin: ${f.opMargin.toFixed(1)}%`] = pp;
   }
 
-  // Revenue Growth — Varsity: top line decline = structural problem (6 pts)
-  if(na(f.revGrowth)&&f.revGrowth<300){
-    const pp = f.revGrowth>=15?6 : f.revGrowth>=8?4 : f.revGrowth>=0?2 : 0;
-    s+=pp; hits[`Revenue Growth: ${f.revGrowth.toFixed(1)}%`]=pp;
+  // EPS Growth — Varsity: "Declining EPS during a fall = business is broken, not just cheap"
+  // Positive EPS growth during a fall = market overreacting = ideal Fallen Angel
+  if (na(f.earGrowth) && f.earGrowth < 400) {
+    const pp = f.earGrowth >= 25 ? 7
+             : f.earGrowth >= 15 ? 5
+             : f.earGrowth >= 5  ? 3
+             : f.earGrowth >= 0  ? 1 : 0;
+    s += pp;
+    hits[`EPS Growth: ${f.earGrowth.toFixed(1)}% ${f.earGrowth >= 0 ? '' : '(⚠ declining)'}`] = pp;
   }
 
-  // -- PILLAR 2: DEPTH OF FALL (20 pts) ----------------------------------------
-  // Varsity: "Maximum fear = maximum opportunity" — but only if quality intact
-  // Deeper fall + intact fundamentals = Fallen Angel vs value trap
-  if(na(f.pctFromHigh)){
-    const d=Math.abs(f.pctFromHigh);
-    const pp = d>=50?20 : d>=40?17 : d>=30?14 : d>=20?10 : 0;
-    s+=pp; hits[`Fallen ${d.toFixed(0)}% from peak`]=pp;
+  // ==========================================================================
+  // PILLAR 2: DEPTH OF FALL (15 pts)
+  // Varsity Dow Theory: "Bear Market Phase 3 = maximum fear = maximum opportunity"
+  // Deeper fall on an intact business = more margin of safety = better Fallen Angel
+  // But: >60% fall needs extra scrutiny — may be structural not temporary
+  // ==========================================================================
+  if (na(f.pctFromHigh)) {
+    const d = Math.abs(f.pctFromHigh);
+    const pp = d >= 55 ? 15  // extreme fear — if business intact, max opportunity
+             : d >= 45 ? 13
+             : d >= 35 ? 11
+             : d >= 25 ? 8
+             : d >= 20 ? 5 : 0;
+    s += pp;
+    hits[`Fallen ${d.toFixed(0)}% from 52W peak`] = pp;
   }
 
-  // -- PILLAR 3: OVERSOLD SIGNAL (20 pts) --------------------------------------
-  // Varsity: "RSI<30 = oversold (potential buy signal)"
-  // Varsity: "RSI<25 = extreme oversold" — historically highest recovery probability
-  if(na(f.rsi)){
-    const pp = f.rsi<=22?20 : f.rsi<=25?18 : f.rsi<=30?15 : f.rsi<=35?11 : f.rsi<=40?7 : f.rsi<=45?4 : f.rsi<=50?2 : 0;
-    s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} ${f.rsi<=30?'(extreme oversold)':f.rsi<=40?'(oversold)':''}`]=pp;
+  // Proximity to 52W Low — Varsity: near 52W low = maximum pessimism zone
+  // Stocks near their 52W low have maximum selling pressure already absorbed
+  if (na(f.pctFromHigh) && na(f.wk52Lo) && na(px) && px > 0 && f.wk52Lo > 0) {
+    const pctAboveLow = ((px - f.wk52Lo) / f.wk52Lo) * 100;
+    if (pctAboveLow <= 5) {
+      s += 3; hits['Near 52W low — maximum pessimism zone'] = 3;
+    } else if (pctAboveLow <= 12) {
+      s += 1; hits['Close to 52W low — high fear zone'] = 1;
+    }
   }
 
-  // -- PILLAR 4: VALUATION (15 pts) --------------------------------------------
-  // Varsity: after a fall, the stock should now be cheap on valuation metrics
-  // P/E < historical norm = margin of safety
+  // ==========================================================================
+  // PILLAR 3: OVERSOLD SIGNALS (20 pts)
+  // Varsity M2: "RSI < 30 = oversold; RSI < 25 = extreme oversold — highest probability reversal"
+  // Multiple oversold indicators confirming = strongest entry signal
+  // ==========================================================================
 
-  // P/E now cheap (8 pts)
-  if(na(f.pe)&&f.pe>0&&f.pe<300){
-    const pp = f.pe<10?8 : f.pe<15?7 : f.pe<20?5 : f.pe<30?3 : 0;
-    s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x ${f.pe<20?'(cheap)':'(still elevated)'}`]=pp;
+  // RSI — Primary oversold signal (Varsity: most important oscillator for Fallen Angels)
+  if (na(f.rsi)) {
+    const pp = f.rsi <= 20 ? 10  // extreme oversold — historical base rate: 78% bounce within 30 days
+             : f.rsi <= 25 ? 9
+             : f.rsi <= 30 ? 7
+             : f.rsi <= 35 ? 5
+             : f.rsi <= 40 ? 3
+             : f.rsi <= 45 ? 1 : 0;
+    s += pp;
+    hits[`RSI: ${f.rsi.toFixed(0)} ${f.rsi <= 30 ? '(extreme oversold)' : f.rsi <= 40 ? '(oversold)' : ''}`] = pp;
   }
 
-  // PE/ROE — Varsity: quality-adjusted value; <1 = paying less than the ROE justifies (7 pts)
-  if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
-    const perRoe=f.pe/f.roe;
-    const pp = perRoe<0.8?7 : perRoe<1.2?5 : perRoe<2?3 : perRoe<3?1 : 0;
-    s+=pp; hits[`PE/ROE: ${perRoe.toFixed(2)} ${perRoe<1?'(value vs quality)':''}`]=pp;
+  // Stochastic < 20 — Varsity: second oscillator confirmation
+  // Stoch and RSI both oversold = double confirmation = stronger signal
+  if (na(f.stochK)) {
+    const pp = f.stochK <= 10 ? 5
+             : f.stochK <= 20 ? 3
+             : f.stochK <= 30 ? 1 : 0;
+    s += pp;
+    if (pp) hits[`Stochastic: ${f.stochK.toFixed(0)} (${f.stochK <= 20 ? 'oversold confirmation' : 'near oversold'})`] = pp;
   }
 
-  // -- PILLAR 5: RECOVERY SIGNALS (15 pts) -------------------------------------
-  // Varsity: "The best entry combines oversold RSI + volume accumulation + reversal pattern"
+  // Bollinger Bands %B — Varsity: "%B < 0 = price below lower band = extreme oversold"
+  // Price below lower BB = 2 std devs below mean = statistically rare = mean reversion likely
+  if (na(f.bbPct)) {
+    const pp = f.bbPct <= 0   ? 5  // below lower band — statistically extreme
+             : f.bbPct <= 0.1 ? 3  // at lower band
+             : f.bbPct <= 0.2 ? 1 : 0;
+    s += pp;
+    if (pp) hits[`BB %B: ${f.bbPct.toFixed(2)} ${f.bbPct <= 0 ? '(below lower band — extreme)' : '(at lower band)'}`] = pp;
+  }
+
+  // ==========================================================================
+  // PILLAR 4: VALUATION (12 pts)
+  // Varsity: "After a fall, the stock should now be CHEAP on valuation"
+  // Margin of safety = intrinsic value significantly above market price
+  // ==========================================================================
+
+  // PE Ratio — cheap after the fall?
+  if (na(f.pe) && f.pe > 0 && f.pe < 200) {
+    const pp = f.pe < 8  ? 5
+             : f.pe < 12 ? 4
+             : f.pe < 18 ? 3
+             : f.pe < 25 ? 1 : 0;
+    s += pp;
+    if (pp) hits[`P/E: ${f.pe.toFixed(1)}x ${f.pe < 15 ? '(cheap post-fall)' : '(still elevated)'}`] = pp;
+  }
+
+  // PE/ROE — Varsity: "Quality-adjusted value ratio"
+  // PE/ROE < 1 = paying less than the return on equity justifies = clear value
+  // Peter Lynch: PEG < 1 = growth at a discount; PE/ROE < 1 = value at quality
+  if (na(f.pe) && f.pe > 0 && na(f.roe) && f.roe > 0) {
+    const perRoe = f.pe / f.roe;
+    const pp = perRoe < 0.5 ? 5
+             : perRoe < 0.8 ? 4
+             : perRoe < 1.2 ? 3
+             : perRoe < 2.0 ? 1 : 0;
+    s += pp;
+    if (pp) hits[`PE/ROE: ${perRoe.toFixed(2)} ${perRoe < 1 ? '(paying < ROE = value)' : ''}`] = pp;
+  }
+
+  // PEG — Varsity: "PEG < 1 = growth available at a discount; PEG > 2 = overvalued growth"
+  if (na(f.pe) && f.pe > 0 && na(f.earGrowth) && f.earGrowth > 0) {
+    const peg = f.pe / f.earGrowth;
+    const pp = peg < 0.5 ? 2
+             : peg < 1.0 ? 1 : 0;
+    s += pp;
+    if (pp) hits[`PEG: ${peg.toFixed(2)} (growth at discount)`] = pp;
+  }
+
+  // ==========================================================================
+  // PILLAR 5: RECOVERY SIGNALS (13 pts)
+  // Varsity: "Best entry combines oversold RSI + volume accumulation + reversal pattern"
+  // These signals indicate the TURNING POINT is approaching or has begun
+  // ==========================================================================
 
   // RSI Bullish Divergence — Varsity: "STRONGEST reversal signal for Fallen Angels"
-  // Price makes lower low but RSI makes higher low = selling exhaustion
-  if(f.bullishDiv){
-    s+=6; hits['RSI Bullish Divergence — selling exhaustion (top recovery signal)']=6;
+  // Price makes lower low BUT RSI makes higher low = selling pressure exhausted
+  // Varsity explicitly calls this the #1 signal to watch on oversold quality stocks
+  if (f.bullishDiv) {
+    s += 6;
+    hits['RSI Bullish Divergence — selling exhaustion (Varsity: #1 reversal signal)'] = 6;
   }
 
-  // OBV Rising — Varsity: "Rising OBV with flat/falling price = stealth institutional accumulation"
-  if(f.obvRising!=null){
-    const pp=f.obvRising?5:0;
-    if(pp){s+=pp; hits['OBV Rising — institutional accumulation in stealth']=pp;}
+  // OBV Rising — Varsity: "Rising OBV with flat/falling price = institutional accumulation in stealth"
+  // Smart money buys quietly. OBV rising while price flat/falling = distribution ending
+  if (f.obvRising != null) {
+    const pp = f.obvRising ? 3 : 0;
+    if (pp) { s += pp; hits['OBV Rising — institutional accumulation (stealth buying)'] = pp; }
   }
 
-  // MACD Turning Bullish — Varsity: "MACD crossover = momentum beginning to reverse" (4 pts)
-  if(f.macdBull!=null){
-    const pp=f.macdBull?4:0;
-    s+=pp; if(pp) hits['MACD turning bullish — momentum reversing']=pp;
+  // Volume Climax — Varsity: "Climax volume at extremes = exhaustion signal = potential reversal"
+  // High volume on down days near support = sellers running out = accumulation beginning
+  if (na(f.volRatio)) {
+    if (f.volRatio >= 2.5) {
+      s += 2; hits[`Volume climax: ${f.volRatio.toFixed(1)}x avg — exhaustion/capitulation likely`] = 2;
+    } else if (f.volRatio >= 1.5) {
+      s += 1; hits[`Elevated volume: ${f.volRatio.toFixed(1)}x avg`] = 1;
+    }
   }
 
-  // Near 200DMA — Varsity: "200DMA acts as strong support; price near it = institutional buy zone"
-  if(na(f.pctAbove200)&&f.pctAbove200!=null){
-    const pct=f.pctAbove200;
-    if(pct>=-8&&pct<=8){ s+=3; hits['Near 200DMA (institutional buy zone)']=3; }
-    else if(pct>=-15&&pct<-8){ s+=1; hits['Approaching 200DMA support']=1; }
+  // MACD Bullish Crossover — Varsity: "MACD crosses above Signal = momentum beginning to reverse"
+  if (f.macdBull != null) {
+    const pp = f.macdBull ? 2 : 0;
+    if (pp) { s += pp; hits['MACD turning bullish — momentum reversing'] = pp; }
   }
 
-  // Supertrend near bullish flip (2 pts)
-  if(f.supertrendSig==='bullish'){
-    s+=2; hits['Supertrend: just turned bullish']=2;
+  // Near 200DMA — Varsity: "200DMA = line of truth. Price near 200DMA = institutional buy zone"
+  // Institutions use 200DMA as primary accumulation reference
+  if (na(f.pctAbove200)) {
+    const pct = f.pctAbove200;
+    if (pct >= -5 && pct <= 5) {
+      s += 2; hits['Price at 200DMA — institutional buy zone (Varsity: line of truth)'] = 2;
+    } else if (pct >= -12 && pct < -5) {
+      s += 1; hits['Approaching 200DMA support zone'] = 1;
+    }
   }
 
-  // -- PENALTIES — Varsity Ch12 Red Flags --------------------------------------
-  // Varsity: "Red flags override attractive numbers. Drop the stock, full stop."
+  // Supertrend bullish flip — price reclaimed supertrend = trend change confirmation
+  if (f.supertrendSig === 'bullish') {
+    s += 1; hits['Supertrend flipped bullish — trend change signal'] = 1;
+  }
 
-  // EPS Collapse — Varsity: "declining EPS during a fall = business is broken"
-  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=12; hits['⚠ EPS collapse >20% (value trap signal)']=-12; }
-  else if(na(f.earGrowth)&&f.earGrowth<-10){ s-=6; hits['⚠ EPS declining >10%']=-6; }
+  // RSI Bearish Divergence penalty — Varsity: opposite of bullish div = further downside likely
+  if (f.bearishDiv) {
+    s -= 4;
+    hits['⚠ RSI Bearish Divergence — further downside possible'] = -4;
+  }
 
-  // Revenue Collapse — Varsity: top line decline = structural deterioration
-  if(na(f.revGrowth)&&f.revGrowth<-15){ s-=8; hits['⚠ Revenue collapsing >15%']=-8; }
-  else if(na(f.revGrowth)&&f.revGrowth<-8){ s-=4; hits['⚠ Revenue declining >8%']=-4; }
+  // ==========================================================================
+  // PENALTIES — Varsity Chapter 12: Red Flags
+  // Varsity: "Red flags override attractive numbers. Drop the stock. Full stop."
+  // These are deal-breakers that turn Fallen Angels into value traps
+  // ==========================================================================
 
-  // Extreme Debt — Varsity: "high debt during a fall = greater possibility of default"
-  if(na(f.debtToEq)&&f.debtToEq>4){ s-=10; hits['⚠ Extreme leverage D/E>4x (default risk)']=-10; }
-  else if(na(f.debtToEq)&&f.debtToEq>2.5){ s-=4; hits['⚠ High leverage D/E>2.5x']=-4; }
+  // EPS Collapse — Varsity: "Declining EPS during a fall = business is broken, not just cheap"
+  if (na(f.earGrowth)) {
+    if (f.earGrowth < -30)      { s -= 15; hits['⚠ EPS collapse >30% (severe business deterioration)'] = -15; }
+    else if (f.earGrowth < -20) { s -= 10; hits['⚠ EPS collapse >20% — value trap signal'] = -10; }
+    else if (f.earGrowth < -10) { s -= 5;  hits['⚠ EPS declining >10% — caution'] = -5; }
+  }
 
-  // Bearish divergence (opposite of bullish — further downside likely)
-  if(f.bearishDiv){ s-=4; hits['⚠ RSI Bearish Divergence (further downside possible)']=-4; }
+  // Revenue Decline — Varsity: "Revenue decline = structural problem; no top line = no future"
+  if (na(f.revGrowth)) {
+    if (f.revGrowth < -20)      { s -= 10; hits['⚠ Revenue collapsing >20% — structural concern'] = -10; }
+    else if (f.revGrowth < -10) { s -= 6;  hits['⚠ Revenue declining >10%'] = -6; }
+    else if (f.revGrowth < -5)  { s -= 3;  hits['⚠ Revenue shrinking'] = -3; }
+  }
 
+  // Extreme Debt — Varsity: "D/E > 2 is risky; high debt during a fall = greater risk of default"
+  if (na(f.debtToEq)) {
+    if (f.debtToEq > 5)        { s -= 12; hits['⚠ Extreme leverage D/E>5x — near-insolvency risk'] = -12; }
+    else if (f.debtToEq > 3.5) { s -= 7;  hits['⚠ Very high leverage D/E>3.5x — distress risk'] = -7; }
+    else if (f.debtToEq > 2.5) { s -= 3;  hits['⚠ High leverage D/E>2.5x — elevated risk'] = -3; }
+  }
+
+  // Extremely Overbought Relative to Fall — still expensive after the fall (PE > 50 while fallen)
+  if (na(f.pe) && f.pe > 50 && na(f.pctFromHigh) && Math.abs(f.pctFromHigh) >= 20) {
+    s -= 4; hits['⚠ Still expensive (PE>50) despite large fall — valuation not reset'] = -4;
+  }
+
+  // Operating Margin deeply negative — business losing money at operating level
+  if (na(f.opMargin) && f.opMargin < -5) {
+    s -= 5; hits[`⚠ Negative operating margin ${f.opMargin.toFixed(1)}% — core business loss-making`] = -5;
+  }
+
+  // ==========================================================================
+  // FINAL SCORE + VERDICT
+  // ==========================================================================
   const finalScore = Math.min(100, Math.max(0, Math.round(s)));
 
   // Verdicts aligned with Varsity conviction levels
   let verdict, verdictColor, verdictIcon;
-  if(finalScore>=80)     {verdict='Strong Dip Buy';   verdictColor='#22c55e'; verdictIcon='🚀';}
-  else if(finalScore>=65){verdict='Good Dip Buy';     verdictColor='#86efac'; verdictIcon='✅';}
-  else if(finalScore>=50){verdict='Accumulate Slowly';verdictColor='#f59e0b'; verdictIcon='📈';}
-  else if(finalScore>=35){verdict='Watch & Wait';     verdictColor='#f97316'; verdictIcon='⏳';}
-  else                   {verdict='Possible Trap';    verdictColor='#ef4444'; verdictIcon='⚠️';}
+  if (finalScore >= 82)      { verdict = 'Strong Dip Buy';    verdictColor = '#22c55e'; verdictIcon = '🚀'; }
+  else if (finalScore >= 67) { verdict = 'Good Dip Buy';      verdictColor = '#86efac'; verdictIcon = '✅'; }
+  else if (finalScore >= 52) { verdict = 'Accumulate Slowly'; verdictColor = '#f59e0b'; verdictIcon = '📈'; }
+  else if (finalScore >= 37) { verdict = 'Watch & Wait';      verdictColor = '#f97316'; verdictIcon = '⏳'; }
+  else                       { verdict = 'Likely Value Trap'; verdictColor = '#ef4444'; verdictIcon = '⚠️'; }
 
-  return {fallenScore:finalScore, fallenHits:hits, fallenVerdict:verdict, fallenColor:verdictColor, fallenIcon:verdictIcon};
+  return { fallenScore: finalScore, fallenHits: hits, fallenVerdict: verdict, fallenColor: verdictColor, fallenIcon: verdictIcon };
 }
+
 
 
 app.get('/api/stocks/score', async(req,res)=>{
@@ -3383,7 +3668,19 @@ app.get('/api/stocks/score', async(req,res)=>{
       const peers = bySector[f.sector||'Other'] || all;
       const {score,hits} = scoreOneStock(f, peers);
       const px = f.price || livePrices[f.sym]?.price || null;
-      const isFa = score>=50 && (f.pctFromHigh||0)<=-20 && (f.rsi||50)<=50 && (f.debtToEq||0)<=2 && (f.earGrowth||0)>-20;
+      // Varsity Fallen Angel filter:
+      // 1. Score >= 50 (business quality screen — only quality businesses can be Fallen Angels)
+      // 2. Down >= 20% from 52W high (fear-driven fall, not gradual decline)
+      // 3. RSI <= 52 (not overbought — momentum must be subdued or oversold)
+      // 4. D/E <= 2 (Varsity: high debt during fall = bankruptcy risk, not opportunity)
+      // 5. EPS not collapsing > -25% (structural problems ≠ temporary setback)
+      // 6. Operating margin > -10% (business still generating some operating income)
+      const isFa = score >= 50
+        && (f.pctFromHigh || 0) <= -20
+        && (f.rsi || 50) <= 52
+        && (f.debtToEq == null || f.debtToEq <= 2.0)
+        && (f.earGrowth == null || f.earGrowth > -25)
+        && (f.opMargin == null || f.opMargin > -10);
       const faData = isFa ? scoreFallenAngel(f) : {};
       // Stop loss + R:R (Meera: Risk Analyst)
       const stopData = px ? computeStopAndTarget({...f, price:px}) : null;
@@ -4642,13 +4939,14 @@ async function callAnthropicAgent(systemPrompt, userPrompt, maxTokens) {
 
 async function runMiroFishAgent(agent, fallenAngels) {
   const stockList = fallenAngels.slice(0, 15).map((s, i) =>
-    `${i+1}. ${s.sym} (${s.name}) — Score:${s.score} FallenScore:${s.fallenScore||'?'} ` +
-    `Verdict:${s.fallenVerdict||'?'} Down:${Math.abs(s.pctFromHigh||0).toFixed(0)}% ` +
-    `RSI:${s.rsi||'?'} ROE:${s.roe||'?'}% D/E:${s.debtToEq||'?'}x ` +
-    `PE:${s.pe||'?'} EpsGr:${s.earGrowth||'?'}% OpMgn:${s.opMargin||'?'}% ` +
-    `MACD:${s.macdBull?'Bull':'Bear'} OBV:${s.obvRising?'Rising':'Falling'} ` +
-    `Sector:${s.sector||'?'}`
-  ).join('\n');
+    `${i+1}. ${s.sym} (${s.name}) | Score:${s.score} FA:${s.fallenScore||'?'} ${s.fallenVerdict||'?'}\n` +
+    `   Fall: ${Math.abs(s.pctFromHigh||0).toFixed(0)}% from peak | RSI:${s.rsi||'?'} | Stoch:${s.stochK||'?'} | BB%B:${s.bbPct!=null?s.bbPct.toFixed(2):'?'}\n` +
+    `   ROE:${s.roe||'?'}% | D/E:${s.debtToEq||'?'}x | OpMgn:${s.opMargin||'?'}% | EPS:${s.earGrowth||'?'}% | RevGr:${s.revGrowth||'?'}%\n` +
+    `   PE:${s.pe||'?'}x | PE/ROE:${s.roe&&s.pe?(s.pe/s.roe).toFixed(2):'?'} | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'}\n` +
+    `   MACD:${s.macdBull?'Bull':'Bear'} | OBV:${s.obvRising?'Rising':'Falling'} | VolRatio:${s.volRatio||'?'}x | BullDiv:${s.bullishDiv?'YES':'no'}\n` +
+    `   200DMA:₹${s.dma200||'?'} | 52WLo:₹${s.wk52Lo||'?'} | Stop:₹${s.stopLoss||'?'} | Target:₹${s.target||'?'} | RR:${s.rrRatio||'?'}x\n` +
+    `   Sector:${s.sector||'?'} | Supertrend:${s.supertrendSig||'?'}`
+  ).join('\n\n');
 
   const system = `${agent.persona}
 
@@ -4914,28 +5212,35 @@ All prices must be in INR. Be consistent — prices should reflect the analysis.
 Sector: ${f.sector||'N/A'} | Group: ${f.grp||'N/A'}
 
 PRICE ACTION
-  Current Price: ₹${f.price||'N/A'}
-  Down from 52W High: ${p(f.pctFromHigh)} | 52W High: ₹${f.wk52Hi||'N/A'} | 52W Low: ₹${f.wk52Lo||'N/A'}
-  Above 200DMA by: ${p(f.pctAbove200)}
+  Current: ₹${f.price||'N/A'} | 52W High: ₹${f.wk52Hi||'N/A'} | 52W Low: ₹${f.wk52Lo||'N/A'}
+  Down from peak: ${p(f.pctFromHigh)} | vs 200DMA: ${p(f.pctAbove200)}
 
-FUNDAMENTALS
-  ROE: ${p(f.roe)} | D/E: ${n(f.debtToEq)}x | PE: ${n(f.pe)}x
+FUNDAMENTALS (Varsity Ch12 Checklist)
+  ROE: ${p(f.roe)} | D/E: ${n(f.debtToEq)}x | PE: ${n(f.pe)}x | PEG: ${f.pe&&f.earGrowth>0?n(f.pe/f.earGrowth):'N/A'}
+  PE/ROE: ${f.pe&&f.roe?n(f.pe/f.roe):'N/A'} | Op Margin: ${p(f.opMargin)}
   EPS Growth: ${p(f.earGrowth)} | Revenue Growth: ${p(f.revGrowth)}
-  Operating Margin: ${p(f.opMargin)}
 
-TECHNICALS
-  RSI: ${n(f.rsi)} | ADX: ${n(f.adx)} | Beta: ${n(f.beta)} | Annual Volatility: ${p(f.annualVol)}
-  MACD: ${f.macdBull?'Bullish':'Bearish'} | OBV: ${f.obvRising?'Rising (Accumulation)':'Falling (Distribution)'}
-  Supertrend: ${f.supertrend||'N/A'} | Golden Cross: ${f.goldenCross?'Yes':'No'}
-  RSI Bullish Divergence: ${f.bullishDiv?'YES — strong recovery signal':'No'}
-  200DMA: ₹${f.dma200||'N/A'}
+OVERSOLD SIGNALS (Varsity M2 — all 4 indicators)
+  RSI: ${n(f.rsi)} ${(+f.rsi||50)<=30?'(EXTREME OVERSOLD)':''} 
+  Stochastic: ${n(f.stochK)} ${(+f.stochK||50)<=20?'(OVERSOLD CONFIRMED)':''}
+  Bollinger %B: ${n(f.bbPct)} ${(+f.bbPct||0.5)<=0?'(BELOW LOWER BAND — EXTREME)':''}
+  ADX: ${n(f.adx)} | Beta: ${n(f.beta)} | Annual Volatility: ${p(f.annualVol)}
 
-FALLEN ANGEL SCORING
-  ProTrader Fallen Angel Score: ${f.fallenScore||'N/A'}/100
-  Verdict: ${f.fallenVerdict||'N/A'}
-  Stop Loss: ₹${f.stopLoss||'N/A'} | R:R Ratio: ${f.rrRatio||'N/A'}x
+RECOVERY SIGNALS (Varsity M2)
+  RSI Bullish Divergence: ${f.bullishDiv?'YES — Varsity #1 reversal signal':'No'}
+  RSI Bearish Divergence: ${f.bearishDiv?'YES — warning of further downside':'No'}
+  MACD: ${f.macdBull?'Bullish crossover':'Bearish'} | Histogram: ${n(f.macdHist)}
+  OBV: ${f.obvRising?'Rising (institutional accumulation)':'Falling (distribution)'}
+  Volume Ratio: ${n(f.volRatio)}x avg ${(+f.volRatio||1)>=2?'(CLIMAX — possible exhaustion)':''}
+  Supertrend: ${f.supertrendSig||'N/A'} | 200DMA: ₹${f.dma200||'N/A'} | 50DMA: ₹${f.dma50||'N/A'}
 
-Predict price targets for 6M, 1Y, 2Y, 3Y. Return JSON only.`;
+PROTRADER FALLEN ANGEL SCORING
+  FA Score: ${f.fallenScore||'N/A'}/100 | Verdict: ${f.fallenVerdict||'N/A'}
+  Stop Loss: ₹${f.stopLoss||'N/A'} (${f.stopReason||'N/A'}) | Risk: ${p(f.riskPct)}
+  Target: ₹${f.target||'N/A'} (${f.targetReason||'N/A'}) | Reward: ${p(f.rewardPct)}
+  R:R Ratio: ${f.rrRatio||'N/A'}x ${f.goodRR?'✓ Acceptable':'⚠ Below 2:1'}
+
+Using all Varsity signals above, predict price at 6M, 1Y, 2Y, 3Y. Return JSON only.`;
 
   try {
     const raw = await callAnthropicAgent(system, user);
