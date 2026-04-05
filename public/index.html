@@ -2078,12 +2078,227 @@ async function pollStockRec(){
   }
 }
 
+// ── Deep Stock Analyzer ───────────────────────────────────────────────────────
+var analyzerChart = null;
+
+async function analyzeStock(){
+  var input = document.getElementById('stock-analyzer-input');
+  var result = document.getElementById('stock-analyzer-result');
+  if(!input||!result) return;
+  var sym = input.value.trim().toUpperCase();
+  if(!sym){ input.focus(); return; }
+
+  result.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">'
+    +'<div style="font-size:24px;margin-bottom:8px">⏳</div>Fetching data for '+sym+'...</div>';
+  result.style.marginTop='16px';
+
+  try {
+    var r = await fetch('/api/stocks/analyze/'+sym);
+    var d = await r.json();
+    if(d.error){ result.innerHTML='<div style="padding:16px;color:var(--red);font-size:12px">❌ '+d.error+'</div>'; return; }
+    result.innerHTML = buildAnalyzerUI(d);
+    // Draw chart after DOM is ready
+    setTimeout(function(){ drawAnalyzerChart(d); }, 100);
+  } catch(e){
+    result.innerHTML='<div style="padding:16px;color:var(--red);font-size:12px">❌ Error: '+e.message+'</div>';
+  }
+}
+
+function buildAnalyzerUI(d){
+  var vc = d.verdictColor || '#f59e0b';
+  var html = '<div style="margin-top:16px">';
+
+  // ── HEADER: verdict + key numbers ────────────────────────────────────────
+  html += '<div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;margin-bottom:16px">';
+
+  // Left: name + verdict
+  html += '<div>';
+  html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">';
+  html += '<span style="font-weight:800;font-size:18px">'+d.sym+'</span>';
+  html += '<span style="font-size:12px;color:var(--text3)">'+d.name+'</span>';
+  html += '<span style="background:rgba(100,116,139,0.2);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:10px">'+d.sector+'</span>';
+  html += '<span style="background:rgba(100,116,139,0.2);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:10px">'+d.grp+'</span>';
+  html += '</div>';
+  if(d.price) html += '<div style="font-size:22px;font-weight:700;margin-bottom:4px">₹'+d.price.toFixed(2)+'</div>';
+  html += '</div>';
+
+  // Right: Verdict box
+  html += '<div style="background:'+vc+'18;border:2px solid '+vc+';border-radius:12px;padding:14px 20px;text-align:center;min-width:150px">';
+  html += '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;letter-spacing:.5px">LONG-TERM VERDICT</div>';
+  html += '<div style="font-size:18px;font-weight:800;color:'+vc+'">'+d.verdict+'</div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:4px">'+d.confidence+' confidence</div>';
+  // Bull/bear meter
+  html += '<div style="margin-top:8px;background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">';
+  html += '<div style="height:100%;border-radius:4px;background:'+vc+';width:'+d.bullPct+'%"></div></div>';
+  html += '<div style="font-size:9px;color:var(--text4);margin-top:3px">'+d.bullPct+'% bullish signals</div>';
+  html += '</div></div>';
+
+  // ── CHART ─────────────────────────────────────────────────────────────────
+  if(d.chartData && d.chartData.length>0){
+    html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
+    html += '<div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--text2)">Price Chart — 60 Day</div>';
+    html += '<canvas id="analyzer-chart" height="120"></canvas>';
+    html += '</div>';
+  }
+
+  // ── SIGNALS GRID ──────────────────────────────────────────────────────────
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">';
+
+  // Technical signals
+  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px">';
+  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:var(--blue)">📈 Technical Signals</div>';
+  d.techSignals.forEach(function(s){
+    var sc = s.signal==='bullish'?'var(--green)':s.signal==='bearish'?'var(--red)':'#f59e0b';
+    var icon = s.signal==='bullish'?'▲':s.signal==='bearish'?'▼':'●';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border2)">';
+    html += '<div><div style="font-size:11px;font-weight:600">'+s.name+'</div>'
+      +'<div style="font-size:9px;color:var(--text3)">'+s.detail+'</div></div>';
+    html += '<div style="text-align:right"><div style="font-size:11px;color:'+sc+';font-weight:700">'+icon+' '+s.value+'</div></div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Fundamental signals
+  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px">';
+  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:#f59e0b">🏦 Fundamental Signals</div>';
+  if(d.fundSignals.length===0){
+    html += '<div style="font-size:11px;color:var(--text3);padding:20px 0;text-align:center">No fundamental data available for '+d.sym+'</div>';
+  } else {
+    d.fundSignals.forEach(function(s){
+      var sc = s.signal==='bullish'?'var(--green)':s.signal==='bearish'?'var(--red)':'#f59e0b';
+      var icon = s.signal==='bullish'?'▲':s.signal==='bearish'?'▼':'●';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border2)">';
+      html += '<div><div style="font-size:11px;font-weight:600">'+s.name+'</div>'
+        +'<div style="font-size:9px;color:var(--text3)">'+s.detail+'</div></div>';
+      html += '<div style="text-align:right"><div style="font-size:11px;color:'+sc+';font-weight:700">'+icon+' '+s.value+'</div></div>';
+      html += '</div>';
+    });
+  }
+  html += '</div></div>';
+
+  // ── SENTIMENT ─────────────────────────────────────────────────────────────
+  var sent = d.sentiment;
+  var sentTotal = Math.max(sent.bull+sent.bear+sent.neutral, 1);
+  html += '<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:16px">';
+  html += '<div style="font-weight:700;font-size:11px;margin-bottom:10px;color:#8b5cf6">📰 News Sentiment</div>';
+  html += '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">';
+  html += '<span style="color:var(--green);font-weight:700;font-size:13px">▲ '+sent.bull+' Bullish</span>';
+  html += '<span style="color:var(--red);font-weight:700;font-size:13px">▼ '+sent.bear+' Bearish</span>';
+  html += '<span style="color:var(--text3);font-size:13px">● '+sent.neutral+' Neutral</span>';
+  html += '</div>';
+  // Sentiment bar
+  var bullW = Math.round(sent.bull/sentTotal*100);
+  var bearW = Math.round(sent.bear/sentTotal*100);
+  var neutW = 100-bullW-bearW;
+  html += '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:10px">';
+  if(bullW>0) html += '<div style="flex:'+bullW+';background:var(--green)"></div>';
+  if(neutW>0) html += '<div style="flex:'+neutW+';background:var(--text4)"></div>';
+  if(bearW>0) html += '<div style="flex:'+bearW+';background:var(--red)"></div>';
+  html += '</div>';
+
+  // News items
+  if(d.news.length===0){
+    html += '<div style="font-size:11px;color:var(--text3);padding:8px 0">No recent news found for '+d.sym+'</div>';
+  } else {
+    d.news.slice(0,6).forEach(function(n){
+      var nc = n.sentiment==='bullish'?'var(--green)':n.sentiment==='bearish'?'var(--red)':'var(--text3)';
+      var ni = n.sentiment==='bullish'?'▲':n.sentiment==='bearish'?'▼':'●';
+      html += '<div style="padding:7px 0;border-bottom:1px solid var(--border2)">';
+      html += '<div style="display:flex;gap:6px;align-items:flex-start">';
+      html += '<span style="color:'+nc+';font-size:11px;margin-top:1px;flex-shrink:0">'+ni+'</span>';
+      html += '<div>';
+      if(n.link) html += '<a href="'+n.link+'" target="_blank" style="font-size:11px;color:var(--text);font-weight:500;text-decoration:none;line-height:1.4">'+n.title+'</a>';
+      else html += '<div style="font-size:11px;color:var(--text);font-weight:500;line-height:1.4">'+n.title+'</div>';
+      html += '<div style="font-size:9px;color:var(--text3);margin-top:2px">'+n.source+' · '+n.timeAgo+'</div>';
+      if(n.desc) html += '<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.4">'+n.desc.slice(0,150)+'...</div>';
+      html += '</div></div></div>';
+    });
+  }
+  html += '</div>';
+
+  // ── SUMMARY ───────────────────────────────────────────────────────────────
+  html += '<div style="background:'+vc+'12;border:1px solid '+vc+'40;border-radius:10px;padding:14px">';
+  html += '<div style="font-weight:700;font-size:12px;margin-bottom:8px;color:'+vc+'">💡 Long-Term Investment Summary</div>';
+  var summaryParts=[];
+  if(d.fund){
+    if(d.fund.roe>=20) summaryParts.push('Strong ROE of '+d.fund.roe+'% signals excellent capital efficiency.');
+    else if(d.fund.roe<10) summaryParts.push('Weak ROE of '+d.fund.roe+'% — management not generating strong returns.');
+    if(d.fund.de<=0.5) summaryParts.push('Very low debt (D/E '+d.fund.de+'x) means financial resilience.');
+    else if(d.fund.de>2) summaryParts.push('High debt (D/E '+d.fund.de+'x) adds risk — watch interest coverage.');
+    if(d.fund.epsGr>=20) summaryParts.push('EPS growing at '+d.fund.epsGr+'% — earnings momentum is strong.');
+    else if(d.fund.epsGr!=null&&d.fund.epsGr<0) summaryParts.push('Earnings declining ('+d.fund.epsGr+'%) — not ideal for long-term entry.');
+  }
+  if(d.tech.goldenCross) summaryParts.push('Golden cross active — long-term uptrend confirmed by moving averages.');
+  else if(d.tech.goldenCross===false) summaryParts.push('Death cross active — long-term trend is bearish.');
+  if(d.tech.rsi!=null&&d.tech.rsi<35) summaryParts.push('RSI at '+d.tech.rsi+' — oversold territory, potentially a good entry point.');
+  if(d.tech.change52w!=null&&d.tech.change52w>20) summaryParts.push('Up '+d.tech.change52w+'% in the past year — strong price momentum.');
+  if(sent.score>30) summaryParts.push('News sentiment is predominantly bullish ('+sent.bull+' positive vs '+sent.bear+' negative stories).');
+  else if(sent.score<-30) summaryParts.push('News sentiment is negative — '+sent.bear+' bearish stories recently.');
+  if(summaryParts.length===0) summaryParts.push('Insufficient data for a detailed fundamental analysis.');
+  summaryParts.forEach(function(p){
+    html += '<div style="font-size:11px;color:var(--text2);line-height:1.6;padding:2px 0">• '+p+'</div>';
+  });
+  html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid '+vc+'30">';
+  html += '<span style="font-size:12px;font-weight:800;color:'+vc+'">Verdict: '+d.verdict+'</span>';
+  html += '<span style="font-size:10px;color:var(--text3);margin-left:10px">Composite score: '+(d.composite*100).toFixed(0)+'% bullish · '+d.confidence+' confidence</span>';
+  html += '</div></div>';
+
+  html += '</div>'; // end analyzer result
+  return html;
+}
+
+function drawAnalyzerChart(d){
+  if(!d.chartData||!d.chartData.length) return;
+  var canvas=document.getElementById('analyzer-chart');
+  if(!canvas||typeof Chart==='undefined') return;
+  if(analyzerChart){analyzerChart.destroy();analyzerChart=null;}
+  var labels=d.chartData.map(function(p){ return new Date(p.t).toLocaleDateString('en-IN',{day:'2-digit',month:'short'}); });
+  var prices=d.chartData.map(function(p){ return p.c; });
+  var minP=Math.min.apply(null,prices), maxP=Math.max.apply(null,prices);
+  var color=prices[prices.length-1]>=prices[0]?'#22c55e':'#ef4444';
+  analyzerChart=new Chart(canvas,{
+    type:'line',
+    data:{
+      labels:labels,
+      datasets:[{data:prices,borderColor:color,borderWidth:1.5,pointRadius:0,fill:true,
+        backgroundColor:function(ctx){
+          var g=ctx.chart.ctx.createLinearGradient(0,0,0,120);
+          g.addColorStop(0,color+'40');g.addColorStop(1,color+'00');return g;
+        },tension:0.3}]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,
+        callbacks:{label:function(ctx){return '₹'+ctx.parsed.y.toFixed(2);}}}},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:8}},
+        y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},
+          callback:function(v){return '₹'+v.toFixed(0);}},min:minP*0.98,max:maxP*1.02}
+      }
+    }
+  });
+}
+
 function renderStockRecPage(){
   var cont = document.getElementById('main-content');
   if(!cont) return;
   var data = stockRecData;
   var allStocks = data.stocks || [];
   var marketOpen = data.market_open;
+
+  // ── STOCK ANALYZER SECTION ────────────────────────────────────────────────
+  var analyzerHtml = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:24px">';
+  analyzerHtml += '<div style="font-weight:700;font-size:14px;margin-bottom:4px">🔍 Deep Stock Analyzer</div>';
+  analyzerHtml += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Enter any NSE stock ticker — get full technical analysis, fundamentals, news sentiment &amp; a long-term buy/sell recommendation</div>';
+  analyzerHtml += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  analyzerHtml += '<input id="stock-analyzer-input" type="text" placeholder="e.g. RELIANCE, TCS, INFY, HDFC..." maxlength="20"'
+    +' style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:13px;width:260px;font-family:monospace;text-transform:uppercase"'
+    +' onkeydown="if(event.key===\'Enter\') analyzeStock()" oninput="this.value=this.value.toUpperCase()"/>';
+  analyzerHtml += '<button onclick="analyzeStock()" style="background:#f59e0b;color:#000;border:none;border-radius:8px;padding:9px 20px;font-weight:700;font-size:13px;cursor:pointer">Analyze →</button>';
+  analyzerHtml += '<span style="font-size:10px;color:var(--text4)">Uses Kite candles + fundamentals + live news sentiment</span>';
+  analyzerHtml += '</div>';
+  analyzerHtml += '<div id="stock-analyzer-result" style="margin-top:0"></div>';
+  analyzerHtml += '</div>';
 
   // ── FILTER ────────────────────────────────────────────────────────
   var filtered = allStocks.filter(function(s){
@@ -2102,6 +2317,7 @@ function renderStockRecPage(){
 
   // ── HEADER ────────────────────────────────────────────────────────
   var html = '<div style="margin-bottom:20px">';
+  html += analyzerHtml;
 
   // Title row
   html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
