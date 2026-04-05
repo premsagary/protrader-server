@@ -88,6 +88,13 @@ async function initDB() {
       )
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_config (
+        key   VARCHAR(100) PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS scan_log (
         id         SERIAL PRIMARY KEY,
         scanned_at TIMESTAMP DEFAULT NOW(),
@@ -109,6 +116,24 @@ function initKite(token) {
   kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
   if (token) kite.setAccessToken(token);
   return kite;
+}
+
+// ── Persist config in DB (survives Railway restarts) ─────────────────────────
+async function dbGet(key) {
+  try {
+    const { rows } = await pool.query('SELECT value FROM app_config WHERE key=$1', [key]);
+    return rows[0]?.value || null;
+  } catch(e) { return null; }
+}
+async function dbSet(key, value) {
+  try {
+    await pool.query(
+      `INSERT INTO app_config(key,value,updated_at) VALUES($1,$2,NOW())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=NOW()`,
+      [key, value]
+    );
+    return true;
+  } catch(e) { return false; }
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1747,7 +1772,8 @@ app.post("/api/token/update", async(req,res)=>{
     kite.setAccessToken(token);
     tokenValid = true;
     startTicker(token);
-    console.log('🔑 Kite token updated via dashboard');
+    await dbSet('kite_access_token', token); // persist across restarts
+    console.log('🔑 Kite token updated and saved to DB');
     res.json({ success: true, message: 'Token updated and ticker restarted' });
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -2491,13 +2517,15 @@ app.get("/auth/callback", async(req,res)=>{
     const session=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
     const token=session.access_token;
     process.env.KITE_ACCESS_TOKEN=token; kite.setAccessToken(token);
+    tokenValid = true;
+    await dbSet('kite_access_token', token); // persist across restarts
     startTicker(token);
     res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center">
-      <h2 style="color:#22c55e">✅ Connected! Smart multi-strategy engine is live.</h2>
+      <h2 style="color:#22c55e">✅ Connected! Token saved to DB — survives restarts.</h2>
       <p>Token: <code style="background:#1e293b;padding:8px 16px;border-radius:6px;display:block;margin:12px auto;max-width:600px;word-break:break-all;color:#38bdf8">${token}</code></p>
-      <p style="color:#fbbf24">Save in Railway → Variables → KITE_ACCESS_TOKEN</p>
+      <p style="color:#22c55e">✅ Auto-saved to database — no need to set Railway env variable manually</p>
       <p style="color:#64748b">7 strategies · auto regime detection · scans every 5 min · 9:15–15:30 IST</p>
-      <br/><a href="/health" style="color:#0ea5e9">Check status →</a>
+      <br/><a href="/" style="color:#0ea5e9">Back to Dashboard →</a>
     </body></html>`);
   } catch(e){
     res.status(500).send(`<html><body style="background:#060b14;color:#fca5a5;font-family:monospace;padding:40px">
@@ -2788,15 +2816,20 @@ app.post("/crypto/scan-now", (req,res) => { res.json({message:"Crypto scan start
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   await initDB();
-  initKite(process.env.KITE_ACCESS_TOKEN||null);
-  if (process.env.KITE_ACCESS_TOKEN) {
+
+  // Load token: env var takes priority, then DB (persisted from last session)
+  let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
+  if (token) process.env.KITE_ACCESS_TOKEN = token;
+
+  initKite(token||null);
+  if (token) {
     tokenValid = true; // assume valid — will be set false if Kite rejects it
-    console.log("✅ Token found — starting smart engine...");
-    startTicker(process.env.KITE_ACCESS_TOKEN);
+    console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") — starting smart engine...");
+    startTicker(token);
     await refreshInstruments();  // fetch real tokens from Kite
     setTimeout(scanAndTrade, 5000);
   } else {
-    console.log("⚠️  No token — visit /auth/login");
+    console.log("⚠️  No token — visit /auth/login or paste token in dashboard");
   }
   // NSE: every 3 min during market hours Mon–Fri
   cron.schedule("*/3 9-15 * * 1-5", ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
