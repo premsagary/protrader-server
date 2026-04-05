@@ -205,7 +205,7 @@ select option{background:var(--bg3)}
     <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stocks Recommendation</button>
     <button class="mode-tab stocks" onclick="checkAccess('stocks')" id="mode-stocks">🔒 Stocks</button>
     <button class="mode-tab crypto" onclick="checkAccess('crypto')" id="mode-crypto">🔒 Crypto</button>
-    <button class="mode-tab" onclick="setMode('mirofish')" id="mode-mirofish" style="background:linear-gradient(135deg,#1a0a2e,#0f0a1e);color:#bc8cff;border-color:#bc8cff40">🐟 MiroFish</button>
+    <button class="mode-tab" onclick="setMode('aiportfolio')" id="mode-aiportfolio" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#60a5fa;border-color:#60a5fa40">📊 AI Portfolio</button>
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
 </div>
@@ -411,7 +411,7 @@ function setMode(mode){
   try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-mirofish").className ="mode-tab"         +(mode==="mirofish"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-aiportfolio").className ="mode-tab"      +(mode==="aiportfolio"?" active":""); }catch(e){}
   if(mode==="mf"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){ console.log("renderTopBar error:", e.message); }
@@ -424,9 +424,9 @@ function setMode(mode){
     renderStockRec();
     return;
   }
-  if(mode==="mirofish"){
+  if(mode==="aiportfolio"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
-    renderMiroFish();
+    renderAIPortfolio();
     return;
   }
   try{ renderSubTabs(); }catch(e){}
@@ -1405,6 +1405,8 @@ async function renderMFPage(){
     document.getElementById("mf-footer").style.display="block";
 
     S.mfTotal = data.total || data.funds.length;
+    // Cache for AI Portfolio tab
+    window._mfFundsList = data.funds;
     var updEl=document.getElementById("mf-updated");
     if(updEl) {
       var mins = data.cached_at ? Math.round((Date.now()-data.cached_at)/60000) : 0;
@@ -2031,208 +2033,158 @@ function mfCardEl(f, rank, cfg, maxS) {
   app(det,summ,detBody); card.appendChild(det);
 
   // MiroFish Wealth Projection — only for top 3 picks per category
+  // Auto-calls MiroFish on render — no placeholder math, no button click needed
   if (rank <= 3) {
     var mfishBox = el('div');
     mfishBox.style.cssText = 'margin-top:12px;border-top:1px solid '+cfg.color+'30;padding-top:12px';
 
-    // Header
+    // Header — no button, auto-loads
     var mfishHeader = div('display:flex;align-items:center;justify-content:space-between;margin-bottom:8px');
     var mfishTitle = span('font-size:10px;font-weight:700;color:#bc8cff');
-    mfishTitle.textContent = '🐟 MiroFish Wealth Projection — ₹1 Lakh invested';
-    var mfishRunBtn = el('button');
-    mfishRunBtn.style.cssText = 'background:rgba(124,58,237,.15);color:#bc8cff;border:1px solid rgba(124,58,237,.3);border-radius:5px;padding:2px 10px;font-size:9px;cursor:pointer;font-weight:700';
-    mfishRunBtn.textContent = 'AI Predict';
-    app(mfishHeader, mfishTitle, mfishRunBtn);
+    mfishTitle.textContent = '🐟 MiroFish — ₹1 Lakh invested';
+    var mfishStatus = span('font-size:9px;color:var(--text4)');
+    mfishStatus.textContent = 'Analyzing...';
+    app(mfishHeader, mfishTitle, mfishStatus);
     mfishBox.appendChild(mfishHeader);
 
-    // Math-based projection (always shown, instant)
-    var histCagr = f.cagr_3y || f.rolling_3y || 12; // use real data
-    var rolling   = f.rolling_3y || histCagr;
-    var cagr5     = f.cagr_5y  || histCagr;
+    // Grid — 5 cells, all start as loading spinners
+    var gridId  = 'mfgrid-'  + f.name.replace(/\W/g,'').slice(0,12) + rank;
+    var aiId    = 'mfai-'    + f.name.replace(/\W/g,'').slice(0,12) + rank;
+    var statusId = 'mfst-'   + f.name.replace(/\W/g,'').slice(0,12) + rank;
+    mfishStatus.id = statusId;
 
-    // Tiered CAGR assumptions based on historical performance
-    // Short term: 3Y CAGR. Medium: slight regression. Long: historical avg
-    var cagrShort  = histCagr;
-    var cagrMedium = (histCagr * 0.85); // regression to mean
-    var cagrLong   = (histCagr * 0.75); // long-run mean reversion
-
-    function project(principal, annualCagr, years) {
-      return Math.round(principal * Math.pow(1 + annualCagr/100, years));
-    }
     function fmt(n) {
       if(n >= 10000000) return '₹' + (n/10000000).toFixed(1) + 'Cr';
       if(n >= 100000)   return '₹' + (n/100000).toFixed(1) + 'L';
       return '₹' + n.toLocaleString('en-IN');
     }
 
-    var rows = [
-      { y:7,  cagr:cagrShort,  val: project(100000, cagrShort,  7)  },
-      { y:10, cagr:cagrShort,  val: project(100000, cagrShort,  10) },
-      { y:20, cagr:cagrMedium, val: project(100000, cagrMedium, 20) },
-      { y:30, cagr:cagrLong,   val: project(100000, cagrLong,   30) },
-      { y:40, cagr:cagrLong,   val: project(100000, cagrLong,   40) },
-    ];
-
     var projGrid = div('display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:8px');
-    rows.forEach(function(r) {
-      var cell = div('background:rgba(124,58,237,.08);border:1px solid rgba(124,58,237,.15);border-radius:6px;padding:6px 4px;text-align:center');
-      var yr = el('div'); yr.style.cssText='font-size:8px;color:var(--text3);margin-bottom:2px';
-      yr.textContent = r.y + 'Y';
-      var val = el('div'); val.style.cssText='font-size:11px;font-weight:700;color:#bc8cff';
-      val.textContent = fmt(r.val);
-      var rate = el('div'); rate.style.cssText='font-size:8px;color:var(--text4)';
-      rate.textContent = r.cagr.toFixed(1)+'%/yr';
-      app(cell, yr, val, rate);
+    projGrid.id = gridId;
+    ['7Y','10Y','20Y','30Y','40Y'].forEach(function(yr) {
+      var cell = div('background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.12);border-radius:6px;padding:6px 4px;text-align:center');
+      var yrEl = el('div'); yrEl.style.cssText='font-size:8px;color:var(--text3);margin-bottom:2px'; yrEl.textContent=yr;
+      var valEl = el('div'); valEl.style.cssText='font-size:11px;font-weight:700;color:var(--text4)';
+      valEl.id = 'mfv-'+gridId+'-'+yr; valEl.textContent='...';
+      var rateEl = el('div'); rateEl.style.cssText='font-size:8px;color:var(--text4)';
+      rateEl.id = 'mfr-'+gridId+'-'+yr;
+      app(cell, yrEl, valEl, rateEl);
       projGrid.appendChild(cell);
     });
     mfishBox.appendChild(projGrid);
 
-    // AI prediction area (populated on button click)
-    var mfishAI = div('font-size:10px;color:var(--text3);line-height:1.5;min-height:32px');
-    mfishAI.id = 'mfai-'+f.name.replace(/\s/g,'').slice(0,15)+rank;
-    mfishAI.textContent = 'Click "AI Predict" for MiroFish analysis of future outlook';
+    // Analysis text area
+    var mfishAI = div('font-size:10px;color:var(--text3);line-height:1.5;min-height:28px');
+    mfishAI.id = aiId;
+    mfishAI.textContent = 'Fetching MiroFish prediction...';
     mfishBox.appendChild(mfishAI);
 
-    // AI predict button handler
-    mfishRunBtn.onclick = async function() {
-      var aiEl = document.getElementById(mfishAI.id);
-      if(!aiEl) return;
-      mfishRunBtn.textContent = '⏳...';
-      mfishRunBtn.disabled = true;
-      aiEl.style.color = '#bc8cff';
-      aiEl.textContent = 'MiroFish analyzing all 55 data points...';
-      try {
-        var resp = await fetch('/api/mirofish/mf-predict', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            // Identity
-            name:           f.name,
-            cat:            f.cat,
-            sub_category:   f.sub_category,
-            plan:           f.plan,
-            amc:            f.amc,
-            benchmark:      f.benchmark,
-            fund_manager:   f.fund_manager,
-            sip_allowed:    f.sip_allowed,
-            sebi_risk:      f.sebi_risk,
-            nav:            f.nav,
-            aum:            f.aum,
-            min_lumpsum:    f.min_lumpsum,
-            min_sip:        f.min_sip,
-            exit_load:      f.exit_load,
-            lock_in:        f.lock_in,
-            months_inception: f.months_inception,
-            // Returns
-            alpha:          f.alpha,
-            ret_1y:         f.ret_1y,
-            ret_3m:         f.ret_3m,
-            ret_6m:         f.ret_6m,
-            cagr_3y:        f.cagr_3y,
-            cagr_5y:        f.cagr_5y,
-            cagr_10y:       f.cagr_10y,
-            rolling_3y:     f.rolling_3y,
-            pct_from_ath:   f.pct_from_ath,
-            vs_cat_1y:      f.vs_cat_1y,
-            vs_cat_3y:      f.vs_cat_3y,
-            vs_cat_5y:      f.vs_cat_5y,
-            vs_cat_10y:     f.vs_cat_10y,
-            // Risk
-            sharpe:         f.sharpe,
-            sortino:        f.sortino,
-            volatility:     f.volatility,
-            category_stddev: f.category_stddev,
-            max_drawdown:   f.max_drawdown,
-            tracking_error: f.tracking_error,
-            // Cost
-            expense_ratio:  f.expense_ratio,
-            // Portfolio composition
-            pct_equity:     f.pct_equity,
-            pct_debt:       f.pct_debt,
-            pct_cash:       f.pct_cash,
-            pct_largecap:   f.pct_largecap,
-            pct_midcap:     f.pct_midcap,
-            pct_smallcap:   f.pct_smallcap,
-            pct_other:      f.pct_other,
-            // Bond quality
-            pct_a_bonds:    f.pct_a_bonds,
-            pct_b_bonds:    f.pct_b_bonds,
-            pct_poor_bonds: f.pct_poor_bonds,
-            pct_corp_debt:  f.pct_corp_debt,
-            pct_sovereign:  f.pct_sovereign,
-            avg_maturity:   f.avg_maturity,
-            avg_ytm:        f.avg_ytm,
-            category_ytm:   f.category_ytm,
-            // Concentration
-            top3_conc:      f.top3_conc,
-            top5_conc:      f.top5_conc,
-            top10_conc:     f.top10_conc,
-            // Valuation
-            pe_ratio:       f.pe_ratio,
-            category_pe:    f.category_pe,
-            // ProTrader
-            score:          f.score,
-            amc_sebi:       f.amc_sebi,
-            rank:           rank,
-          })
-        });
-        var d = await resp.json();
-        if(d.error) throw new Error(d.error);
+    // Re-predict button (small, for manual refresh)
+    var reBtn = el('button');
+    reBtn.id = 'mfrb-'+gridId;
+    reBtn.style.cssText = 'display:none;margin-top:6px;background:rgba(124,58,237,.12);color:#bc8cff;border:1px solid rgba(124,58,237,.25);border-radius:5px;padding:2px 10px;font-size:9px;cursor:pointer';
+    reBtn.textContent = '🔄 Re-predict';
+    mfishBox.appendChild(reBtn);
 
-        // Render AI prediction text
-        aiEl.style.color = 'var(--text2)';
-        aiEl.innerHTML =
-          '<span style="color:#bc8cff;font-weight:700">🐟 MiroFish: </span>' + d.prediction +
-          (d.key_driver ? '<br><span style="color:var(--green);font-size:9px">▲ Key driver: '+d.key_driver+'</span>' : '') +
-          (d.main_risk  ? '<br><span style="color:var(--red);font-size:9px">▼ Main risk: '+d.main_risk+'</span>' : '') +
-          (d.expense_drag_note ? '<br><span style="color:var(--text4);font-size:9px">💸 '+d.expense_drag_note+'</span>' : '') +
-          '<br><span style="color:var(--text4);font-size:9px">Confidence: '+d.confidence+' · Verdict: '+(d.verdict||'—')+'</span>';
-
-        // Rebuild projection grid with per-horizon AI CAGRs
-        projGrid.querySelectorAll('[data-airow]').forEach(function(c){ c.remove(); });
-
-        var aiHorizons = [
-          { y:7,  cagr: d.cagr_7y  || d.adjusted_cagr },
-          { y:10, cagr: d.cagr_10y || d.adjusted_cagr * 0.97 },
-          { y:20, cagr: d.cagr_20y || d.adjusted_cagr * 0.88 },
-          { y:30, cagr: d.cagr_30y || d.adjusted_cagr * 0.80 },
-          { y:40, cagr: d.cagr_40y || d.adjusted_cagr * 0.75 },
-        ];
-
-        // Replace each cell value with AI projection
-        var existingCells = projGrid.querySelectorAll('div:not([data-airow])');
-        // Rebuild the grid entirely with AI data
-        while(projGrid.firstChild) projGrid.removeChild(projGrid.firstChild);
-
-        aiHorizons.forEach(function(r) {
-          var val = Math.round(100000 * Math.pow(1 + (r.cagr||12)/100, r.y));
-          var cell = el('div');
-          cell.style.cssText = 'background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.3);border-radius:6px;padding:6px 4px;text-align:center';
-          cell.setAttribute('data-airow','1');
-          var yr = el('div'); yr.style.cssText='font-size:8px;color:var(--text3);margin-bottom:2px'; yr.textContent=r.y+'Y';
-          var vl = el('div'); vl.style.cssText='font-size:11px;font-weight:700;color:#bc8cff'; vl.textContent=fmt(val);
-          var rt = el('div'); rt.style.cssText='font-size:8px;color:#bc8cff80'; rt.textContent=(r.cagr||0).toFixed(1)+'%/yr';
-          app(cell, yr, vl, rt);
-          projGrid.appendChild(cell);
-        });
-
-        // AI label row
-        var aiLabel = el('div');
-        aiLabel.style.cssText='grid-column:1/-1;font-size:9px;color:#bc8cff;text-align:center;padding-top:2px';
-        aiLabel.setAttribute('data-airow','1');
-        aiLabel.textContent = '🐟 AI projections — all 55 data points analyzed';
-        projGrid.appendChild(aiLabel);
-
-      } catch(e) {
-        aiEl.style.color = 'var(--red)';
-        aiEl.textContent = e.message.includes('ANTHROPIC') ? '⚠ Add ANTHROPIC_API_KEY to Railway env vars' : 'Error: '+e.message;
-      }
-      mfishRunBtn.textContent = '🔄 Re-predict';
-      mfishRunBtn.disabled = false;
-    };
-
-    mfishBox.appendChild(el('div')); // spacer
+    mfishBox.appendChild(el('div'));
     card.appendChild(mfishBox);
+
+    // Auto-fetch — fires after card appended, using requestAnimationFrame to not block render
+    (function(fundData, gId, aId, stId, rbId, fmtFn) {
+      // Cache to avoid re-fetching same fund
+      if(!window._mfPredCache) window._mfPredCache = {};
+      var cacheKey = fundData.name + '-' + rank;
+
+      function doFetch() {
+        if(window._mfPredCache[cacheKey]) {
+          applyMFPred(window._mfPredCache[cacheKey]);
+          return;
+        }
+        fetch('/api/mirofish/mf-predict', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            name:f.name, cat:f.cat, sub_category:f.sub_category,
+            plan:f.plan, amc:f.amc, benchmark:f.benchmark,
+            fund_manager:f.fund_manager, sip_allowed:f.sip_allowed,
+            sebi_risk:f.sebi_risk, nav:f.nav, aum:f.aum,
+            min_lumpsum:f.min_lumpsum, min_sip:f.min_sip,
+            exit_load:f.exit_load, lock_in:f.lock_in,
+            months_inception:f.months_inception,
+            alpha:f.alpha, ret_1y:f.ret_1y, ret_3m:f.ret_3m, ret_6m:f.ret_6m,
+            cagr_3y:f.cagr_3y, cagr_5y:f.cagr_5y, cagr_10y:f.cagr_10y,
+            rolling_3y:f.rolling_3y, pct_from_ath:f.pct_from_ath,
+            vs_cat_1y:f.vs_cat_1y, vs_cat_3y:f.vs_cat_3y,
+            vs_cat_5y:f.vs_cat_5y, vs_cat_10y:f.vs_cat_10y,
+            sharpe:f.sharpe, sortino:f.sortino, volatility:f.volatility,
+            category_stddev:f.category_stddev, max_drawdown:f.max_drawdown,
+            tracking_error:f.tracking_error, expense_ratio:f.expense_ratio,
+            pct_equity:f.pct_equity, pct_debt:f.pct_debt, pct_cash:f.pct_cash,
+            pct_largecap:f.pct_largecap, pct_midcap:f.pct_midcap,
+            pct_smallcap:f.pct_smallcap, pct_other:f.pct_other,
+            pct_a_bonds:f.pct_a_bonds, pct_b_bonds:f.pct_b_bonds,
+            pct_poor_bonds:f.pct_poor_bonds, pct_corp_debt:f.pct_corp_debt,
+            pct_sovereign:f.pct_sovereign, avg_maturity:f.avg_maturity,
+            avg_ytm:f.avg_ytm, category_ytm:f.category_ytm,
+            top3_conc:f.top3_conc, top5_conc:f.top5_conc, top10_conc:f.top10_conc,
+            pe_ratio:f.pe_ratio, category_pe:f.category_pe,
+            score:f.score, amc_sebi:f.amc_sebi, rank:rank,
+          })
+        })
+        .then(function(r){return r.json();})
+        .then(function(d){
+          if(d.error) throw new Error(d.error);
+          window._mfPredCache[cacheKey] = d;
+          applyMFPred(d);
+        })
+        .catch(function(e){
+          var aiEl=document.getElementById(aId);
+          var stEl=document.getElementById(stId);
+          if(aiEl){ aiEl.style.color='var(--red)'; aiEl.textContent=e.message.includes('ANTHROPIC')?'⚠ Set ANTHROPIC_API_KEY in Railway env vars':'Error: '+e.message; }
+          if(stEl) stEl.textContent='Failed';
+          var rbEl=document.getElementById(rbId);
+          if(rbEl){rbEl.style.display='inline-block'; rbEl.onclick=function(){rbEl.style.display='none';doFetch();};}
+        });
+      }
+
+      function applyMFPred(d) {
+        var horizons = [
+          {yr:'7Y',  cagr: d.cagr_7y  || d.adjusted_cagr},
+          {yr:'10Y', cagr: d.cagr_10y || d.adjusted_cagr * 0.97},
+          {yr:'20Y', cagr: d.cagr_20y || d.adjusted_cagr * 0.88},
+          {yr:'30Y', cagr: d.cagr_30y || d.adjusted_cagr * 0.80},
+          {yr:'40Y', cagr: d.cagr_40y || d.adjusted_cagr * 0.75},
+        ];
+        horizons.forEach(function(h) {
+          var projected = Math.round(100000 * Math.pow(1 + (h.cagr||12)/100, parseInt(h.yr)));
+          var valEl  = document.getElementById('mfv-'+gId+'-'+h.yr);
+          var rateEl = document.getElementById('mfr-'+gId+'-'+h.yr);
+          var cellEl = valEl && valEl.parentElement;
+          if(valEl) { valEl.textContent=fmtFn(projected); valEl.style.color='#bc8cff'; }
+          if(rateEl){ rateEl.textContent=(h.cagr||0).toFixed(1)+'%/yr'; rateEl.style.color='#bc8cff80'; }
+          if(cellEl){ cellEl.style.background='rgba(124,58,237,.12)'; cellEl.style.borderColor='rgba(124,58,237,.3)'; }
+        });
+        var aiEl=document.getElementById(aId);
+        var stEl=document.getElementById(stId);
+        if(stEl) stEl.textContent = '55 data points · ' + (d.confidence||'') + ' confidence';
+        if(aiEl){
+          aiEl.style.color='var(--text2)';
+          aiEl.innerHTML=
+            '<span style="color:#bc8cff;font-weight:700">🐟 </span>'+(d.prediction||'')+
+            (d.key_driver?'<br><span style="color:var(--green);font-size:9px">▲ '+d.key_driver+'</span>':'')+
+            (d.main_risk ?'<br><span style="color:var(--red);font-size:9px">▼ '+d.main_risk+'</span>':'')+
+            (d.verdict   ?'<br><span style="font-size:9px;color:var(--text3)">Verdict: '+d.verdict+'</span>':'');
+        }
+        var rbEl=document.getElementById(rbId);
+        if(rbEl){rbEl.style.display='inline-block'; rbEl.onclick=function(){delete window._mfPredCache[cacheKey];rbEl.style.display='none';var aiEl2=document.getElementById(aId);if(aiEl2)aiEl2.textContent='Re-fetching...';doFetch();};}
+      }
+
+      // Stagger requests — rank 1 fires immediately, rank 2 after 2s, rank 3 after 4s
+      // This avoids hammering the API and rate limiting
+      var delay = (rank - 1) * 2000;
+      setTimeout(doFetch, delay);
+
+    })(f, gridId, aiId, statusId, 'mfrb-'+gridId, fmt);
   }
 
   return card;
@@ -3228,50 +3180,29 @@ function buildStockCard(s, medal){
     h+='</div>';
   }
 
-  // -- MIROFISH VERDICT (from last simulation — no extra API call) ---
+  // -- MIROFISH GROWTH PREDICTION (live call, shows inline, no redirect) -------
   if(isFallenAngel) {
-    var mfPick = window.mfishPickMap && window.mfishPickMap[s.sym];
-    var mfAvoid = window.mfishAvoidSet && window.mfishAvoidSet.has(s.sym);
-    if(mfPick) {
-      var mfCol = mfPick.verdict&&mfPick.verdict.includes('Strong')?'#22c55e':
-                  mfPick.verdict&&mfPick.verdict.includes('Likely')?'#86efac':'#f59e0b';
-      h+='<div style="margin-top:10px;border-top:1px solid rgba(124,58,237,.25);padding-top:10px">';
-      h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">';
-      h+='<span style="font-size:9px;font-weight:700;color:#bc8cff">🐟 MIROFISH VERDICT</span>';
-      h+='<span style="font-size:9px;background:rgba(124,58,237,.15);color:#bc8cff;border-radius:4px;padding:1px 8px">Rank #'+mfPick.rank+'</span>';
+    var faCardId = 'fa-pred-'+s.sym;
+    h+='<div style="margin-top:10px;border-top:1px solid rgba(245,158,11,.25);padding-top:10px" id="'+faCardId+'">';
+    h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+    h+='<span style="font-size:9px;font-weight:700;color:#f59e0b">🐟 MiroFish Growth Prediction</span>';
+    h+='<button onclick="predictFallenAngel(\''+s.sym+'\',\''+faCardId+'\')" '
+     +'style="background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);'
+     +'border-radius:5px;padding:2px 10px;font-size:9px;cursor:pointer;font-weight:700" '
+     +'id="btn-'+faCardId+'">Predict →</button>';
+    h+='</div>';
+    // 4 projection cells — filled by predictFallenAngel()
+    h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:6px" id="grid-'+faCardId+'">';
+    ['6M','1Y','2Y','3Y'].forEach(function(yr){
+      h+='<div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:6px;padding:5px;text-align:center">';
+      h+='<div style="font-size:8px;color:var(--text4);margin-bottom:2px">'+yr+'</div>';
+      h+='<div style="font-size:11px;font-weight:700;color:var(--text3)" id="val-'+faCardId+'-'+yr+'">—</div>';
+      h+='<div style="font-size:8px;color:var(--text4)" id="pct-'+faCardId+'-'+yr+'"></div>';
       h+='</div>';
-      h+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">';
-      h+='<div style="background:rgba(124,58,237,.08);border-radius:6px;padding:5px;text-align:center">';
-      h+='<div style="font-size:8px;color:var(--text4)">Conviction</div>';
-      h+='<div style="font-size:13px;font-weight:800;color:#bc8cff">'+(mfPick.conviction_score||'—')+'</div></div>';
-      h+='<div style="background:rgba(34,197,94,.08);border-radius:6px;padding:5px;text-align:center">';
-      h+='<div style="font-size:8px;color:var(--text4)">Target Upside</div>';
-      h+='<div style="font-size:13px;font-weight:800;color:var(--green)">+'+(mfPick.avg_target_upside||mfPick.target_upside||'—')+'%</div></div>';
-      h+='<div style="background:rgba(245,158,11,.08);border-radius:6px;padding:5px;text-align:center">';
-      h+='<div style="font-size:8px;color:var(--text4)">Horizon</div>';
-      h+='<div style="font-size:10px;font-weight:700;color:#f59e0b">'+(mfPick.recommended_horizon||mfPick.horizon||'—')+'</div></div>';
-      h+='</div>';
-      h+='<div style="font-size:10px;font-weight:700;color:'+mfCol+';margin-bottom:4px">'+mfPick.verdict+'</div>';
-      if(mfPick.bull_case) h+='<div style="font-size:10px;color:var(--green);margin-bottom:2px">▲ '+mfPick.bull_case+'</div>';
-      if(mfPick.bear_case) h+='<div style="font-size:10px;color:var(--red);margin-bottom:4px">▼ '+mfPick.bear_case+'</div>';
-      if(mfPick.position_sizing) h+='<div style="font-size:9px;color:var(--text3)">Position: '+mfPick.position_sizing+'</div>';
-      if(mfPick.consensus) h+='<span style="font-size:9px;background:rgba(34,197,94,.1);color:var(--green);border-radius:4px;padding:1px 7px">'+mfPick.consensus+' consensus</span>';
-      h+='</div>';
-    } else if(mfAvoid) {
-      h+='<div style="margin-top:10px;border-top:1px solid rgba(239,68,68,.2);padding-top:8px">';
-      h+='<div style="display:flex;align-items:center;gap:6px">';
-      h+='<span style="font-size:9px;font-weight:700;color:#bc8cff">🐟 MIROFISH</span>';
-      h+='<span style="background:rgba(239,68,68,.15);color:var(--red);border-radius:4px;padding:2px 10px;font-size:10px;font-weight:700">⚠ Agents flagged as value trap</span>';
-      h+='</div>';
-      if(window.mfishAvoidReason) h+='<div style="font-size:10px;color:var(--text3);margin-top:4px">'+window.mfishAvoidReason+'</div>';
-      h+='</div>';
-    } else {
-      // MiroFish not yet run or stock not in top picks
-      h+='<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;display:flex;align-items:center;justify-content:space-between">';
-      h+='<span style="font-size:9px;color:var(--text4)">🐟 MiroFish not analyzed</span>';
-      h+='<button onclick="setMode(\'mirofish\')" style="background:rgba(124,58,237,.12);color:#bc8cff;border:1px solid rgba(124,58,237,.2);border-radius:4px;padding:2px 10px;font-size:9px;cursor:pointer">Run MiroFish →</button>';
-      h+='</div>';
-    }
+    });
+    h+='</div>';
+    h+='<div style="font-size:10px;color:var(--text3);line-height:1.5;min-height:20px" id="txt-'+faCardId+'">Click Predict to get MiroFish recovery analysis</div>';
+    h+='</div>';
   }
 
   h+='</div>';
@@ -3626,6 +3557,261 @@ async function startMiroFish() {
   } catch(e) {
     if(cont) cont.innerHTML = '<div style="padding:24px;color:var(--red)">Error: '+e.message+'</div>';
   }
+}
+
+
+// =============================================================================
+// MIROFISH — FALLEN ANGEL INLINE PREDICTION
+// =============================================================================
+var _faPredCache = {};
+
+async function predictFallenAngel(sym, cardId) {
+  var btn = document.getElementById('btn-'+cardId);
+  var txt = document.getElementById('txt-'+cardId);
+  if(btn){btn.textContent='⏳...';btn.disabled=true;}
+  if(txt){txt.style.color='#f59e0b';txt.textContent='MiroFish agents analyzing '+sym+'...';}
+  if(_faPredCache[sym]){ _fillFACard(cardId,sym,_faPredCache[sym]); if(btn){btn.textContent='🔄';btn.disabled=false;} return; }
+  var stock=(stockRecData&&stockRecData.stocks||[]).find(function(s){return s.sym===sym;});
+  try {
+    var resp=await fetch('/api/mirofish/fa-predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      sym:sym, name:stock?stock.name:sym, sector:stock?stock.sector:null,
+      price:stock?stock.price:null, pctFromHigh:stock?stock.pctFromHigh:null,
+      rsi:stock?stock.rsi:null, roe:stock?stock.roe:null,
+      debtToEq:stock?stock.debtToEq:null, pe:stock?stock.pe:null,
+      earGrowth:stock?stock.earGrowth:null, opMargin:stock?stock.opMargin:null,
+      revGrowth:stock?stock.revGrowth:null, macdBull:stock?stock.macdBull:null,
+      obvRising:stock?stock.obvRising:null, bullishDiv:stock?stock.bullishDiv:null,
+      supertrend:stock?stock.supertrendSig:null, goldenCross:stock?stock.goldenCross:null,
+      dma200:stock?stock.dma200:null, beta:stock?stock.beta:null,
+      annualVol:stock?stock.annualVol:null, fallenScore:stock?stock.fallenScore:null,
+      fallenVerdict:stock?stock.fallenVerdict:null, stopLoss:stock?stock.stopLoss:null,
+      rrRatio:stock?stock.rrRatio:null, wk52Hi:stock?stock.wk52Hi:null,
+      wk52Lo:stock?stock.wk52Lo:null, pctAbove200:stock?stock.pctAbove200:null,
+      adx:stock?stock.adx:null, grp:stock?stock.grp:null,
+    })});
+    var d=await resp.json();
+    if(d.error) throw new Error(d.error);
+    _faPredCache[sym]=d;
+    _fillFACard(cardId,sym,d);
+  } catch(e) {
+    if(txt){txt.style.color='var(--red)';txt.textContent=e.message.includes('ANTHROPIC')?'Set ANTHROPIC_API_KEY in Railway':'Error: '+e.message;}
+  }
+  if(btn){btn.textContent='🔄';btn.disabled=false;}
+}
+
+function _fillFACard(cardId, sym, d) {
+  var txt=document.getElementById('txt-'+cardId);
+  var px=d.current_price||0;
+  var horizons={'6M':d.price_6m,'1Y':d.price_1y,'2Y':d.price_2y,'3Y':d.price_3y};
+  Object.keys(horizons).forEach(function(yr){
+    var target=horizons[yr];
+    var valEl=document.getElementById('val-'+cardId+'-'+yr);
+    var pctEl=document.getElementById('pct-'+cardId+'-'+yr);
+    if(!valEl) return;
+    if(target&&px){
+      var gain=((target/px-1)*100);
+      valEl.textContent='\u20b9'+Math.round(target).toLocaleString('en-IN');
+      valEl.style.color=gain>=0?'var(--green)':'var(--red)';
+      if(pctEl){pctEl.textContent=(gain>=0?'+':'')+gain.toFixed(0)+'%';pctEl.style.color=gain>=0?'var(--green)':'var(--red)';}
+    } else { valEl.textContent='\u2014'; }
+  });
+  if(txt){
+    txt.style.color='var(--text2)';
+    var vc=d.verdict&&d.verdict.includes('Strong')?'#22c55e':d.verdict&&d.verdict.includes('Likely')?'#86efac':'#f59e0b';
+    txt.innerHTML=(d.verdict?'<span style="color:'+vc+';font-weight:700">'+d.verdict+'</span> &middot; ':'')+
+      (d.analysis||'')+
+      (d.key_risk?'<br><span style="color:var(--red);font-size:9px">&#9888; '+d.key_risk+'</span>':'')+
+      '<br><span style="color:var(--text4);font-size:9px">Confidence: '+(d.confidence||'\u2014')+' &middot; MiroFish 5-agent analysis</span>';
+  }
+}
+
+// =============================================================================
+// AI PORTFOLIO TAB
+// =============================================================================
+var _aiPortfolioItems=[];
+var _aiPortfolioYears=5;
+
+async function renderAIPortfolio() {
+  var cont=document.getElementById('main-content');
+  if(!cont) return;
+  var stockList=(stockRecData&&stockRecData.stocks||[]).sort(function(a,b){return(b.score||0)-(a.score||0);}).map(function(s){return{type:'stock',sym:s.sym,name:s.name,score:s.score,sector:s.sector};});
+  var mfList=(window._mfFundsList||[]).filter(function(f){return f.eligible!==false;}).sort(function(a,b){return(b.score||0)-(a.score||0);}).map(function(f){return{type:'mf',sym:f.name,name:f.name,score:f.score,cat:f.cat};});
+  window._aipStockList=stockList; window._aipMFList=mfList;
+
+  var h='<div style="padding:24px;max-width:900px">';
+  h+='<div style="margin-bottom:24px"><div style="font-size:20px;font-weight:700;margin-bottom:4px">&#x1F4CA; AI Portfolio Predictor</div>';
+  h+='<div style="font-size:12px;color:var(--text3)">Add stocks or mutual funds &middot; Set investment amount &middot; Choose horizon &middot; MiroFish predicts future value</div></div>';
+
+  // Step 1
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">';
+  h+='<div style="font-size:13px;font-weight:700;margin-bottom:16px;color:var(--text2)">Step 1 &mdash; Add investments</div>';
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+  h+='<select id="aip-type" onchange="aipUpdateSearch()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;cursor:pointer"><option value="stock">&#x1F4C8; Stocks (NSE)</option><option value="mf">&#x1F4CA; Mutual Funds</option></select>';
+  h+='<div style="position:relative;flex:1;min-width:180px"><input id="aip-search" type="text" placeholder="Search by name..." oninput="aipUpdateSearch()" style="width:100%;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;box-sizing:border-box">';
+  h+='<div id="aip-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;max-height:220px;overflow-y:auto;z-index:999;margin-top:2px;box-shadow:0 8px 24px rgba(0,0,0,.4)"></div></div>';
+  h+='<input id="aip-amount" type="number" placeholder="Amount (&#x20b9;)" min="1000" step="1000" value="100000" style="width:140px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px">';
+  h+='<button onclick="aipAddItem()" style="background:var(--green);color:#000;border:none;border-radius:6px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer">+ Add</button>';
+  h+='</div><div id="aip-items"></div></div>';
+
+  // Step 2
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">';
+  h+='<div style="font-size:13px;font-weight:700;margin-bottom:14px;color:var(--text2)">Step 2 &mdash; Investment horizon</div>';
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  [1,2,3,5,7,10,15,20].forEach(function(y){
+    h+='<button onclick="aipSetYears('+y+',this)" style="padding:8px 16px;border-radius:20px;border:1px solid var(--border);background:'+(y===5?'var(--green)':'var(--bg3)')+';color:'+(y===5?'#000':'var(--text)')+';font-size:12px;font-weight:600;cursor:pointer" class="aip-yr-btn">'+y+' yr'+(y>1?'s':'')+'</button>';
+  });
+  h+='</div></div>';
+
+  // Step 3
+  h+='<button onclick="aipRunPrediction()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;border-radius:10px;padding:14px 40px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:24px">&#x1F41F; Predict with MiroFish</button>';
+  h+='<div id="aip-result"></div></div>';
+  cont.innerHTML=h;
+  _renderAipItems();
+}
+
+function aipCacheMFList(funds){ window._mfFundsList=funds; }
+
+function aipUpdateSearch(){
+  var type=document.getElementById('aip-type').value;
+  var q=(document.getElementById('aip-search').value||'').toLowerCase().trim();
+  var dd=document.getElementById('aip-dropdown');
+  if(!dd) return;
+  var list=type==='stock'?(window._aipStockList||[]):(window._aipMFList||[]);
+  var filtered=q.length<1?list.slice(0,20):list.filter(function(x){return(x.name+' '+x.sym).toLowerCase().includes(q);}).slice(0,20);
+  if(!filtered.length){dd.style.display='none';return;}
+  dd.innerHTML=filtered.map(function(x){
+    var sub=x.type==='mf'?(x.cat||'').replace('cap',' Cap'):x.sector||'';
+    var sc=x.score?'<span style="font-size:9px;background:var(--bg4);border-radius:3px;padding:1px 5px;color:var(--text3)">'+Math.round(x.score)+'pts</span>':'';
+    return '<div class="aip-dd-item" data-sym="'+x.sym+'" data-type="'+x.type+'" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background=\'var(--bg3)\'" onmouseout="this.style.background=\'\'"><div><div style="font-size:12px;font-weight:600">'+x.sym+'</div><div style="font-size:10px;color:var(--text3)">'+sub+'</div></div>'+sc+'</div>';
+  }).join('');
+  dd.style.display='block';
+  // Use event delegation — safe for any sym content
+  dd.onclick = function(e) {
+    var item = e.target.closest('.aip-dd-item');
+    if(!item) return;
+    aipSelectItem(item.dataset.sym, item.dataset.type);
+  };
+}
+
+function aipSelectItem(sym,type){
+  var list=type==='stock'?(window._aipStockList||[]):(window._aipMFList||[]);
+  var item=list.find(function(x){return x.sym===sym;});
+  if(!item) return;
+  document.getElementById('aip-search').value=sym+(item.name&&item.name!==sym?' — '+item.name.slice(0,30):'');
+  document.getElementById('aip-dropdown').style.display='none';
+  window._aipSelected=item;
+}
+
+function aipAddItem(){
+  var item=window._aipSelected;
+  var amt=parseInt(document.getElementById('aip-amount').value||'100000');
+  if(!item){alert('Search and select a stock or fund first');return;}
+  if(!amt||amt<100){alert('Enter a valid amount');return;}
+  if(_aiPortfolioItems.find(function(x){return x.sym===item.sym;})){alert(item.sym+' already in portfolio');return;}
+  _aiPortfolioItems.push(Object.assign({},item,{amount:amt}));
+  window._aipSelected=null;
+  document.getElementById('aip-search').value='';
+  document.getElementById('aip-dropdown').style.display='none';
+  _renderAipItems();
+}
+
+function aipRemoveItem(i){
+  _aiPortfolioItems.splice(i,1);
+  _renderAipItems();
+}
+
+function _renderAipItems(){
+  var el=document.getElementById('aip-items');
+  if(!el) return;
+  if(!_aiPortfolioItems.length){
+    el.innerHTML='<div style="font-size:12px;color:var(--text4);padding:16px;text-align:center;border:1px dashed var(--border);border-radius:8px;margin-top:8px">No investments added yet &mdash; search above and click + Add</div>';
+    return;
+  }
+  var total=_aiPortfolioItems.reduce(function(s,x){return s+x.amount;},0);
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">'
+    +_aiPortfolioItems.map(function(x,i){
+      var pct=Math.round(x.amount/total*100);
+      return '<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border-radius:8px;padding:10px 14px">'
+        +'<span style="font-size:16px">'+(x.type==='mf'?'&#x1F4CA;':'&#x1F4C8;')+'</span>'
+        +'<div style="flex:1"><div style="font-size:12px;font-weight:600">'+x.sym+'</div>'
+        +'<div style="font-size:10px;color:var(--text3)">'+x.name+'</div></div>'
+        +'<div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--green)">&#x20b9;'+x.amount.toLocaleString('en-IN')+'</div>'
+        +'<div style="font-size:9px;color:var(--text3)">'+pct+'% of total</div></div>'
+        +'<button onclick="aipRemoveItem('+i+')" style="background:rgba(239,68,68,.15);color:var(--red);border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px">&#x2715;</button>'
+        +'</div>';
+    }).join('')
+    +'<div style="font-size:11px;color:var(--text3);padding:8px 4px;text-align:right;border-top:1px solid var(--border);margin-top:4px">'
+    +'Total: <b style="color:var(--text)">&#x20b9;'+total.toLocaleString('en-IN')+'</b> across '+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')
+    +'</div></div>';
+}
+
+function aipSetYears(y,btn){
+  _aiPortfolioYears=y;
+  document.querySelectorAll('.aip-yr-btn').forEach(function(b){b.style.background='var(--bg3)';b.style.color='var(--text)';});
+  if(btn){btn.style.background='var(--green)';btn.style.color='#000';}
+}
+
+async function aipRunPrediction(){
+  if(!_aiPortfolioItems.length){alert('Add at least one investment first');return;}
+  var result=document.getElementById('aip-result');
+  if(!result) return;
+  result.innerHTML='<div style="text-align:center;padding:32px"><div style="font-size:28px;margin-bottom:12px">&#x1F41F;</div><div style="font-size:13px;color:#bc8cff;font-weight:600;margin-bottom:6px">MiroFish agents running...</div><div style="font-size:11px;color:var(--text3)">Analyzing each investment individually &middot; ~30-60 seconds</div></div>';
+  try{
+    var resp=await fetch('/api/mirofish/portfolio-predict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:_aiPortfolioItems,years:_aiPortfolioYears})});
+    var d=await resp.json();
+    if(d.error) throw new Error(d.error);
+    _renderAipResult(d);
+  }catch(e){
+    result.innerHTML='<div style="color:var(--red);padding:16px;background:rgba(239,68,68,.08);border-radius:8px;font-size:12px">'+(e.message.includes('ANTHROPIC')?'&#9888; Add ANTHROPIC_API_KEY to Railway env vars':'Error: '+e.message)+'</div>';
+  }
+}
+
+function _renderAipResult(d){
+  var result=document.getElementById('aip-result');
+  if(!result||!d) return;
+  var total=_aiPortfolioItems.reduce(function(s,x){return s+x.amount;},0);
+  var proj=d.total_projected||0;
+  var gain=proj-total;
+  var gainPct=total>0?((gain/total)*100).toFixed(1):0;
+  var col=gain>=0?'var(--green)':'var(--red)';
+
+  var h='<div style="background:var(--bg2);border:1px solid rgba(124,58,237,.3);border-radius:12px;padding:20px">';
+  h+='<div style="font-size:13px;font-weight:700;margin-bottom:16px;color:#bc8cff">&#x1F41F; MiroFish Prediction &mdash; '+_aiPortfolioYears+' Year'+(_aiPortfolioYears>1?'s':'')+'</div>';
+  // Big total
+  h+='<div style="background:linear-gradient(135deg,rgba(124,58,237,.1),rgba(79,70,229,.08));border:1px solid rgba(124,58,237,.2);border-radius:10px;padding:20px;margin-bottom:16px;text-align:center">';
+  h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">&#x20b9;'+total.toLocaleString('en-IN')+' invested &rarr; '+_aiPortfolioYears+' year'+(_aiPortfolioYears>1?'s':'')+'</div>';
+  h+='<div style="font-size:36px;font-weight:800;color:'+col+'">&#x20b9;'+Math.round(proj).toLocaleString('en-IN')+'</div>';
+  h+='<div style="font-size:14px;color:'+col+';margin-top:6px">'+(gain>=0?'&#x25B2; +&#x20b9;'+Math.round(gain).toLocaleString('en-IN')+' (+'+gainPct+'%)':'&#x25BC; &#x20b9;'+Math.abs(Math.round(gain)).toLocaleString('en-IN')+' ('+gainPct+'%)')+'</div>';
+  h+='<div style="font-size:10px;color:var(--text3);margin-top:6px">Portfolio CAGR: '+(d.portfolio_cagr||'\u2014')+'% &middot; Confidence: '+(d.confidence||'\u2014')+'</div>';
+  h+='</div>';
+  // Per item
+  h+='<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">Breakdown</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
+  (d.items||[]).forEach(function(item){
+    var iGain=(item.projected||0)-(item.amount||0);
+    var iGainPct=item.amount?((iGain/item.amount)*100).toFixed(0):0;
+    var ic=iGain>=0?'var(--green)':'var(--red)';
+    h+='<div style="background:var(--bg3);border-radius:8px;padding:12px;display:flex;align-items:flex-start;gap:12px">';
+    h+='<span style="font-size:18px;flex-shrink:0">'+(item.type==='mf'?'&#x1F4CA;':'&#x1F4C8;')+'</span>';
+    h+='<div style="flex:1"><div style="font-size:12px;font-weight:600">'+item.sym+'</div>';
+    h+='<div style="font-size:10px;color:var(--text3)">&#x20b9;'+item.amount.toLocaleString('en-IN')+' invested &middot; '+(item.cagr||'\u2014')+'% CAGR</div>';
+    if(item.thesis) h+='<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.5">'+item.thesis+'</div>';
+    h+='</div>';
+    h+='<div style="text-align:right;flex-shrink:0"><div style="font-size:14px;font-weight:700;color:'+ic+'">&#x20b9;'+Math.round(item.projected||0).toLocaleString('en-IN')+'</div>';
+    h+='<div style="font-size:10px;color:'+ic+'">'+(iGain>=0?'+':'')+iGainPct+'%</div></div>';
+    h+='</div>';
+  });
+  h+='</div>';
+  if(d.portfolio_insight){
+    h+='<div style="background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.15);border-radius:8px;padding:12px">';
+    h+='<div style="font-size:10px;font-weight:700;color:#bc8cff;margin-bottom:6px">&#x1F41F; MiroFish Insight</div>';
+    h+='<div style="font-size:11px;color:var(--text2);line-height:1.6">'+d.portfolio_insight+'</div>';
+    if(d.key_risk) h+='<div style="font-size:10px;color:var(--red);margin-top:6px">&#9888; Key risk: '+d.key_risk+'</div>';
+    h+='</div>';
+  }
+  h+='<div style="text-align:center;margin-top:16px"><button onclick="aipRunPrediction()" class="btn btn-sm">&#x1F504; Re-predict</button></div>';
+  h+='</div>';
+  result.innerHTML=h;
 }
 
 // -- _init --------------------------------------------------------------------
