@@ -1416,7 +1416,7 @@ async function renderMFPage(){
       colGroups.forEach(function(g){
         var grpColor = g.label==="RETURNS"?"var(--green)":g.label==="RISK"?"var(--red)":g.label==="vs CATEGORY"?"#2dd4bf":g.label==="SCORE"?"var(--blue)":"var(--text3)";
         var isIdentity = g.label==="IDENTITY";
-        html+='<th colspan="'+g.cols.length+'" style="background:var(--bg3);color:'+grpColor+';font-size:9px;letter-spacing:.8px;text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border3);'+(isIdentity?'position:sticky;left:0;z-index:10;':'')+' ">'+g.label+'</th>';
+        html+='<th colspan="'+g.cols.length+'" style="background:var(--bg3);color:'+grpColor+';font-size:9px;letter-spacing:.8px;text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border3);'+(isIdentity?'position:sticky;left:0;z-index:10;background:var(--bg3);':'')+' ">'+g.label+'</th>';
       });
       html+='</tr>';
 
@@ -1427,7 +1427,7 @@ async function renderMFPage(){
         var stickyStyle = isHash ? 'position:sticky;left:0;z-index:5;' : isFund ? 'position:sticky;left:44px;z-index:5;' : '';
         var widthStyle = isHash ? 'min-width:44px;width:44px;' : isFund ? 'min-width:200px;' : 'min-width:78px;';
         var borderRight = groupEndIdx[i] ? 'border-right:2px solid var(--border3);' : '';
-        html+='<th style="padding:5px 8px;text-align:'+(i<2?"left":"right")+';background:var(--bg2);color:var(--text3);font-weight:600;font-size:10px;border-bottom:2px solid var(--border3);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
+        html+='<th style="padding:5px 8px;text-align:'+(i<2?"left":"right")+';background:var(--bg3);color:var(--text3);font-weight:600;font-size:10px;border-bottom:2px solid var(--border3);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
       });
       html+='</tr></thead><tbody>';
 
@@ -1437,8 +1437,8 @@ async function renderMFPage(){
         var eligibleRank = 0;
         if(isEligible){ eligibleFunds.forEach(function(ef,ei){if(ef.name===f.name)eligibleRank=ei+1;}); }
         var isTop = isEligible && eligibleRank <= 5;
-        var rowTopBg = isTop ? cfg.color+'0f' : 'var(--bg)';
-        var rowOpacity = isEligible ? '' : 'opacity:0.45;';
+        var rowTopBg = isTop ? 'var(--bg2)' : 'var(--bg)';
+        var rowHighlight = isTop ? 'border-left:3px solid '+cfg.color+';' : '';
 
         function rv(v,dec){ 
           if(v==null||v===undefined) return '<span style="color:var(--text4)">—</span>';
@@ -1544,62 +1544,62 @@ async function renderMFPage(){
              : (f.filter_reasons&&f.filter_reasons[0] ? f.filter_reasons[0] : 'Not eligible')},
         ];
 
-        html+='<tr data-ri="'+i+'" style="'+(isEligible?'':'opacity:0.45;')+'border-bottom:1px solid var(--border2);">';
+        html+='<tr data-ri="'+i+'" style="'+(isEligible?'':'opacity:0.45;')+rowHighlight+'border-bottom:1px solid var(--border2);">';
         cells.forEach(function(c){
           html+='<td style="padding:5px 8px;'+c.s+'">'+c.v+'</td>';
         });
         html+='</tr>';
       });
-      // Show more row — hidden rows beyond 10 shown on click
-      var TABLE_INITIAL = 10;
-      html+='<tr id="tbl-more-'+cat+'" style="display:none"><td colspan="99" style="text-align:center;padding:10px;border-top:1px solid var(--border2)"><span onclick="tblExpand(\''+cat+'\')" style="cursor:pointer;font-size:11px;color:'+cfg.color+';font-weight:600;padding:4px 16px;border:1px solid '+cfg.color+'60;border-radius:20px;display:inline-block">Show more ▾</span></td></tr>';
-      html+='</tbody></table></div></div>';
+      // Close table and scroll container
+      html+='</tbody></table></div>';
+      // Show more button OUTSIDE scroll div — always visible at bottom, no scrolling needed
+      html+='<div id="tbl-showmore-'+cat+'" style="display:none;text-align:center;padding:10px 0 6px">'
+           +'<span onclick="tblExpand(\''+cat+'\')" id="tbl-showmore-btn-'+cat+'"'
+           +' style="cursor:pointer;font-size:11px;color:'+cfg.color+';font-weight:600;'
+           +'padding:5px 22px;border:1px solid '+cfg.color+'60;border-radius:20px;'
+           +'display:inline-block;background:var(--bg2)">Show more ▾</span>'
+           +'</div>'
+           +'</div>';  // closes outer wrapper div
     });
     catsEl.innerHTML=html;
 
-    // Hide table rows beyond 10 per category, show "show more" button
+    // Hide table rows beyond 10 per category, show external "show more" button
     var TABLE_INITIAL = 10;
     ['smallcap','midcap','flexicap'].forEach(function(cat){
-      var allRows = catsEl.querySelectorAll('tr[data-ri]');
-      var catRows = [];
-      // Filter rows belonging to this cat's table
-      // Use the tbl-more row as anchor to find parent table
-      var moreRow = document.getElementById('tbl-more-'+cat);
-      if(!moreRow) return;
-      var tbody = moreRow.parentNode;
-      if(!tbody) return;
-      var rows = tbody.querySelectorAll('tr[data-ri]');
+      var showMoreDiv = document.getElementById('tbl-showmore-'+cat);
+      if(!showMoreDiv) return;
+      // Find all data rows in this category's table
+      // The showMoreDiv's previousSibling is the scroll container > table > tbody
+      var scrollDiv = showMoreDiv.previousElementSibling;
+      if(!scrollDiv) return;
+      var rows = scrollDiv.querySelectorAll('tr[data-ri]');
       var hasHidden = false;
       rows.forEach(function(r){
-        var ri = parseInt(r.getAttribute('data-ri'));
-        if(ri >= TABLE_INITIAL){
+        if(parseInt(r.getAttribute('data-ri')) >= TABLE_INITIAL){
           r.style.display = 'none';
           hasHidden = true;
         }
       });
-      if(hasHidden) moreRow.style.display = '';
+      if(hasHidden) showMoreDiv.style.display = '';
     });
 
-    // Global expand function for tables
+    // Global expand/collapse for tables
     window.tblExpand = function(cat){
-      var moreRow = document.getElementById('tbl-more-'+cat);
-      if(!moreRow) return;
-      var tbody = moreRow.parentNode;
-      var rows = tbody.querySelectorAll('tr[data-ri]');
-      var allVisible = true;
-      rows.forEach(function(r){ if(r.style.display==='none') allVisible=false; });
-      if(!allVisible){
-        // Show all
+      var showMoreDiv = document.getElementById('tbl-showmore-'+cat);
+      var btn = document.getElementById('tbl-showmore-btn-'+cat);
+      if(!showMoreDiv) return;
+      var scrollDiv = showMoreDiv.previousElementSibling;
+      if(!scrollDiv) return;
+      var rows = scrollDiv.querySelectorAll('tr[data-ri]');
+      var anyHidden = false;
+      rows.forEach(function(r){ if(r.style.display==='none') anyHidden=true; });
+      if(anyHidden){
         rows.forEach(function(r){ r.style.display=''; });
-        var btn = moreRow.querySelector('span');
         if(btn) btn.textContent = 'Show less ▴';
       } else {
-        // Collapse back
         rows.forEach(function(r){
-          var ri = parseInt(r.getAttribute('data-ri'));
-          if(ri >= TABLE_INITIAL) r.style.display = 'none';
+          if(parseInt(r.getAttribute('data-ri')) >= TABLE_INITIAL) r.style.display='none';
         });
-        var btn = moreRow.querySelector('span');
         if(btn) btn.textContent = 'Show more ▾';
       }
     };
