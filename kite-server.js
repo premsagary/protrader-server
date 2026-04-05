@@ -4741,7 +4741,117 @@ app.get('/api/mirofish/result', (req,res) => {
   res.json(mfLastSimulation);
 });
 
-// MF Wealth Projection — AI-powered per-fund prediction
+// MiroFish — Fallen Angel inline prediction (per stock, called from card)
+app.post('/api/mirofish/fa-predict', async(req,res) => {
+  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
+  const f = req.body;
+  const n = v => (v==null||v===''||isNaN(+v)) ? 'N/A' : (+v).toFixed(2);
+  const p = v => (v==null||v===''||isNaN(+v)) ? 'N/A' : (+v).toFixed(1)+'%';
+
+  const system = `You are a panel of 5 expert NSE equity analysts (Fundamental, Technical, Contrarian, Risk, Quant).
+You analyze a Fallen Angel stock — a quality business that has fallen 20%+ from its peak.
+Your job: predict the stock price at 6 months, 1 year, 2 years, 3 years from today.
+
+Base your prediction on all provided data. Be realistic — not bullish marketing.
+If debt is high or earnings are collapsing, say so.
+
+Respond ONLY in valid JSON, no markdown:
+{
+  "current_price": 148.4,
+  "price_6m": 172.0,
+  "price_1y": 195.0,
+  "price_2y": 235.0,
+  "price_3y": 280.0,
+  "verdict": "Strong Recovery / Likely Recovery / Slow Recovery / Value Trap",
+  "confidence": "High / Medium / Low",
+  "analysis": "2-3 sentence explanation of why these prices",
+  "key_risk": "Single biggest risk to this prediction"
+}
+All prices must be in INR. Be consistent — prices should reflect the analysis.`;
+
+  const user = `Stock: ${f.sym} — ${f.name||f.sym}
+Sector: ${f.sector||'N/A'} | Group: ${f.grp||'N/A'}
+
+PRICE ACTION
+  Current Price: ₹${f.price||'N/A'}
+  Down from 52W High: ${p(f.pctFromHigh)} | 52W High: ₹${f.wk52Hi||'N/A'} | 52W Low: ₹${f.wk52Lo||'N/A'}
+  Above 200DMA by: ${p(f.pctAbove200)}
+
+FUNDAMENTALS
+  ROE: ${p(f.roe)} | D/E: ${n(f.debtToEq)}x | PE: ${n(f.pe)}x
+  EPS Growth: ${p(f.earGrowth)} | Revenue Growth: ${p(f.revGrowth)}
+  Operating Margin: ${p(f.opMargin)}
+
+TECHNICALS
+  RSI: ${n(f.rsi)} | ADX: ${n(f.adx)} | Beta: ${n(f.beta)} | Annual Volatility: ${p(f.annualVol)}
+  MACD: ${f.macdBull?'Bullish':'Bearish'} | OBV: ${f.obvRising?'Rising (Accumulation)':'Falling (Distribution)'}
+  Supertrend: ${f.supertrend||'N/A'} | Golden Cross: ${f.goldenCross?'Yes':'No'}
+  RSI Bullish Divergence: ${f.bullishDiv?'YES — strong recovery signal':'No'}
+  200DMA: ₹${f.dma200||'N/A'}
+
+FALLEN ANGEL SCORING
+  ProTrader Fallen Angel Score: ${f.fallenScore||'N/A'}/100
+  Verdict: ${f.fallenVerdict||'N/A'}
+  Stop Loss: ₹${f.stopLoss||'N/A'} | R:R Ratio: ${f.rrRatio||'N/A'}x
+
+Predict price targets for 6M, 1Y, 2Y, 3Y. Return JSON only.`;
+
+  try {
+    const raw = await callAnthropicAgent(system, user);
+    const clean = raw.replace(/```json|```/g,'').trim();
+    res.json(JSON.parse(clean));
+  } catch(e) { res.json({ error: e.message }); }
+});
+
+// MiroFish — Portfolio prediction (multiple stocks + MFs, per-item + total)
+app.post('/api/mirofish/portfolio-predict', async(req,res) => {
+  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
+  const { items, years } = req.body;
+  if (!items||!items.length) return res.json({ error: 'No items provided' });
+
+  const system = `You are a senior portfolio manager and MiroFish synthesis agent.
+You receive a list of investments (stocks and/or mutual funds) with amounts.
+Your job: predict the portfolio value after ${years} year${years>1?'s':''}.
+
+For each item estimate a realistic CAGR based on:
+- Stock: quality, sector, growth trajectory
+- MF: category (small/mid/flexi cap), historical CAGR, expense ratio effect
+
+Apply mean reversion for longer horizons. Be conservative, not optimistic.
+
+Respond ONLY in valid JSON, no markdown:
+{
+  "items": [
+    {
+      "sym": "RELIANCE",
+      "type": "stock",
+      "amount": 100000,
+      "cagr": 12.5,
+      "projected": 225000,
+      "thesis": "One sentence reason for this CAGR"
+    }
+  ],
+  "total_projected": 450000,
+  "portfolio_cagr": 13.2,
+  "confidence": "High/Medium/Low",
+  "portfolio_insight": "2-3 sentence overall portfolio assessment",
+  "key_risk": "Biggest single risk to this portfolio"
+}`;
+
+  const itemsText = items.map((x,i) =>
+    `${i+1}. ${x.sym} (${x.type==='mf'?'Mutual Fund — '+(x.cat||''):'Stock — '+(x.sector||'')}) — ₹${x.amount.toLocaleString('en-IN')} invested`
+  ).join('\n');
+
+  const user = `Portfolio to analyze over ${years} year${years>1?'s':''}:\n\n${itemsText}\n\nPredict each item's projected value and the total portfolio value. JSON only.`;
+
+  try {
+    const raw = await callAnthropicAgent(system, user);
+    const clean = raw.replace(/```json|```/g,'').trim();
+    res.json(JSON.parse(clean));
+  } catch(e) { res.json({ error: e.message }); }
+});
+
+
 app.post('/api/mirofish/mf-predict', async(req,res) => {
   if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
 
