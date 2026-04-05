@@ -2400,22 +2400,28 @@ async function checkTokenStatus() {
     var banner = document.getElementById('token-banner');
     if (!banner) return;
 
-    // Show banner if: token expired, OR no token and market open
-    var needsToken = d.tokenExpired || (!d.hasToken && d.marketOpen);
+    // Show banner if: no token at all, OR token is expired (Kite rejected it)
+    var needsToken = !d.hasToken || d.tokenExpired;
     banner.style.display = needsToken ? 'flex' : 'none';
 
-    // Update market badge
+    // Market badge — show during market hours
     var mb = document.getElementById('market-badge');
     if (mb) {
-      mb.style.display = d.marketOpen ? 'inline-flex' : 'none';
-      mb.textContent   = d.isWorking ? '● NSE Open' : '⚠ Token Expired';
-      mb.style.color   = d.isWorking ? '#22c55e' : '#f59e0b';
+      if (d.marketOpen) {
+        mb.style.display = 'inline-flex';
+        mb.textContent   = d.tickerOn ? '● NSE Open' : '◎ NSE Open';
+        mb.style.color   = d.tickerOn ? '#22c55e' : '#f59e0b';
+      } else {
+        mb.style.display = 'none';
+      }
     }
 
-    // Update logo dot colour
+    // Logo dot: green=ticker live, amber=token valid but market closed or ticker not yet on, grey=no/bad token
     var dot = document.querySelector('.logo-dot');
     if (dot) {
-      dot.style.background = d.isWorking ? '#22c55e' : (d.hasToken ? '#f59e0b' : '#64748b');
+      dot.style.background = d.tickerOn         ? '#22c55e'
+        : (d.hasToken && d.tokenValid)          ? '#f59e0b'
+        : '#ef4444'; // red = no token or expired
     }
   } catch(e) {}
 }
