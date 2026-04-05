@@ -1723,91 +1723,38 @@ app.get("/api/mf/tickertape", async(req,res)=>{
 // Falls back to MFAPI cache if DB table not yet loaded
 app.get("/api/mf/funds", async(req,res)=>{
   try {
-    // Serve from in-memory cache if available (built on startup - instant load)
-    let rows_data;
+    // Serve from pre-scored in-memory cache (built on startup — instant, fully scored)
     if (mfScoreCache && mfScoreCache.length > 0) {
-      rows_data = mfScoreCache;
-    } else {
-      // Cache not ready yet - build it now (first request only)
-      await buildMFCache();
-      rows_data = mfScoreCache || [];
-    }
-    if (!rows_data.length) throw new Error("No MF data in cache or DB");
-    const funds = rows_data;
-
-    // -- STEP 2: ELIGIBILITY FILTER ----------------------------------
-    // Hard filters - any fail = fund not scored
-    // Filters: AUM >=₹1K Cr, Age >=5Y, 3Y rolling data exists, expense <2%
-    const eligible   = funds.filter(f => checkEligible(f).eligible);
-    const ineligible = funds.filter(f => !checkEligible(f).eligible);
-
-    // -- STEP 3: BUILD DISTRIBUTIONS FROM ELIGIBLE FUNDS ONLY --------
-    // Critical: distributions must NOT include unproven small/new funds
-    CAT_DIST = {};
-    const distCols = {
-      rolling_3y:    f => f.rolling_3y  && f.rolling_3y  > 0 ? f.rolling_3y  : null,
-      sharpe:        f => f.sharpe  != null ? f.sharpe  : null,
-      sortino:       f => f.sortino != null ? f.sortino : null,
-      volatility:    f => f.volatility   && f.volatility   > 0 ? f.volatility   : null,
-      max_drawdown:  f => f.max_drawdown && f.max_drawdown > 0 ? f.max_drawdown : null,
-      cagr_3y:       f => f.cagr_3y  && f.cagr_3y  > 0 ? f.cagr_3y  : null,
-      cagr_5y:       f => f.cagr_5y  && f.cagr_5y  > 0 ? f.cagr_5y  : null,
-      cagr_10y:      f => f.cagr_10y && f.cagr_10y > 0 ? f.cagr_10y : null,
-      vs_cat_3y:     f => f.vs_cat_3y  && f.vs_cat_3y  > 0 ? f.vs_cat_3y  : null,
-      vs_cat_5y:     f => f.vs_cat_5y  && f.vs_cat_5y  > 0 ? f.vs_cat_5y  : null,
-      vs_cat_10y:    f => f.vs_cat_10y && f.vs_cat_10y > 0 ? f.vs_cat_10y : null,
-      expense:       f => f.expense_ratio && f.expense_ratio > 0 ? f.expense_ratio : null,
-      pe:            f => f.pe_ratio && f.pe_ratio > 0 ? f.pe_ratio : null,
-      top10:         f => f.top10_conc && f.top10_conc > 0 ? f.top10_conc : null,
-      pct_from_ath:  f => f.pct_from_ath != null ? f.pct_from_ath : null,
-    };
-    eligible.forEach(f => {
-      const subcat = f.sub_category;
-      if (!CAT_DIST[subcat]) CAT_DIST[subcat] = Object.fromEntries(Object.keys(distCols).map(k=>[k,[]]));
-      Object.entries(distCols).forEach(([col, fn]) => {
-        const v = fn(f); if (v != null) CAT_DIST[subcat][col].push(v);
+      const eligible_count   = mfScoreCache.filter(f=>f.eligible).length;
+      const ineligible_count = mfScoreCache.filter(f=>!f.eligible).length;
+      return res.json({
+        funds: mfScoreCache,
+        total: mfScoreCache.length,
+        eligible_count, not_eligible_count: ineligible_count,
+        source: 'Tickertape CSV - Apr 4 2026',
+        filters: 'AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%',
+        cached_at: mfScoreCachedAt,
       });
-    });
+    }
 
-    // -- STEP 4: SCORE ELIGIBLE FUNDS --------------------------------
-    const scoredEligible = eligible.map(f => {
-      const {score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist} = scoreMFTickertape(f);
-      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist, eligible: true, filter_reasons: []};
-    });
+    // Cache not ready — build it now (blocks until done, first request only)
+    await buildMFCache();
 
-    // -- STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) --
-    const scoredIneligible = ineligible.map(f => {
-      const subcat = f.sub_category || '';
-      const cat = subcat.includes('Small') ? 'smallcap' : subcat.includes('Mid') ? 'midcap' : 'flexicap';
-      const {reasons} = checkEligible(f);
-      const qual = getAmcQual(f.amc || '');
-      return {...f, score: null, hits: {}, cat,
-        amc_sebi: qual.sebi, amc_warning: qual.warning, amc_note: null,
-        eligible: false, filter_reasons: reasons};
-    });
+    if (mfScoreCache && mfScoreCache.length > 0) {
+      const eligible_count   = mfScoreCache.filter(f=>f.eligible).length;
+      const ineligible_count = mfScoreCache.filter(f=>!f.eligible).length;
+      return res.json({
+        funds: mfScoreCache,
+        total: mfScoreCache.length,
+        eligible_count, not_eligible_count: ineligible_count,
+        source: 'Tickertape CSV - Apr 4 2026',
+        filters: 'AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%',
+        cached_at: mfScoreCachedAt,
+      });
+    }
 
-    // -- STEP 6: SORT - eligible by score desc, ineligible by name ---
-    const allFunds = [...scoredEligible, ...scoredIneligible];
-    allFunds.sort((a,b) => {
-      if (a.sub_category !== b.sub_category) return a.sub_category.localeCompare(b.sub_category);
-      // eligible before ineligible
-      if (a.eligible && !b.eligible) return -1;
-      if (!a.eligible && b.eligible) return 1;
-      // within eligible: DNI red at very bottom, DNI amber above that, clean funds at top
-      const dniRank = f => !f.dni ? 0 : f.dni.level==='red' ? 2 : 1;
-      if (dniRank(a) !== dniRank(b)) return dniRank(a) - dniRank(b);
-      return (b.score||0) - (a.score||0);
-    });
+    throw new Error('No MF data in cache or DB');
 
-    return res.json({
-      funds: allFunds,
-      total: allFunds.length,
-      eligible_count: scoredEligible.length,
-      not_eligible_count: scoredIneligible.length,
-      source: "Tickertape CSV - Apr 4 2026",
-      filters: "AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%",
-      cached_at: Date.now()
-    });
 
   } catch(e) {
     console.log("Tickertape DB not ready:", e.message);
@@ -1828,13 +1775,14 @@ let mfScoreCachedAt = null;
 async function buildMFCache() {
   try {
     const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
-    if (!rows.length) return;
+    if (!rows.length) { console.log('buildMFCache: no rows in mf_tickertape'); return; }
+
     const pf = (v) => v!=null ? parseFloat(v) : null;
     const funds = rows.map(f => ({
       name:f.name, sub_category:f.sub_category, amc:f.amc,
       benchmark:f.benchmark, fund_manager:f.fund_manager,
       sip_allowed:f.sip_allowed, sebi_risk:f.sebi_risk,
-      nav:pf(f.nav), navFormatted:f.nav?"Rs."+parseFloat(f.nav).toFixed(2):null,
+      nav:pf(f.nav), navFormatted:f.nav?'₹'+parseFloat(f.nav).toFixed(2):null,
       aum_cr:pf(f.aum), aum:pf(f.aum),
       expense_ratio:pf(f.expense_ratio), min_lumpsum:pf(f.min_lumpsum),
       min_sip:pf(f.min_sip), exit_load:pf(f.exit_load),
@@ -1854,11 +1802,68 @@ async function buildMFCache() {
       pct_midcap:pf(f.pct_midcap), pct_smallcap:pf(f.pct_smallcap),
       pct_cash:pf(f.pct_cash), pct_debt:pf(f.pct_debt),
       top3_conc:pf(f.top3_conc), top5_conc:pf(f.top5_conc), top10_conc:pf(f.top10_conc),
-      dataSource:"Tickertape - Apr 4 2026",
+      dataSource:'Tickertape - Apr 4 2026',
     }));
-    mfScoreCache = funds;
+
+    // Run the FULL scoring pipeline (same as /api/mf/funds)
+    const eligible   = funds.filter(f => checkEligible(f).eligible);
+    const ineligible = funds.filter(f => !checkEligible(f).eligible);
+
+    // Build per-subcategory distributions from eligible funds only
+    CAT_DIST = {};
+    const distCols = {
+      rolling_3y:   f => f.rolling_3y  && f.rolling_3y  > 0 ? f.rolling_3y  : null,
+      sharpe:       f => f.sharpe  != null ? f.sharpe  : null,
+      sortino:      f => f.sortino != null ? f.sortino : null,
+      volatility:   f => f.volatility   && f.volatility   > 0 ? f.volatility   : null,
+      max_drawdown: f => f.max_drawdown && f.max_drawdown > 0 ? f.max_drawdown : null,
+      cagr_3y:      f => f.cagr_3y  && f.cagr_3y  > 0 ? f.cagr_3y  : null,
+      cagr_5y:      f => f.cagr_5y  && f.cagr_5y  > 0 ? f.cagr_5y  : null,
+      cagr_10y:     f => f.cagr_10y && f.cagr_10y > 0 ? f.cagr_10y : null,
+      vs_cat_3y:    f => f.vs_cat_3y  && f.vs_cat_3y  > 0 ? f.vs_cat_3y  : null,
+      vs_cat_5y:    f => f.vs_cat_5y  && f.vs_cat_5y  > 0 ? f.vs_cat_5y  : null,
+      vs_cat_10y:   f => f.vs_cat_10y && f.vs_cat_10y > 0 ? f.vs_cat_10y : null,
+      expense:      f => f.expense_ratio && f.expense_ratio > 0 ? f.expense_ratio : null,
+      pe:           f => f.pe_ratio && f.pe_ratio > 0 ? f.pe_ratio : null,
+      top10:        f => f.top10_conc && f.top10_conc > 0 ? f.top10_conc : null,
+      pct_from_ath: f => f.pct_from_ath != null ? f.pct_from_ath : null,
+    };
+    eligible.forEach(f => {
+      const subcat = f.sub_category;
+      if (!CAT_DIST[subcat]) CAT_DIST[subcat] = Object.fromEntries(Object.keys(distCols).map(k=>[k,[]]));
+      Object.entries(distCols).forEach(([col, fn]) => { const v=fn(f); if(v!=null) CAT_DIST[subcat][col].push(v); });
+    });
+
+    // Score eligible funds
+    const scoredEligible = eligible.map(f => {
+      const {score,hits,cat,amc_sebi,amc_warning,amc_note,dni,watchlist} = scoreMFTickertape(f);
+      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, watchlist, eligible:true, filter_reasons:[]};
+    });
+
+    // Mark ineligible (no score, but keep for display)
+    const scoredIneligible = ineligible.map(f => {
+      const subcat = f.sub_category || '';
+      const cat = subcat.includes('Small')?'smallcap':subcat.includes('Mid')?'midcap':'flexicap';
+      const {reasons} = checkEligible(f);
+      const qual = getAmcQual(f.amc||'');
+      return {...f, score:null, hits:{}, cat, amc_sebi:qual.sebi, amc_warning:qual.warning,
+        amc_note:null, eligible:false, filter_reasons:reasons};
+    });
+
+    // Sort: sub_category → eligible before ineligible → DNI level → score desc
+    const allFunds = [...scoredEligible, ...scoredIneligible];
+    allFunds.sort((a,b)=>{
+      if(a.sub_category!==b.sub_category) return (a.sub_category||'').localeCompare(b.sub_category||'');
+      if(a.eligible && !b.eligible) return -1;
+      if(!a.eligible && b.eligible) return 1;
+      const dniRank = f=>!f.dni?0:f.dni.level==='red'?2:1;
+      if(dniRank(a)!==dniRank(b)) return dniRank(a)-dniRank(b);
+      return (b.score||0)-(a.score||0);
+    });
+
+    mfScoreCache = allFunds;
     mfScoreCachedAt = Date.now();
-    console.log(`MF cache built: ${funds.length} funds`);
+    console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
 }
 // Build on startup and every 6h
