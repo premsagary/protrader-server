@@ -343,7 +343,7 @@ async function fetchAll(){
     if(cr[0].status==="fulfilled"&&cr[0].value.ok){const d=await cr[0].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
     if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats = await cr[1].value.json();
   } catch(e){}
-  if(S.mode!=="mf") render(); // preserve MF tab content
+  if(S.mode!=="mf" && S.mode!=="stockrec") render(); // preserve MF + StockRec tab content
 }
 
 async function fetchCryptoPrices(){
@@ -1186,7 +1186,8 @@ async function fetchCryptoNews(){
 // RENDER DISPATCHER — single definitive version
 // ═══════════════════════════════════════════════════════
 function render(){
-  if(S.mode==="mf") return; // don't wipe MF tab on auto-refresh
+  if(S.mode==="mf") return;      // don't wipe MF tab on auto-refresh
+  if(S.mode==="stockrec") return; // don't wipe StockRec tab on auto-refresh
   renderTopBar();
   const tab = S.mode==="stocks" ? S.stocksTab : S.cryptoTab;
   if(S.mode==="stocks"){
