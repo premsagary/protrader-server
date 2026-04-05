@@ -2120,7 +2120,7 @@ function buildAnalyzerUI(d){
   var vc  = d.verdictColor||'#f59e0b';
   var px  = d.price;
   var da  = d.dataAvailable||{};
-  var html= '<div style="margin-top:16px">';
+  var html= '<div style="margin-top:16px;padding:0 2px">';
 
   // ── TOP BAR ────────────────────────────────────────────────────────────────
   html += '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">';
@@ -2158,12 +2158,12 @@ function buildAnalyzerUI(d){
     html += '<button onclick="switchChartTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(active?'#f59e0b':'var(--border)')+';background:'+(active?'rgba(245,158,11,.2)':'var(--bg2)')+';color:'+(active?'#f59e0b':'var(--text3)')+';font-size:10px;font-weight:'+(active?'700':'400')+';cursor:pointer">'+tf+'</button>';
   });
   html += '</div></div>';
-  // Support/resistance legend
   if(t.supports&&t.supports.length){
-    html += '<div style="font-size:9px;color:var(--text4);margin-bottom:6px">🟢 Support levels  🔴 Resistance levels  🔵 Buy zone</div>';
+    html += '<div style="font-size:9px;color:var(--text4);margin-bottom:6px">🟢 Support  🔴 Resistance  🔵 Buy zone  🟡 50DMA  🟣 200DMA</div>';
   }
-  html += '<canvas id="deep-chart" height="180"></canvas>';
-  html += '</div>';
+  html += '<div style="position:relative;height:280px;width:100%">';
+  html += '<canvas id="deep-chart" style="position:absolute;top:0;left:0;width:100%;height:100%"></canvas>';
+  html += '</div></div>';
 
   // ── SUPPORT / RESISTANCE / BUY ZONE ──────────────────────────────────────
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">';
@@ -2401,21 +2401,22 @@ function drawChart(d, tf){
         data:prices, borderColor:color, borderWidth:1.5,
         pointRadius:0, fill:true, tension:0.3,
         backgroundColor:function(ctx){
-          var g=ctx.chart.ctx.createLinearGradient(0,0,0,200);
+          var g=ctx.chart.ctx.createLinearGradient(0,0,0,280);
           g.addColorStop(0,color+'35'); g.addColorStop(1,color+'00'); return g;
         }
       }]
     },
     options:{
       responsive:true, maintainAspectRatio:false,
+      layout:{padding:{top:8,bottom:4}},
       plugins:{
         legend:{display:false},
         tooltip:{mode:'index',intersect:false,callbacks:{label:function(c){return '₹'+c.parsed.y.toFixed(2);}}},
         annotation:{annotations:annotations}
       },
       scales:{
-        x:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:tf==='MAX'?8:10}},
-        y:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return '₹'+v.toFixed(0);}},min:minP,max:maxP}
+        x:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:tf==='MAX'||tf==='5Y'?7:10,maxRotation:0}},
+        y:{position:'right',grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return '₹'+v.toFixed(0);}},min:minP,max:maxP}
       }
     }
   });
@@ -2439,7 +2440,7 @@ function renderStockRecPage(){
   analyzerHtml += '<button onclick="analyzeStock()" style="background:#f59e0b;color:#000;border:none;border-radius:8px;padding:9px 20px;font-weight:700;font-size:13px;cursor:pointer">Analyze →</button>';
   analyzerHtml += '<span style="font-size:10px;color:var(--text4)">Uses Kite candles + fundamentals + live news sentiment</span>';
   analyzerHtml += '</div>';
-  analyzerHtml += '<div id="stock-analyzer-result" style="margin-top:0"></div>';
+  analyzerHtml += '<div id="stock-analyzer-result" style="margin-top:0;max-height:85vh;overflow-y:auto;overflow-x:hidden"></div>';
   analyzerHtml += '</div>';
 
   // ── FILTER ────────────────────────────────────────────────────────
