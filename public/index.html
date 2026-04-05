@@ -2004,34 +2004,66 @@ var stockRecFilter = 'ALL';
 var stockRecSort = 'score';
 var stockRecExpanded = {};
 var stockRecShowAll = false;
+var stockRecRetries = 0;
 
 async function renderStockRec(forceRefresh){
   var cont = document.getElementById('main-content');
   if(!cont) return;
 
-  // Show loading only first time
   if(!stockRecData || forceRefresh){
+    stockRecRetries = 0;
     cont.innerHTML = '<div style="text-align:center;padding:80px 0">'
       +'<div style="font-size:32px;margin-bottom:16px">📊</div>'
-      +'<div style="font-size:14px;color:var(--text2);margin-bottom:8px">Loading fundamentals from Yahoo Finance...</div>'
-      +'<div style="font-size:11px;color:var(--text3)">Fetching 30 data points for 252 stocks — takes ~40 seconds on first load</div>'
+      +'<div id="srec-loading-msg" style="font-size:14px;color:var(--text2);margin-bottom:8px">Connecting to Yahoo Finance...</div>'
+      +'<div id="srec-loading-sub" style="font-size:11px;color:var(--text3)">Fetching price + fundamentals for 252 NSE stocks</div>'
       +'<div style="margin-top:20px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:300px;margin-left:auto;margin-right:auto">'
       +'<div style="height:100%;background:#f59e0b;border-radius:2px;width:60%;animation:mfpulse 1.5s ease-in-out infinite"></div></div>'
+      +'<div style="margin-top:16px"><button class="btn btn-sm" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button></div>'
       +'</div>';
-    try {
-      var r = await fetch('/api/stocks/score');
-      var d = await r.json();
-      if(d.loading){
-        setTimeout(function(){ renderStockRec(true); }, 5000);
-        return;
-      }
-      stockRecData = d;
-    } catch(e){
-      cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--red)">Failed to load: '+e.message+'</div>';
-      return;
-    }
+    await pollStockRec();
+    return;
   }
 
+  renderStockRecPage();
+}
+
+async function pollStockRec(){
+  var cont = document.getElementById('main-content');
+  if(!cont) return;
+  try {
+    var r = await fetch('/api/stocks/score');
+    var d = await r.json();
+    var msgEl  = document.getElementById('srec-loading-msg');
+    var subEl  = document.getElementById('srec-loading-sub');
+    if(d.loading && (!d.stocks || d.stocks.length===0)){
+      stockRecRetries++;
+      var msg = d.loadingMsg || 'Fetching data...';
+      if(msgEl) msgEl.textContent = msg;
+      if(subEl) subEl.textContent = 'Retry '+stockRecRetries+' — refreshing every 4 seconds...';
+      if(stockRecRetries < 30){
+        setTimeout(pollStockRec, 4000);
+      } else {
+        if(cont) cont.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">'
+          +'<div style="font-size:24px;margin-bottom:12px">⚠️</div>'
+          +'<div style="margin-bottom:8px">Yahoo Finance is not responding</div>'
+          +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">This may be a temporary block on the server IP. Try again in a few minutes.</div>'
+          +'<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
+          +'</div>';
+      }
+      return;
+    }
+    stockRecData = d;
+    renderStockRecPage();
+  } catch(e){
+    var cont2 = document.getElementById('main-content');
+    if(cont2) cont2.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">Error: '+e.message
+      +'<br><button class="btn btn-sm" style="margin-top:12px" onclick="stockRecData=null;renderStockRec(true)">↻ Retry</button></div>';
+  }
+}
+
+function renderStockRecPage(){
+  var cont = document.getElementById('main-content');
+  if(!cont) return;
   var data = stockRecData;
   var allStocks = data.stocks || [];
   var marketOpen = data.market_open;
