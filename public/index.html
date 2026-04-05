@@ -442,6 +442,14 @@ function renderTopBar(){
       stat("Cash",cash!=null?INR(cash.toFixed(0)):"—",""),
       sl?stat("Last Scan",new Date(sl.scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})+" · "+(sl.regime||""),""):"",
     ].join("");
+  } else if(S.mode==="stockrec"){
+    document.getElementById("topbar-stats").innerHTML=[
+      stat("Universe","252 stocks","var(--text2)"),
+      stat("Criteria","100 pts","#f59e0b"),
+      stat("Pillars","5 factors","#f59e0b"),
+      stat("Scope","Long term","var(--green)"),
+      stat("Data","Yahoo Finance","var(--text2)"),
+    ].join("");
   } else if(S.mode==="crypto"){
     document.getElementById("topbar-stats").innerHTML=[
       stat("Crypto P&L",(cryptoPnL>=0?"+":"")+INR(cryptoPnL.toFixed(0)),clr(cryptoPnL)),
@@ -1997,7 +2005,7 @@ var stockRecExpanded = {};
 var stockRecShowAll = false;
 
 async function renderStockRec(forceRefresh){
-  var cont = document.getElementById('content');
+  var cont = document.getElementById('main-content');
   if(!cont) return;
 
   // Show loading only first time
