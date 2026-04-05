@@ -1644,7 +1644,7 @@ app.get("/api/mf/funds", async(req,res)=>{
 
     // -- STEP 2: ELIGIBILITY FILTER ----------------------------------
     // Hard filters - any fail = fund not scored
-    // Filters: AUM ≥₹1K Cr, Age ≥5Y, 3Y rolling data exists, expense <2%
+    // Filters: AUM >=₹1K Cr, Age >=5Y, 3Y rolling data exists, expense <2%
     const eligible   = funds.filter(f => checkEligible(f).eligible);
     const ineligible = funds.filter(f => !checkEligible(f).eligible);
 
@@ -1712,7 +1712,7 @@ app.get("/api/mf/funds", async(req,res)=>{
       eligible_count: scoredEligible.length,
       not_eligible_count: scoredIneligible.length,
       source: "Tickertape CSV - Apr 4 2026",
-      filters: "AUM ≥₹1,000 Cr · Age ≥5Y · 3Y rolling data · Expense <2%",
+      filters: "AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%",
       cached_at: Date.now()
     });
 
@@ -2060,44 +2060,137 @@ async function fetchKiteDaily(sym) {
 // -- Compute technicals from daily candles ------------------------------------
 function computeTechnicals(candles) {
   const C = candles.map(c => c.close);
+  const H = candles.map(c => c.high  || c.close);
+  const L = candles.map(c => c.low   || c.close);
   const V = candles.map(c => c.volume || 0);
   const n = C.length;
   const avg = (arr, s, l) => arr.slice(s,s+l).reduce((a,b)=>a+b,0)/l;
+  const calcEma = (arr, p) => { const k=2/(p+1); let e=arr[0]; return arr.map(v=>{e=v*k+e*(1-k);return e;}); };
 
-  const dma50  = n>=50  ? avg(C,n-50,50)   : null;
-  const dma200 = n>=200 ? avg(C,n-200,200) : null;
+  // Moving averages
+  const dma20  = n>=20  ? avg(C,n-20,20)  : null;
+  const dma50  = n>=50  ? avg(C,n-50,50)  : null;
+  const dma100 = n>=100 ? avg(C,n-100,100): null;
+  const dma200 = n>=200 ? avg(C,n-200,200): null;
 
+  // 52-week range
   const yr252  = C.slice(-252);
-  const wk52Hi = Math.max(...yr252);
-  const wk52Lo = Math.min(...yr252);
+  const wk52Hi = yr252.length ? Math.max(...yr252) : C[n-1];
+  const wk52Lo = yr252.length ? Math.min(...yr252) : C[n-1];
 
+  // Returns
   const change52w = n>=252 ? (C[n-1]-C[n-252])/C[n-252] : (C[n-1]-C[0])/C[0];
   const change6m  = n>=126 ? (C[n-1]-C[n-126])/C[n-126] : null;
+  const change3m  = n>=63  ? (C[n-1]-C[n-63])/C[n-63]   : null;
+  const change1m  = n>=21  ? (C[n-1]-C[n-21])/C[n-21]   : null;
 
   // RSI-14
   let gains=0,losses=0;
-  for(let i=n-14;i<n;i++){
+  for(let i=Math.max(1,n-14);i<n;i++){
     const d=C[i]-C[i-1]; if(d>0)gains+=d; else losses-=d;
   }
-  const avgG=gains/14, avgL=losses/14;
-  const rsi = avgL===0?100:100-100/(1+avgG/avgL);
+  const rsi = losses===0?100:100-100/(1+(gains/14)/(losses/14));
 
-  // Volume: 10d vs 60d
+  // MACD (12,26,9)
+  const e12=calcEma(C,12), e26=calcEma(C,26);
+  const macdLine=e12.map((v,i)=>v-e26[i]);
+  const signalLine=calcEma(macdLine,9);
+  const macd=macdLine[n-1], macdSig=signalLine[n-1];
+  const macdBull=macd>macdSig;
+  const macdHist=+(macd-macdSig).toFixed(2);
+
+  // Bollinger Bands (20,2)
+  const bbMid=dma20||C[n-1];
+  const bbStd=n>=20?Math.sqrt(C.slice(n-20).reduce((a,v)=>a+(v-bbMid)**2,0)/20):0;
+  const bbUpper=+(bbMid+2*bbStd).toFixed(2);
+  const bbLower=+(bbMid-2*bbStd).toFixed(2);
+  const bbPct=bbUpper>bbLower?(C[n-1]-bbLower)/(bbUpper-bbLower):0.5;
+
+  // Stochastic %K (14,3)
+  let stochK=50;
+  if(n>=14){
+    const lo14=Math.min(...L.slice(n-14)), hi14=Math.max(...H.slice(n-14));
+    stochK=hi14===lo14?50:(C[n-1]-lo14)/(hi14-lo14)*100;
+  }
+
+  // ADX (14) simplified
+  let adx=20;
+  if(n>=15){
+    let pdm=0,ndm=0,tr14=0;
+    for(let i=Math.max(1,n-14);i<n;i++){
+      const um=H[i]-H[i-1],dm=L[i-1]-L[i];
+      if(um>dm&&um>0)pdm+=um; if(dm>um&&dm>0)ndm+=dm;
+      tr14+=Math.max(H[i]-L[i],Math.abs(H[i]-C[i-1]),Math.abs(L[i]-C[i-1]));
+    }
+    adx=pdm+ndm>0?Math.abs(pdm-ndm)/(pdm+ndm)*100:20;
+  }
+
+  // Supertrend (10,3)
+  let supertrendSig='neutral', supertrend=null;
+  try{
+    const atrArr=candles.slice(1).map((c,i)=>Math.max(c.high-c.low,Math.abs(c.high-candles[i].close),Math.abs(c.low-candles[i].close)));
+    const atr14=atrArr.slice(-14).reduce((a,b)=>a+b,0)/14;
+    let st=C[0],trend=1;
+    for(let i=1;i<n;i++){
+      const atri=atrArr[i-1]||atr14, mid=(H[i]+L[i])/2;
+      const up=mid+3*atri, dn=mid-3*atri;
+      if(trend===1)st=Math.max(st,dn); else st=Math.min(st,up);
+      if(C[i]<st&&trend===1){trend=-1;st=up;} else if(C[i]>st&&trend===-1){trend=1;st=dn;}
+    }
+    supertrend=+st.toFixed(2); supertrendSig=trend===1?'bullish':'bearish';
+  }catch(e){}
+
+  // Volume analysis
   const vol10 = V.slice(-10).reduce((a,b)=>a+b,0)/10;
-  const vol60 = V.slice(-60).reduce((a,b)=>a+b,0)/60;
+  const vol20 = V.slice(-20).reduce((a,b)=>a+b,0)/20;
+  const vol60 = n>=60?V.slice(-60).reduce((a,b)=>a+b,0)/60:vol20;
   const volRatio = vol60>0 ? vol10/vol60 : 1;
+  const volTrend = volRatio>1.3?'Accumulation':volRatio>1.1?'Rising':volRatio<0.7?'Distribution':'Normal';
 
-  // Beta approx from daily std dev
+  // OBV trend
+  let obv=0;
+  for(let i=1;i<n;i++) obv+=C[i]>C[i-1]?V[i]:C[i]<C[i-1]?-V[i]:0;
+  const obv20ago = (()=>{ let o=0; for(let i=1;i<n-20;i++) o+=C[i]>C[i-1]?V[i]:C[i]<C[i-1]?-V[i]:0; return o; })();
+  const obvRising = obv>obv20ago;
+
+  // Accumulation/Distribution
+  const upVol=V.slice(-20).filter((_,i)=>C[Math.max(0,n-20+i)]>(i>0?C[n-20+i-1]:C[n-21])).reduce((a,b)=>a+b,0);
+  const dnVol=V.slice(-20).filter((_,i)=>C[Math.max(0,n-20+i)]<(i>0?C[n-20+i-1]:C[n-21])).reduce((a,b)=>a+b,0);
+  const accumDist=upVol>dnVol?'Accumulation':'Distribution';
+
+  // Beta
   const rets = C.slice(-252).map((c,i,a)=>i===0?0:(c-a[i-1])/a[i-1]).slice(1);
-  const std  = Math.sqrt(rets.reduce((a,b)=>a+b*b,0)/rets.length);
-  const beta = Math.min(Math.max(std/0.013,0.3),2.5);
+  const std  = rets.length?Math.sqrt(rets.reduce((a,b)=>a+b*b,0)/rets.length):0.013;
+  const beta = +Math.min(Math.max(std/0.013,0.3),2.5).toFixed(2);
+  const annualVol = +(std*Math.sqrt(252)*100).toFixed(1);
+
+  // 200DMA trend
+  const dma200_30ago = n>=230 ? avg(C,n-230,200) : null;
+  const dma200Trend = dma200&&dma200_30ago?(dma200>dma200_30ago?'rising':'falling'):null;
+
+  // Weekly higher highs/lows
+  const recent=C.slice(-20);
+  const fMax=Math.max(...recent.slice(0,10)), sMax=Math.max(...recent.slice(10));
+  const fMin=Math.min(...recent.slice(0,10)), sMin=Math.min(...recent.slice(10));
+  const weeklyTrend=sMax>fMax&&sMin>fMin?'uptrend':sMax<fMax&&sMin<fMin?'downtrend':'sideways';
 
   return {
-    price:C[n-1], dma50, dma200,
-    wk52Hi, wk52Lo, change52w, change6m,
-    rsi, volRatio, beta,
+    price:C[n-1],
+    dma20, dma50, dma100, dma200,
+    wk52Hi, wk52Lo, change52w, change6m, change3m, change1m,
+    rsi:+rsi.toFixed(1),
+    macd:+macd.toFixed(2), macdSig:+macdSig.toFixed(2), macdBull, macdHist,
+    bbUpper, bbLower, bbMid:+bbMid.toFixed(2), bbPct:+bbPct.toFixed(2),
+    stochK:+stochK.toFixed(1),
+    adx:+adx.toFixed(1),
+    supertrend, supertrendSig,
+    volRatio:+volRatio.toFixed(2), volTrend, obvRising, accumDist,
+    beta, annualVol,
+    dma200Trend, weeklyTrend,
     goldenCross: (dma50&&dma200) ? dma50>dma200 : null,
-    pctFromHigh: wk52Hi>0 ? (C[n-1]-wk52Hi)/wk52Hi*100 : null,
+    pctFromHigh: wk52Hi>0 ? +((C[n-1]-wk52Hi)/wk52Hi*100).toFixed(1) : null,
+    pctAbove200: dma200>0 ? +((C[n-1]-dma200)/dma200*100).toFixed(1) : null,
+    pctAbove50:  dma50>0  ? +((C[n-1]-dma50)/dma50*100).toFixed(1)   : null,
   };
 }
 
@@ -2123,16 +2216,26 @@ async function refreshAllFundamentals() {
       stockFundamentals[stock.sym] = {
         sym:stock.sym, name:stock.n, grp:stock.grp,
         sector: SECTOR_MAP[stock.sym] || 'Other',
-        // Technical (Kite)
-        price:tech.price,       dma50:tech.dma50,     dma200:tech.dma200,
-        wk52Hi:tech.wk52Hi,     wk52Lo:tech.wk52Lo,   change52w:tech.change52w,
-        change6m:tech.change6m, rsi:tech.rsi,         volRatio:tech.volRatio,
-        beta:tech.beta,         goldenCross:tech.goldenCross,
-        pctFromHigh:tech.pctFromHigh,
-        // Fundamental (static table)
+        // Technical (Kite) - full set
+        price:tech.price,
+        dma20:tech.dma20,       dma50:tech.dma50,     dma100:tech.dma100,   dma200:tech.dma200,
+        wk52Hi:tech.wk52Hi,     wk52Lo:tech.wk52Lo,
+        change52w:tech.change52w, change6m:tech.change6m, change3m:tech.change3m, change1m:tech.change1m,
+        rsi:tech.rsi,
+        macd:tech.macd,         macdBull:tech.macdBull, macdHist:tech.macdHist,
+        bbPct:tech.bbPct,       bbUpper:tech.bbUpper,   bbLower:tech.bbLower,
+        stochK:tech.stochK,     adx:tech.adx,
+        supertrend:tech.supertrend, supertrendSig:tech.supertrendSig,
+        volRatio:tech.volRatio, volTrend:tech.volTrend, obvRising:tech.obvRising, accumDist:tech.accumDist,
+        beta:tech.beta,         annualVol:tech.annualVol,
+        dma200Trend:tech.dma200Trend, weeklyTrend:tech.weeklyTrend,
+        goldenCross:tech.goldenCross,
+        pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
+        // Fundamental (static table) [ROE,D/E,PE,RevGr,EpsGr,OpMargin]
         roe:      f?f[0]:null,  debtToEq: f?f[1]:null,
         pe:       f?f[2]:null,  revGrowth:f?f[3]:null,
         earGrowth:f?f[4]:null,  opMargin: f?f[5]:null,
+        peg:      f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null,
         fetchedAt:Date.now(),
       };
       ok++;
@@ -2259,7 +2362,87 @@ function scoreOneStock(f, peers) {
 
 
 
-// -- /api/stocks/score endpoint ------------------------------------------------
+// -- Fallen Angel Score (0-100) ------------------------------------------------
+// Different logic: rewards quality + how oversold + recovery signals - debt risk
+function scoreFallenAngel(f) {
+  let s=0; const hits={};
+  const na = v => v!=null&&isFinite(v);
+  const px = f.price || livePrices[f.sym]?.price;
+
+  // 1. BUSINESS QUALITY (40 pts) - must be a good business to be worth buying
+  if(na(f.roe)){
+    const pp=f.roe>=25?14:f.roe>=20?12:f.roe>=15?9:f.roe>=10?5:0;
+    s+=pp; hits[`ROE ${f.roe.toFixed(1)}%`]=pp;
+  }
+  if(na(f.debtToEq)){
+    const pp=f.debtToEq<=0.3?12:f.debtToEq<=0.7?10:f.debtToEq<=1.5?6:f.debtToEq<=3?2:0;
+    s+=pp; hits[`D/E ${f.debtToEq.toFixed(2)}x`]=pp;
+  }
+  if(na(f.earGrowth)&&f.earGrowth<400){
+    const pp=f.earGrowth>=20?10:f.earGrowth>=10?7:f.earGrowth>=0?3:0; // declining EPS = trap
+    s+=pp; hits[`EPS Gr ${f.earGrowth.toFixed(1)}%`]=pp;
+  }
+  if(na(f.opMargin)){
+    const pp=f.opMargin>=20?4:f.opMargin>=10?2:0;
+    s+=pp; hits[`Op Mgn ${f.opMargin.toFixed(1)}%`]=pp;
+  }
+
+  // 2. HOW DEEP IS THE DIP (20 pts) - deeper fall = bigger opportunity IF quality intact
+  if(na(f.pctFromHigh)){
+    const d=Math.abs(f.pctFromHigh);
+    const pp=d>=50?20:d>=40?18:d>=30?15:d>=20?10:0;
+    s+=pp; hits[`Fallen ${d.toFixed(0)}% from peak`]=pp;
+  }
+
+  // 3. HOW OVERSOLD (20 pts) - more oversold = better entry timing
+  if(na(f.rsi)){
+    const pp=f.rsi<=25?20:f.rsi<=30?17:f.rsi<=35?14:f.rsi<=40?10:f.rsi<=45?6:f.rsi<=50?3:0;
+    s+=pp; hits[`RSI ${f.rsi.toFixed(0)}`]=pp;
+  }
+
+  // 4. VALUATION NOW CHEAP (15 pts) - fallen enough to be attractive
+  if(na(f.pe)&&f.pe>0&&f.pe<300){
+    const pp=f.pe<12?15:f.pe<18?12:f.pe<25?8:f.pe<35?4:0;
+    s+=pp; hits[`P/E ${f.pe.toFixed(1)}x`]=pp;
+  }
+
+  // 5. RECOVERY SIGNALS (15 pts) - early signs of reversal
+  if(f.macdBull!=null){
+    const pp=f.macdBull?8:0; // MACD turning bullish = recovery starting
+    s+=pp; if(pp) hits['MACD turning bullish']=pp;
+  }
+  if(f.accumDist){
+    const pp=f.accumDist==='Accumulation'?7:0;
+    s+=pp; if(pp) hits['Volume: Accumulation']=pp;
+  }
+  if(f.obvRising!=null){
+    const pp=f.obvRising?5:0;
+    if(pp){s+=pp; hits['OBV rising']=pp;}
+  }
+  if(na(f.pctAbove200)&&f.pctAbove200!=null){
+    // Near 200DMA is a recovery zone
+    const pct=f.pctAbove200;
+    if(pct>=-10&&pct<=5){s+=5; hits['Near 200DMA (recovery zone)']=5;}
+  }
+
+  // PENALTIES (subtract) - signs this is a value trap not a dip
+  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=10; hits['EPS collapse (trap signal)']=-10; }
+  if(na(f.debtToEq)&&f.debtToEq>3)   { s-=8;  hits['Dangerous debt (trap risk)']=-8; }
+  if(na(f.revGrowth)&&f.revGrowth<-10){ s-=5;  hits['Revenue declining']=-5; }
+
+  const finalScore = Math.min(100, Math.max(0, Math.round(s)));
+
+  // Fallen angel verdict
+  let verdict, verdictColor, verdictIcon;
+  if(finalScore>=75)     {verdict='Strong Dip Buy';   verdictColor='#22c55e'; verdictIcon='🚀';}
+  else if(finalScore>=60){verdict='Good Dip Buy';     verdictColor='#86efac'; verdictIcon='✅';}
+  else if(finalScore>=45){verdict='Accumulate Slowly';verdictColor='#f59e0b'; verdictIcon='📈';}
+  else if(finalScore>=30){verdict='Watch & Wait';     verdictColor='#f97316'; verdictIcon='⏳';}
+  else                   {verdict='Possible Trap';    verdictColor='#ef4444'; verdictIcon='⚠️';}
+
+  return {fallenScore:finalScore, fallenHits:hits, fallenVerdict:verdict, fallenColor:verdictColor, fallenIcon:verdictIcon};
+}
+
 app.get('/api/stocks/score', async(req,res)=>{
   try {
     const empty = Object.keys(stockFundamentals).length === 0;
@@ -2290,28 +2473,43 @@ app.get('/api/stocks/score', async(req,res)=>{
       const peers = bySector[f.sector||'Other'] || all;
       const {score,hits} = scoreOneStock(f, peers);
       const px = f.price || livePrices[f.sym]?.price || null;
+      const isFa = score>=50 && (f.pctFromHigh||0)<=-20 && (f.rsi||50)<=50 && (f.debtToEq||0)<=2 && (f.earGrowth||0)>-20;
+      const faData = isFa ? scoreFallenAngel(f) : {};
       return {
         sym:f.sym, name:f.name, grp:f.grp, sector:f.sector, score, hits,
-        // Quality
+        // Fallen Angel
+        ...faData, isFallenAngel:isFa,
+        // Fundamentals
         roe:f.roe!=null?+f.roe.toFixed(1):null,
         debtToEq:f.debtToEq!=null?+f.debtToEq.toFixed(2):null,
         opMargin:f.opMargin!=null?+f.opMargin.toFixed(1):null,
-        // Value
         pe:f.pe!=null?+f.pe.toFixed(1):null,
-        pctFromHigh:f.pctFromHigh!=null?+f.pctFromHigh.toFixed(1):null,
-        // Growth
+        peg:f.peg!=null?+f.peg.toFixed(2):null,
         revGrowth:f.revGrowth!=null?+f.revGrowth.toFixed(1):null,
         earGrowth:f.earGrowth!=null?+f.earGrowth.toFixed(1):null,
-        // Momentum
+        // Technical - full set
+        price:px,
+        dma20:f.dma20, dma50:f.dma50, dma100:f.dma100, dma200:f.dma200,
+        wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
         wk52Change:f.change52w!=null?+(f.change52w*100).toFixed(1):null,
         change6m:f.change6m!=null?+(f.change6m*100).toFixed(1):null,
+        change3m:f.change3m!=null?+(f.change3m*100).toFixed(1):null,
+        change1m:f.change1m!=null?+(f.change1m*100).toFixed(1):null,
         rsi:f.rsi!=null?+f.rsi.toFixed(0):null,
-        beta:f.beta!=null?+f.beta.toFixed(2):null,
-        // Technical
-        price:px, dma50:f.dma50, dma200:f.dma200,
-        wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
-        goldenCross:f.goldenCross,
+        macd:f.macd!=null?+f.macd.toFixed(2):null,
+        macdBull:f.macdBull, macdHist:f.macdHist,
+        bbPct:f.bbPct!=null?+f.bbPct.toFixed(2):null,
+        stochK:f.stochK!=null?+f.stochK.toFixed(1):null,
+        adx:f.adx!=null?+f.adx.toFixed(1):null,
+        supertrend:f.supertrend, supertrendSig:f.supertrendSig,
         volRatio:f.volRatio!=null?+f.volRatio.toFixed(2):null,
+        volTrend:f.volTrend, obvRising:f.obvRising, accumDist:f.accumDist,
+        beta:f.beta!=null?+f.beta.toFixed(2):null, annualVol:f.annualVol,
+        goldenCross:f.goldenCross,
+        pctFromHigh:f.pctFromHigh!=null?+f.pctFromHigh.toFixed(1):null,
+        pctAbove200:f.pctAbove200!=null?+f.pctAbove200.toFixed(1):null,
+        pctAbove50:f.pctAbove50!=null?+f.pctAbove50.toFixed(1):null,
+        dma200Trend:f.dma200Trend, weeklyTrend:f.weeklyTrend,
         fetchedAt:f.fetchedAt,
       };
     });
