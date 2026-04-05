@@ -1,4 +1,4 @@
-=<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -3668,15 +3668,20 @@ async function renderAIPortfolio(){
   var cont=document.getElementById('main-content');
   if(!cont)return;
 
-  cont.innerHTML='<div style="padding:40px;text-align:center;color:#475569;font-size:13px">Loading portfolio builder...</div>';
-
-  // Fetch MF list if needed
+  // Fetch MF list with timeout — never block render
   if(!window._mfFundsList||!window._mfFundsList.length){
-    try{var r=await fetch('/api/mf/funds');var d=await r.json();window._mfFundsList=d.funds||[];}
-    catch(e){window._mfFundsList=[];}
+    try{
+      var controller=new AbortController();
+      var tid=setTimeout(function(){controller.abort();},4000);
+      var r=await fetch('/api/mf/funds',{signal:controller.signal});
+      clearTimeout(tid);
+      var d=await r.json();
+      window._mfFundsList=d.funds||[];
+    }catch(e){window._mfFundsList=[];}
   }
 
   // Build MF asset list from server data
+  try {
   AIP_ASSETS.mf=(window._mfFundsList||[])
     .filter(function(f){return f.name&&(f.score||0)>0;})
     .sort(function(a,b){return(b.score||0)-(a.score||0);})
@@ -3685,25 +3690,32 @@ async function renderAIPortfolio(){
       var risk=f.sebi_risk||(cat.includes('Small')?'Very High':cat.includes('Mid')?'High':'Moderate');
       return{id:f.name,name:f.name,cat:cat,risk:risk,ret:parseFloat(f.cagr_3y)||parseFloat(f.rolling_3y)||12,score:f.score,amc:f.amc,type:'mf'};
     });
+  } catch(e){ AIP_ASSETS.mf=[]; }
   if(!AIP_ASSETS.mf.length) AIP_ASSETS.mf=[
     {id:'ppfcf',name:'Parag Parikh Flexi Cap Fund',cat:'Flexi Cap',risk:'Moderate',ret:18.4,type:'mf'},
     {id:'nmgcf',name:'Nippon India Mid Cap Fund',cat:'Mid Cap',risk:'High',ret:22.1,type:'mf'},
     {id:'quant',name:'Quant Small Cap Fund',cat:'Small Cap',risk:'Very High',ret:31.2,type:'mf'},
     {id:'hdfc',name:'HDFC Mid Cap Opportunities',cat:'Mid Cap',risk:'High',ret:21.3,type:'mf'},
     {id:'mafcf',name:'Mirae Asset Large Cap Fund',cat:'Large Cap',risk:'Moderate',ret:14.2,type:'mf'},
+    {id:'sbi',name:'SBI Contra Fund',cat:'Contra',risk:'Moderate',ret:19.7,type:'mf'},
+    {id:'icici',name:'ICICI Pru Bluechip Fund',cat:'Large Cap',risk:'Low',ret:13.8,type:'mf'},
+    {id:'dsp',name:'DSP Midcap Fund',cat:'Mid Cap',risk:'High',ret:20.4,type:'mf'},
   ];
 
   // Build Stock list from live scoring data
+  try {
   AIP_ASSETS.stock=(stockRecData&&stockRecData.stocks||[])
     .sort(function(a,b){return(b.score||0)-(a.score||0);})
     .slice(0,100)
     .map(function(s){
       return{id:s.sym,name:s.name||s.sym,cat:s.sector||'Equity',risk:'Moderate',ret:Math.abs(parseFloat(s.earGrowth)||12),score:s.score,type:'stock'};
     });
+  } catch(e){ AIP_ASSETS.stock=[]; }
 
   _aiPortfolioYears=_aiPortfolioYears||10;
 
   // -- Build HTML --------------------------------------------------------------
+  try {
   var h='<div id="aip-root" style="background:#0b0f14;min-height:100%;padding:16px;box-sizing:border-box">';
   h+='<style>';
   h+='@keyframes aip-spin{to{transform:rotate(360deg)}}';
@@ -3788,6 +3800,7 @@ async function renderAIPortfolio(){
   aipDrawHorizons();
   aipDrawItems();
   aipSyncBtn();
+  } catch(err) { cont.innerHTML='<div style="padding:32px;text-align:center;color:#ef4444;font-size:12px">Error loading AI Portfolio: '+err.message+'<br><br><button onclick="renderAIPortfolio()" style="margin-top:12px;background:rgba(34,211,238,0.15);color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:6px;padding:8px 20px;cursor:pointer;font-size:12px">Retry</button></div>'; }
 }
 
 // -----------------------------------------------------------------------------
@@ -3993,13 +4006,12 @@ async function aipPredict(){
   var blended=d.portfolio_cagr||'—';
   var riskLabel=d.risk_level||'Moderate';
   var riskCol=AIP_RISK_COL[riskLabel]||'#f59e0b';
-  var bench=Math.round(total*Math.pow(1.12,_aiPortfolioYears));
   var worst=d.worst_case||Math.round(proj*0.75);
   var best=d.best_case||Math.round(proj*1.3);
   var inflAdj=d.inflation_adjusted||Math.round(proj/Math.pow(1.06,_aiPortfolioYears));
 
   // chart curve
-  var chartLabels=[],portData=[],benchData=[];
+  var chartLabels=[],portData=[];
   if(d.growth_curve&&d.growth_curve.length){
     d.growth_curve.forEach(function(p){chartLabels.push(p.year===0?'Now':p.year+'Y');portData.push(p.value);});
   } else {
@@ -4010,11 +4022,6 @@ async function aipPredict(){
       portData.push(Math.round(total*Math.pow(1+(parseFloat(blended)||12)/100,y)));
     }
   }
-  for(var bi=0;bi<chartLabels.length;bi++){
-    var yr=bi===0?0:Math.round(bi/Math.max(chartLabels.length-1,1)*_aiPortfolioYears);
-    benchData.push(Math.round(total*Math.pow(1.12,yr)));
-  }
-
   var html='';
 
   // Hero card
@@ -4028,16 +4035,12 @@ async function aipPredict(){
 
   // Chart
   html+='<div class="aip-fade" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px">';
-  html+='<div style="display:flex;gap:14px;margin-bottom:8px;font-size:9px;color:#64748b">';
-  html+='<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:2px;background:#22d3ee;display:inline-block;border-radius:1px"></span>Portfolio</span>';
-  html+='<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:1px;background:#6366f1;display:inline-block"></span>Nifty 12%</span>';
-  html+='</div>';
   html+='<div style="position:relative;width:100%;height:155px"><canvas id="aip-chart"></canvas></div>';
   html+='</div>';
 
   // 4 metric cards
-  html+='<div class="aip-fade" style="display:grid;grid-template-columns:1fr 1fr;gap:7px">';
-  [['BEST CASE',aipFmt(best),'#22d3ee'],['WORST CASE',aipFmt(worst),'#f97316'],['INFLATION ADJ.',aipFmt(inflAdj),'#94a3b8'],['VS NIFTY',proj>bench?'+'+aipFmt(proj-bench):'-'+aipFmt(bench-proj),proj>bench?'#10b981':'#ef4444']].forEach(function(m){
+  html+='<div class="aip-fade" style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px">';
+  [['BEST CASE',aipFmt(best),'#22d3ee'],['WORST CASE',aipFmt(worst),'#f97316'],['INFLATION ADJ.',aipFmt(inflAdj),'#94a3b8']].forEach(function(m){
     html+='<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:9px 11px">';
     html+='<div style="font-size:8px;color:#475569;font-weight:700;margin-bottom:3px">'+m[0]+'</div>';
     html+='<div style="font-size:12px;font-weight:700;color:'+m[2]+'">'+m[1]+'</div></div>';
@@ -4090,8 +4093,7 @@ async function aipPredict(){
       _aipChart=new Chart(ctx,{
         type:'line',
         data:{labels:chartLabels,datasets:[
-          {label:'Portfolio',data:portData,borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,0.07)',borderWidth:2.5,pointRadius:2,pointBackgroundColor:'#22d3ee',tension:0.38,fill:true},
-          {label:'Nifty',data:benchData,borderColor:'#6366f1',backgroundColor:'transparent',borderWidth:1.5,borderDash:[5,4],pointRadius:0,tension:0.38}
+          {label:'Portfolio',data:portData,borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,0.07)',borderWidth:2.5,pointRadius:2,pointBackgroundColor:'#22d3ee',tension:0.38,fill:true}
         ]},
         options:{responsive:true,maintainAspectRatio:false,
           interaction:{mode:'index',intersect:false},
