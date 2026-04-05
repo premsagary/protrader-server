@@ -3411,491 +3411,779 @@ function _fillFACard(cardId, sym, d) {
 // -----------------------------------------------------------------------------
 // AI PORTFOLIO — State
 // -----------------------------------------------------------------------------
-var _aiPortfolioItems = [];
-var _aiPortfolioYears = 10;
-var _aipTab = 'mf';
-var _aipCatFilter = 'All';
-var _aipSearch = '';
-var _aipFiltered = [];
-var _aipChart = null;
+// =============================================================================
+// AI PORTFOLIO — STATE
+// =============================================================================
+var _aiPortfolioItems  = [];
+var _aiPortfolioYears  = 10;
+var _aipTab            = 'mf';
+var _aipCatFilter      = 'All';
+var _aipSearch         = '';
+var _aipFiltered       = [];
+var _aipChart          = null;
+var _aipPredicting     = false;
 
-var AIP_RISK_COL = {'Low':'#10b981','Moderate':'#f59e0b','High':'#f97316','Very High':'#ef4444'};
+var AIP_RISK_COL = {Low:'#10b981',Moderate:'#f59e0b',High:'#f97316','Very High':'#ef4444'};
 var AIP_HORIZONS = [1,3,5,10,20,30];
 var AIP_CATS = {
-  mf:['All','Large Cap','Mid Cap','Small Cap','Flexi Cap','Index','ELSS','Contra'],
-  stock:['All','IT','Banking','Consumer','Energy','NBFC','Retail','Pharma','Auto'],
-  crypto:['All','Layer 1','Exchange','Payments','DeFi']
+  mf:     ['All','Large Cap','Mid Cap','Small Cap','Flexi Cap','Index','ELSS','Contra'],
+  stock:  ['All','IT','Banking','Consumer','Energy','NBFC','Retail','Pharma','Auto'],
+  crypto: ['All','Layer 1','Exchange','Payments','DeFi'],
 };
 var AIP_ASSETS = { mf:[], stock:[], crypto:[
-  {id:'btc',name:'Bitcoin (BTC)',cat:'Layer 1',risk:'Very High',ret:48.2,type:'crypto'},
-  {id:'eth',name:'Ethereum (ETH)',cat:'Layer 1',risk:'Very High',ret:39.7,type:'crypto'},
-  {id:'sol',name:'Solana (SOL)',cat:'Layer 1',risk:'Very High',ret:62.1,type:'crypto'},
-  {id:'bnb',name:'BNB',cat:'Exchange',risk:'Very High',ret:28.4,type:'crypto'},
-  {id:'xrp',name:'Ripple (XRP)',cat:'Payments',risk:'Very High',ret:18.9,type:'crypto'},
+  {id:'btc', name:'Bitcoin (BTC)',     cat:'Layer 1', risk:'Very High', ret:48.2, type:'crypto'},
+  {id:'eth', name:'Ethereum (ETH)',    cat:'Layer 1', risk:'Very High', ret:39.7, type:'crypto'},
+  {id:'sol', name:'Solana (SOL)',      cat:'Layer 1', risk:'Very High', ret:62.1, type:'crypto'},
+  {id:'bnb', name:'BNB',               cat:'Exchange', risk:'Very High', ret:28.4, type:'crypto'},
+  {id:'xrp', name:'Ripple (XRP)',      cat:'Payments', risk:'Very High', ret:18.9, type:'crypto'},
 ]};
 
-function aipFmt(n){
-  if(!n&&n!==0)return'—';
-  if(n>=1e7)return'₹'+(n/1e7).toFixed(2)+'Cr';
-  if(n>=1e5)return'₹'+(n/1e5).toFixed(2)+'L';
-  return'₹'+Math.round(n).toLocaleString('en-IN');
+function aipFmt(n) {
+  if (n == null || isNaN(n)) return '—';
+  if (n >= 1e7) return '₹' + (n/1e7).toFixed(2) + 'Cr';
+  if (n >= 1e5) return '₹' + (n/1e5).toFixed(2) + 'L';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
 }
 
-// -----------------------------------------------------------------------------
-// RENDER — Main entry point called when tab is clicked
-// -----------------------------------------------------------------------------
-async function renderAIPortfolio(){
-  var cont=document.getElementById('main-content');
-  if(!cont)return;
+// =============================================================================
+// RENDER — entry point
+// =============================================================================
+async function renderAIPortfolio() {
+  var cont = document.getElementById('main-content');
+  if (!cont) return;
 
-  // Fetch MF list with timeout — never block render
-  if(!window._mfFundsList||!window._mfFundsList.length){
-    try{
-      var controller=new AbortController();
-      var tid=setTimeout(function(){controller.abort();},4000);
-      var r=await fetch('/api/mf/funds',{signal:controller.signal});
+  // Fetch MF data (non-blocking, 4s timeout)
+  if (!window._mfFundsList || !window._mfFundsList.length) {
+    try {
+      var ctl = new AbortController();
+      var tid = setTimeout(function(){ ctl.abort(); }, 4000);
+      var r = await fetch('/api/mf/funds', { signal: ctl.signal });
       clearTimeout(tid);
-      var d=await r.json();
-      window._mfFundsList=d.funds||[];
-    }catch(e){window._mfFundsList=[];}
+      var d = await r.json();
+      window._mfFundsList = d.funds || [];
+    } catch(e) { window._mfFundsList = []; }
   }
 
-  // Build MF asset list from server data
+  // Build AIP_ASSETS.mf — full data for MiroFish
   try {
-  AIP_ASSETS.mf=(window._mfFundsList||[])
-    .filter(function(f){return f.name&&(f.score||0)>0;})
-    .sort(function(a,b){return(b.score||0)-(a.score||0);})
-    .map(function(f){
-      var cat=(f.sub_category||f.cat||'Equity').replace(/\s*Fund\s*$/i,'').trim();
-      var risk=f.sebi_risk||(cat.includes('Small')?'Very High':cat.includes('Mid')?'High':'Moderate');
-      return{id:f.name,name:f.name,cat:cat,risk:risk,ret:parseFloat(f.cagr_3y)||parseFloat(f.rolling_3y)||12,score:f.score,amc:f.amc,type:'mf'};
+    AIP_ASSETS.mf = (window._mfFundsList || [])
+      .filter(function(f){ return f.name && (f.score||0) > 0; })
+      .sort(function(a,b){ return (b.score||0) - (a.score||0); })
+      .map(function(f){
+        var cat = (f.sub_category||f.cat||'Equity').replace(/\s*Fund\s*$/i,'').trim();
+        var risk = f.sebi_risk || (cat.includes('Small')?'Very High':cat.includes('Mid')?'High':'Moderate');
+        return {
+          id:f.name, name:f.name, cat:cat, risk:risk, type:'mf',
+          ret: parseFloat(f.cagr_3y) || parseFloat(f.rolling_3y) || 12,
+          // Full Tickertape fields for MiroFish
+          cagr_3y:      parseFloat(f.cagr_3y)||null,
+          cagr_5y:      parseFloat(f.cagr_5y)||null,
+          cagr_10y:     parseFloat(f.cagr_10y)||null,
+          rolling_3y:   parseFloat(f.rolling_3y)||null,
+          sharpe:       parseFloat(f.sharpe)||null,
+          sortino:      parseFloat(f.sortino)||null,
+          max_drawdown: parseFloat(f.max_drawdown||f.maxDD)||null,
+          volatility:   parseFloat(f.volatility)||null,
+          expense_ratio:parseFloat(f.expense_ratio)||null,
+          aum_cr:       parseFloat(f.aum_cr)||null,
+          alpha:        parseFloat(f.alpha)||null,
+          vs_cat_3y:    parseFloat(f.vs_cat_3y)||null,
+          vs_cat_5y:    parseFloat(f.vs_cat_5y)||null,
+          pe_ratio:     parseFloat(f.pe_ratio)||null,
+          category_pe:  parseFloat(f.category_pe)||null,
+          pct_cash:     parseFloat(f.pct_cash)||null,
+          top10_conc:   parseFloat(f.top10_conc)||null,
+          score:        f.score,
+          amc:          f.amc,
+          sebi_risk:    f.sebi_risk,
+          amc_sebi:     f.amc_sebi,
+        };
+      });
+  } catch(e) { AIP_ASSETS.mf = []; }
+
+  if (!AIP_ASSETS.mf.length) {
+    AIP_ASSETS.mf = [
+      {id:'ppfcf', name:'Parag Parikh Flexi Cap Fund',      cat:'Flexi Cap', risk:'Moderate',   ret:18.4, type:'mf'},
+      {id:'bscf',  name:'Bandhan Small Cap Fund',           cat:'Small Cap', risk:'Very High',  ret:28.6, type:'mf'},
+      {id:'emcf',  name:'Edelweiss Mid Cap Fund',           cat:'Mid Cap',   risk:'Very High',  ret:24.0, type:'mf'},
+      {id:'nmgcf', name:'Nippon India Small Cap Fund',      cat:'Small Cap', risk:'Very High',  ret:22.1, type:'mf'},
+      {id:'quant', name:'Quant Small Cap Fund',             cat:'Small Cap', risk:'Very High',  ret:31.2, type:'mf'},
+      {id:'hdfc',  name:'HDFC Mid Cap Opportunities',       cat:'Mid Cap',   risk:'High',       ret:21.3, type:'mf'},
+      {id:'mafcf', name:'Mirae Asset Large Cap Fund',       cat:'Large Cap', risk:'Moderate',   ret:14.2, type:'mf'},
+      {id:'sbi',   name:'SBI Contra Fund',                  cat:'Contra',    risk:'Moderate',   ret:19.7, type:'mf'},
+    ];
+  }
+
+  // Build AIP_ASSETS.stock — full fundamentals for MiroFish
+  try {
+    AIP_ASSETS.stock = (stockRecData && stockRecData.stocks || [])
+      .sort(function(a,b){ return (b.score||0)-(a.score||0); })
+      .slice(0,100)
+      .map(function(s){
+        return {
+          id:s.sym, name:s.name||s.sym, cat:s.sector||'Equity', risk:'Moderate', type:'stock',
+          ret: parseFloat(s.earGrowth) || 12,
+          // Full stock fields for MiroFish
+          score:       s.score,
+          price:       s.price,
+          roe:         s.roe,
+          pe:          s.pe,
+          debtToEq:    s.debtToEq,
+          opMargin:    s.opMargin,
+          earGrowth:   s.earGrowth,
+          revGrowth:   s.revGrowth,
+          pctFromHigh: s.pctFromHigh,
+          wk52Change:  s.wk52Change,
+          rsi:         s.rsi,
+          goldenCross: s.goldenCross,
+          macdBull:    s.macdBull,
+          obvRising:   s.obvRising,
+          bullishDiv:  s.bullishDiv,
+          dma200:      s.dma200,
+          sector:      s.sector,
+          grp:         s.grp,
+        };
+      });
+  } catch(e) { AIP_ASSETS.stock = []; }
+
+  _aiPortfolioYears = _aiPortfolioYears || 10;
+
+  // -- Build HTML shell ----------------------------------------------------------
+  try {
+    var h = '<div id="aip-root" style="background:#0b0f14;min-height:100%;padding:16px 20px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,\'SF Pro Display\',sans-serif">';
+    h += '<style>';
+    h += '@keyframes aip-spin{to{transform:rotate(360deg)}}';
+    h += '@keyframes aip-fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}';
+    h += '@keyframes aip-bar{0%{transform:translateX(-100%)}50%{transform:translateX(20%)}100%{transform:translateX(300%)}}';
+    h += '.aip-fade{animation:aip-fade .3s ease forwards}';
+    h += '#aip-root input[type=number]::-webkit-inner-spin-button,#aip-root input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}';
+    h += '#aip-root input[type=number]{-moz-appearance:textfield}';
+    h += '#aip-root ::-webkit-scrollbar{width:3px}#aip-root ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}';
+    h += '#aip-root input,#aip-root select,#aip-root button{font-family:inherit}';
+    h += '.aip-agent-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:9px;font-weight:700;border:1px solid}';
+    h += '</style>';
+
+    // Top bar
+    h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">';
+    h += '<span style="font-size:18px;font-weight:700;color:#f1f5f9;letter-spacing:-0.03em">AI Portfolio Predictor</span>';
+    h += '<span style="flex:1"></span>';
+    h += '<span style="font-size:10px;color:#334155">5-agent MiroFish engine</span>';
+    h += '<span style="width:7px;height:7px;border-radius:50%;background:#22d3ee;display:inline-block;box-shadow:0 0 8px #22d3ee;margin-left:6px"></span>';
+    h += '</div>';
+
+    // Agent chips row
+    h += '<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+    [['Vikram','FA','#f59e0b'],['Priya','TA','#3b82f6'],['Arjun','Contrarian','#8b5cf6'],
+     ['Meera','Risk','#ef4444'],['Rahul','Quant','#22d3ee']].forEach(function(a){
+      h += '<span class="aip-agent-chip" style="background:'+a[2]+'12;color:'+a[2]+';border-color:'+a[2]+'30">🧠 '+a[0]+' <span style="opacity:.6;font-weight:400">'+a[1]+'</span></span>';
     });
-  } catch(e){ AIP_ASSETS.mf=[]; }
-  if(!AIP_ASSETS.mf.length) AIP_ASSETS.mf=[
-    {id:'ppfcf',name:'Parag Parikh Flexi Cap Fund',cat:'Flexi Cap',risk:'Moderate',ret:18.4,type:'mf'},
-    {id:'nmgcf',name:'Nippon India Mid Cap Fund',cat:'Mid Cap',risk:'High',ret:22.1,type:'mf'},
-    {id:'quant',name:'Quant Small Cap Fund',cat:'Small Cap',risk:'Very High',ret:31.2,type:'mf'},
-    {id:'hdfc',name:'HDFC Mid Cap Opportunities',cat:'Mid Cap',risk:'High',ret:21.3,type:'mf'},
-    {id:'mafcf',name:'Mirae Asset Large Cap Fund',cat:'Large Cap',risk:'Moderate',ret:14.2,type:'mf'},
-    {id:'sbi',name:'SBI Contra Fund',cat:'Contra',risk:'Moderate',ret:19.7,type:'mf'},
-    {id:'icici',name:'ICICI Pru Bluechip Fund',cat:'Large Cap',risk:'Low',ret:13.8,type:'mf'},
-    {id:'dsp',name:'DSP Midcap Fund',cat:'Mid Cap',risk:'High',ret:20.4,type:'mf'},
-  ];
+    h += '<span style="font-size:9px;color:#334155;align-self:center;margin-left:4px">Varsity-trained · debate in parallel · synthesis agent synthesises</span>';
+    h += '</div>';
 
-  // Build Stock list from live scoring data
-  try {
-  AIP_ASSETS.stock=(stockRecData&&stockRecData.stocks||[])
-    .sort(function(a,b){return(b.score||0)-(a.score||0);})
-    .slice(0,100)
-    .map(function(s){
-      return{id:s.sym,name:s.name||s.sym,cat:s.sector||'Equity',risk:'Moderate',ret:Math.abs(parseFloat(s.earGrowth)||12),score:s.score,type:'stock'};
+    // 3-column grid
+    h += '<div id="aip-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:start">';
+
+    var PANEL = 'background:#111827;border-radius:14px;border:1px solid rgba(255,255,255,0.07);display:flex;flex-direction:column;height:640px';
+    var HDR   = 'padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);font-size:9px;font-weight:700;color:#475569;letter-spacing:.08em;flex-shrink:0';
+
+    // -- LEFT: Asset Selection ---------------------------------------------------
+    h += '<div style="'+PANEL+'">';
+    h += '<div style="'+HDR+'"">ASSET SELECTION</div>';
+    // Tabs
+    h += '<div style="display:flex;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
+    [['mf','Funds'],['stock','Stocks'],['crypto','Crypto']].forEach(function(t){
+      h += '<button id="aip-tab-'+t[0]+'" onclick="aipTab(\''+t[0]+'\')" style="flex:1;padding:9px 2px;font-size:11px;font-weight:700;border:none;cursor:pointer;transition:all .15s;background:transparent;color:#475569;border-bottom:2px solid transparent">'+t[1]+'</button>';
     });
-  } catch(e){ AIP_ASSETS.stock=[]; }
+    h += '</div>';
+    // Search + filter
+    h += '<div style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0">';
+    h += '<input id="aip-search" oninput="aipDoSearch()" placeholder="Search..." autocomplete="off" style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:7px 10px;font-size:11px;color:#e2e8f0;outline:none;box-sizing:border-box;margin-bottom:6px">';
+    h += '<select id="aip-cat" onchange="aipCatChange()" style="width:100%;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:5px 8px;font-size:10px;color:#94a3b8;outline:none"></select>';
+    h += '</div>';
+    // Asset list
+    h += '<div id="aip-asset-list" style="overflow-y:auto;flex:1"></div>';
+    h += '</div>';
 
-  _aiPortfolioYears=_aiPortfolioYears||10;
+    // -- CENTER: Portfolio Builder ------------------------------------------------
+    h += '<div style="'+PANEL.replace('overflow:hidden;','')+'">';
+    h += '<div style="'+HDR+';display:flex;align-items:center;justify-content:space-between">';
+    h += '<span>YOUR PORTFOLIO</span>';
+    h += '<button onclick="aipClearAll()" style="background:none;border:1px solid rgba(239,68,68,.3);border-radius:4px;padding:2px 8px;font-size:9px;color:#ef4444;cursor:pointer">Clear</button>';
+    h += '</div>';
+    // Horizons
+    h += '<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
+    h += '<div style="font-size:9px;color:#475569;font-weight:700;margin-bottom:8px;letter-spacing:.06em">INVESTMENT HORIZON</div>';
+    h += '<div id="aip-hz" style="display:flex;gap:5px;flex-wrap:wrap"></div>';
+    h += '</div>';
+    // Items list
+    h += '<div id="aip-items" style="flex:1;overflow-y:auto;padding:8px 0"></div>';
+    // Footer
+    h += '<div style="padding:12px 14px;border-top:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">';
+    h += '<span style="font-size:10px;color:#475569">Total Investment</span>';
+    h += '<span id="aip-total" style="font-size:17px;font-weight:700;color:#f1f5f9">₹0</span>';
+    h += '</div>';
+    h += '<button id="aip-btn" onclick="aipPredict()" style="width:100%;padding:13px;border-radius:10px;border:none;font-size:13px;font-weight:700;cursor:not-allowed;background:rgba(255,255,255,0.04);color:#334155;transition:all .2s;letter-spacing:.01em">🚀 Predict with MiroFish</button>';
+    h += '</div></div>';
 
-  // -- Build HTML --------------------------------------------------------------
-  try {
-  var h='<div id="aip-root" style="background:#0b0f14;min-height:100%;padding:16px;box-sizing:border-box">';
-  h+='<style>';
-  h+='@keyframes aip-spin{to{transform:rotate(360deg)}}';
-  h+='@keyframes aip-fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}';
-  h+='.aip-fade{animation:aip-fade .3s ease forwards}';
-  h+='#aip-root input[type=number]::-webkit-inner-spin-button,#aip-root input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}';
-  h+='#aip-root input[type=number]{-moz-appearance:textfield}';
-  h+='#aip-root ::-webkit-scrollbar{width:3px}#aip-root ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}';
-  h+='#aip-root input,#aip-root select{font-family:inherit}';
-  h+='@media(max-width:1000px){#aip-grid{grid-template-columns:1fr 1fr!important}#aip-left-panel{display:none!important}}';
-  h+='@media(max-width:650px){#aip-grid{grid-template-columns:1fr!important}#aip-left-panel{display:flex!important}}';
-  h+='</style>';
+    // -- RIGHT: Prediction Results ---------------------------------------------
+    h += '<div style="'+PANEL+'">';
+    h += '<div style="'+HDR+'"">PREDICTION RESULTS</div>';
+    h += '<div id="aip-empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;text-align:center">';
+    h += '<div style="font-size:40px">🐟</div>';
+    h += '<div style="color:#1e293b;font-size:12px;line-height:2">';
+    h += 'Add assets → Set horizon<br>';
+    h += '<span style="color:#22d3ee;font-weight:600">Predict with MiroFish</span><br>';
+    h += '<span style="font-size:10px;color:#0f172a">5 Varsity-trained agents debate your portfolio<br>and synthesise a growth projection</span>';
+    h += '</div></div>';
+    h += '<div id="aip-result" style="flex:1;overflow-y:auto;padding:12px;display:none;flex-direction:column;gap:10px"></div>';
+    h += '</div>';
 
-  // Topbar
-  h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">';
-  h+='<span style="font-size:17px;font-weight:700;color:#e2e8f0;letter-spacing:-0.02em">AI Portfolio Predictor</span>';
-  h+='<span style="flex:1"></span>';
-  h+='<span style="font-size:10px;color:#475569">Powered by MiroFish</span>';
-  h+='<span style="width:7px;height:7px;border-radius:50%;background:#22d3ee;display:inline-block;box-shadow:0 0 6px #22d3ee;margin-left:6px"></span>';
-  h+='</div>';
+    h += '</div></div>'; // grid + root
+    cont.innerHTML = h;
 
-  // 3-column grid
-  h+='<div id="aip-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:start">';
-
-  var panel='background:#111827;border-radius:12px;border:1px solid rgba(255,255,255,0.07);overflow:hidden;display:flex;flex-direction:column;height:620px';
-  var hdr='padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);font-size:9px;font-weight:700;color:#64748b;letter-spacing:.08em;flex-shrink:0';
-
-  // -- LEFT: Asset Selection --------------------------------------------------
-  h+='<div id="aip-left-panel" style="'+panel+'">';
-  h+='<div style="'+hdr+'">ASSET SELECTION</div>';
-  // Tabs
-  h+='<div style="display:flex;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
-  [['mf','Funds'],['stock','Stocks'],['crypto','Crypto']].forEach(function(t){
-    h+='<button id="aip-tab-'+t[0]+'" onclick="aipTab(\''+t[0]+'\')" style="flex:1;padding:8px 2px;font-size:10px;font-weight:700;border:none;cursor:pointer;transition:all .15s;background:transparent;color:#64748b;border-bottom:2px solid transparent">'+t[1]+'</button>';
-  });
-  h+='</div>';
-  // Search + category
-  h+='<div style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0">';
-  h+='<input id="aip-search" oninput="aipDoSearch()" placeholder="Search..." autocomplete="off" style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:6px 10px;font-size:11px;color:#e2e8f0;outline:none;box-sizing:border-box;margin-bottom:6px">';
-  h+='<select id="aip-cat" onchange="aipCatChange()" style="width:100%;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:5px 8px;font-size:10px;color:#94a3b8;outline:none"></select>';
-  h+='</div>';
-  // List
-  h+='<div id="aip-asset-list" style="overflow-y:auto;flex:1"></div>';
-  h+='</div>';
-
-  // -- CENTER: Portfolio Builder ----------------------------------------------
-  h+='<div style="'+panel.replace('overflow:hidden;','')+';">';
-  h+='<div style="'+hdr+';display:flex;align-items:center;justify-content:space-between">';
-  h+='<span>YOUR PORTFOLIO</span>';
-  h+='<button onclick="aipClearAll()" style="background:none;border:1px solid rgba(239,68,68,.3);border-radius:4px;padding:2px 7px;font-size:9px;color:#ef4444;cursor:pointer">Clear</button>';
-  h+='</div>';
-  // Horizons
-  h+='<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
-  h+='<div style="font-size:9px;color:#475569;font-weight:700;margin-bottom:7px">INVESTMENT HORIZON</div>';
-  h+='<div id="aip-hz" style="display:flex;gap:5px;flex-wrap:wrap"></div>';
-  h+='</div>';
-  // Items
-  h+='<div id="aip-items" style="flex:1;overflow-y:auto;padding:8px 0"></div>';
-  // Footer
-  h+='<div style="padding:12px 14px;border-top:1px solid rgba(255,255,255,0.07);flex-shrink:0">';
-  h+='<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">';
-  h+='<span style="font-size:10px;color:#64748b">Total Investment</span>';
-  h+='<span id="aip-total" style="font-size:16px;font-weight:700;color:#e2e8f0">₹0</span>';
-  h+='</div>';
-  h+='<button id="aip-btn" onclick="aipPredict()" style="width:100%;padding:12px;border-radius:10px;border:none;font-size:13px;font-weight:700;cursor:not-allowed;background:rgba(255,255,255,0.04);color:#334155;transition:all .2s">🚀 Predict with MiroFish</button>';
-  h+='</div></div>';
-
-  // -- RIGHT: Results ---------------------------------------------------------
-  h+='<div style="'+panel+'">';
-  h+='<div style="'+hdr+'">PREDICTION RESULTS</div>';
-  h+='<div id="aip-empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px;gap:14px">';
-  h+='<div style="font-size:38px">🐟</div>';
-  h+='<div style="color:#334155;font-size:12px;text-align:center;line-height:1.9">Add assets and click<br><span style="color:#22d3ee;font-weight:600">Predict with MiroFish</span><br><span style="font-size:10px;color:#1e3a4a">5 AI agents will analyze your portfolio</span></div>';
-  h+='</div>';
-  h+='<div id="aip-result" style="flex:1;overflow-y:auto;padding:12px;display:none;flex-direction:column;gap:10px"></div>';
-  h+='</div>';
-
-  h+='</div></div>'; // grid + root
-  cont.innerHTML=h;
+  } catch(err) {
+    cont.innerHTML = '<div style="padding:32px;text-align:center;color:#ef4444;font-size:12px">Error: '+err.message+'<br><button onclick="renderAIPortfolio()" style="margin-top:12px;background:rgba(34,211,238,0.1);color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:6px;padding:7px 18px;cursor:pointer">Retry</button></div>';
+    return;
+  }
 
   aipTab('mf');
   aipDrawHorizons();
   aipDrawItems();
   aipSyncBtn();
-  } catch(err) { cont.innerHTML='<div style="padding:32px;text-align:center;color:#ef4444;font-size:12px">Error loading AI Portfolio: '+err.message+'<br><br><button onclick="renderAIPortfolio()" style="margin-top:12px;background:rgba(34,211,238,0.15);color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:6px;padding:8px 20px;cursor:pointer;font-size:12px">Retry</button></div>'; }
 }
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // TAB / SEARCH / FILTER
-// -----------------------------------------------------------------------------
-function aipTab(t){
-  _aipTab=t; _aipCatFilter='All'; _aipSearch='';
-  var si=document.getElementById('aip-search'); if(si)si.value='';
+// =============================================================================
+function aipTab(t) {
+  _aipTab = t;
+  _aipCatFilter = 'All';
+  _aipSearch = '';
+  var si = document.getElementById('aip-search');
+  if (si) si.value = '';
   ['mf','stock','crypto'].forEach(function(x){
-    var b=document.getElementById('aip-tab-'+x); if(!b)return;
-    var on=x===t;
-    b.style.background=on?'rgba(34,211,238,0.1)':'transparent';
-    b.style.color=on?'#22d3ee':'#64748b';
-    b.style.borderBottom=on?'2px solid #22d3ee':'2px solid transparent';
+    var b = document.getElementById('aip-tab-'+x);
+    if (!b) return;
+    var on = x === t;
+    b.style.background   = on ? 'rgba(34,211,238,0.08)' : 'transparent';
+    b.style.color        = on ? '#22d3ee' : '#475569';
+    b.style.borderBottom = on ? '2px solid #22d3ee' : '2px solid transparent';
   });
   aipBuildCats();
   aipDrawList();
 }
 
-function aipBuildCats(){
-  var sel=document.getElementById('aip-cat'); if(!sel)return;
-  sel.innerHTML=(AIP_CATS[_aipTab]||['All']).map(function(c){
-    return'<option value="'+c+'" style="background:#1a2235"'+(c===_aipCatFilter?' selected':'')+'>'+c+'</option>';
+function aipBuildCats() {
+  var sel = document.getElementById('aip-cat');
+  if (!sel) return;
+  sel.innerHTML = (AIP_CATS[_aipTab]||['All']).map(function(c){
+    return '<option value="'+c+'" style="background:#1a2235"'+(c===_aipCatFilter?' selected':'')+'>'+c+'</option>';
   }).join('');
 }
 
-function aipCatChange(){
-  var sel=document.getElementById('aip-cat'); _aipCatFilter=sel?sel.value:'All'; aipDrawList();
+function aipCatChange() {
+  var sel = document.getElementById('aip-cat');
+  _aipCatFilter = sel ? sel.value : 'All';
+  aipDrawList();
 }
 
-function aipDoSearch(){
-  var si=document.getElementById('aip-search'); _aipSearch=si?(si.value||'').toLowerCase().trim():''; aipDrawList();
+function aipDoSearch() {
+  var si = document.getElementById('aip-search');
+  _aipSearch = si ? (si.value||'').toLowerCase().trim() : '';
+  aipDrawList();
 }
 
-function aipDrawList(){
-  var el=document.getElementById('aip-asset-list'); if(!el)return;
-  var all=AIP_ASSETS[_aipTab]||[];
-  var addedIds={}; _aiPortfolioItems.forEach(function(x){addedIds[x.id]=true;});
-  var filtered=all.filter(function(a){
-    if(_aipCatFilter!=='All'&&a.cat!==_aipCatFilter)return false;
-    if(_aipSearch){var hay=(a.name+' '+a.cat+(a.amc?' '+a.amc:'')).toLowerCase();return hay.indexOf(_aipSearch)>=0;}
+// =============================================================================
+// ASSET LIST
+// =============================================================================
+function aipDrawList() {
+  var el = document.getElementById('aip-asset-list');
+  if (!el) return;
+  var all = AIP_ASSETS[_aipTab] || [];
+  var addedIds = {};
+  _aiPortfolioItems.forEach(function(x){ addedIds[x.id] = true; });
+
+  var filtered = all.filter(function(a){
+    if (_aipCatFilter !== 'All' && a.cat !== _aipCatFilter) return false;
+    if (_aipSearch) {
+      var hay = (a.name+' '+a.cat+(a.amc?' '+a.amc:'')).toLowerCase();
+      return hay.indexOf(_aipSearch) >= 0;
+    }
     return true;
-  }).slice(0,60);
-  _aipFiltered=filtered;
-  if(!filtered.length){el.innerHTML='<div style="padding:20px;text-align:center;color:#475569;font-size:11px">No assets found</div>';return;}
-  el.innerHTML=filtered.map(function(a,i){
-    var added=!!addedIds[a.id];
-    var rc=AIP_RISK_COL[a.risk]||'#888';
-    return'<div onclick="aipClickAdd('+i+')" style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:'+(added?'default':'pointer')+';opacity:'+(added?0.38:1)+';transition:background .1s" '
-      +'onmouseover="if(!'+added+')this.style.background=\'rgba(255,255,255,0.03)\'" onmouseout="this.style.background=\'\'">'
+  }).slice(0, 60);
+  _aipFiltered = filtered;
+
+  if (!filtered.length) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:#334155;font-size:11px">No assets found</div>';
+    return;
+  }
+
+  el.innerHTML = filtered.map(function(a, i){
+    var added = !!addedIds[a.id];
+    var rc    = AIP_RISK_COL[a.risk] || '#888';
+    var retStr = a.ret != null ? (+a.ret).toFixed(1)+'%' : '—';
+    // Show Sortino for MF if available (Varsity: Sortino > Sharpe for SIP investors)
+    var extraBadge = '';
+    if (a.type === 'mf' && a.sortino != null) {
+      var sortinoCol = a.sortino > 1 ? '#10b981' : a.sortino > 0 ? '#f59e0b' : '#ef4444';
+      extraBadge = '<span style="font-size:8px;color:'+sortinoCol+';font-weight:600">S:'+a.sortino.toFixed(2)+'</span>';
+    }
+    if (a.type === 'stock' && a.score != null) {
+      var scol = a.score>=75?'#10b981':a.score>=55?'#f59e0b':'#ef4444';
+      extraBadge = '<span style="font-size:8px;color:'+scol+';font-weight:600">'+a.score+'pts</span>';
+    }
+    return '<div onclick="aipClickAdd('+i+')" '
+      +'style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:'+(added?'default':'pointer')+';opacity:'+(added?0.35:1)+';transition:background .1s" '
+      +'onmouseover="if(!'+added+')this.style.background=\'rgba(255,255,255,0.03)\'" '
+      +'onmouseout="this.style.background=\'\'">'
       +'<div style="flex:1;min-width:0">'
       +'<div style="font-size:11px;font-weight:600;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+a.name+'</div>'
-      +'<div style="font-size:9px;color:#475569;margin-top:1px">'+a.cat+' · <span style="color:'+rc+'">'+a.risk+'</span></div>'
-      +'</div>'
+      +'<div style="font-size:9px;color:#334155;margin-top:2px;display:flex;align-items:center;gap:6px">'
+      +'<span>'+a.cat+'</span><span style="color:'+rc+'">'+a.risk+'</span>'+(extraBadge?'<span>'+extraBadge+'</span>':'')
+      +'</div></div>'
       +'<div style="text-align:right;flex-shrink:0">'
-      +'<div style="font-size:10px;color:#22d3ee;font-weight:600">'+(a.ret!=null?a.ret.toFixed(1):'—')+'%</div>'
-      +'<div style="font-size:8px;color:#475569">3Y</div>'
+      +'<div style="font-size:11px;color:#22d3ee;font-weight:700">'+retStr+'</div>'
+      +'<div style="font-size:8px;color:#334155">'+(a.type==='mf'?'3Y':'EPS')+'</div>'
       +'</div>'
-      +'<div style="background:'+(added?'rgba(34,211,238,0.06)':'rgba(34,211,238,0.15)')+';color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:5px;padding:3px 8px;font-size:10px;font-weight:700;flex-shrink:0;min-width:26px;text-align:center">'
+      +'<div style="background:'+(added?'rgba(34,211,238,0.05)':'rgba(34,211,238,0.14)')+';color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:5px;padding:3px 8px;font-size:11px;font-weight:700;flex-shrink:0">'
       +(added?'✓':'+')+'</div>'
       +'</div>';
   }).join('');
 }
 
-function aipClickAdd(i){
-  var item=_aipFiltered[i]; if(!item)return;
-  for(var j=0;j<_aiPortfolioItems.length;j++){if(_aiPortfolioItems[j].id===item.id)return;}
-  _aiPortfolioItems.push({id:item.id,name:item.name,cat:item.cat,risk:item.risk,ret:item.ret,type:item.type,amount:100000});
-  aipDrawList(); aipDrawItems(); aipSyncBtn();
+function aipClickAdd(i) {
+  var item = _aipFiltered[i];
+  if (!item) return;
+  for (var j = 0; j < _aiPortfolioItems.length; j++) {
+    if (_aiPortfolioItems[j].id === item.id) return;
+  }
+  // Push FULL item data — MiroFish needs every field
+  _aiPortfolioItems.push(Object.assign({}, item, { amount: 100000 }));
+  aipDrawList();
+  aipDrawItems();
+  aipSyncBtn();
 }
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // PORTFOLIO ITEMS
-// -----------------------------------------------------------------------------
-function aipDrawItems(){
-  var el=document.getElementById('aip-items'); if(!el)return;
-  if(!_aiPortfolioItems.length){
-    el.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:36px;gap:12px">'
-      +'<div style="width:52px;height:52px;border-radius:50%;background:rgba(34,211,238,0.06);border:1px dashed rgba(34,211,238,0.25);display:flex;align-items:center;justify-content:center;font-size:22px">📊</div>'
-      +'<div style="color:#475569;font-size:12px;text-align:center;line-height:1.8">Click <b style="color:#22d3ee">+</b> next to any asset<br>to build your portfolio</div>'
+// =============================================================================
+function aipDrawItems() {
+  var el = document.getElementById('aip-items');
+  if (!el) return;
+  if (!_aiPortfolioItems.length) {
+    el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:32px;gap:12px;text-align:center">'
+      +'<div style="width:52px;height:52px;border-radius:50%;background:rgba(34,211,238,0.05);border:1px dashed rgba(34,211,238,0.2);display:flex;align-items:center;justify-content:center;font-size:22px">📊</div>'
+      +'<div style="color:#334155;font-size:12px;line-height:1.9">Click <b style="color:#22d3ee">+</b> on any asset<br>to build your portfolio</div>'
       +'</div>';
     return;
   }
-  var total=_aiPortfolioItems.reduce(function(s,a){return s+a.amount;},0);
-  el.innerHTML=_aiPortfolioItems.map(function(a,i){
-    var pct=total>0?((a.amount/total)*100).toFixed(0):0;
-    var rc=AIP_RISK_COL[a.risk]||'#888';
-    return'<div class="aip-fade" style="margin:0 10px 6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:9px 12px">'
+  var total = _aiPortfolioItems.reduce(function(s,a){ return s+a.amount; }, 0);
+  el.innerHTML = _aiPortfolioItems.map(function(a, i){
+    var pct   = total > 0 ? ((a.amount/total)*100).toFixed(0) : 0;
+    var rc    = AIP_RISK_COL[a.risk] || '#888';
+    var retStr = a.ret != null ? (+a.ret).toFixed(1)+'%' : '—';
+    // Score pill
+    var scorePill = '';
+    if (a.type === 'mf' && a.sortino != null) {
+      var sc = a.sortino > 1 ? '#10b981' : '#f59e0b';
+      scorePill = '<span style="font-size:8px;color:'+sc+';background:'+sc+'18;padding:1px 5px;border-radius:3px">Sortino '+a.sortino.toFixed(2)+'</span>';
+    } else if (a.type === 'stock' && a.score != null) {
+      var sc2 = a.score>=75?'#10b981':a.score>=55?'#f59e0b':'#ef4444';
+      scorePill = '<span style="font-size:8px;color:'+sc2+';background:'+sc2+'18;padding:1px 5px;border-radius:3px">'+a.score+'/100</span>';
+    }
+    return '<div class="aip-fade" style="margin:0 10px 6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:9px 12px">'
       +'<div style="display:flex;align-items:flex-start;gap:8px">'
       +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:11px;font-weight:600;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+a.name+'</div>'
-      +'<div style="font-size:9px;color:#475569;margin-top:1px">'+a.cat+' · <span style="color:'+rc+'">'+a.risk+'</span></div>'
-      +'</div>'
-      +'<button onclick="aipRemove('+i+')" style="background:none;border:none;color:#475569;cursor:pointer;font-size:17px;line-height:1;flex-shrink:0;padding:0">×</button>'
+      +'<div style="font-size:11px;font-weight:600;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+a.name+'</div>'
+      +'<div style="font-size:9px;color:#334155;margin-top:2px;display:flex;align-items:center;gap:5px">'
+      +'<span style="color:'+rc+'">'+a.risk+'</span><span>·</span><span style="color:#22d3ee">'+retStr+' hist</span>'+(scorePill?'<span>·</span>'+scorePill:'')
+      +'</div></div>'
+      +'<button onclick="aipRemove('+i+')" style="background:none;border:none;color:#334155;cursor:pointer;font-size:18px;line-height:1;flex-shrink:0;padding:0">×</button>'
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:8px;margin-top:8px">'
       +'<div style="position:relative;flex:1">'
-      +'<span style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:11px;color:#64748b">₹</span>'
-      +'<input type="number" value="'+a.amount+'" onchange="aipAmt('+i+',this.value)" min="0" step="10000" style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:5px 8px 5px 20px;font-size:11px;color:#e2e8f0;outline:none;box-sizing:border-box">'
+      +'<span style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:11px;color:#475569">₹</span>'
+      +'<input type="number" value="'+a.amount+'" onchange="aipAmt('+i+',this.value)" min="0" step="10000" '
+      +'style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:5px 8px 5px 20px;font-size:11px;color:#e2e8f0;outline:none;box-sizing:border-box">'
       +'</div>'
-      +'<div style="text-align:right;flex-shrink:0;min-width:34px">'
-      +'<div style="font-size:11px;font-weight:700;color:#22d3ee">'+pct+'%</div>'
+      +'<div style="text-align:right;flex-shrink:0;min-width:36px">'
+      +'<div style="font-size:12px;font-weight:700;color:#22d3ee">'+pct+'%</div>'
       +'</div></div>'
-      +'<div style="margin-top:7px;height:2px;background:rgba(255,255,255,0.06);border-radius:1px">'
-      +'<div style="height:100%;width:'+pct+'%;background:linear-gradient(90deg,#22d3ee,#6366f1);border-radius:1px;transition:width .3s"></div>'
+      +'<div style="margin-top:7px;height:2px;background:rgba(255,255,255,0.05);border-radius:1px">'
+      +'<div style="height:100%;width:'+pct+'%;background:linear-gradient(90deg,#22d3ee,#6366f1);border-radius:1px;transition:width .4s"></div>'
       +'</div></div>';
   }).join('');
 }
 
-function aipRemove(i){
-  _aiPortfolioItems.splice(i,1);
-  aipDrawList(); aipDrawItems(); aipSyncBtn();
-  document.getElementById('aip-empty').style.display='flex';
-  document.getElementById('aip-result').style.display='none';
+function aipRemove(i) {
+  _aiPortfolioItems.splice(i, 1);
+  aipDrawList();
+  aipDrawItems();
+  aipSyncBtn();
+  var r = document.getElementById('aip-result');
+  var e = document.getElementById('aip-empty');
+  if (r) r.style.display = 'none';
+  if (e) e.style.display = 'flex';
 }
 
-function aipAmt(i,v){
-  if(_aiPortfolioItems[i])_aiPortfolioItems[i].amount=Math.max(0,parseInt(v)||0);
+function aipAmt(i, v) {
+  if (_aiPortfolioItems[i]) _aiPortfolioItems[i].amount = Math.max(0, parseInt(v)||0);
   aipSyncBtn();
-  // Re-render just the % bars without full redraw
-  var total=_aiPortfolioItems.reduce(function(s,a){return s+a.amount;},0);
-  document.getElementById('aip-total').textContent=aipFmt(total);
   aipDrawItems();
 }
 
-function aipClearAll(){
-  _aiPortfolioItems=[];
-  aipDrawList(); aipDrawItems(); aipSyncBtn();
-  document.getElementById('aip-empty').style.display='flex';
-  document.getElementById('aip-result').style.display='none';
+function aipClearAll() {
+  _aiPortfolioItems = [];
+  aipDrawList();
+  aipDrawItems();
+  aipSyncBtn();
+  var r = document.getElementById('aip-result');
+  var e = document.getElementById('aip-empty');
+  if (r) r.style.display = 'none';
+  if (e) e.style.display = 'flex';
 }
 
-function aipSyncBtn(){
-  var total=_aiPortfolioItems.reduce(function(s,a){return s+a.amount;},0);
-  var el=document.getElementById('aip-total'); if(el)el.textContent=aipFmt(total);
-  var btn=document.getElementById('aip-btn'); if(!btn)return;
-  var ok=_aiPortfolioItems.length>0&&total>0;
-  btn.style.background=ok?'linear-gradient(135deg,#22d3ee,#6366f1)':'rgba(255,255,255,0.04)';
-  btn.style.color=ok?'#fff':'#334155';
-  btn.style.cursor=ok?'pointer':'not-allowed';
-  btn.style.boxShadow=ok?'0 4px 20px rgba(34,211,238,0.2)':'none';
+function aipSyncBtn() {
+  var total = _aiPortfolioItems.reduce(function(s,a){ return s+a.amount; }, 0);
+  var el = document.getElementById('aip-total');
+  if (el) el.textContent = aipFmt(total);
+  var btn = document.getElementById('aip-btn');
+  if (!btn) return;
+  var ok = _aiPortfolioItems.length > 0 && total > 0 && !_aipPredicting;
+  btn.style.background  = ok ? 'linear-gradient(135deg,#22d3ee,#6366f1)' : 'rgba(255,255,255,0.04)';
+  btn.style.color       = ok ? '#fff' : '#334155';
+  btn.style.cursor      = ok ? 'pointer' : 'not-allowed';
+  btn.style.boxShadow   = ok ? '0 4px 24px rgba(34,211,238,0.22)' : 'none';
 }
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // HORIZONS
-// -----------------------------------------------------------------------------
-function aipDrawHorizons(){
-  var el=document.getElementById('aip-hz'); if(!el)return;
-  el.innerHTML=AIP_HORIZONS.map(function(y){
-    var on=y===_aiPortfolioYears;
-    return'<button onclick="aipHz('+y+',this)" class="aip-yr-btn" style="padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid;transition:all .15s;background:'+(on?'#22d3ee':'rgba(255,255,255,0.05)')+';color:'+(on?'#0b0f14':'#64748b')+';border-color:'+(on?'#22d3ee':'rgba(255,255,255,0.1)')+'">'+y+'Y</button>';
+// =============================================================================
+function aipDrawHorizons() {
+  var el = document.getElementById('aip-hz');
+  if (!el) return;
+  el.innerHTML = AIP_HORIZONS.map(function(y){
+    var on = y === _aiPortfolioYears;
+    return '<button onclick="aipHz('+y+',this)" class="aip-yr-btn" '
+      +'style="padding:5px 13px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid;transition:all .15s;'
+      +'background:'+(on?'#22d3ee':'rgba(255,255,255,0.05)')+';'
+      +'color:'+(on?'#0b0f14':'#475569')+';'
+      +'border-color:'+(on?'#22d3ee':'rgba(255,255,255,0.1)')+'">'
+      +y+'Y</button>';
   }).join('');
 }
 
-function aipHz(y,btn){
-  _aiPortfolioYears=y;
-  document.querySelectorAll('.aip-yr-btn').forEach(function(b){b.style.background='rgba(255,255,255,0.05)';b.style.color='#64748b';b.style.borderColor='rgba(255,255,255,0.1)';});
-  if(btn){btn.style.background='#22d3ee';btn.style.color='#0b0f14';btn.style.borderColor='#22d3ee';}
+function aipHz(y, btn) {
+  _aiPortfolioYears = y;
+  document.querySelectorAll('.aip-yr-btn').forEach(function(b){
+    b.style.background  = 'rgba(255,255,255,0.05)';
+    b.style.color       = '#475569';
+    b.style.borderColor = 'rgba(255,255,255,0.1)';
+  });
+  if (btn) {
+    btn.style.background  = '#22d3ee';
+    btn.style.color       = '#0b0f14';
+    btn.style.borderColor = '#22d3ee';
+  }
 }
 
-// -----------------------------------------------------------------------------
-// PREDICT — calls /api/mirofish/portfolio-predict (MiroFish AI engine)
-// -----------------------------------------------------------------------------
-async function aipPredict(){
-  var total=_aiPortfolioItems.reduce(function(s,a){return s+a.amount;},0);
-  if(!_aiPortfolioItems.length||!total)return;
+// =============================================================================
+// PREDICTION — 5 agents + synthesis
+// =============================================================================
+async function aipPredict() {
+  if (_aipPredicting) return;
+  var total = _aiPortfolioItems.reduce(function(s,a){ return s+a.amount; }, 0);
+  if (!_aiPortfolioItems.length || !total) return;
 
-  var btn=document.getElementById('aip-btn');
-  var emEl=document.getElementById('aip-empty');
-  var resEl=document.getElementById('aip-result');
-  if(!resEl)return;
+  _aipPredicting = true;
+  aipSyncBtn();
 
-  // Loading state
-  if(btn){btn.disabled=true;btn.innerHTML='<span style="display:inline-flex;align-items:center;justify-content:center;gap:8px"><span style="width:12px;height:12px;border:2px solid rgba(34,211,238,0.25);border-top-color:#22d3ee;border-radius:50%;animation:aip-spin 0.8s linear infinite;display:inline-block"></span>MiroFish analyzing...</span>';}
-  if(emEl)emEl.style.display='none';
-  resEl.style.display='flex';
-  resEl.innerHTML='<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px">'
-    +'<div style="font-size:34px">🐟</div>'
-    +'<div style="color:#22d3ee;font-size:13px;font-weight:700">MiroFish is thinking...</div>'
-    +'<div style="font-size:10px;color:#475569;text-align:center;line-height:1.8">'
-    +'MiroFish runs 5 internal agents in parallel:<br>'
-    +'<span style="color:#64748b">Vikram (FA) · Priya (TA) · Arjun (Contrarian)</span><br>'
-    +'<span style="color:#64748b">Meera (Risk) · Rahul (Quant)</span><br>'
-    +'analyzing '+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')+' over '+_aiPortfolioYears+' years'
+  var btn   = document.getElementById('aip-btn');
+  var emEl  = document.getElementById('aip-empty');
+  var resEl = document.getElementById('aip-result');
+  if (!resEl) { _aipPredicting = false; return; }
+
+  if (btn) btn.innerHTML = '<span style="display:inline-flex;align-items:center;justify-content:center;gap:8px">'
+    +'<span style="width:12px;height:12px;border:2px solid rgba(34,211,238,0.2);border-top-color:#22d3ee;border-radius:50%;animation:aip-spin 0.8s linear infinite;display:inline-block"></span>'
+    +'MiroFish is running 5 agents...</span>';
+
+  if (emEl) emEl.style.display = 'none';
+  resEl.style.display = 'flex';
+
+  // Agent progress display
+  var agents = ['Vikram (FA)','Priya (TA)','Arjun (Contrarian)','Meera (Risk)','Rahul (Quant)'];
+  var agentHTML = agents.map(function(a){
+    return '<div id="aip-ag-'+a.split(' ')[0].toLowerCase()+'" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04)">'
+      +'<div style="width:7px;height:7px;border-radius:50%;background:#334155;flex-shrink:0" id="aip-ag-dot-'+a.split(' ')[0].toLowerCase()+'"></div>'
+      +'<span style="font-size:11px;color:#475569">'+a+'</span>'
+      +'<span style="font-size:10px;color:#1e293b;margin-left:auto" id="aip-ag-st-'+a.split(' ')[0].toLowerCase()+'">waiting...</span>'
+      +'</div>';
+  }).join('');
+
+  resEl.innerHTML = '<div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:20px">'
+    +'<div style="text-align:center;margin-bottom:20px">'
+    +'<div style="font-size:32px;margin-bottom:8px">🐟</div>'
+    +'<div style="color:#22d3ee;font-size:13px;font-weight:700;margin-bottom:4px">5 Agents debating your portfolio...</div>'
+    +'<div style="font-size:10px;color:#334155">Varsity-trained · analyzing '+_aiPortfolioItems.length+' asset'+(_aiPortfolioItems.length>1?'s':'')+' over '+_aiPortfolioYears+'Y</div>'
     +'</div>'
-    +'<div style="width:160px;height:2px;background:rgba(255,255,255,0.06);border-radius:1px;overflow:hidden"><div style="height:100%;background:linear-gradient(90deg,#22d3ee,#6366f1);animation:aip-loading 1.6s ease-in-out infinite;border-radius:1px"></div></div>'
-    +'</div>';
+    +'<div style="background:rgba(255,255,255,0.02);border-radius:10px;padding:12px;margin-bottom:14px">'+agentHTML+'</div>'
+    +'<div style="height:2px;background:rgba(255,255,255,0.05);border-radius:1px;overflow:hidden">'
+    +'<div style="height:100%;width:33%;background:linear-gradient(90deg,#22d3ee,#6366f1);border-radius:1px;animation:aip-bar 2s ease-in-out infinite"></div>'
+    +'</div></div>';
 
-  var d=null;
-  try{
-    var resp=await fetch('/api/mirofish/portfolio-predict',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({items:_aiPortfolioItems,years:_aiPortfolioYears})
+  // Animate agents as they "work"
+  var agentIds = ['vikram','priya','arjun','meera','rahul'];
+  var delays   = [0, 600, 1200, 1800, 2400];
+  delays.forEach(function(delay, idx){
+    setTimeout(function(){
+      var dot = document.getElementById('aip-ag-dot-'+agentIds[idx]);
+      var st  = document.getElementById('aip-ag-st-'+agentIds[idx]);
+      if (dot) dot.style.background = '#f59e0b';
+      if (st)  st.style.color = '#f59e0b';
+      if (st)  st.textContent = 'analyzing...';
+    }, delay);
+  });
+
+  var d = null;
+  try {
+    var resp = await fetch('/api/mirofish/portfolio-predict-v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: _aiPortfolioItems, years: _aiPortfolioYears }),
     });
-    d=await resp.json();
-    if(d.error)throw new Error(d.error);
-  }catch(e){
-    resEl.innerHTML='<div style="color:#ef4444;padding:16px;background:rgba(239,68,68,.08);border-radius:8px;font-size:12px;margin:12px">'
-      +(e.message&&e.message.includes('ANTHROPIC')?'⚠ Add ANTHROPIC_API_KEY to Railway env vars':'❌ '+e.message)+'</div>';
-    if(btn){btn.disabled=false;btn.innerHTML='🚀 Predict with MiroFish';}
+    d = await resp.json();
+    if (d.error) throw new Error(d.error);
+
+    // Mark all agents done
+    agentIds.forEach(function(id){
+      var dot = document.getElementById('aip-ag-dot-'+id);
+      var st  = document.getElementById('aip-ag-st-'+id);
+      if (dot) dot.style.background = '#10b981';
+      if (st)  { st.style.color = '#10b981'; st.textContent = 'done'; }
+    });
+
+    await new Promise(function(r){ setTimeout(r, 400); }); // brief "all done" flash
+  } catch(e) {
+    resEl.innerHTML = '<div style="color:#ef4444;padding:16px;background:rgba(239,68,68,.08);border-radius:8px;font-size:12px;margin:12px">'
+      +(e.message.includes('ANTHROPIC') ? '⚠ Add ANTHROPIC_API_KEY to Railway env vars' : '❌ '+e.message)
+      +'<br><button onclick="aipPredict()" style="margin-top:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 14px;font-size:11px;color:#64748b;cursor:pointer">↻ Retry</button></div>';
+    _aipPredicting = false;
+    if (btn) btn.innerHTML = '🚀 Predict with MiroFish';
+    aipSyncBtn();
     return;
   }
 
-  // -- Render results ----------------------------------------------------------
-  var proj=d.total_projected||0;
-  var gain=proj-total;
-  var gainPct=total>0?((gain/total)*100).toFixed(1):0;
-  var blended=d.portfolio_cagr||'—';
-  var riskLabel=d.risk_level||'Moderate';
-  var riskCol=AIP_RISK_COL[riskLabel]||'#f59e0b';
-  var worst=d.worst_case||Math.round(proj*0.75);
-  var best=d.best_case||Math.round(proj*1.3);
-  var inflAdj=d.inflation_adjusted||Math.round(proj/Math.pow(1.06,_aiPortfolioYears));
+  // -- RENDER RESULTS ------------------------------------------------------------
+  var proj       = d.total_projected || 0;
+  var blended    = d.portfolio_cagr || '—';
+  var riskLabel  = d.risk_level || 'Moderate';
+  var riskCol    = AIP_RISK_COL[riskLabel] || '#f59e0b';
+  var worst      = d.worst_case  || Math.round(proj * 0.72);
+  var best       = d.best_case   || Math.round(proj * 1.32);
+  var inflAdj    = d.inflation_adjusted || Math.round(proj / Math.pow(1.06, _aiPortfolioYears));
+  var expDrag    = d.expense_drag || 0;
+  var consensus  = d.agent_consensus || 'Medium';
+  var consensusCol = consensus==='High'?'#10b981':consensus==='Low'?'#ef4444':'#f59e0b';
 
-  // chart curve
-  var chartLabels=[],portData=[];
-  if(d.growth_curve&&d.growth_curve.length){
-    d.growth_curve.forEach(function(p){chartLabels.push(p.year===0?'Now':p.year+'Y');portData.push(p.value);});
+  // Chart data — use growth_curve from server or compute from blendedCAGR
+  var chartLabels = [], portData = [];
+  if (d.growth_curve && d.growth_curve.length) {
+    d.growth_curve.forEach(function(p){ chartLabels.push(p.year===0?'Now':p.year+'Y'); portData.push(p.value); });
   } else {
-    var steps=Math.min(_aiPortfolioYears,20);
-    for(var s=0;s<=steps;s++){
-      var y=Math.round(s/steps*_aiPortfolioYears);
+    var steps = Math.min(_aiPortfolioYears, 20);
+    for (var s = 0; s <= steps; s++) {
+      var y = Math.round(s/steps*_aiPortfolioYears);
       chartLabels.push(y===0?'Now':y+'Y');
-      portData.push(Math.round(total*Math.pow(1+(parseFloat(blended)||12)/100,y)));
+      portData.push(Math.round(total * Math.pow(1+(parseFloat(blended)||14)/100, y)));
     }
   }
-  var html='';
 
-  // Hero card
-  html+='<div class="aip-fade" style="background:linear-gradient(135deg,rgba(34,211,238,0.08),rgba(99,102,241,0.08));border:1px solid rgba(34,211,238,0.2);border-radius:11px;padding:14px;text-align:center">';
-  html+='<div style="font-size:10px;color:#64748b;margin-bottom:4px">Projected value in '+_aiPortfolioYears+' years</div>';
-  html+='<div style="font-size:30px;font-weight:800;color:#22d3ee;letter-spacing:-0.03em">'+aipFmt(proj)+'</div>';
-  html+='<div style="font-size:11px;color:#94a3b8;margin-top:5px">from '+aipFmt(total)+' invested · <span style="color:#22d3ee">'+blended+'% CAGR</span></div>';
-  html+='<div style="margin-top:8px"><span style="font-size:9px;padding:2px 8px;border-radius:4px;background:'+riskCol+'20;color:'+riskCol+';border:1px solid '+riskCol+'40">'+riskLabel+' Risk</span></div>';
-  if(d.confidence)html+='<div style="font-size:9px;color:#475569;margin-top:5px">MiroFish confidence: '+d.confidence+'</div>';
-  html+='</div>';
+  var html = '';
+
+  // Hero projection card
+  html += '<div class="aip-fade" style="background:linear-gradient(135deg,rgba(34,211,238,0.08),rgba(99,102,241,0.08));border:1px solid rgba(34,211,238,0.2);border-radius:12px;padding:16px;text-align:center">';
+  html += '<div style="font-size:10px;color:#475569;margin-bottom:4px;letter-spacing:.04em">PROJECTED VALUE IN '+_aiPortfolioYears+' YEARS</div>';
+  html += '<div style="font-size:32px;font-weight:800;color:#22d3ee;letter-spacing:-0.04em;line-height:1">'+aipFmt(proj)+'</div>';
+  html += '<div style="font-size:11px;color:#64748b;margin-top:6px">from '+aipFmt(total)+' invested · <span style="color:#22d3ee;font-weight:600">'+blended+'% CAGR</span></div>';
+  html += '<div style="margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px">';
+  html += '<span style="font-size:9px;padding:2px 8px;border-radius:4px;background:'+riskCol+'18;color:'+riskCol+';border:1px solid '+riskCol+'35">'+riskLabel+' Risk</span>';
+  html += '<span style="font-size:9px;padding:2px 8px;border-radius:4px;background:'+consensusCol+'18;color:'+consensusCol+';border:1px solid '+consensusCol+'35">Consensus: '+consensus+'</span>';
+  html += '</div></div>';
 
   // Chart
-  html+='<div class="aip-fade" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px">';
-  html+='<div style="position:relative;width:100%;height:155px"><canvas id="aip-chart"></canvas></div>';
-  html+='</div>';
+  html += '<div class="aip-fade" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px">';
+  html += '<div style="position:relative;width:100%;height:150px"><canvas id="aip-chart"></canvas></div>';
+  html += '</div>';
 
-  // 4 metric cards
-  html+='<div class="aip-fade" style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px">';
-  [['BEST CASE',aipFmt(best),'#22d3ee'],['WORST CASE',aipFmt(worst),'#f97316'],['INFLATION ADJ.',aipFmt(inflAdj),'#94a3b8']].forEach(function(m){
-    html+='<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:9px 11px">';
-    html+='<div style="font-size:8px;color:#475569;font-weight:700;margin-bottom:3px">'+m[0]+'</div>';
-    html+='<div style="font-size:12px;font-weight:700;color:'+m[2]+'">'+m[1]+'</div></div>';
+  // Metric cards — 3 columns
+  html += '<div class="aip-fade" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">';
+  [
+    ['BEST CASE',    aipFmt(best),    '#22d3ee'],
+    ['WORST CASE',   aipFmt(worst),   '#f97316'],
+    ['INFLATION ADJ',aipFmt(inflAdj), '#94a3b8'],
+  ].forEach(function(m){
+    html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:9px 10px">';
+    html += '<div style="font-size:8px;color:#334155;font-weight:700;margin-bottom:3px;letter-spacing:.04em">'+m[0]+'</div>';
+    html += '<div style="font-size:12px;font-weight:700;color:'+m[2]+'">'+m[1]+'</div>';
+    html += '</div>';
   });
-  html+='</div>';
+  html += '</div>';
 
-  // MiroFish insight
-  if(d.portfolio_insight||d.prediction){
-    html+='<div class="aip-fade" style="background:rgba(34,211,238,0.04);border:1px solid rgba(34,211,238,0.15);border-radius:10px;padding:12px">';
-    html+='<div style="font-size:9px;color:#22d3ee;font-weight:700;margin-bottom:6px">🐟 MIROFISH INSIGHT</div>';
-    html+='<div style="font-size:10px;color:#94a3b8;line-height:1.8">'+(d.portfolio_insight||d.prediction||'')+'</div>';
-    if(d.key_risk)html+='<div style="font-size:9px;color:#ef4444;margin-top:6px">⚠ Key risk: '+d.key_risk+'</div>';
-    html+='</div>';
+  // Expense drag card (Varsity Module 11: "expense ratio compounding is brutal")
+  if (expDrag > 0) {
+    html += '<div class="aip-fade" style="background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.12);border-radius:8px;padding:10px 12px">';
+    html += '<div style="font-size:9px;font-weight:700;color:#ef4444;margin-bottom:3px;display:flex;align-items:center;gap:5px">⚠ VARSITY: EXPENSE DRAG OVER '+_aiPortfolioYears+'Y</div>';
+    html += '<div style="font-size:11px;color:#94a3b8">Your TER costs you <span style="color:#ef4444;font-weight:700">'+aipFmt(expDrag)+'</span> in lost compounding</div>';
+    if (d.avg_expense_ratio) html += '<div style="font-size:9px;color:#334155;margin-top:2px">Avg TER: '+d.avg_expense_ratio.toFixed(2)+'% · Switch to lower TER funds to keep more wealth</div>';
+    html += '</div>';
   }
 
-  // Breakdown
-  if(d.items&&d.items.length){
-    html+='<div class="aip-fade" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:11px">';
-    html+='<div style="font-size:9px;color:#64748b;font-weight:700;margin-bottom:9px">ASSET BREAKDOWN</div>';
+  // MiroFish Insight
+  if (d.portfolio_insight) {
+    html += '<div class="aip-fade" style="background:rgba(34,211,238,0.04);border:1px solid rgba(34,211,238,0.13);border-radius:10px;padding:12px">';
+    html += '<div style="font-size:9px;color:#22d3ee;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:5px">🐟 MIROFISH SYNTHESIS</div>';
+    html += '<div style="font-size:10px;color:#94a3b8;line-height:1.8">'+d.portfolio_insight+'</div>';
+    if (d.key_risk) html += '<div style="font-size:9px;color:#ef4444;margin-top:7px">⚠ Key risk: '+d.key_risk+'</div>';
+    html += '</div>';
+  }
+
+  // Varsity Lesson
+  if (d.varsity_lesson) {
+    html += '<div class="aip-fade" style="background:rgba(99,102,241,0.04);border:1px solid rgba(99,102,241,0.13);border-radius:10px;padding:11px">';
+    html += '<div style="font-size:9px;color:#818cf8;font-weight:700;margin-bottom:5px">📚 VARSITY LESSON</div>';
+    html += '<div style="font-size:10px;color:#94a3b8;line-height:1.8">'+d.varsity_lesson+'</div>';
+    if (d.sip_vs_lumpsum) html += '<div style="font-size:9px;color:#64748b;margin-top:5px;font-style:italic">'+d.sip_vs_lumpsum+'</div>';
+    html += '</div>';
+  }
+
+  // Rebalance suggestion
+  if (d.rebalance_suggestion && d.rebalance_suggestion !== 'null') {
+    html += '<div class="aip-fade" style="background:rgba(245,158,11,0.04);border:1px solid rgba(245,158,11,0.13);border-radius:8px;padding:10px 12px">';
+    html += '<div style="font-size:9px;color:#f59e0b;font-weight:700;margin-bottom:4px">⚖ REBALANCE SUGGESTION</div>';
+    html += '<div style="font-size:10px;color:#94a3b8;line-height:1.7">'+d.rebalance_suggestion+'</div>';
+    html += '</div>';
+  }
+
+  // Per-asset breakdown
+  if (d.items && d.items.length) {
+    html += '<div class="aip-fade" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px">';
+    html += '<div style="font-size:9px;color:#475569;font-weight:700;margin-bottom:10px;letter-spacing:.06em">ASSET BREAKDOWN</div>';
     d.items.forEach(function(item){
-      var gain2=(item.projected||0)-(item.amount||0);
-      var gPct=item.amount?((gain2/item.amount)*100).toFixed(0):0;
-      var aPct=total>0?((item.amount/total)*100).toFixed(0):0;
-      html+='<div style="margin-bottom:9px">';
-      html+='<div style="display:flex;justify-content:space-between;margin-bottom:3px">';
-      html+='<span style="font-size:10px;color:#94a3b8;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:6px">'+(item.sym||item.name||'')+'</span>';
-      html+='<span style="font-size:10px;color:#22d3ee;font-weight:600;flex-shrink:0">'+aipFmt(item.projected||0)+'</span>';
-      html+='</div>';
-      html+='<div style="display:flex;align-items:center;gap:6px">';
-      html+='<div style="flex:1;height:2px;background:rgba(255,255,255,0.06);border-radius:1px"><div style="height:100%;width:'+aPct+'%;background:rgba(34,211,238,0.5);border-radius:1px"></div></div>';
-      html+='<span style="font-size:9px;color:#64748b;flex-shrink:0">'+(item.cagr||'—')+'% · <span style="color:'+(gain2>=0?'#10b981':'#ef4444')+'">'+(gain2>=0?'+':'')+gPct+'%</span></span>';
-      html+='</div></div>';
+      var gain2  = (item.projected||0) - (item.amount||0);
+      var gPct   = item.amount ? ((gain2/item.amount)*100).toFixed(0) : 0;
+      var aPct   = total > 0  ? ((item.amount/total)*100).toFixed(0)  : 0;
+      var gCol   = gain2 >= 0 ? '#10b981' : '#ef4444';
+      html += '<div style="margin-bottom:11px">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">';
+      html += '<span style="font-size:10px;font-weight:600;color:#94a3b8;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:8px">'+(item.name||item.id||'')+'</span>';
+      html += '<span style="font-size:10px;color:#22d3ee;font-weight:700;flex-shrink:0">'+aipFmt(item.projected||0)+'</span>';
+      html += '</div>';
+      // Sub-row: CAGR + gain% + insight
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+      html += '<div style="flex:1;height:2px;background:rgba(255,255,255,0.05);border-radius:1px">';
+      html += '<div style="height:100%;width:'+aPct+'%;background:rgba(34,211,238,0.45);border-radius:1px"></div></div>';
+      html += '<span style="font-size:9px;color:#475569;flex-shrink:0">'+(item.cagr||'—')+'% CAGR</span>';
+      html += '<span style="font-size:9px;color:'+gCol+';font-weight:600;flex-shrink:0">'+(gain2>=0?'+':'')+gPct+'%</span>';
+      html += '</div>';
+      // Agent insights (first 2)
+      if (item.insights && item.insights.length) {
+        var insightStr = item.insights.slice(0,1).join(' | ');
+        html += '<div style="font-size:9px;color:#334155;line-height:1.6;padding-left:2px">'+insightStr+'</div>';
+      }
+      // Red flags
+      if (item.redFlags && item.redFlags.length) {
+        html += '<div style="font-size:9px;color:#ef4444;margin-top:2px">⚠ '+item.redFlags[0]+'</div>';
+      }
+      html += '</div>';
     });
-    html+='</div>';
+    html += '</div>';
   }
 
-  // Repredict
-  html+='<div style="text-align:center;padding-bottom:4px">';
-  html+='<button onclick="aipPredict()" style="background:rgba(255,255,255,0.05);color:#64748b;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:7px 18px;font-size:11px;cursor:pointer">🔄 Re-predict</button>';
-  html+='</div>';
+  // Agent views accordion
+  if (d.agent_views && d.agent_views.length) {
+    html += '<div class="aip-fade" style="background:rgba(255,255,255,0.01);border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden">';
+    html += '<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'" '
+      +'style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between">'
+      +'<span style="font-size:9px;color:#475569;font-weight:700;letter-spacing:.06em">🧠 AGENT VIEWS</span>'
+      +'<span style="font-size:10px;color:#334155">▾</span></div>';
+    html += '<div style="display:none;padding:0 12px 12px">';
+    var agentColMap = {vikram:'#f59e0b', priya:'#3b82f6', arjun:'#8b5cf6', meera:'#ef4444', rahul:'#22d3ee'};
+    d.agent_views.forEach(function(av){
+      var aid = av.agent ? av.agent.split(' ')[0].toLowerCase() : 'unknown';
+      var col = agentColMap[aid] || '#64748b';
+      html += '<div style="margin-bottom:8px;padding:8px;background:rgba(255,255,255,0.02);border-radius:7px;border-left:2px solid '+col+'">';
+      html += '<div style="font-size:9px;font-weight:700;color:'+col+';margin-bottom:3px">'+av.agent+'</div>';
+      html += '<div style="font-size:10px;color:#64748b;line-height:1.6">'+(av.portfolio_view||'—')+'</div>';
+      if (av.biggest_risk) html += '<div style="font-size:9px;color:#ef4444;margin-top:3px">⚠ '+av.biggest_risk+'</div>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
 
-  resEl.innerHTML=html;
+  // Re-predict button
+  html += '<div style="text-align:center;padding:4px 0">';
+  html += '<button onclick="aipPredict()" style="background:rgba(255,255,255,0.04);color:#475569;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:7px 18px;font-size:11px;cursor:pointer;transition:all .15s" '
+    +'onmouseover="this.style.borderColor=\'rgba(255,255,255,0.15)\'" onmouseout="this.style.borderColor=\'rgba(255,255,255,0.08)\'">🔄 Re-predict</button>';
+  html += '</div>';
 
-  // Draw chart after DOM ready
+  resEl.innerHTML = html;
+
+  // Draw Chart.js
   setTimeout(function(){
-    var ctx=document.getElementById('aip-chart'); if(!ctx)return;
-    if(_aipChart){_aipChart.destroy();_aipChart=null;}
-    // Load Chart.js if not already loaded
-    function drawChart(){
-      _aipChart=new Chart(ctx,{
-        type:'line',
-        data:{labels:chartLabels,datasets:[
-          {label:'Portfolio',data:portData,borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,0.07)',borderWidth:2.5,pointRadius:2,pointBackgroundColor:'#22d3ee',tension:0.38,fill:true}
-        ]},
-        options:{responsive:true,maintainAspectRatio:false,
-          interaction:{mode:'index',intersect:false},
-          plugins:{legend:{display:false},tooltip:{backgroundColor:'#1a2235',borderColor:'#2d3f5a',borderWidth:1,callbacks:{label:function(c){return'  '+c.dataset.label+': '+aipFmt(c.raw);}}}},
-          scales:{x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9}}},y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:9},callback:function(v){return aipFmt(v);}},border:{dash:[4,4]}}}}
+    var ctx = document.getElementById('aip-chart');
+    if (!ctx) return;
+    if (_aipChart) { _aipChart.destroy(); _aipChart = null; }
+    function drawChart() {
+      _aipChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: chartLabels, datasets: [{
+          label: 'Portfolio',
+          data: portData,
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34,211,238,0.07)',
+          borderWidth: 2.5,
+          pointRadius: portData.length <= 12 ? 2 : 0,
+          pointBackgroundColor: '#22d3ee',
+          tension: 0.4,
+          fill: true,
+        }]},
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#0f172a',
+              borderColor: '#1e3a5f',
+              borderWidth: 1,
+              callbacks: { label: function(c){ return '  '+aipFmt(c.raw); } },
+            },
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#334155', font: { size: 9 } } },
+            y: {
+              grid: { color: 'rgba(255,255,255,0.03)' },
+              ticks: { color: '#334155', font: { size: 9 }, callback: function(v){ return aipFmt(v); } },
+              border: { dash: [3,3] },
+            },
+          },
+        },
       });
     }
-    if(window.Chart){drawChart();}
-    else{
-      var sc=document.createElement('script');
-      sc.src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js';
-      sc.onload=drawChart;
+    if (window.Chart) { drawChart(); }
+    else {
+      var sc = document.createElement('script');
+      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js';
+      sc.onload = drawChart;
       document.head.appendChild(sc);
     }
-  },80);
+  }, 80);
 
-  if(btn){btn.disabled=false;btn.innerHTML='🚀 Predict with MiroFish';}
+  _aipPredicting = false;
+  if (btn) btn.innerHTML = '🚀 Predict with MiroFish';
+  aipSyncBtn();
 }
 
 function _init() {
