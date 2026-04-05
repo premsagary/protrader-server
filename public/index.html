@@ -3632,334 +3632,264 @@ var _aiPortfolioItems=[];
 var _aiPortfolioYears=5;
 
 async function renderAIPortfolio() {
-  var cont=document.getElementById('main-content');
-  if(!cont) return;
-  cont.innerHTML='<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Loading...</div>';
+  var cont = document.getElementById('main-content');
+  if (!cont) return;
 
-  // Auto-fetch MF list if not loaded yet
-  if(!window._mfFundsList||window._mfFundsList.length===0){
-    try{
-      var r=await fetch('/api/mf/funds');
-      var d=await r.json();
-      window._mfFundsList=d.funds||[];
-    }catch(e){window._mfFundsList=[];}
+  // Fetch MF list if empty
+  if (!window._mfFundsList || !window._mfFundsList.length) {
+    try {
+      var r = await fetch('/api/mf/funds');
+      var d = await r.json();
+      window._mfFundsList = d.funds || [];
+    } catch(e) { window._mfFundsList = []; }
   }
 
-  var stockList=(stockRecData&&stockRecData.stocks||[])
-    .sort(function(a,b){return(b.score||0)-(a.score||0);})
-    .map(function(s){return{type:'stock',sym:s.sym,name:s.name,score:s.score,sector:s.sector};});
-  var mfList=(window._mfFundsList||[])
-    .filter(function(f){return f.eligible!==false&&f.score!=null;})
-    .sort(function(a,b){return(b.score||0)-(a.score||0);})
-    .map(function(f){return{type:'mf',sym:f.name,name:f.name,score:f.score,cat:f.cat,amc:f.amc};});
+  // Build search lists
+  window._aipStockList = (stockRecData && stockRecData.stocks || [])
+    .sort(function(a,b){ return (b.score||0)-(a.score||0); })
+    .map(function(s){ return {type:'stock',sym:s.sym,name:s.name||s.sym,score:s.score,sector:s.sector}; });
 
-  window._aipStockList=stockList;
-  window._aipMFList=mfList;
+  window._aipMFList = (window._mfFundsList || [])
+    .filter(function(f){ return f.eligible !== false && f.score != null; })
+    .sort(function(a,b){ return (b.score||0)-(a.score||0); })
+    .map(function(f){ return {type:'mf',sym:f.name,name:f.name,score:f.score,cat:f.cat,amc:f.amc}; });
 
-  var h='<div style="padding:24px;max-width:960px">';
-  h+='<div style="margin-bottom:24px">';
-  h+='<div style="font-size:20px;font-weight:700;margin-bottom:4px">&#x1F4CA; AI Portfolio Predictor</div>';
-  h+='<div style="font-size:12px;color:var(--text3)">Add stocks or mutual funds &middot; Enter amount &middot; Pick years &middot; MiroFish predicts your portfolio value</div>';
-  h+='</div>';
+  _aiPortfolioYears = _aiPortfolioYears || 10;
 
-  // Step 1
-  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">';
-  h+='<div style="font-size:13px;font-weight:700;margin-bottom:14px;color:var(--text2)">Step 1 &mdash; Add investments</div>';
-  h+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">';
-  h+='<select id="aip-type" onchange="aipTypeChanged()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;cursor:pointer;flex-shrink:0">';
-  h+='<option value="stock">&#x1F4C8; Stocks ('+stockList.length+')</option>';
-  h+='<option value="mf">&#x1F4CA; Mutual Funds ('+mfList.length+')</option>';
-  h+='</select>';
-  h+='<div style="position:relative;flex:1;min-width:200px">';
-  h+='<input id="aip-search" type="text" placeholder="Search & select from list below..." oninput="aipSearch()" onfocus="aipSearch()" autocomplete="off" ';
-  h+='style="width:100%;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;box-sizing:border-box">';
-  h+='<div id="aip-dd" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;max-height:240px;overflow-y:auto;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.6)"></div>';
-  h+='</div>';
-  h+='<input id="aip-amount" type="number" placeholder="&#x20b9; Amount" min="1000" step="5000" value="100000" ';
-  h+='style="width:130px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;flex-shrink:0">';
-  h+='<button onclick="aipAdd()" style="background:var(--green);color:#000;border:none;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+ Add</button>';
-  h+='</div>';
-  h+='<div id="aip-sel" style="font-size:11px;color:var(--text3);min-height:18px;margin-bottom:10px;padding:0 2px">Select from dropdown above, then click + Add</div>';
-  h+='<div id="aip-items"></div>';
-  h+='</div>';
+  var h = '<div style="padding:20px;max-width:900px">';
+  h += '<div style="font-size:20px;font-weight:700;margin-bottom:4px">&#x1F4CA; AI Portfolio Predictor</div>';
+  h += '<div style="font-size:12px;color:var(--text3);margin-bottom:20px">Click any stock or fund to add &middot; Set amount &middot; Pick years &middot; Predict</div>';
 
-  // Step 2 — years including 30 and 40
-  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">';
-  h+='<div style="font-size:13px;font-weight:700;margin-bottom:14px;color:var(--text2)">Step 2 &mdash; Investment horizon</div>';
-  h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  [1,2,3,5,7,10,15,20,30,40].forEach(function(y){
-    var active=y===10;
-    h+='<button onclick="aipSetYears('+y+',this)" class="aip-yr-btn" ';
-    h+='style="padding:8px 14px;border-radius:20px;border:1px solid var(--border);background:'+(active?'var(--green)':'var(--bg3)')+';color:'+(active?'#000':'var(--text)')+';font-size:12px;font-weight:600;cursor:pointer">'+y+' yr'+(y>1?'s':'')+'</button>';
+  // Controls row
+  h += '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">';
+  h += '<select id="aip-type" onchange="aipRefresh()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;cursor:pointer;flex-shrink:0">';
+  h += '<option value="mf">&#x1F4CA; Mutual Funds (' + window._aipMFList.length + ')</option>';
+  h += '<option value="stock">&#x1F4C8; Stocks (' + window._aipStockList.length + ')</option>';
+  h += '</select>';
+  h += '<input id="aip-search" type="text" placeholder="Search..." oninput="aipRefresh()" ';
+  h += 'style="flex:1;min-width:150px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;box-sizing:border-box">';
+  h += '<input id="aip-amount" type="number" value="100000" min="1000" step="5000" ';
+  h += 'style="width:120px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;flex-shrink:0">';
+  h += '</div>';
+
+  // Two-panel layout: search results | portfolio
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">';
+
+  // Left: search results
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden">';
+  h += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">Available — click to add</div>';
+  h += '<div id="aip-list" style="max-height:320px;overflow-y:auto"></div>';
+  h += '</div>';
+
+  // Right: portfolio
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden">';
+  h += '<div style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.05em">Your Portfolio</div>';
+  h += '<div id="aip-portfolio" style="max-height:320px;overflow-y:auto;padding:8px"></div>';
+  h += '</div>';
+
+  h += '</div>'; // end grid
+
+  // Years
+  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
+  [1,2,3,5,7,10,15,20,30,40].forEach(function(y) {
+    var active = y === _aiPortfolioYears;
+    h += '<button onclick="aipSetYears(' + y + ',this)" class="aip-yr-btn" ';
+    h += 'style="padding:7px 14px;border-radius:20px;border:1px solid var(--border);font-size:12px;font-weight:600;cursor:pointer;';
+    h += 'background:' + (active ? 'var(--green)' : 'var(--bg3)') + ';color:' + (active ? '#000' : 'var(--text)') + '">';
+    h += y + 'yr' + (y > 1 ? 's' : '') + '</button>';
   });
-  h+='</div></div>';
+  h += '</div>';
 
-  // Step 3
-  h+='<button onclick="aipRunPrediction()" id="aip-predict-btn" ';
-  h+='style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;border-radius:10px;';
-  h+='padding:14px 40px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:24px">';
-  h+='&#x1F41F; Predict with MiroFish</button>';
-  h+='<div id="aip-result"></div></div>';
+  // Predict button
+  h += '<button onclick="aipRunPrediction()" id="aip-predict-btn" ';
+  h += 'style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;border-radius:10px;';
+  h += 'padding:14px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:20px">';
+  h += '&#x1F41F; Predict with MiroFish</button>';
 
-  cont.innerHTML=h;
-  _aiPortfolioYears=10;
-  _renderAipItems();
+  h += '<div id="aip-result"></div>';
+  h += '</div>';
+
+  cont.innerHTML = h;
+  aipRefresh();
+  aipDrawPortfolio();
 }
 
-function aipCacheMFList(funds){window._mfFundsList=funds;}
+// Single refresh function — rebuilds the left list only
+function aipRefresh() {
+  var typeEl = document.getElementById('aip-type');
+  var searchEl = document.getElementById('aip-search');
+  var listEl = document.getElementById('aip-list');
+  if (!typeEl || !listEl) return;
 
-function aipTypeChanged(){
-  var s=document.getElementById('aip-search');
-  if(s)s.value='';
-  window._aipSelected=null;
-  var sel=document.getElementById('aip-sel');
-  if(sel){sel.textContent='Select from dropdown above, then click + Add';sel.style.color='var(--text3)';}
-  // Rebuild lists from current type
-  var typeEl=document.getElementById('aip-type');
-  if(!typeEl) return;
-  var type=typeEl.value;
-  if(type==='mf'&&(!window._mfFundsList||!window._mfFundsList.length)){
-    fetch('/api/mf/funds').then(function(r){return r.json();}).then(function(d){
-      window._mfFundsList=d.funds||[];
-      window._aipMFList=(window._mfFundsList||[]).filter(function(f){return f.eligible!==false&&f.score!=null;}).sort(function(a,b){return(b.score||0)-(a.score||0);}).map(function(f){return{type:'mf',sym:f.name,name:f.name,score:f.score,cat:f.cat,amc:f.amc};});
-      aipSearch();
-    }).catch(function(){});
-  } else {
-    aipSearch();
-  }
-}
+  var type = typeEl.value;
+  var q = (searchEl ? searchEl.value : '').toLowerCase().trim();
+  var all = type === 'mf' ? (window._aipMFList || []) : (window._aipStockList || []);
 
-function aipSearch(){
-  var typeEl=document.getElementById('aip-type');
-  var searchEl=document.getElementById('aip-search');
-  var dd=document.getElementById('aip-dd');
-  if(!typeEl||!searchEl||!dd) return;
-  var type=typeEl.value;
-  var q=(searchEl.value||'').toLowerCase().trim();
-  var list=type==='stock'?(window._aipStockList||[]):(window._aipMFList||[]);
-  if(!list.length){
-    dd.innerHTML='<div style="padding:12px;color:var(--text3);font-size:12px">'+(type==='mf'?'Fetching fund list...':'Go to Stocks tab first to load stock data')+'</div>';
-    dd.style.display='block';
+  // Hide already-added items
+  var added = {};
+  _aiPortfolioItems.forEach(function(x) { added[x.sym] = true; });
+
+  var filtered = all.filter(function(x) {
+    if (added[x.sym]) return false;
+    if (!q) return true;
+    return (x.sym + ' ' + x.name).toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 40);
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text3);text-align:center">' +
+      (all.length === 0 ? 'No data loaded' : 'No results' + (q ? ' for "' + q + '"' : '')) + '</div>';
     return;
   }
-  var filtered=q.length<1?list.slice(0,30):list.filter(function(x){return(x.sym+' '+x.name).toLowerCase().includes(q);}).slice(0,30);
-  if(!filtered.length){
-    dd.innerHTML='<div style="padding:12px;color:var(--text3);font-size:12px">No results for "'+q+'"</div>';
-    dd.style.display='block';
-    return;
-  }
-  window._aipFiltered=filtered;
-  dd.innerHTML=filtered.map(function(x,i){
-    var icon=x.type==='mf'?'&#x1F4CA;':'&#x1F4C8;';
-    var sub=x.type==='mf'?(x.cat?x.cat.replace('cap',' Cap'):'')+(x.amc?' &middot; '+x.amc:''):(x.sector||'');
-    var sc=x.score!=null?'<span style="font-size:10px;background:var(--bg4);border-radius:3px;padding:1px 6px;color:var(--text2);flex-shrink:0">'+Math.round(x.score)+'pts</span>':'';
-    return '<div data-idx="'+i+'" onclick="aipPickItem(this)" '
-      +'style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px" '
-      +'onmouseover="this.style.background=\'var(--bg3)\'" onmouseout="this.style.background=\'\'">'
-      +'<span style="font-size:14px;flex-shrink:0">'+icon+'</span>'
-      +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+x.sym+'</div>'
-      +'<div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+sub+'</div>'
-      +'</div>'+sc+'</div>';
+
+  listEl.innerHTML = filtered.map(function(x, i) {
+    var icon = x.type === 'mf' ? '&#x1F4CA;' : '&#x1F4C8;';
+    var sub = x.type === 'mf'
+      ? (x.cat || '').replace('cap', ' Cap') + (x.amc ? ' \u00b7 ' + x.amc : '')
+      : (x.sector || '');
+    var sc = x.score != null ? Math.round(x.score) + 'pts' : '';
+    return '<div onclick="aipAddIdx(' + i + ')" '
+      + 'style="padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px" '
+      + 'onmouseover="this.style.background=\'var(--bg3)\'" onmouseout="this.style.background=\'\'">'
+      + '<span style="font-size:14px;flex-shrink:0">' + icon + '</span>'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + x.name + '</div>'
+      + '<div style="font-size:10px;color:var(--text3)">' + sub + '</div>'
+      + '</div>'
+      + (sc ? '<span style="font-size:9px;color:var(--text3);flex-shrink:0">' + sc + '</span>' : '')
+      + '<span style="font-size:10px;background:rgba(34,197,94,.2);color:var(--green);border-radius:4px;padding:2px 7px;flex-shrink:0;font-weight:600">+</span>'
+      + '</div>';
   }).join('');
-  dd.style.display='block';
-  // Close on outside click
-  setTimeout(function(){
-    document.addEventListener('click',function onOut(e){
-      if(!dd.contains(e.target)&&e.target.id!=='aip-search'){dd.style.display='none';document.removeEventListener('click',onOut);}
-    });
-  },10);
+
+  // Store filtered for index lookup — simple array, no closures
+  window._aipFiltered = filtered;
 }
 
-function aipPickItem(el){
-  var idx=parseInt(el.dataset.idx);
-  var item=(window._aipFiltered||[])[idx];
-  if(!item) return;
-  window._aipSelected=item;
-  var s=document.getElementById('aip-search');
-  if(s) s.value=item.sym+(item.name&&item.name!==item.sym?' \u2014 '+item.name.slice(0,40):'');
-  var dd=document.getElementById('aip-dd');
-  if(dd) dd.style.display='none';
-  var sel=document.getElementById('aip-sel');
-  if(sel){
-    sel.innerHTML=(item.type==='mf'?'&#x1F4CA;':'&#x1F4C8;')+' <b>'+item.sym+'</b> selected'+(item.score?' (score: '+Math.round(item.score)+'pts)':'')+'  &mdash; set amount &amp; click + Add';
-    sel.style.color='var(--green)';
+// Called when user clicks a row — uses index into _aipFiltered
+function aipAddIdx(i) {
+  var item = (window._aipFiltered || [])[i];
+  if (!item) return;
+  var amtEl = document.getElementById('aip-amount');
+  var amt = parseInt(amtEl ? amtEl.value : '100000') || 100000;
+  if (amt < 100) amt = 100000;
+  // Don't add duplicates
+  for (var j = 0; j < _aiPortfolioItems.length; j++) {
+    if (_aiPortfolioItems[j].sym === item.sym) return;
   }
+  _aiPortfolioItems.push({ type: item.type, sym: item.sym, name: item.name, score: item.score, sector: item.sector, cat: item.cat, amount: amt });
+  aipDrawPortfolio();
+  aipRefresh(); // refresh list to hide added item
 }
 
-function aipAdd(){
-  var item=window._aipSelected;
-
-  // Auto-select if user typed text but didn't click dropdown — match from filtered list
-  if(!item){
-    var searchEl=document.getElementById('aip-search');
-    var typeEl=document.getElementById('aip-type');
-    var q=(searchEl?searchEl.value:'').trim().toLowerCase();
-    if(q.length>0){
-      var list=typeEl&&typeEl.value==='mf'?(window._aipMFList||[]):(window._aipStockList||[]);
-      // Exact sym match first, then name starts-with, then name includes
-      item = list.find(function(x){return x.sym.toLowerCase()===q;})
-          || list.find(function(x){return x.name.toLowerCase().startsWith(q);})
-          || list.find(function(x){return x.name.toLowerCase().includes(q)||x.sym.toLowerCase().includes(q);});
-      if(!item && window._aipFiltered && window._aipFiltered.length>0){
-        item=window._aipFiltered[0]; // take top dropdown result
-      }
-    }
-  }
-
-  var amtEl=document.getElementById('aip-amount');
-  var amt=parseInt(amtEl?amtEl.value:'100000')||0;
-  var sel=document.getElementById('aip-sel');
-  function msg(t,c){if(sel){sel.textContent=t;sel.style.color=c||'var(--red)';}}
-  if(!item){msg('\u26a0 Search and select a stock or fund from the dropdown first');return;}
-  if(amt<100){msg('\u26a0 Enter a valid amount (minimum \u20b91,000)');return;}
-  if(_aiPortfolioItems.find(function(x){return x.sym===item.sym;})){msg('\u26a0 '+item.sym+' is already in your portfolio');return;}
-  _aiPortfolioItems.push(Object.assign({},item,{amount:amt}));
-  window._aipSelected=null;
-  var s=document.getElementById('aip-search');if(s)s.value='';
-  var dd=document.getElementById('aip-dd');if(dd)dd.style.display='none';
-  msg('\u2705 '+item.sym+' added! Add more or click Predict.','var(--green)');
-  _renderAipItems();
+function aipRemoveIdx(i) {
+  _aiPortfolioItems.splice(i, 1);
+  aipDrawPortfolio();
+  aipRefresh();
 }
 
-function aipRemoveItem(i){_aiPortfolioItems.splice(i,1);_renderAipItems();}
-
-function _renderAipItems(){
-  var el=document.getElementById('aip-items');
-  if(!el) return;
-  if(!_aiPortfolioItems.length){
-    el.innerHTML='<div style="font-size:12px;color:var(--text4);padding:14px;text-align:center;border:1px dashed var(--border);border-radius:8px;margin-top:6px">No investments added yet</div>';
+function aipDrawPortfolio() {
+  var el = document.getElementById('aip-portfolio');
+  if (!el) return;
+  if (!_aiPortfolioItems.length) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;font-size:12px;color:var(--text4)">Click items on the left to add</div>';
     return;
   }
-  var total=_aiPortfolioItems.reduce(function(s,x){return s+x.amount;},0);
-  el.innerHTML='<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">'
-    +_aiPortfolioItems.map(function(x,i){
-      var pct=Math.round(x.amount/total*100);
-      var icon=x.type==='mf'?'&#x1F4CA;':'&#x1F4C8;';
-      return '<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border-radius:8px;padding:10px 14px">'
-        +'<span style="font-size:16px">'+icon+'</span>'
-        +'<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600">'+x.sym+'</div>'
-        +'<div style="font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+x.name+'</div></div>'
-        +'<div style="text-align:right;flex-shrink:0"><div style="font-size:13px;font-weight:700;color:var(--green)">&#x20b9;'+x.amount.toLocaleString('en-IN')+'</div>'
-        +'<div style="font-size:9px;color:var(--text3)">'+pct+'%</div></div>'
-        +'<button onclick="aipRemoveItem('+i+')" style="background:rgba(239,68,68,.15);color:var(--red);border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;flex-shrink:0">&#x2715;</button>'
-        +'</div>';
-    }).join('')
-    +'<div style="font-size:11px;color:var(--text3);padding:6px 4px;text-align:right;border-top:1px solid var(--border);margin-top:2px">'
-    +'Total: <b style="color:var(--text)">&#x20b9;'+total.toLocaleString('en-IN')+'</b> across '+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')
-    +'</div></div>';
+  var total = _aiPortfolioItems.reduce(function(s, x) { return s + x.amount; }, 0);
+  el.innerHTML = _aiPortfolioItems.map(function(x, i) {
+    var pct = Math.round(x.amount / total * 100);
+    var icon = x.type === 'mf' ? '&#x1F4CA;' : '&#x1F4C8;';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg3);border-radius:7px;margin-bottom:6px">'
+      + '<span style="font-size:14px;flex-shrink:0">' + icon + '</span>'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + x.name + '</div>'
+      + '<div style="font-size:10px;color:var(--green);font-weight:600">\u20b9' + x.amount.toLocaleString('en-IN') + ' <span style="color:var(--text3)">(' + pct + '%)</span></div>'
+      + '</div>'
+      + '<button onclick="aipRemoveIdx(' + i + ')" style="background:rgba(239,68,68,.15);color:var(--red);border:none;border-radius:4px;padding:3px 7px;cursor:pointer;font-size:11px;flex-shrink:0">\u2715</button>'
+      + '</div>';
+  }).join('')
+  + '<div style="font-size:11px;color:var(--text3);text-align:right;padding-top:4px;border-top:1px solid var(--border);margin-top:4px">'
+  + 'Total: <b style="color:var(--text)">\u20b9' + total.toLocaleString('en-IN') + '</b>'
+  + '</div>';
 }
 
-function aipSetYears(y,btn){
-  _aiPortfolioYears=y;
-  document.querySelectorAll('.aip-yr-btn').forEach(function(b){b.style.background='var(--bg3)';b.style.color='var(--text)';});
-  if(btn){btn.style.background='var(--green)';btn.style.color='#000';}
+function aipSetYears(y, btn) {
+  _aiPortfolioYears = y;
+  document.querySelectorAll('.aip-yr-btn').forEach(function(b) { b.style.background = 'var(--bg3)'; b.style.color = 'var(--text)'; });
+  if (btn) { btn.style.background = 'var(--green)'; btn.style.color = '#000'; }
 }
 
-async function aipRunPrediction(){
-  // Auto-add any pending selected item before running
-  if(window._aipSelected || (function(){
-    var s=document.getElementById('aip-search');
-    return s&&s.value.trim().length>2;
-  })()){
-    aipAdd();
-  }
-
-  var sel=document.getElementById('aip-sel');
-  var btn=document.getElementById('aip-predict-btn');
-  var result=document.getElementById('aip-result');
-  if(!_aiPortfolioItems||!_aiPortfolioItems.length){
-    if(sel){sel.textContent='\u26a0 Add at least one investment using the + Add button first';sel.style.color='var(--red)';}
+async function aipRunPrediction() {
+  var btn = document.getElementById('aip-predict-btn');
+  var result = document.getElementById('aip-result');
+  if (!result) return;
+  if (!_aiPortfolioItems || !_aiPortfolioItems.length) {
+    result.innerHTML = '<div style="color:var(--red);padding:12px;background:rgba(239,68,68,.08);border-radius:8px;font-size:13px">\u26a0 Add at least one investment from the list on the left</div>';
     return;
   }
-  if(!result) return;
-  if(btn){btn.disabled=true;btn.textContent='\u23f3 Analyzing...';}
-  result.innerHTML='<div style="text-align:center;padding:32px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">'
-    +'<div style="font-size:28px;margin-bottom:12px">&#x1F41F;</div>'
-    +'<div style="font-size:13px;color:#bc8cff;font-weight:600;margin-bottom:6px">MiroFish analyzing your portfolio...</div>'
-    +'<div style="font-size:11px;color:var(--text3)">'+_aiPortfolioItems.length+' investment'+(_aiPortfolioItems.length>1?'s':'')+' over '+_aiPortfolioYears+' year'+(_aiPortfolioYears>1?'s':'')+' \u00b7 ~30-60 seconds</div>'
-    +'</div>';
-  try{
-    var resp=await fetch('/api/mirofish/portfolio-predict',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({items:_aiPortfolioItems,years:_aiPortfolioYears})
-    });
-    var d=await resp.json();
-    if(d.error) throw new Error(d.error);
-    _renderAipResult(d);
-  }catch(e){
-    result.innerHTML='<div style="color:var(--red);padding:16px;background:rgba(239,68,68,.08);border-radius:8px;font-size:12px">'
-      +(e.message.includes('ANTHROPIC')?'\u26a0 Add ANTHROPIC_API_KEY to Railway environment variables':'Error: '+e.message)+'</div>';
-  }finally{
-    if(btn){btn.disabled=false;btn.textContent='&#x1F41F; Predict with MiroFish';}
-  }
-}
-
-function _renderAipResult(d){
-  var result=document.getElementById('aip-result');
-  if(!result||!d) return;
-  var total=_aiPortfolioItems.reduce(function(s,x){return s+x.amount;},0);
-  var proj=d.total_projected||0;
-  var gain=proj-total;
-  var gainPct=total>0?((gain/total)*100).toFixed(1):0;
-  var col=gain>=0?'var(--green)':'var(--red)';
-  var h='<div style="background:var(--bg2);border:1px solid rgba(124,58,237,.3);border-radius:12px;padding:20px">';
-  h+='<div style="font-size:13px;font-weight:700;margin-bottom:16px;color:#bc8cff">&#x1F41F; MiroFish \u2014 '+_aiPortfolioYears+' Year'+(_aiPortfolioYears>1?'s':'')+'</div>';
-  h+='<div style="background:linear-gradient(135deg,rgba(124,58,237,.1),rgba(79,70,229,.08));border:1px solid rgba(124,58,237,.2);border-radius:10px;padding:20px;margin-bottom:16px;text-align:center">';
-  h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">&#x20b9;'+total.toLocaleString('en-IN')+' invested \u2192 '+_aiPortfolioYears+' year'+(_aiPortfolioYears>1?'s':'')+'</div>';
-  h+='<div style="font-size:36px;font-weight:800;color:'+col+'">&#x20b9;'+Math.round(proj).toLocaleString('en-IN')+'</div>';
-  h+='<div style="font-size:14px;color:'+col+';margin-top:6px">'+(gain>=0?'\u25b2 +\u20b9'+Math.round(gain).toLocaleString('en-IN')+' (+'+gainPct+'%)':'\u25bc \u20b9'+Math.abs(Math.round(gain)).toLocaleString('en-IN')+' ('+gainPct+'%)')+'</div>';
-  h+='<div style="font-size:10px;color:var(--text3);margin-top:6px">CAGR: '+(d.portfolio_cagr||'\u2014')+'% \u00b7 Confidence: '+(d.confidence||'\u2014')+'</div>';
-  h+='</div>';
-  h+='<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">Breakdown</div>';
-  h+='<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
-  (d.items||[]).forEach(function(item){
-    var iGain=(item.projected||0)-(item.amount||0);
-    var iGainPct=item.amount?((iGain/item.amount)*100).toFixed(0):0;
-    var ic=iGain>=0?'var(--green)':'var(--red)';
-    var icon=item.type==='mf'?'&#x1F4CA;':'&#x1F4C8;';
-    h+='<div style="background:var(--bg3);border-radius:8px;padding:12px;display:flex;align-items:flex-start;gap:12px">';
-    h+='<span style="font-size:18px;flex-shrink:0">'+icon+'</span>';
-    h+='<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600">'+item.sym+'</div>';
-    h+='<div style="font-size:10px;color:var(--text3)">&#x20b9;'+item.amount.toLocaleString('en-IN')+' \u00b7 '+(item.cagr||'\u2014')+'% CAGR</div>';
-    if(item.thesis) h+='<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.5">'+item.thesis+'</div>';
-    h+='</div><div style="text-align:right;flex-shrink:0">';
-    h+='<div style="font-size:14px;font-weight:700;color:'+ic+'">&#x20b9;'+Math.round(item.projected||0).toLocaleString('en-IN')+'</div>';
-    h+='<div style="font-size:10px;color:'+ic+'">'+(iGain>=0?'+':'')+iGainPct+'%</div></div></div>';
-  });
-  h+='</div>';
-  if(d.portfolio_insight){
-    h+='<div style="background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.15);border-radius:8px;padding:12px">';
-    h+='<div style="font-size:10px;font-weight:700;color:#bc8cff;margin-bottom:6px">&#x1F41F; MiroFish Insight</div>';
-    h+='<div style="font-size:11px;color:var(--text2);line-height:1.7">'+d.portfolio_insight+'</div>';
-    if(d.key_risk) h+='<div style="font-size:10px;color:var(--red);margin-top:6px">\u26a0 '+d.key_risk+'</div>';
-    h+='</div>';
-  }
-  h+='<div style="text-align:center;margin-top:16px"><button onclick="aipRunPrediction()" class="btn btn-sm">&#x1F504; Re-predict</button></div>';
-  h+='</div>';
-  result.innerHTML=h;
-}
-
-// -- _init --------------------------------------------------------------------
-
-// MiroFish global lookup maps — read from last simulation, zero API calls in stock cards
-window.mfishPickMap    = {};
-window.mfishAvoidSet   = new Set();
-window.mfishAvoidReason = '';
-
-async function loadMiroFishLookup() {
+  if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Analyzing...'; }
+  result.innerHTML = '<div style="text-align:center;padding:32px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">'
+    + '<div style="font-size:28px;margin-bottom:12px">&#x1F41F;</div>'
+    + '<div style="font-size:13px;color:#bc8cff;font-weight:600;margin-bottom:6px">MiroFish analyzing your portfolio...</div>'
+    + '<div style="font-size:11px;color:var(--text3)">' + _aiPortfolioItems.length + ' investment' + (_aiPortfolioItems.length > 1 ? 's' : '') + ' over ' + _aiPortfolioYears + ' years \u00b7 ~30-60 seconds</div>'
+    + '</div>';
   try {
-    var st = await fetch('/api/mirofish/status').then(function(r){return r.json();}).catch(function(){return {};});
-    if(!st.hasResult) return;
-    var d = await fetch('/api/mirofish/result').then(function(r){return r.json();}).catch(function(){return null;});
-    if(!d || d.error) return;
-    window.mfishPickMap = {};
-    (d.top_recovery_picks||[]).forEach(function(p){ if(p.sym) window.mfishPickMap[p.sym] = p; });
-    window.mfishAvoidSet = new Set(d.stocks_to_avoid||[]);
-    window.mfishAvoidReason = d.avoid_reason||'';
-    if(!mfishData) mfishData = d;
-    console.log('MiroFish lookup: '+Object.keys(window.mfishPickMap).length+' picks, '+window.mfishAvoidSet.size+' avoids');
-  } catch(e) { console.log('MiroFish lookup error:', e.message); }
+    var resp = await fetch('/api/mirofish/portfolio-predict', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: _aiPortfolioItems, years: _aiPortfolioYears })
+    });
+    var d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    _renderAipResult(d);
+  } catch(e) {
+    result.innerHTML = '<div style="color:var(--red);padding:16px;background:rgba(239,68,68,.08);border-radius:8px;font-size:12px">'
+      + (e.message.includes('ANTHROPIC') ? '\u26a0 Add ANTHROPIC_API_KEY to Railway environment variables' : 'Error: ' + e.message) + '</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '&#x1F41F; Predict with MiroFish'; }
+  }
+}
+
+function _renderAipResult(d) {
+  var result = document.getElementById('aip-result');
+  if (!result || !d) return;
+  var total = _aiPortfolioItems.reduce(function(s, x) { return s + x.amount; }, 0);
+  var proj = d.total_projected || 0;
+  var gain = proj - total;
+  var gainPct = total > 0 ? ((gain / total) * 100).toFixed(1) : 0;
+  var col = gain >= 0 ? 'var(--green)' : 'var(--red)';
+  var h = '<div style="background:var(--bg2);border:1px solid rgba(124,58,237,.3);border-radius:12px;padding:20px">';
+  h += '<div style="font-size:13px;font-weight:700;margin-bottom:16px;color:#bc8cff">&#x1F41F; MiroFish \u2014 ' + _aiPortfolioYears + ' Year' + (_aiPortfolioYears > 1 ? 's' : '') + '</div>';
+  h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.1),rgba(79,70,229,.08));border:1px solid rgba(124,58,237,.2);border-radius:10px;padding:20px;margin-bottom:16px;text-align:center">';
+  h += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">\u20b9' + total.toLocaleString('en-IN') + ' invested \u2192 ' + _aiPortfolioYears + ' years</div>';
+  h += '<div style="font-size:36px;font-weight:800;color:' + col + '">\u20b9' + Math.round(proj).toLocaleString('en-IN') + '</div>';
+  h += '<div style="font-size:14px;color:' + col + ';margin-top:6px">' + (gain >= 0 ? '\u25b2 +\u20b9' + Math.round(gain).toLocaleString('en-IN') + ' (+' + gainPct + '%)' : '\u25bc \u20b9' + Math.abs(Math.round(gain)).toLocaleString('en-IN') + ' (' + gainPct + '%)') + '</div>';
+  h += '<div style="font-size:10px;color:var(--text3);margin-top:6px">CAGR: ' + (d.portfolio_cagr || '\u2014') + '% \u00b7 Confidence: ' + (d.confidence || '\u2014') + '</div>';
+  h += '</div>';
+  h += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">Breakdown</div>';
+  h += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
+  (d.items || []).forEach(function(item) {
+    var iGain = (item.projected || 0) - (item.amount || 0);
+    var iGainPct = item.amount ? ((iGain / item.amount) * 100).toFixed(0) : 0;
+    var ic = iGain >= 0 ? 'var(--green)' : 'var(--red)';
+    var icon = item.type === 'mf' ? '&#x1F4CA;' : '&#x1F4C8;';
+    h += '<div style="background:var(--bg3);border-radius:8px;padding:12px;display:flex;align-items:flex-start;gap:12px">';
+    h += '<span style="font-size:18px;flex-shrink:0">' + icon + '</span>';
+    h += '<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600">' + item.sym + '</div>';
+    h += '<div style="font-size:10px;color:var(--text3)">\u20b9' + item.amount.toLocaleString('en-IN') + ' \u00b7 ' + (item.cagr || '\u2014') + '% CAGR</div>';
+    if (item.thesis) h += '<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.5">' + item.thesis + '</div>';
+    h += '</div><div style="text-align:right;flex-shrink:0">';
+    h += '<div style="font-size:14px;font-weight:700;color:' + ic + '">\u20b9' + Math.round(item.projected || 0).toLocaleString('en-IN') + '</div>';
+    h += '<div style="font-size:10px;color:' + ic + '">' + (iGain >= 0 ? '+' : '') + iGainPct + '%</div></div></div>';
+  });
+  h += '</div>';
+  if (d.portfolio_insight) {
+    h += '<div style="background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.15);border-radius:8px;padding:12px">';
+    h += '<div style="font-size:10px;font-weight:700;color:#bc8cff;margin-bottom:6px">&#x1F41F; MiroFish Insight</div>';
+    h += '<div style="font-size:11px;color:var(--text2);line-height:1.7">' + d.portfolio_insight + '</div>';
+    if (d.key_risk) h += '<div style="font-size:10px;color:var(--red);margin-top:6px">\u26a0 ' + d.key_risk + '</div>';
+    h += '</div>';
+  }
+  h += '<div style="text-align:center;margin-top:16px"><button onclick="aipRunPrediction()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 20px;cursor:pointer;font-size:12px">&#x1F504; Re-predict</button></div>';
+  h += '</div>';
+  result.innerHTML = h;
 }
 
 function _init() {
