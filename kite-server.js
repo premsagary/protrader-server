@@ -1,21 +1,21 @@
 /**
 
-- ProTrader — Smart Multi-Strategy Engine v3
+- ProTrader - Smart Multi-Strategy Engine v3
 - ============================================
 - Strategies:
-- 1. EMA Crossover      — trending markets
-- 1. RSI Mean Reversion — ranging/oversold markets
-- 1. Bollinger Squeeze  — low volatility breakouts
-- 1. VWAP Momentum      — intraday institutional flow
-- 1. Supertrend         — strong directional moves
-- 1. Opening Range      — first 30min breakout (9:15–9:45)
-- 1. Volume Spike       — unusual volume = smart money
+- 1. EMA Crossover      - trending markets
+- 1. RSI Mean Reversion - ranging/oversold markets
+- 1. Bollinger Squeeze  - low volatility breakouts
+- 1. VWAP Momentum      - intraday institutional flow
+- 1. Supertrend         - strong directional moves
+- 1. Opening Range      - first 30min breakout (9:15-9:45)
+- 1. Volume Spike       - unusual volume = smart money
 - 
 - Market Regime Detection:
-- TRENDING   → uses EMA Crossover + Supertrend
-- RANGING    → uses RSI Mean Reversion + Bollinger
-- BREAKOUT   → uses Bollinger Squeeze + Volume Spike
-- MOMENTUM   → uses VWAP Momentum + Opening Range
+- TRENDING   -> uses EMA Crossover + Supertrend
+- RANGING    -> uses RSI Mean Reversion + Bollinger
+- BREAKOUT   -> uses Bollinger Squeeze + Volume Spike
+- MOMENTUM   -> uses VWAP Momentum + Opening Range
   */
 
 require(“dotenv”).config();
@@ -112,7 +112,7 @@ t.on(“error”, () => { console.log(“Ticker error”); tokenValid = false; }
 t.on(“close”, () => { tickerOn = false; broadcast({ type:“status”, connected:false }); });
 }
 
-// ── Universe — Nifty 50 + Next 50 + Midcap 150 (250 stocks) ──────────────────
+// ── Universe - Nifty 50 + Next 50 + Midcap 150 (250 stocks) ──────────────────
 const UNIVERSE = [
 // ── NIFTY 50 ──
 {sym:“RELIANCE”,   n:“Reliance Industries”,       grp:“NIFTY50”},
@@ -403,7 +403,7 @@ const INSTRUMENTS = {
 “RECLTD”:3244289,“PFC”:3329793,“IRCTC”:3424833,“CONCOR”:4029185,
 “MOTHERSON”:4285697,“BALKRISIND”:85513,“MFSL”:3563521,“INDHOTEL”:500209,
 “VOLTAS”:951809,“PAGEIND”:3044737,“TRENT”:1964033,“JUBLFOOD”:1790529,
-// Midcap (instrument tokens — approximate, verify from Kite instruments API)
+// Midcap (instrument tokens - approximate, verify from Kite instruments API)
 “ASTRAL”:2425409,“SUPREMEIND”:776961,“DEEPAKNTR”:2229761,“LAURUSLABS”:4923905,
 “IPCALAB”:3737857,“ALKEM”:1215745,“TORNTPHARM”:900929,“LUPIN”:2672641,
 “FEDERALBNK”:261889,“IDFCFIRSTB”:2863105,“RBLBANK”:4708609,“POLYCAB”:4000513,
@@ -483,7 +483,7 @@ return cumPV/cumV;
 }
 
 function adx(candles, n=14) {
-// Average Directional Index — measures trend strength 0-100
+// Average Directional Index - measures trend strength 0-100
 if (candles.length < n+2) return 25;
 const dms = candles.slice(1).map((c,i) => {
 const prev  = candles[i];
@@ -533,7 +533,7 @@ const isRanging = adxVal < 20 && lastRSI > 35 && lastRSI < 65;
 // Extreme RSI = mean reversion opportunity
 const isExtreme = lastRSI < 28 || lastRSI > 72;
 
-// Opening range: first 30 minutes (9:15–9:45 IST)
+// Opening range: first 30 minutes (9:15-9:45 IST)
 const ist  = new Date(new Date().toLocaleString(“en-US”,{timeZone:“Asia/Kolkata”}));
 const h=ist.getHours(), m=ist.getMinutes();
 const isOpeningRange = (h===9&&m>=15) || (h===9&&m<=45);
@@ -545,13 +545,13 @@ regime=“MOMENTUM”; reason=“Opening range + volume spike”; confidence=90;
 } else if (isSqueeze && priceChange > 0.5) {
 regime=“BREAKOUT”; reason=`BB squeeze with ${priceChange.toFixed(1)}% move`; confidence=85;
 } else if (isTrending && priceChange > 1) {
-regime=“TRENDING”; reason=`ADX ${adxVal.toFixed(0)} — strong trend`; confidence=80;
+regime=“TRENDING”; reason=`ADX ${adxVal.toFixed(0)} - strong trend`; confidence=80;
 } else if (isExtreme) {
-regime=“RANGING”; reason=`RSI ${lastRSI.toFixed(0)} — extreme = mean reversion`; confidence=75;
+regime=“RANGING”; reason=`RSI ${lastRSI.toFixed(0)} - extreme = mean reversion`; confidence=75;
 } else if (isRanging) {
-regime=“RANGING”; reason=`ADX ${adxVal.toFixed(0)} — no clear trend`; confidence=65;
+regime=“RANGING”; reason=`ADX ${adxVal.toFixed(0)} - no clear trend`; confidence=65;
 } else if (isVolumeSpike) {
-regime=“MOMENTUM”; reason=“Unusual volume — smart money moving”; confidence=70;
+regime=“MOMENTUM”; reason=“Unusual volume - smart money moving”; confidence=70;
 } else {
 regime=“RANGING”; reason=“Low ADX, normal volume”; confidence=50;
 }
@@ -563,7 +563,7 @@ return { regime, reason, confidence, adx:adxVal.toFixed(1), rsi:lastRSI.toFixed(
 // ── STRATEGY LIBRARY ──────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Strategy 1: EMA Crossover — for TRENDING markets
+// Strategy 1: EMA Crossover - for TRENDING markets
 function stratEMACrossover(candles) {
 const closes = candles.map(c=>c.close);
 const e9=ema(closes,9), e21=ema(closes,21), e50=ema(closes,50);
@@ -584,7 +584,7 @@ return { score, signal:score>=3?“BUY”:score<=-3?“SELL”:“NEUTRAL”, de
 sl:score>=3?closes[n]*0.985:null, tgt:score>=3?closes[n]*1.04:null };
 }
 
-// Strategy 2: RSI Mean Reversion — for RANGING markets
+// Strategy 2: RSI Mean Reversion - for RANGING markets
 function stratRSIMeanReversion(candles) {
 const closes = candles.map(c=>c.close);
 const r=rsi(closes,14), n=closes.length-1;
@@ -611,7 +611,7 @@ return { score, signal:score>=4?“BUY”:score<=-4?“SELL”:“NEUTRAL”, de
 sl:score>=4?closes[n]*0.988:null, tgt:score>=4?closes[n]*1.025:null };
 }
 
-// Strategy 3: Bollinger Squeeze Breakout — for BREAKOUT regime
+// Strategy 3: Bollinger Squeeze Breakout - for BREAKOUT regime
 function stratBollingerSqueeze(candles) {
 const closes = candles.map(c=>c.close);
 const bbs=bollingerBands(closes,20);
@@ -637,7 +637,7 @@ return { score, signal:score>=5?“BUY”:score<=-4?“SELL”:“NEUTRAL”, de
 sl:score>=5?closes[n]*0.982:null, tgt:score>=5?closes[n]*1.045:null };
 }
 
-// Strategy 4: VWAP Momentum — for MOMENTUM regime
+// Strategy 4: VWAP Momentum - for MOMENTUM regime
 function stratVWAPMomentum(candles) {
 const closes = candles.map(c=>c.close);
 const vwaps=vwap(candles);
@@ -666,7 +666,7 @@ return { score, signal:score>=5?“BUY”:score<=-4?“SELL”:“NEUTRAL”, de
 sl:score>=5?closes[n]*0.984:null, tgt:score>=5?closes[n]*1.035:null };
 }
 
-// Strategy 5: Supertrend — for strong TRENDING markets
+// Strategy 5: Supertrend - for strong TRENDING markets
 function stratSupertrend(candles) {
 const closes=candles.map(c=>c.close);
 const sts=supertrend(candles,10,3);
@@ -692,9 +692,9 @@ return { score, signal:score>=4?“BUY”:score<=-4?“SELL”:“NEUTRAL”, de
 sl:score>=4?curr.line:null, tgt:score>=4?closes[n]*1.04:null };
 }
 
-// Strategy 6: Opening Range Breakout — 9:15–9:45 AM only
+// Strategy 6: Opening Range Breakout - 9:15-9:45 AM only
 function stratOpeningRange(candles) {
-// Uses first 6 candles (9:15–9:45 in 5-min bars)
+// Uses first 6 candles (9:15-9:45 in 5-min bars)
 if (candles.length < 8) return { score:0, signal:“NEUTRAL”, detail:“Not enough candles”, strategy:“OPENING_RANGE” };
 const first6 = candles.slice(0,6);
 const orHigh = Math.max(…first6.map(c=>c.high));
@@ -702,7 +702,7 @@ const orLow  = Math.min(…first6.map(c=>c.low));
 const lastClose = candles[candles.length-1].close;
 const orSize = (orHigh-orLow)/orLow*100;
 
-let score=0, detail=`OR: ${orLow.toFixed(0)}–${orHigh.toFixed(0)} `;
+let score=0, detail=`OR: ${orLow.toFixed(0)}-${orHigh.toFixed(0)} `;
 if(orSize<0.5){detail+=”(tight OR) “;}
 if(lastClose>orHigh){score+=5;detail+=“BROKE ABOVE OR “;}
 else if(lastClose<orLow){score-=5;detail+=“BROKE BELOW OR “;}
@@ -712,7 +712,7 @@ return { score, signal:score>=5?“BUY”:score<=-5?“SELL”:“NEUTRAL”, de
 sl:score>=5?orLow:null, tgt:score>=5?orHigh+(orHigh-orLow)*1.5:null };
 }
 
-// Strategy 7: Volume Spike — smart money detection
+// Strategy 7: Volume Spike - smart money detection
 function stratVolumeSpike(candles) {
 const closes=candles.map(c=>c.close);
 const vols=candles.map(c=>c.volume||0);
@@ -759,7 +759,7 @@ const strategies = strategyMap[regime] || strategyMap.UNKNOWN;
 // Run all selected strategies and combine scores
 const results = strategies.map(fn => fn(candles));
 
-// Weighted combination — primary strategy gets 50%, others 25% each
+// Weighted combination - primary strategy gets 50%, others 25% each
 const weightedScore =
 results[0].score * 0.50 +
 (results[1]?.score||0) * 0.30 +
@@ -800,7 +800,7 @@ CAPITAL_PER_TRADE:7500,
 MAX_POSITIONS:    10,   // increased from 3 to 10
 DEFAULT_SL_PCT:   1.5,
 DEFAULT_TGT_PCT:  3.0,
-SCAN_DELAY_MS:    250,  // faster scan — 250ms between stocks
+SCAN_DELAY_MS:    250,  // faster scan - 250ms between stocks
 };
 
 function isMarketOpen() {
@@ -922,7 +922,7 @@ app.get(”/api/news”, async(req,res)=>{
 const sym = (req.query.sym||“RELIANCE”).toUpperCase();
 const name = req.query.name||sym;
 
-// Free RSS feeds — no API key needed
+// Free RSS feeds - no API key needed
 const feeds = [
 {url:“https://economictimes.indiatimes.com/markets/stocks/rss.cms”,         source:“Economic Times”},
 {url:“https://www.moneycontrol.com/rss/MCtopnews.xml”,                       source:“Moneycontrol”},
@@ -1021,8 +1021,8 @@ app.get(”/api/instruments”, (req,res) => res.json(validTokens));
 // Cached in memory, refreshed daily at 6 AM IST
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Fund universe — AMFI scheme codes (direct growth plans)
-// Fund universe — auto-discovered from MFAPI, populated on startup
+// Fund universe - AMFI scheme codes (direct growth plans)
+// Fund universe - auto-discovered from MFAPI, populated on startup
 let MF_UNIVERSE_SERVER = [];
 
 // Known correct codes as seed (verified working)
@@ -1128,7 +1128,7 @@ if (discovered.smallcap.length >= 10 && discovered.midcap.length >= 10 && discov
 ```
 
 } catch(e) {
-console.log(“⚠️ Universe discovery failed:”, e.message, “— using seed list”);
+console.log(“⚠️ Universe discovery failed:”, e.message, “- using seed list”);
 MF_UNIVERSE_SERVER = dedupeSeed();
 }
 }
@@ -1155,7 +1155,7 @@ if (name.includes(key)) return short;
 return name.split(” “)[0];
 }
 
-// ── Qualitative AMC scores — research-based (updated Apr 2026) ────────────────
+// ── Qualitative AMC scores - research-based (updated Apr 2026) ────────────────
 function pctRank(val, arr, higher=true) {
 if (val==null || !arr || !arr.length) return null;
 const below = arr.filter(v => v < val).length;
@@ -1168,48 +1168,48 @@ return Math.round(pct/100*mx*10)/10;
 }
 
 // ── AMC quality scores (Morningstar Stewardship Pillar) ──────────
-// ── DO NOT INVEST flags — research-based professional overlays ───────
+// ── DO NOT INVEST flags - research-based professional overlays ───────
 // Funds that pass eligibility filters but have specific disqualifying
 // characteristics. Shown in red on cards with reason.
 const DO_NOT_INVEST = {
-// 🔴 SEBI ACTIVE INVESTIGATIONS — capital at risk
+// 🔴 SEBI ACTIVE INVESTIGATIONS - capital at risk
 “Quant Small Cap Fund”:      { level:“red”,   short:“SEBI Investigation”,         reason:“SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved.” },
 “Quant Mid Cap Fund”:        { level:“red”,   short:“SEBI Investigation”,         reason:“SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved.” },
 “Quant Flexi Cap Fund”:      { level:“red”,   short:“SEBI Investigation”,         reason:“SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved.” },
 // 🔴 EXTREME UNDERPERFORMERS
 “UTI Flexi Cap Fund”:        { level:“red”,   short:“Consistent Underperformer”,  reason:“3Y CAGR only 8.5%, 5Y only 5.9%. Dead last among eligible flexi cap funds. No reason to hold when peers deliver 16-22%.” },
-“LIC MF Flexi Cap Fund”:     { level:“red”,   short:“Worst Performer + Expensive”,reason:“3Y CAGR 12.6%, 5Y 10%, 10Y 10.4% — worst long-term returns in flexi cap. Expense 1.59% is expensive for consistently poor results.” },
-“SBI Small Cap Fund”:        { level:“red”,   short:“Too Large + Underperformer”, reason:“AUM ₹35,000 Cr — far too large for small cap. Fund is forced to hold mid/large cap to deploy capital. 3Y CAGR 12.6%, ranked last among eligible small caps.” },
+“LIC MF Flexi Cap Fund”:     { level:“red”,   short:“Worst Performer + Expensive”,reason:“3Y CAGR 12.6%, 5Y 10%, 10Y 10.4% - worst long-term returns in flexi cap. Expense 1.59% is expensive for consistently poor results.” },
+“SBI Small Cap Fund”:        { level:“red”,   short:“Too Large + Underperformer”, reason:“AUM ₹35,000 Cr - far too large for small cap. Fund is forced to hold mid/large cap to deploy capital. 3Y CAGR 12.6%, ranked last among eligible small caps.” },
 // ⚠️ SEBI ENFORCEMENT ACTIONS
-“Axis Flexi Cap Fund”:       { level:“amber”, short:“SEBI Enforcement Action”,    reason:“Axis AMC had 21 entities barred by SEBI in 2022 — most serious action among eligible funds. 3Y CAGR only 13.6%, ranked #19 of 21 flexi caps.” },
+“Axis Flexi Cap Fund”:       { level:“amber”, short:“SEBI Enforcement Action”,    reason:“Axis AMC had 21 entities barred by SEBI in 2022 - most serious action among eligible funds. 3Y CAGR only 13.6%, ranked #19 of 21 flexi caps.” },
 “Axis Midcap Fund”:          { level:“amber”, short:“SEBI Enforcement Action”,    reason:“Axis AMC 2022 enforcement action. Score already reduced 15%. Better mid cap alternatives exist at similar price.” },
 “Axis Small Cap Fund”:       { level:“amber”, short:“SEBI Enforcement Action”,    reason:“Axis AMC 2022 enforcement action. Despite decent 10Y numbers, governance concern remains. Better alternatives available.” },
 “Aditya Birla SL Flexi Cap Fund”:  { level:“amber”, short:“SEBI Fine + Below Average”,  reason:“SEBI minor fine on record. 3Y CAGR 16.6% is mediocre for the AMC’s resources. Ranked #7 of 21 flexi caps.” },
 “Aditya Birla SL Midcap Fund”:     { level:“amber”, short:“SEBI Fine + Underperformance”,reason:“SEBI minor fine 2024. Sharpe -0.13, ranked #22 of 23 mid caps. Worst drawdown in mid cap at 45.1%.” },
-“Aditya Birla SL Small Cap Fund”:  { level:“amber”, short:“SEBI Fine + Worst Drawdown”,  reason:“SEBI fine on record. Maximum drawdown 57.4% — worst in eligible small cap universe. High risk, mediocre returns.” },
+“Aditya Birla SL Small Cap Fund”:  { level:“amber”, short:“SEBI Fine + Worst Drawdown”,  reason:“SEBI fine on record. Maximum drawdown 57.4% - worst in eligible small cap universe. High risk, mediocre returns.” },
 “Franklin India Flexi Cap Fund”:   { level:“amber”, short:“Reputation Risk + SEBI History”,reason:“Franklin India’s 2020 debt fund closure shook investor trust. SEBI fine on record. 3Y CAGR 16%, ranked #14 of 21. Choose peers instead.” },
 “Franklin India Mid Cap Fund”:     { level:“amber”, short:“SEBI History + Below Average”,  reason:“Franklin AMC SEBI history. 3Y CAGR 19.1% but ranked #17 of 23 mid caps. Multiple better alternatives exist.” },
 “Franklin India Small Cap Fund”:   { level:“amber”, short:“SEBI History + Below Average”,  reason:“Franklin AMC SEBI history. 3Y CAGR 16.8%, ranked #13 of 21 small caps. Better small cap options available.” },
 // ⚠️ AUM TOO LARGE FOR CATEGORY
-“HDFC Small Cap Fund”:       { level:“amber”, short:“AUM Too Large for Small Cap”, reason:“AUM ₹37,424 Cr — way above ₹15K Cr ideal for small cap. Cannot find enough small cap stocks. Forced into mid/large cap, defeating the purpose.” },
+“HDFC Small Cap Fund”:       { level:“amber”, short:“AUM Too Large for Small Cap”, reason:“AUM ₹37,424 Cr - way above ₹15K Cr ideal for small cap. Cannot find enough small cap stocks. Forced into mid/large cap, defeating the purpose.” },
 // ⚠️ CHRONIC UNDERPERFORMERS
 “SBI Flexicap Fund”:         { level:“amber”, short:“Chronic Underperformer”,     reason:“3Y CAGR 11.2%, 5Y 10.2%. Bottom quartile in every metric. SBI’s scale and bureaucracy works against active management here.” },
-“SBI Midcap Fund”:           { level:“amber”, short:“Chronic Underperformer”,     reason:“3Y CAGR 14.8%, Sharpe -0.50 — worst among established mid cap funds. Ranked #20 of 23 eligible.” },
+“SBI Midcap Fund”:           { level:“amber”, short:“Chronic Underperformer”,     reason:“3Y CAGR 14.8%, Sharpe -0.50 - worst among established mid cap funds. Ranked #20 of 23 eligible.” },
 “UTI Mid Cap Fund”:          { level:“amber”, short:“Consistent Underperformer”,  reason:“3Y CAGR 16%, ranked #21 of 23 eligible mid caps. UTI funds have underperformed peers consistently for 5+ years.” },
 “Kotak Small Cap Fund”:      { level:“amber”, short:“Declining Performance”,      reason:“3Y CAGR only 13.9%, ranked #19 of 21 despite 13Y track record. Strategy has clearly drifted from its historically strong approach.” },
-“Tata Small Cap Fund”:       { level:“amber”, short:“Worst Risk-Adjusted Returns”,reason:“Sharpe -0.97 — worst risk-adjusted return in eligible small cap. 3Y CAGR 12.2%. Taking maximum risk for minimum reward.” },
+“Tata Small Cap Fund”:       { level:“amber”, short:“Worst Risk-Adjusted Returns”,reason:“Sharpe -0.97 - worst risk-adjusted return in eligible small cap. 3Y CAGR 12.2%. Taking maximum risk for minimum reward.” },
 “PGIM India Flexi Cap Fund”: { level:“amber”, short:“Consistent Underperformer”,  reason:“3Y CAGR 11.2%, 5Y 11.2%. Ranked near bottom of flexi cap. PGIM India has had fund manager instability concerns.” },
-“DSP Midcap Fund”:           { level:“amber”, short:“Declining 5Y Performance”,   reason:“3Y CAGR 18.9% looks ok but 5Y only 12.8% — significantly below peers. DSP Midcap has been losing ground steadily.” },
+“DSP Midcap Fund”:           { level:“amber”, short:“Declining 5Y Performance”,   reason:“3Y CAGR 18.9% looks ok but 5Y only 12.8% - significantly below peers. DSP Midcap has been losing ground steadily.” },
 “Canara Rob Small Cap Fund”: { level:“amber”, short:“Below Average”,              reason:“3Y CAGR 14.7%, ranked #12 of 21 eligible small caps. Consistently below median peer performance.” },
 “Canara Rob Flexi Cap Fund”: { level:“amber”, short:“Below Average”,              reason:“3Y CAGR 13.6%, 5Y 12%. Ranked #8 of 21 flexi caps. Multiple better alternatives at similar or lower cost.” },
 // ⚠️ HIGH RISK, SPECIFIC CONCERNS
 “Motilal Oswal Midcap Fund”: { level:“amber”, short:“High Volatility Momentum Fund”,reason:“Rolling 30.8% looks great but 1Y return -9.6%, Sharpe -0.64 worst in eligible mid caps. Motilal’s concentrated momentum strategy falls hard in corrections. 26.6% below ATH.” },
 “JM Flexicap Fund”:          { level:“amber”, short:“Aggressive Strategy, Inconsistent”,reason:“1Y return -5.6%, Sharpe -0.59, 21.2% below ATH. JM funds use aggressive sector bets that work in bull runs but crash hard. Not suitable for stable wealth creation.” },
-“Sundaram Small Cap Fund”:   { level:“amber”, short:“Worst Drawdown in Category”, reason:“Maximum drawdown 57.1% — worst in eligible small cap universe. 3Y CAGR 18.6% does not justify catastrophic correction risk.” },
-“HSBC Small Cap Fund”:       { level:“amber”, short:“High Drawdown, Weak Returns”,reason:“Max drawdown 52.5% — second worst in eligible small cap. 3Y CAGR only 14.9%. Poor risk-reward trade-off.” },
-“ICICI Pru Midcap Fund”:     { level:“amber”, short:“Highest Cost in Category”,   reason:“Expense ratio 1.03% — highest among eligible mid cap funds. Good Sharpe but high cost compounds against you over time. Better value peers available.” },
-“Bandhan Flexi Cap Fund”:    { level:“amber”, short:“Underperformer + Expensive”,  reason:“3Y CAGR 14.2%, 5Y 11.8%, ranked #13 of 21 flexi caps. Expense 1.13% — one of highest in category. Poor value proposition.” },
-“HSBC Flexi Cap Fund”:       { level:“amber”, short:“Expensive for Returns”,      reason:“Expense 1.20% — one of most expensive eligible flexi cap funds. 3Y CAGR 16.4% ranked #9. High cost will compound against long-term returns.” },
+“Sundaram Small Cap Fund”:   { level:“amber”, short:“Worst Drawdown in Category”, reason:“Maximum drawdown 57.1% - worst in eligible small cap universe. 3Y CAGR 18.6% does not justify catastrophic correction risk.” },
+“HSBC Small Cap Fund”:       { level:“amber”, short:“High Drawdown, Weak Returns”,reason:“Max drawdown 52.5% - second worst in eligible small cap. 3Y CAGR only 14.9%. Poor risk-reward trade-off.” },
+“ICICI Pru Midcap Fund”:     { level:“amber”, short:“Highest Cost in Category”,   reason:“Expense ratio 1.03% - highest among eligible mid cap funds. Good Sharpe but high cost compounds against you over time. Better value peers available.” },
+“Bandhan Flexi Cap Fund”:    { level:“amber”, short:“Underperformer + Expensive”,  reason:“3Y CAGR 14.2%, 5Y 11.8%, ranked #13 of 21 flexi caps. Expense 1.13% - one of highest in category. Poor value proposition.” },
+“HSBC Flexi Cap Fund”:       { level:“amber”, short:“Expensive for Returns”,      reason:“Expense 1.20% - one of most expensive eligible flexi cap funds. 3Y CAGR 16.4% ranked #9. High cost will compound against long-term returns.” },
 };
 
 const AMC_QUAL = {
@@ -1301,7 +1301,7 @@ hits[`Rolling 3Y: ${roll!=null?roll.toFixed(1):'?'}% (top ${rollP!=null?(100-rol
 
 // 2. RISK-ADJUSTED RETURNS (20 pts) ──────────────────────────────
 // Sharpe + Sortino both percentile-ranked within category.
-// Never use absolute thresholds — all negative in bear markets.
+// Never use absolute thresholds - all negative in bear markets.
 const sharpe  = get(‘sharpe’);
 const sortino = get(‘sortino’);
 const shP  = pr(sharpe,  dist.sharpe,  true);
@@ -1354,7 +1354,7 @@ const expTier = exp ? (exp<0.5?‘very low’:exp<0.75?‘low’:exp<1.0?‘aver
 hits[`Expense: ${exp!=null?exp.toFixed(2):'?'}% (${expTier})`] = expPts;
 
 // 6. ABSOLUTE RETURNS (8 pts) ─────────────────────────────────────
-// Lower weight — point-in-time returns have low predictive power.
+// Lower weight - point-in-time returns have low predictive power.
 const r3  = get(‘cagr_3y’);
 const r5  = get(‘cagr_5y’);
 const r10 = get(‘cagr_10y’);
@@ -1383,7 +1383,7 @@ if (pe) hits[`Portfolio PE: ${pe.toFixed(1)} vs category ${catPE.toFixed(1)}`] =
 const cash = get(‘pct_cash’) || 0;
 if (cash >= 3 && cash <= 10) { score += 2; hits[`Cash: ${cash.toFixed(1)}% (healthy buffer)`] = 2; }
 else if (cash > 0 && cash < 3) { score += 1; hits[`Cash: ${cash.toFixed(1)}%`] = 1; }
-else if (cash > 20) hits[`Cash: ${cash.toFixed(1)}% (excess — uncertain market view?)`] = 0;
+else if (cash > 20) hits[`Cash: ${cash.toFixed(1)}% (excess - uncertain market view?)`] = 0;
 
 const top10  = get(‘top10_conc’) || 0;
 const top10P = (top10 > 0) ? pr(top10, dist.top10, false) : null;
@@ -1391,7 +1391,7 @@ const top10Pts = pts(top10P, 1);
 score += top10Pts;
 if (top10) hits[`Top 10 holdings: ${top10.toFixed(1)}% concentration`] = top10Pts;
 
-// % Away from ATH (2 pts) — 100% data coverage
+// % Away from ATH (2 pts) - 100% data coverage
 // Measures how much the fund has recovered vs its own all-time high.
 // Lower = better (0% = at ATH, 28% = 28% below peak).
 // Rewards funds that have held up or recovered well in the 2024-25 correction.
@@ -1404,7 +1404,7 @@ const athLabel = ath <= 5 ? ‘near ATH’ : ath <= 15 ? ‘moderate recovery’
 hits[`From ATH: ${ath.toFixed(1)}% below peak (${athLabel})`] = athPts;
 }
 
-// Volatility vs Category StdDev bonus (1 pt) — 100% data coverage
+// Volatility vs Category StdDev bonus (1 pt) - 100% data coverage
 // Funds that deliver lower volatility than category average are
 // demonstrating better risk management, not just riding the beta.
 const vol2    = get(‘volatility’);
@@ -1418,7 +1418,7 @@ hits[`Volatility below category avg: ${vol2.toFixed(1)}% vs ${catVol2.toFixed(1)
 
 // Style drift penalty for Mid Cap funds only (up to -2 pts)
 // Mid cap funds holding >25% small cap are taking hidden risk beyond mandate.
-// Flexi cap funds CAN legitimately hold small cap — no penalty for them.
+// Flexi cap funds CAN legitimately hold small cap - no penalty for them.
 if (subcat.includes(‘Mid’)) {
 const smallCapPct = get(‘pct_smallcap’) || 0;
 if (smallCapPct > 27) {
@@ -1439,7 +1439,7 @@ score += 5; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (ideal ra
 } else if (aum > aumMax) {
 const p = subcat.includes(‘Small’) ? 2 : 4;
 score += p;
-hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr ${subcat.includes('Small') ? '(too large — liquidity risk for small cap)' : '(large, established fund)'}`] = p;
+hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr ${subcat.includes('Small') ? '(too large - liquidity risk for small cap)' : '(large, established fund)'}`] = p;
 } else if (aum >= aumMin * 0.5) {
 score += 3; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (below ideal, growing)`] = 3;
 } else if (aum > 0) {
@@ -1453,9 +1453,9 @@ score += 1; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fu
 // That is 5 distinct stress events. A 5Y fund caught only 2 of them.
 // Morningstar weights 10Y returns at 50% of their star rating.
 // New scale: 5Y=2pts, 7Y=4pts, 10Y=7pts, 13Y=9pts
-if      (months >= 156) { score += 9; hits[`Track record: ${Math.round(months)} months (13Y+ — pre-taper tantrum history)`] = 9; }
-else if (months >= 120) { score += 7; hits[`Track record: ${Math.round(months)} months (10Y+ — full bull-bear cycle)`] = 7; }
-else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+ — two corrections)`] = 4; }
+if      (months >= 156) { score += 9; hits[`Track record: ${Math.round(months)} months (13Y+ - pre-taper tantrum history)`] = 9; }
+else if (months >= 120) { score += 7; hits[`Track record: ${Math.round(months)} months (10Y+ - full bull-bear cycle)`] = 7; }
+else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+ - two corrections)`] = 4; }
 else if (months >= 60)  { score += 2; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 2; }
 
 // 10. AMC QUALITY (10 pts) ────────────────────────────────────────
@@ -1475,34 +1475,34 @@ else if (qual.sebi === ‘minor’)  { score = Math.round(score * 0.95 * 10)/10;
 // Applied after all scoring to prevent unproven small funds from
 // outranking established funds with long track records.
 
-// Rule 1: Minimum Credibility — AUM < ₹5,000 Cr AND age < 84 months
+// Rule 1: Minimum Credibility - AUM < ₹5,000 Cr AND age < 84 months
 // A small, young fund cannot be recommended above established peers
 // regardless of good recent numbers. Numbers are unproven at scale.
 const fundAum = parseFloat(f.aum_cr || f.aum) || 0;
 if (fundAum < 5000 && months < 84 && score > 70) {
 score = 70;
-hits[‘📌 Credibility cap: AUM < ₹5K Cr + age < 7Y → score capped at 70 (watchlist)’] = 0;
+hits[‘📌 Credibility cap: AUM < ₹5K Cr + age < 7Y -> score capped at 70 (watchlist)’] = 0;
 }
 
-// Rule 2: No 5Y return data AND young fund → cap at 75
+// Rule 2: No 5Y return data AND young fund -> cap at 75
 // Without 5Y data the fund hasn’t been tested across a full market cycle.
 const has5Y = parseFloat(f.cagr_5y) > 0;
 if (!has5Y && months < 84 && score > 75) {
 score = Math.min(score, 75);
-hits[‘📌 No 5Y data + age < 7Y → score capped at 75’] = 0;
+hits[‘📌 No 5Y data + age < 7Y -> score capped at 75’] = 0;
 }
 
-// Rule 3: Low-credibility AMC + small AUM → cap at 72
+// Rule 3: Low-credibility AMC + small AUM -> cap at 72
 // Double governance risk: unknown AMC managing small corpus.
 if (qual.score <= 5 && fundAum < 5000 && score > 72) {
 score = 72;
-hits[`📌 Low AMC credibility (${qual.score}/10) + AUM < ₹5K Cr → score capped at 72`] = 0;
+hits[`📌 Low AMC credibility (${qual.score}/10) + AUM < ₹5K Cr -> score capped at 72`] = 0;
 }
 
-// Watchlist flag — AUM < ₹5,000 Cr (informational, no score change)
+// Watchlist flag - AUM < ₹5,000 Cr (informational, no score change)
 const isWatchlist = fundAum > 0 && fundAum < 5000;
 
-// Professional overlay — DO NOT INVEST flag
+// Professional overlay - DO NOT INVEST flag
 const dniFlag = DO_NOT_INVEST[f.name] || null;
 
 return {
@@ -1513,7 +1513,7 @@ amc_sebi:    qual.sebi,
 amc_warning: qual.warning,
 amc_note:    qual.note || null,
 dni:         dniFlag,
-watchlist:   isWatchlist,  // small fund — monitor, don’t rush
+watchlist:   isWatchlist,  // small fund - monitor, don’t rush
 };
 }
 
@@ -1533,14 +1533,14 @@ maxDD: f.max_drawdown, rollConsistency: null,
 fund_manager: f.fund_manager,
 dataSource: “Tickertape (Apr 2026)”};
 });
-res.json({funds:scored, total:scored.length, source:“Tickertape CSV — Apr 4 2026”, cached_at:Date.now()});
+res.json({funds:scored, total:scored.length, source:“Tickertape CSV - Apr 4 2026”, cached_at:Date.now()});
 } catch(e){
 // Table might not exist yet
 res.status(503).json({error:“Run the SQL migration first: “+e.message, funds:[]});
 }
 });
 
-// /api/mf/funds — primary endpoint, uses Tickertape DB (real data)
+// /api/mf/funds - primary endpoint, uses Tickertape DB (real data)
 // Falls back to MFAPI cache if DB table not yet loaded
 app.get(”/api/mf/funds”, async(req,res)=>{
 try {
@@ -1548,7 +1548,7 @@ const {rows} = await pool.query(“SELECT * FROM mf_tickertape ORDER BY sub_cate
 if (!rows.length) throw new Error(“No rows in mf_tickertape”);
 
 ```
-// ── STEP 1: Map raw DB rows → fund objects ──────────────────────
+// ── STEP 1: Map raw DB rows -> fund objects ──────────────────────
 const pf = (v) => v!=null ? parseFloat(v) : null;
 const funds = rows.map(f => ({
   // identity
@@ -1584,11 +1584,11 @@ const funds = rows.map(f => ({
   pct_corp_debt: pf(f.pct_corp_debt), pct_sovereign: pf(f.pct_sovereign),
   // concentration
   top3_conc: pf(f.top3_conc), top5_conc: pf(f.top5_conc), top10_conc: pf(f.top10_conc),
-  dataSource: "Tickertape — Apr 4 2026",
+  dataSource: "Tickertape - Apr 4 2026",
 }));
 
 // ── STEP 2: ELIGIBILITY FILTER ──────────────────────────────────
-// Hard filters — any fail = fund not scored
+// Hard filters - any fail = fund not scored
 // Filters: AUM ≥₹1K Cr, Age ≥5Y, 3Y rolling data exists, expense <2%
 const eligible   = funds.filter(f => checkEligible(f).eligible);
 const ineligible = funds.filter(f => !checkEligible(f).eligible);
@@ -1638,7 +1638,7 @@ const scoredIneligible = ineligible.map(f => {
     eligible: false, filter_reasons: reasons};
 });
 
-// ── STEP 6: SORT — eligible by score desc, ineligible by name ───
+// ── STEP 6: SORT - eligible by score desc, ineligible by name ───
 const allFunds = [...scoredEligible, ...scoredIneligible];
 allFunds.sort((a,b) => {
   if (a.sub_category !== b.sub_category) return a.sub_category.localeCompare(b.sub_category);
@@ -1656,7 +1656,7 @@ return res.json({
   total: allFunds.length,
   eligible_count: scoredEligible.length,
   not_eligible_count: scoredIneligible.length,
-  source: "Tickertape CSV — Apr 4 2026",
+  source: "Tickertape CSV - Apr 4 2026",
   filters: "AUM ≥₹1,000 Cr · Age ≥5Y · 3Y rolling data · Expense <2%",
   cached_at: Date.now()
 });
@@ -1671,16 +1671,16 @@ res.status(503).json({error:“No MF data. Run mf_load_v2.sql in Railway Postgre
 });
 
 app.post(”/api/mf/refresh”, async(req,res) => {
-res.json({message:“MF data is served from Tickertape DB (mf_tickertape table). No live refresh needed — re-run mf_load_v2.sql quarterly.”});
+res.json({message:“MF data is served from Tickertape DB (mf_tickertape table). No live refresh needed - re-run mf_load_v2.sql quarterly.”});
 });
 
-// MF data is static Tickertape CSV loaded into DB — no background refresh needed
+// MF data is static Tickertape CSV loaded into DB - no background refresh needed
 
 // ── Crypto prices proxy ───────────────────────────────────────────────────────
 app.get(”/api/crypto-prices”, async(req,res)=>{
 // Return cached prices updated by background poller every 60s
 if(Object.keys(cryptoPrices).length > 0) return res.json(cryptoPrices);
-// No cache yet — fetch fresh
+// No cache yet - fetch fresh
 await fetchCryptoPricesREST();
 res.json(cryptoPrices);
 });
@@ -1762,10 +1762,10 @@ app.post(”/scan-now”, (req,res)=>{ res.json({message:“Scan started”}); s
 
 app.post(”/scan-now”, (req,res)=>{ res.json({message:“Scan started”}); scanAndTrade(); });
 
-// ── Stock Scoring Engine — Kite Daily Candles ────────────────────────────────
-// Phase 1: Kite getHistoricalData(daily, 1yr) → price, DMA50/200, 52w, RSI, volume
-// Phase 2: Static fundamental table → ROE, D/E, PE, growth, margins
-// No Yahoo Finance, no external API — 100% reliable on Railway
+// ── Stock Scoring Engine - Kite Daily Candles ────────────────────────────────
+// Phase 1: Kite getHistoricalData(daily, 1yr) -> price, DMA50/200, 52w, RSI, volume
+// Phase 2: Static fundamental table -> ROE, D/E, PE, growth, margins
+// No Yahoo Finance, no external API - 100% reliable on Railway
 // ─────────────────────────────────────────────────────────────────────────────
 
 const stockFundamentals  = {};
@@ -1925,7 +1925,7 @@ pctFromHigh: wk52Hi>0 ? (C[n-1]-wk52Hi)/wk52Hi*100 : null,
 async function refreshAllFundamentals() {
 if (stockFundLoading) return;
 if (!kite || !process.env.KITE_ACCESS_TOKEN) {
-console.log(‘📊 Kite not ready — skipping stock refresh’); return;
+console.log(‘📊 Kite not ready - skipping stock refresh’); return;
 }
 stockFundLoading = true;
 console.log(‘📊 Stock scoring: fetching Kite daily candles…’);
@@ -2143,7 +2143,7 @@ res.json({
 } catch(e){ res.status(500).json({error:e.message,stocks:[]}); }
 });
 
-// Daily refresh 7AM IST (market opens 9:15 — get fresh data early)
+// Daily refresh 7AM IST (market opens 9:15 - get fresh data early)
 cron.schedule(‘0 7 * * *’, ()=>{ refreshAllFundamentals(); },{timezone:‘Asia/Kolkata’});
 // First fetch 90s after server start
 setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
@@ -2242,7 +2242,7 @@ function fullTech(cans){
   const calcEma=(arr,p)=>{const k=2/(p+1);let e=arr[0];return arr.map(v=>{e=v*k+e*(1-k);return e;});};
   const sma=(p)=>n>=p?avgArr(C,n-p,p):null;
 
-  // Moving Averages — all of them
+  // Moving Averages - all of them
   const dma9=sma(9),dma20=sma(20),dma50=sma(50),dma100=sma(100),dma150=sma(150),dma200=sma(200);
   const e9=calcEma(C,9),e12=calcEma(C,12),e20=calcEma(C,20),e21=calcEma(C,21);
   const e26=calcEma(C,26),e50=calcEma(C,50),e200=calcEma(C,200);
@@ -2482,10 +2482,10 @@ function fullTech(cans){
     const isEngulfBull=c2.close<c2.open&&c1.close>c1.open&&c1.close>c2.open&&c1.open<c2.close;
     const isEngulfBear=c2.close>c2.open&&c1.close<c1.open&&c1.close<c2.open&&c1.open>c2.close;
     const isMorningStar=c3.close<c3.open&&body2<Math.abs(c3.close-c3.open)*0.3&&c1.close>c1.open&&c1.close>(c3.open+c3.close)/2;
-    if(isDoji)patterns.push({name:'Doji',signal:'neutral',desc:'Indecision — market at crossroads'});
-    if(isHammer)patterns.push({name:'Hammer',signal:'bullish',desc:'Potential reversal — buyers stepped in at lows'});
-    if(isEngulfBull)patterns.push({name:'Bullish Engulfing',signal:'bullish',desc:'Strong reversal signal — bulls took control'});
-    if(isEngulfBear)patterns.push({name:'Bearish Engulfing',signal:'bearish',desc:'Strong reversal — bears took control'});
+    if(isDoji)patterns.push({name:'Doji',signal:'neutral',desc:'Indecision - market at crossroads'});
+    if(isHammer)patterns.push({name:'Hammer',signal:'bullish',desc:'Potential reversal - buyers stepped in at lows'});
+    if(isEngulfBull)patterns.push({name:'Bullish Engulfing',signal:'bullish',desc:'Strong reversal signal - bulls took control'});
+    if(isEngulfBear)patterns.push({name:'Bearish Engulfing',signal:'bearish',desc:'Strong reversal - bears took control'});
     if(isMorningStar)patterns.push({name:'Morning Star',signal:'bullish',desc:'3-candle bottom reversal pattern'});
   }
 
@@ -2615,33 +2615,33 @@ else if(score>=-5){verdict='Hold / Watch';  verdictColor='#f97316';verdictIcon='
 else if(score>=-25){verdict='Avoid for Now';verdictColor='#ef4444';verdictIcon='⚠️';shortVerdict='avoid';}
 else              {verdict='Do Not Buy';    verdictColor='#dc2626';verdictIcon='🚫';shortVerdict='dnb';}
 
-// Plain English reasons — what a common person can understand
+// Plain English reasons - what a common person can understand
 const reasons=[];
 // Trend
 if(t.goldenCross===true)  reasons.push({emoji:'📈',type:'Positive',text:`The 50-day average crossed above the 200-day average (Golden Cross). This is one of the most reliable long-term bullish signals. Big institutions use this as a buy trigger.`});
 if(t.goldenCross===false) reasons.push({emoji:'📉',type:'Concern',text:`The 50-day average is below the 200-day average (Death Cross). This means the stock is in a long-term downtrend. Risky to buy until this reverses.`});
-if(t.above200===true)     reasons.push({emoji:'✅',type:'Positive',text:`Stock is trading above its 200-day moving average (₹${t.dma200?.toFixed(1)}). This is the most important long-term health indicator — being above it means the stock is fundamentally healthy.`});
+if(t.above200===true)     reasons.push({emoji:'✅',type:'Positive',text:`Stock is trading above its 200-day moving average (₹${t.dma200?.toFixed(1)}). This is the most important long-term health indicator - being above it means the stock is fundamentally healthy.`});
 if(t.above200===false)    reasons.push({emoji:'⚠️',type:'Concern',text:`Stock is trading BELOW its 200-day moving average (₹${t.dma200?.toFixed(1)}). This is a warning sign. Most mutual funds and institutions won't buy a stock in this condition.`});
 // RSI
 if(t.rsi14!=null){
-  if(t.rsi14<35)  reasons.push({emoji:'🟢',type:'Opportunity',text:`RSI is at ${t.rsi14} — this means the stock is oversold (beaten down too much). Historically, stocks with RSI below 35 tend to bounce back. This could be a good entry opportunity.`});
-  else if(t.rsi14>70) reasons.push({emoji:'🔴',type:'Caution',text:`RSI is at ${t.rsi14} — the stock is overbought (ran up too fast). Buying now means you might be chasing. Better to wait for a pullback to below 60 for a safer entry.`});
-  else            reasons.push({emoji:'⚖️',type:'Neutral',text:`RSI is at ${t.rsi14} — neutral zone. Not overbought, not oversold. Momentum is balanced.`});
+  if(t.rsi14<35)  reasons.push({emoji:'🟢',type:'Opportunity',text:`RSI is at ${t.rsi14} - this means the stock is oversold (beaten down too much). Historically, stocks with RSI below 35 tend to bounce back. This could be a good entry opportunity.`});
+  else if(t.rsi14>70) reasons.push({emoji:'🔴',type:'Caution',text:`RSI is at ${t.rsi14} - the stock is overbought (ran up too fast). Buying now means you might be chasing. Better to wait for a pullback to below 60 for a safer entry.`});
+  else            reasons.push({emoji:'⚖️',type:'Neutral',text:`RSI is at ${t.rsi14} - neutral zone. Not overbought, not oversold. Momentum is balanced.`});
 }
 // Supertrend
 if(t.supertrendSig==='bullish') reasons.push({emoji:'🟢',type:'Positive',text:`Supertrend indicator is bullish (price above ₹${t.supertrend}). This algorithmic trend-following indicator is widely used by professional traders to confirm buy signals.`});
 if(t.supertrendSig==='bearish') reasons.push({emoji:'🔴',type:'Concern',text:`Supertrend is bearish (price below ₹${t.supertrend}). The stock is in a confirmed downtrend. Short-term traders would be shorting this, not buying.`});
 // Fundamentals
 if(fundAnalysis){
-  if(fundAnalysis.roe>=20) reasons.push({emoji:'💰',type:'Quality',text:`ROE (Return on Equity) is ${fundAnalysis.roe}% — excellent! This means for every ₹100 of shareholder money, the company earns ₹${fundAnalysis.roe}. Top companies like TCS, Nestlé maintain ROE above 20%.`});
-  else if(fundAnalysis.roe<10) reasons.push({emoji:'⚠️',type:'Concern',text:`ROE is only ${fundAnalysis.roe}% — weak. The company isn't generating good returns on the capital invested. Compare with industry peers before investing.`});
+  if(fundAnalysis.roe>=20) reasons.push({emoji:'💰',type:'Quality',text:`ROE (Return on Equity) is ${fundAnalysis.roe}% - excellent! This means for every ₹100 of shareholder money, the company earns ₹${fundAnalysis.roe}. Top companies like TCS, Nestlé maintain ROE above 20%.`});
+  else if(fundAnalysis.roe<10) reasons.push({emoji:'⚠️',type:'Concern',text:`ROE is only ${fundAnalysis.roe}% - weak. The company isn't generating good returns on the capital invested. Compare with industry peers before investing.`});
   if(fundAnalysis.de!=null){
     if(fundAnalysis.de<0.3) reasons.push({emoji:'💪',type:'Quality',text:`Debt is almost nil (D/E ratio: ${fundAnalysis.de}x). A debt-free company can survive recessions, invest in growth, and doesn't have interest payments eating profits. This is a huge positive for long-term investors.`});
     else if(fundAnalysis.de>2) reasons.push({emoji:'🚨',type:'Risk',text:`High debt (D/E ratio: ${fundAnalysis.de}x). The company owes more than twice its equity. During slowdowns or interest rate hikes, high-debt companies suffer the most. This is a serious risk factor.`});
   }
   if(fundAnalysis.epsGr!=null&&fundAnalysis.epsGr<400){
-    if(fundAnalysis.epsGr>=25) reasons.push({emoji:'🚀',type:'Growth',text:`EPS (Earnings Per Share) growing at ${fundAnalysis.epsGr}% — hypergrowth! The company is compounding earnings rapidly. At this rate, even a high PE makes sense because future earnings will justify today's price.`});
-    else if(fundAnalysis.epsGr<0) reasons.push({emoji:'📉',type:'Risk',text:`Earnings are declining (${fundAnalysis.epsGr}%). A stock is worth the present value of future earnings — if earnings are shrinking, the stock price usually follows. Be careful.`});
+    if(fundAnalysis.epsGr>=25) reasons.push({emoji:'🚀',type:'Growth',text:`EPS (Earnings Per Share) growing at ${fundAnalysis.epsGr}% - hypergrowth! The company is compounding earnings rapidly. At this rate, even a high PE makes sense because future earnings will justify today's price.`});
+    else if(fundAnalysis.epsGr<0) reasons.push({emoji:'📉',type:'Risk',text:`Earnings are declining (${fundAnalysis.epsGr}%). A stock is worth the present value of future earnings - if earnings are shrinking, the stock price usually follows. Be careful.`});
   }
   if(fundAnalysis.pe!=null){
     if(fundAnalysis.pe<15) reasons.push({emoji:'🏷️',type:'Value',text:`PE ratio of ${fundAnalysis.pe}x is cheap relative to the market. You're paying ₹${fundAnalysis.pe} for every ₹1 of earnings. If earnings grow, this stock could re-rate significantly higher. Classic value investment.`});
@@ -2650,25 +2650,25 @@ if(fundAnalysis){
 }
 // Price action
 if(t.pctFromHigh<-30) reasons.push({emoji:'💡',type:'Opportunity',text:`Stock is ${Math.abs(t.pctFromHigh)}% below its 52-week high (peak: ₹${t.wk52Hi?.toFixed(1)}). Significant correction has already happened. This could represent long-term value if fundamentals are intact.`});
-if(t.macdBull&&t.macdMomentum==='expanding') reasons.push({emoji:'⚡',type:'Momentum',text:`MACD is bullish with expanding histogram — momentum is accelerating upward. This is often seen at the beginning of a new uptrend, not the end.`});
+if(t.macdBull&&t.macdMomentum==='expanding') reasons.push({emoji:'⚡',type:'Momentum',text:`MACD is bullish with expanding histogram - momentum is accelerating upward. This is often seen at the beginning of a new uptrend, not the end.`});
 // Ichimoku
-if(t.ichimoku?.bullish) reasons.push({emoji:'☁️',type:'Positive',text:`Price is above the Ichimoku Cloud — one of the strongest trend confirmation signals used by Japanese institutional traders. All Ichimoku components are aligned bullishly.`});
+if(t.ichimoku?.bullish) reasons.push({emoji:'☁️',type:'Positive',text:`Price is above the Ichimoku Cloud - one of the strongest trend confirmation signals used by Japanese institutional traders. All Ichimoku components are aligned bullishly.`});
 // Volume
 if(t.volTrend?.includes('Accum')) reasons.push({emoji:'🏦',type:'Institutional',text:`Volume is significantly above average (${t.volRatio20}x normal). Rising price with rising volume is the #1 sign that institutions (mutual funds, FIIs) are accumulating this stock.`});
 // Buy zone
-if(t.idealBuy&&px&&Math.abs(px-t.idealBuy)/px<0.03) reasons.push({emoji:'🎯',type:'Timing',text:`Current price (₹${px?.toFixed(1)}) is near the ideal buy zone (₹${t.buyZoneLow}–₹${t.buyZoneHigh}) based on historical support. This is the zone where buyers have historically stepped in. Good entry area for long-term accumulation.`});
+if(t.idealBuy&&px&&Math.abs(px-t.idealBuy)/px<0.03) reasons.push({emoji:'🎯',type:'Timing',text:`Current price (₹${px?.toFixed(1)}) is near the ideal buy zone (₹${t.buyZoneLow}-₹${t.buyZoneHigh}) based on historical support. This is the zone where buyers have historically stepped in. Good entry area for long-term accumulation.`});
 // Sentiment
-if(bull>bear&&news.length>2) reasons.push({emoji:'📰',type:'Sentiment',text:`News sentiment is positive — ${bull} bullish vs ${bear} bearish recent stories. Positive news flow means analysts and media have a favorable view, which attracts retail and institutional buying.`});
-else if(bear>bull&&news.length>2) reasons.push({emoji:'📰',type:'Concern',text:`News sentiment is negative — ${bear} bearish vs ${bull} bullish recent stories. Negative news flow can weigh on the stock. Monitor developments before investing.`});
+if(bull>bear&&news.length>2) reasons.push({emoji:'📰',type:'Sentiment',text:`News sentiment is positive - ${bull} bullish vs ${bear} bearish recent stories. Positive news flow means analysts and media have a favorable view, which attracts retail and institutional buying.`});
+else if(bear>bull&&news.length>2) reasons.push({emoji:'📰',type:'Concern',text:`News sentiment is negative - ${bear} bearish vs ${bull} bullish recent stories. Negative news flow can weigh on the stock. Monitor developments before investing.`});
 
 // When to buy advice
 const whenToBuy=[];
-if(t.buyZoneLow&&t.buyZoneHigh) whenToBuy.push({type:'Support Zone',priority:'HIGH',price:`₹${t.buyZoneLow}–₹${t.buyZoneHigh}`,why:'Strongest historical support — highest probability of bounce'});
-if(t.dma50BuyZone) whenToBuy.push({type:'50-DMA Zone',priority:'HIGH',price:`₹${t.dma50BuyZone.low}–₹${t.dma50BuyZone.high}`,why:'Institutional buying zone — professional traders use 50DMA as entry'});
-if(t.dma200BuyZone) whenToBuy.push({type:'200-DMA Zone',priority:'MEDIUM',price:`₹${t.dma200BuyZone.low}–₹${t.dma200BuyZone.high}`,why:'Long-term value zone — where Warren Buffett type investors accumulate'});
-if(t.fibs) whenToBuy.push({type:'Fibonacci 61.8%',priority:'MEDIUM',price:`₹${t.fibs.r618}`,why:'Golden ratio retracement — used by technical traders worldwide'});
-if(t.rsi14>60) whenToBuy.push({type:'RSI Pullback',priority:'LOW',price:`Wait for RSI < 50`,why:`RSI at ${t.rsi14} is elevated — better entry on cooling`});
-if(t.rsi14<35) whenToBuy.push({type:'NOW (RSI Oversold)',priority:'HIGH',price:`₹${px?.toFixed(1)} — current price`,why:`RSI ${t.rsi14} is oversold — historically strong entry zone`});
+if(t.buyZoneLow&&t.buyZoneHigh) whenToBuy.push({type:'Support Zone',priority:'HIGH',price:`₹${t.buyZoneLow}-₹${t.buyZoneHigh}`,why:'Strongest historical support - highest probability of bounce'});
+if(t.dma50BuyZone) whenToBuy.push({type:'50-DMA Zone',priority:'HIGH',price:`₹${t.dma50BuyZone.low}-₹${t.dma50BuyZone.high}`,why:'Institutional buying zone - professional traders use 50DMA as entry'});
+if(t.dma200BuyZone) whenToBuy.push({type:'200-DMA Zone',priority:'MEDIUM',price:`₹${t.dma200BuyZone.low}-₹${t.dma200BuyZone.high}`,why:'Long-term value zone - where Warren Buffett type investors accumulate'});
+if(t.fibs) whenToBuy.push({type:'Fibonacci 61.8%',priority:'MEDIUM',price:`₹${t.fibs.r618}`,why:'Golden ratio retracement - used by technical traders worldwide'});
+if(t.rsi14>60) whenToBuy.push({type:'RSI Pullback',priority:'LOW',price:`Wait for RSI < 50`,why:`RSI at ${t.rsi14} is elevated - better entry on cooling`});
+if(t.rsi14<35) whenToBuy.push({type:'NOW (RSI Oversold)',priority:'HIGH',price:`₹${px?.toFixed(1)} - current price`,why:`RSI ${t.rsi14} is oversold - historically strong entry zone`});
 
 // Price targets
 const targets=[];
@@ -2705,7 +2705,7 @@ res.status(500).json({error:e.message});
 // Aggregates paper trade signals + live prices into a ranked recommendation list
 app.get(”/api/stocks/recommendations”, async(req,res)=>{
 try {
-// Get recent signals — last 7 days of BUY signals with score >= 3
+// Get recent signals - last 7 days of BUY signals with score >= 3
 const {rows: signals} = await pool.query(`SELECT DISTINCT ON (symbol) symbol, name, type, price as entry_price, signal_score, strategy, regime, indicators, entry_time, stop_loss, target, status, pnl, pnl_pct, exit_reason FROM paper_trades WHERE type = 'BUY' AND entry_time >= NOW() - INTERVAL '7 days' AND signal_score >= 3 ORDER BY symbol, entry_time DESC`);
 
 ```
@@ -2814,7 +2814,7 @@ try {
 const{interval=“5minute”}=req.query;
 // Use validTokens (from Kite API) with fallback to hardcoded INSTRUMENTS
 const token=validTokens[req.params.symbol]||INSTRUMENTS[req.params.symbol];
-if(!token)return res.status(404).json({error:“Symbol not found — token not loaded yet”});
+if(!token)return res.status(404).json({error:“Symbol not found - token not loaded yet”});
 const today=new Date().toISOString().split(“T”)[0];
 const weekAgo=new Date(Date.now()-7*24*60*60*1000).toISOString().split(“T”)[0];
 res.json(await kite.getHistoricalData(token,interval,weekAgo,today));
@@ -2832,7 +2832,7 @@ process.env.KITE_ACCESS_TOKEN=token; kite.setAccessToken(token);
 tokenValid = true;
 await dbSet(‘kite_access_token’, token); // persist across restarts
 startTicker(token);
-res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center"> <h2 style="color:#22c55e">✅ Connected! Token saved to DB — survives restarts.</h2> <p>Token: <code style="background:#1e293b;padding:8px 16px;border-radius:6px;display:block;margin:12px auto;max-width:600px;word-break:break-all;color:#38bdf8">${token}</code></p> <p style="color:#22c55e">✅ Auto-saved to database — no need to set Railway env variable manually</p> <p style="color:#64748b">7 strategies · auto regime detection · scans every 5 min · 9:15–15:30 IST</p> <br/><a href="/" style="color:#0ea5e9">Back to Dashboard →</a> </body></html>`);
+res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center"> <h2 style="color:#22c55e">✅ Connected! Token saved to DB - survives restarts.</h2> <p>Token: <code style="background:#1e293b;padding:8px 16px;border-radius:6px;display:block;margin:12px auto;max-width:600px;word-break:break-all;color:#38bdf8">${token}</code></p> <p style="color:#22c55e">✅ Auto-saved to database - no need to set Railway env variable manually</p> <p style="color:#64748b">7 strategies · auto regime detection · scans every 5 min · 9:15-15:30 IST</p> <br/><a href="/" style="color:#0ea5e9">Back to Dashboard -></a> </body></html>`);
 } catch(e){
 res.status(500).send(`<html><body style="background:#060b14;color:#fca5a5;font-family:monospace;padding:40px"> <h2>❌ Auth failed</h2><pre>${e.message}</pre><a href="/auth/login" style="color:#0ea5e9">Try again</a> </body></html>`);
 }
@@ -2850,7 +2850,7 @@ const t = setTimeout(()=>ctrl.abort(), ms);
 return fetch(url, {…opts, signal:ctrl.signal}).finally(()=>clearTimeout(t));
 }
 
-// ── CRYPTO ENGINE — Binance Public API (no account needed) ────────────────────
+// ── CRYPTO ENGINE - Binance Public API (no account needed) ────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const CRYPTO_UNIVERSE = [
@@ -2876,7 +2876,7 @@ const CRYPTO_UNIVERSE = [
 {sym:“SUIUSDT”,  name:“Sui”,            base:“SUI”},
 ];
 
-// Fetch candles — try multiple endpoints
+// Fetch candles - try multiple endpoints
 async function fetchCryptoCandles(sym) {
 const endpoints = [
 `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
@@ -2917,7 +2917,7 @@ return true;
 } catch(e) { return false; }
 }
 
-// Fetch live prices — try multiple Binance endpoints
+// Fetch live prices - try multiple Binance endpoints
 async function fetchCryptoPricesREST() {
 const syms = JSON.stringify(CRYPTO_UNIVERSE.map(c=>c.sym));
 const endpoints = [
@@ -2943,7 +2943,7 @@ cryptoCandles[t.symbol][cryptoCandles[t.symbol].length-1].close=+t.lastPrice;
 });
 cryptoWSActive = true;
 broadcast({type:“crypto_tick”, prices:cryptoPrices});
-console.log(`₿ Prices updated — ${data.length} pairs`);
+console.log(`₿ Prices updated - ${data.length} pairs`);
 return;
 } catch(e) { continue; }
 }
@@ -2976,7 +2976,7 @@ fetchCryptoPricesREST();
 setInterval(fetchCryptoPricesREST, 60000);
 }
 
-// Crypto strategy — same logic but wider thresholds (crypto is volatile)
+// Crypto strategy - same logic but wider thresholds (crypto is volatile)
 function scoreCrypto(closes) {
 if (closes.length < 30) return { total: 0, bd: {} };
 const n = closes.length - 1;
@@ -2988,13 +2988,13 @@ const [lp, lr, lbb] = [closes[n], r[n], bbs[n]];
 const vwapVal = closes.slice(-20).reduce((a,b)=>a+b,0)/Math.min(20,closes.length);
 const bd = {}; let total = 0;
 
-// EMA — wider for crypto
+// EMA - wider for crypto
 let emaS = le9>le21?2:le9<le21?-2:0;
 if(pe9<=pe21&&le9>le21) emaS=3;
 if(pe9>=pe21&&le9<le21) emaS=-3;
 bd.ema=emaS; total+=emaS;
 
-// RSI — wider thresholds for crypto
+// RSI - wider thresholds for crypto
 const rsiS=lr<25?3:lr<35?2:lr<45?1:lr>75?-3:lr>65?-2:lr>55?-1:0;
 bd.rsi=rsiS; total+=rsiS;
 
@@ -3012,7 +3012,7 @@ return {total, bd, rsi:lr, price:lp};
 }
 
 const CRYPTO_CONFIG = {
-BUY_SCORE:        3,      // lowered from 4 — easier to trigger
+BUY_SCORE:        3,      // lowered from 4 - easier to trigger
 SELL_SCORE:      -2,
 MAX_POSITIONS:    5,
 CAPITAL_PER_TRADE:5000,
@@ -3088,7 +3088,7 @@ scanned++;
 ```
 
 }
-console.log(`₿ Done — scanned:${scanned} skipped:${skipped} signals:${signals}\n`);
+console.log(`₿ Done - scanned:${scanned} skipped:${skipped} signals:${signals}\n`);
 }
 
 // ── Crypto API endpoints ───────────────────────────────────────────────────────
@@ -3119,22 +3119,22 @@ if (token) process.env.KITE_ACCESS_TOKEN = token;
 
 initKite(token||null);
 if (token) {
-tokenValid = true; // assume valid — will be set false if Kite rejects it
-console.log(“✅ Token loaded (from “+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet(‘kite_access_token’)?‘env’:‘DB’)+”) — starting smart engine…”);
+tokenValid = true; // assume valid - will be set false if Kite rejects it
+console.log(“✅ Token loaded (from “+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet(‘kite_access_token’)?‘env’:‘DB’)+”) - starting smart engine…”);
 startTicker(token);
 await refreshInstruments();  // fetch real tokens from Kite
 setTimeout(scanAndTrade, 5000);
 } else {
-console.log(“⚠️  No token — visit /auth/login or paste token in dashboard”);
+console.log(“⚠️  No token - visit /auth/login or paste token in dashboard”);
 }
-// NSE: every 3 min during market hours Mon–Fri
+// NSE: every 3 min during market hours Mon-Fri
 cron.schedule(”*/3 9-15 * * 1-5”, ()=>scanAndTrade(), {timezone:“Asia/Kolkata”});
 cron.schedule(“15 9 * * 1-5”,     ()=>scanAndTrade(), {timezone:“Asia/Kolkata”});
 // Refresh instrument tokens daily at 9:00 AM
 cron.schedule(“0 9 * * 1-5”, ()=>refreshInstruments(), {timezone:“Asia/Kolkata”});
 
 // Crypto: start immediately, run 24/7 every 15 minutes
-console.log(“₿ Starting crypto engine — 24/7…”);
+console.log(“₿ Starting crypto engine - 24/7…”);
 startCryptoTicker(); // REST polling every 60s
 setTimeout(scanCrypto, 10000); // first scan after 10s
 cron.schedule(”*/15 * * * *”, ()=>scanCrypto());
