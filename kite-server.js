@@ -2414,24 +2414,24 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
 
       // 52w / returns
       const yr=C.slice(-252);
-      const wk52Hi=Math.max(...yr), wk52Lo=Math.min(...yr);
+      const wk52Hi=yr.length?Math.max(...yr):C[n-1];
+      const wk52Lo=yr.length?Math.min(...yr):C[n-1];
       const ret1y=yr.length>1?(C[n-1]-yr[0])/yr[0]*100:null;
       const ret6m=C.length>=126?(C[n-1]-C[n-126])/C[n-126]*100:null;
       const ret3m=C.length>=63 ?(C[n-1]-C[n-63])/C[n-63]*100:null;
       const ret1m=C.length>=21 ?(C[n-1]-C[n-21])/C[n-21]*100:null;
-      const pctFromHigh=(C[n-1]-wk52Hi)/wk52Hi*100;
-      const pctFromLow =(C[n-1]-wk52Lo)/wk52Lo*100;
+      const pctFromHigh=wk52Hi?(C[n-1]-wk52Hi)/wk52Hi*100:0;
+      const pctFromLow =wk52Lo?(C[n-1]-wk52Lo)/wk52Lo*100:0;
 
       // ── SUPPORT & RESISTANCE (key price levels) ───────────────────────────
-      // Method: pivot points + price clustering on daily candles
       const pivots=[];
       const lookback=Math.min(n,500);
       const data=cans.slice(n-lookback);
-      // Standard pivot: (H+L+C)/3
       for(let i=5;i<data.length-5;i++){
-        const pivot=(data[i].high+data[i].low+data[i].close)/3;
-        const isHigh=data[i].high>=Math.max(...data.slice(i-5,i+5+1).map(c=>c.high));
-        const isLow =data[i].low <=Math.min(...data.slice(i-5,i+5+1).map(c=>c.low));
+        const window=data.slice(i-5,i+6);
+        if(window.length<3) continue;
+        const isHigh=data[i].high>=Math.max(...window.map(c=>c.high));
+        const isLow =data[i].low <=Math.min(...window.map(c=>c.low));
         if(isHigh) pivots.push({price:data[i].high, type:'resistance', strength:0});
         if(isLow)  pivots.push({price:data[i].low,  type:'support',    strength:0});
       }
