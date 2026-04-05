@@ -115,6 +115,7 @@ function initKite(token) {
 const livePrices  = {};
 const subscribers = new Set();
 let   tickerOn    = false;
+let   tokenValid  = false; // set true when ticker connects, false when error/disconnect
 function broadcast(data) {
   const msg = JSON.stringify(data);
   subscribers.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
@@ -130,6 +131,7 @@ function startTicker(token) {
   t.connect();
   t.on("connect", () => {
     tickerOn = true;
+    tokenValid = true;
     const tokens = Object.values(INSTRUMENTS);
     t.subscribe(tokens); t.setMode(t.modeFull, tokens);
     broadcast({ type:"status", connected:true });
@@ -143,7 +145,7 @@ function startTicker(token) {
     });
     broadcast({ type:"tick", prices:livePrices });
   });
-  t.on("error", () => console.log("Ticker error"));
+  t.on("error", () => { console.log("Ticker error"); tokenValid = false; });
   t.on("close", () => { tickerOn = false; broadcast({ type:"status", connected:false }); });
 }
 
@@ -926,6 +928,7 @@ async function scanAndTrade() {
       await delay(CONFIG.SCAN_DELAY_MS); // Kite rate limit
     } catch(e) {
       console.error(`  ✗ ${stock.sym}: ${e.message}`);
+      if (e.message && e.message.includes('api_key')) tokenValid = false;
       await delay(500);
     }
   }
@@ -1719,13 +1722,17 @@ app.get("/health", (req,res)=>res.json({
 
 // ── Token management endpoints ────────────────────────────────────────────────
 app.get("/api/token/status", (req,res)=>{
-  const hasToken  = !!process.env.KITE_ACCESS_TOKEN;
-  const isWorking = tickerOn || Object.keys(livePrices).length > 0;
-  // Token is expired if we have it but ticker isn't on and market is open
+  const hasToken   = !!process.env.KITE_ACCESS_TOKEN;
   const marketOpen = isMarketOpen();
-  const tokenExpired = hasToken && marketOpen && !tickerOn && Object.keys(livePrices).length === 0;
+  // Token expired = has token but Kite rejected it (flagged by scan or ticker error)
+  // OR market is open, has token, but ticker never connected and no prices
+  const tokenExpired = hasToken && !tokenValid && (
+    Object.keys(livePrices).length === 0  // no prices ever populated
+  );
+  // Working = ticker connected, OR we have live prices, OR token is valid and market closed
+  const isWorking = tickerOn || Object.keys(livePrices).length > 0 || (tokenValid && !marketOpen);
   res.json({
-    hasToken, isWorking, tickerOn, tokenExpired, marketOpen,
+    hasToken, isWorking, tickerOn, tokenValid, tokenExpired, marketOpen,
     livePrices: Object.keys(livePrices).length,
     loginUrl: kite ? kite.getLoginURL() : null,
   });
@@ -1738,6 +1745,7 @@ app.post("/api/token/update", async(req,res)=>{
     process.env.KITE_ACCESS_TOKEN = token;
     initKite(token);
     kite.setAccessToken(token);
+    tokenValid = true;
     startTicker(token);
     console.log('🔑 Kite token updated via dashboard');
     res.json({ success: true, message: 'Token updated and ticker restarted' });
@@ -2621,6 +2629,7 @@ async function start() {
   await initDB();
   initKite(process.env.KITE_ACCESS_TOKEN||null);
   if (process.env.KITE_ACCESS_TOKEN) {
+    tokenValid = true; // assume valid — will be set false if Kite rejects it
     console.log("✅ Token found — starting smart engine...");
     startTicker(process.env.KITE_ACCESS_TOKEN);
     await refreshInstruments();  // fetch real tokens from Kite
