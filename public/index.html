@@ -2543,13 +2543,18 @@ function renderStockRecPage(){
   analyzerHtml += '</div>';
 
   // -- FILTER --------------------------------------------------------
+  var fallenAngels = allStocks.filter(function(s){ return s.isFallenAngel; })
+    .sort(function(a,b){ return (b.fallenScore||0)-(a.fallenScore||0); });
+
   var filtered = allStocks.filter(function(s){
     if(stockRecFilter==='ALL') return true;
+    if(stockRecFilter==='FALLEN') return s.isFallenAngel;
     if(stockRecFilter==='NIFTY50') return s.grp==='NIFTY50';
     if(stockRecFilter==='NEXT50')  return s.grp==='NEXT50';
     if(stockRecFilter==='MIDCAP')  return s.grp==='MIDCAP';
     return s.sector===stockRecFilter;
   });
+  if(stockRecFilter==='FALLEN') filtered = fallenAngels;
 
   // Get unique sectors
   var sectors = [...new Set(allStocks.map(function(s){ return s.sector; }).filter(Boolean))].sort();
@@ -2583,34 +2588,61 @@ function renderStockRecPage(){
   var analysts = allStocks.filter(function(s){ return s.upside&&s.upside>15; }).length;
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
   var pills = [
-    {l:'Total Stocks',    v:allStocks.length, c:'var(--text)'},
-    {l:'Analyst Buys',   v:buys,              c:'var(--green)'},
-    {l:'ROE ≥ 15%',      v:highRoe,           c:'#f59e0b'},
-    {l:'Golden Cross',   v:golden,            c:'#f59e0b'},
-    {l:'Upside >15%',   v:analysts,          c:'var(--blue)'},
-    {l:'Nifty50',        v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
-    {l:'Next50',         v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length, c:'#8b5cf6'},
-    {l:'Midcap',         v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length, c:'#f59e0b'},
+    {l:'Total Stocks',    v:allStocks.length,    c:'var(--text)'},
+    {l:'Fallen Angels',   v:fallenAngels.length, c:'#f59e0b', hot:true},
+    {l:'ROE >= 15%',      v:highRoe,             c:'var(--green)'},
+    {l:'Golden Cross',    v:golden,              c:'#f59e0b'},
+    {l:'Upside >15%',     v:analysts,            c:'var(--blue)'},
+    {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
+    {l:'Next50',          v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length,  c:'#8b5cf6'},
+    {l:'Midcap',          v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length,  c:'#f59e0b'},
   ];
   pills.forEach(function(p){
-    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 13px">'
-      +'<div style="font-size:10px;color:var(--text3)">'+p.l+'</div>'
+    html+='<div style="background:'+(p.hot?'rgba(245,158,11,.1)':'var(--bg2)')+';border:1px solid '+(p.hot?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:8px;padding:7px 13px;cursor:'+(p.hot?'pointer':'default')+'"'
+      +(p.hot?' onclick="stockRecFilter=\'FALLEN\';renderStockRec()"':'')+' title="'+(p.hot?'Click to view Fallen Angels':'')+'">'
+      +'<div style="font-size:10px;color:'+(p.hot?'#f59e0b':'var(--text3)')+'">'+p.l+(p.hot?' 🔥':'')+'</div>'
       +'<div style="font-size:18px;font-weight:700;color:'+p.c+'">'+p.v+'</div>'
       +'</div>';
   });
   html += '</div>';
 
   // -- FILTER TABS --------------------------------------------------
-  var filters = ['ALL','NIFTY50','NEXT50','MIDCAP'].concat(sectors.slice(0,8));
+  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP'].concat(sectors.slice(0,8));
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
+    var isFallen = f==='FALLEN';
     html += '<button onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:4px 12px;border-radius:20px;border:1px solid '
-      +(active?'#f59e0b':'var(--border)')+';background:'+(active?'rgba(245,158,11,0.15)':'var(--bg2)')
-      +';color:'+(active?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'400')+'">'
-      +f+'</button>';
+      +(active?'#f59e0b':isFallen?'rgba(245,158,11,.3)':'var(--border)')+';background:'
+      +(active?'rgba(245,158,11,0.2)':isFallen?'rgba(245,158,11,.08)':'var(--bg2)')
+      +';color:'+(active||isFallen?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'400')+'">'
+      +(isFallen?'🔥 ':'')+f+'</button>';
   });
   html += '</div>';
+
+  // Fallen Angels banner
+  if(stockRecFilter==='FALLEN'){
+    html += '<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:12px;padding:14px 16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:13px;color:#f59e0b;margin-bottom:6px">🔥 Fallen Angels — Quality Stocks On Sale</div>';
+    html += '<div style="font-size:11px;color:var(--text2);line-height:1.7">';
+    html += 'These are <b>high-quality stocks</b> (score &ge;50) that have <b>fallen 20%+ from their 52-week high</b> — ';
+    html += 'not because of broken fundamentals, but likely due to market correction, sector rotation, or temporary bad news. ';
+    html += 'RSI is not overbought, debt is manageable, and earnings are intact. ';
+    html += 'This is historically where <b>institutional investors quietly accumulate</b>.<br>';
+    html += '<span style="color:#f59e0b">Filter: Score &ge;50 + Down &ge;20% from peak + RSI &le;50 + D/E &le;2 + EPS not collapsing</span>';
+    html += '</div>';
+    // Extra stats
+    var deepFallen = fallenAngels.filter(function(s){return (s.pctFromHigh||0)<=-35;});
+    var nearDma200 = fallenAngels.filter(function(s){
+      var px=s.price, d200=s.dma200;
+      return px&&d200&&Math.abs(px-d200)/d200<0.08;
+    });
+    var oversold = fallenAngels.filter(function(s){return (s.rsi||50)<=35;});
+    html += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">';
+    [{l:'Total fallen',v:fallenAngels.length},{l:'Down 35%+',v:deepFallen.length},{l:'Near 200DMA',v:nearDma200.length},{l:'RSI Oversold',v:oversold.length}]
+      .forEach(function(p){ html+='<div style="background:rgba(245,158,11,.15);border-radius:6px;padding:4px 12px;font-size:11px"><b style="color:#f59e0b">'+p.v+'</b> <span style="color:var(--text3)">'+p.l+'</span></div>'; });
+    html += '</div></div>';
+  }
 
   // -- TOP 3 MEDAL CARDS --------------------------------------------
   if(top3.length){
@@ -2779,11 +2811,161 @@ function renderStockRecPage(){
 function buildStockCard(s, medal){
   var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b'}[s.grp]||'var(--text3)';
   var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
-  var recMap={strong_buy:'Strong Buy',buy:'Buy',hold:'Hold',sell:'Sell',strong_sell:'Strong Sell'};
-  var recCol={strong_buy:'var(--green)',buy:'var(--green)',hold:'#f59e0b',sell:'var(--red)',strong_sell:'var(--red)'};
-  var gc2 = s.recKey?recCol[s.recKey]||'var(--text)':'var(--text)';
+  var isFallenAngel = s.score>=50 && (s.pctFromHigh||0)<=-20 && (s.rsi||50)<=50;
+  var px = s.price;
 
-  var h='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:16px">';
+  var h='<div style="background:var(--bg2);border:1.5px solid '+(isFallenAngel?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:12px;padding:14px;position:relative;overflow:hidden">';
+
+  // Fallen Angel ribbon
+  if(isFallenAngel){
+    var fallPct=Math.abs(s.pctFromHigh||0).toFixed(0);
+    h+='<div style="position:absolute;top:0;right:0;background:#f59e0b;color:#000;font-size:9px;font-weight:800;padding:3px 10px;border-radius:0 12px 0 8px">🔥 -'+fallPct+'% FROM PEAK</div>';
+  }
+
+  // -- HEADER ------------------------------------------------------
+  h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">';
+  h+='<div style="display:flex;align-items:center;gap:8px">';
+  h+='<span style="font-size:20px">'+medal+'</span>';
+  h+='<div>';
+  h+='<div style="font-weight:700;font-size:15px">'+s.sym+'</div>';
+  h+='<div style="font-size:10px;color:var(--text3)">'+s.name+'</div>';
+  h+='</div></div>';
+  h+='<div style="text-align:right">';
+  h+='<div style="font-size:21px;font-weight:800;color:'+sc+'">'+s.score+'<span style="font-size:10px;color:var(--text4);font-weight:400">/100</span></div>';
+  if(px) h+='<div style="font-size:13px;font-weight:700">Rs.'+px.toFixed(1)+'</div>';
+  h+='</div></div>';
+
+  // Score bar
+  h+='<div style="background:var(--bg3);border-radius:3px;height:4px;margin-bottom:10px;overflow:hidden">'
+    +'<div style="height:100%;border-radius:3px;background:'+sc+';width:'+Math.min(100,s.score)+'%"></div></div>';
+
+  // Tags row
+  h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">';
+  h+='<span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 7px;font-size:9px;font-weight:700">'+s.grp+'</span>';
+  if(s.sector) h+='<span style="background:var(--bg3);color:var(--text3);border-radius:4px;padding:1px 7px;font-size:9px">'+s.sector+'</span>';
+  if(s.goldenCross===true)  h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:4px;padding:1px 7px;font-size:9px">⚡Golden Cross</span>';
+  if(s.goldenCross===false) h+='<span style="background:rgba(239,68,68,.1);color:var(--red);border-radius:4px;padding:1px 7px;font-size:9px">Death Cross</span>';
+  if(s.supertrendSig==='bullish') h+='<span style="background:rgba(34,197,94,.1);color:var(--green);border-radius:4px;padding:1px 7px;font-size:9px">ST Bullish</span>';
+  if(s.supertrendSig==='bearish') h+='<span style="background:rgba(239,68,68,.1);color:var(--red);border-radius:4px;padding:1px 7px;font-size:9px">ST Bearish</span>';
+  if(s.accumDist==='Accumulation') h+='<span style="background:rgba(59,130,246,.1);color:var(--blue);border-radius:4px;padding:1px 7px;font-size:9px">Accumulation</span>';
+  if(isFallenAngel&&(s.rsi||50)<=35) h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:1px 7px;font-size:9px">RSI Oversold</span>';
+  h+='</div>';
+
+  // -- FALLEN ANGEL SCORECARD ---------------------------------------
+  if(isFallenAngel && s.fallenScore!=null){
+    var fc=s.fallenColor||'#f59e0b';
+    h+='<div style="background:'+fc+'10;border:1px solid '+fc+'40;border-radius:10px;padding:10px;margin-bottom:10px">';
+    h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">';
+    h+='<div style="font-size:10px;font-weight:700;color:'+fc+'">'+s.fallenIcon+' Fallen Angel Score</div>';
+    h+='<div style="font-size:18px;font-weight:800;color:'+fc+'">'+s.fallenScore+'<span style="font-size:10px;font-weight:400;color:var(--text3)">/100</span></div>';
+    h+='</div>';
+    h+='<div style="background:var(--bg3);border-radius:3px;height:5px;margin-bottom:7px;overflow:hidden">';
+    h+='<div style="height:100%;border-radius:3px;background:'+fc+';width:'+s.fallenScore+'%"></div></div>';
+    h+='<div style="font-size:11px;font-weight:700;color:'+fc+';margin-bottom:7px">'+s.fallenVerdict+'</div>';
+    if(s.fallenHits){
+      h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px">';
+      Object.entries(s.fallenHits).forEach(function(e){
+        var pts=e[1], pos=pts>=0;
+        h+='<div style="display:flex;justify-content:space-between;font-size:9px;padding:2px 6px;background:'+(pos?'rgba(34,197,94,.08)':'rgba(239,68,68,.08)')+';border-radius:4px">';
+        h+='<span style="color:var(--text3)">'+e[0]+'</span>';
+        h+='<span style="font-weight:700;color:'+(pos?'var(--green)':'var(--red)')+'">'+( pts>0?'+':'')+pts+'</span>';
+        h+='</div>';
+      });
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+
+  // -- FUNDAMENTALS SECTION ----------------------------------------
+  h+='<div style="font-size:9px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Fundamentals</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px">';
+  function mc(l,v,c,sub){
+    return '<div style="background:var(--bg3);border-radius:6px;padding:5px 6px;text-align:center">'
+      +'<div style="font-size:8px;color:var(--text3);margin-bottom:1px">'+l+'</div>'
+      +'<div style="font-size:11px;font-weight:700;color:'+(c||'var(--text)')+'">'+v+'</div>'
+      +(sub?'<div style="font-size:8px;color:var(--text4)">'+sub+'</div>':'')
+      +'</div>';
+  }
+  var na='<span style="color:var(--text4)">--</span>';
+  h+=mc('ROE',    s.roe!=null?s.roe.toFixed(1)+'%':na,    s.roe>=20?'var(--green)':s.roe>=15?'#f59e0b':s.roe>=10?'var(--text)':'var(--red)',   s.roe>=20?'Excellent':s.roe>=15?'Good':s.roe>=10?'Average':'Weak');
+  h+=mc('D/E',    s.debtToEq!=null?s.debtToEq.toFixed(2)+'x':na, s.debtToEq<=0.3?'var(--green)':s.debtToEq<=1?'#f59e0b':s.debtToEq<=2?'var(--text)':'var(--red)', s.debtToEq<=0.3?'Debt-free':s.debtToEq<=1?'Low':s.debtToEq<=2?'Moderate':'High');
+  h+=mc('P/E',    s.pe!=null?s.pe.toFixed(1)+'x':na,      s.pe<15?'var(--green)':s.pe<25?'#f59e0b':s.pe<40?'var(--text)':'var(--red)',        s.pe<15?'Cheap':s.pe<25?'Fair':s.pe<40?'Premium':'Expensive');
+  h+=mc('PEG',    s.peg!=null?s.peg.toFixed(2)+'x':na,    s.peg<1?'var(--green)':s.peg<2?'#f59e0b':'var(--red)',                              s.peg<1?'Underval':s.peg<2?'Fair':'Overval');
+  h+=mc('Rev Gr', s.revGrowth!=null?'+'+s.revGrowth.toFixed(1)+'%':na, s.revGrowth>=15?'var(--green)':s.revGrowth>=5?'#f59e0b':s.revGrowth>=0?'var(--text)':'var(--red)', s.revGrowth>=15?'Strong':s.revGrowth>=5?'Moderate':'Slow');
+  h+=mc('EPS Gr', s.earGrowth!=null?(s.earGrowth>0?'+':'')+s.earGrowth.toFixed(1)+'%':na, s.earGrowth>=20?'var(--green)':s.earGrowth>=10?'#f59e0b':s.earGrowth>=0?'var(--text)':'var(--red)', s.earGrowth>=20?'Strong':s.earGrowth>=0?'Growing':'Declining');
+  h+=mc('Op Mgn', s.opMargin!=null?s.opMargin.toFixed(1)+'%':na,   s.opMargin>=20?'var(--green)':s.opMargin>=10?'#f59e0b':'var(--text)',     s.opMargin>=20?'High':s.opMargin>=10?'OK':'Low');
+  h+=mc('Beta',   s.beta!=null?s.beta.toFixed(2):na,               s.beta<0.8?'var(--green)':s.beta<1.3?'var(--text)':'var(--red)',          s.beta<0.8?'Low Risk':s.beta<1.3?'Market':'High Risk');
+  h+='</div>';
+
+  // -- TECHNICALS SECTION ------------------------------------------
+  h+='<div style="font-size:9px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Technicals</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px">';
+  var above200=px&&s.dma200?px>s.dma200:null;
+  var above50=px&&s.dma50?px>s.dma50:null;
+  h+=mc('200 DMA', s.dma200?'Rs.'+s.dma200.toFixed(0):na, above200?'var(--green)':'var(--red)', above200?'Above':'Below');
+  h+=mc('50 DMA',  s.dma50?'Rs.'+s.dma50.toFixed(0):na,  above50?'var(--green)':'var(--red)',  above50?'Above':'Below');
+  h+=mc('RSI-14',  s.rsi!=null?s.rsi.toFixed(0):na,       s.rsi<35?'var(--green)':s.rsi<50?'#f59e0b':s.rsi<70?'var(--text)':'var(--red)', s.rsi<35?'Oversold':s.rsi<50?'Neutral':s.rsi<70?'Healthy':'Overbought');
+  h+=mc('MACD',    s.macdHist!=null?(s.macdHist>0?'+':'')+s.macdHist:na, s.macdBull?'var(--green)':'var(--red)', s.macdBull?'Bullish':'Bearish');
+  h+=mc('ADX',     s.adx!=null?s.adx.toFixed(0):na,       s.adx>25?'var(--green)':'#f59e0b',  s.adx>35?'V.Strong':s.adx>25?'Strong':'Weak');
+  h+=mc('BB%B',    s.bbPct!=null?(s.bbPct*100).toFixed(0)+'%':na, s.bbPct<0.2?'var(--green)':s.bbPct>0.8?'var(--red)':'var(--text)', s.bbPct<0.2?'Lower BB':s.bbPct>0.8?'Upper BB':'Mid');
+  h+=mc('Volume',  s.volRatio!=null?s.volRatio.toFixed(2)+'x':na, s.volRatio>1.3?'var(--green)':s.volRatio<0.7?'var(--red)':'var(--text)', s.volTrend||'');
+  h+=mc('OBV',     s.obvRising!=null?(s.obvRising?'Rising':'Falling'):na, s.obvRising?'var(--green)':'var(--red)', 'On-bal vol');
+  h+='</div>';
+
+  // -- PRICE ACTION ------------------------------------------------
+  h+='<div style="font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Price Action</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:10px">';
+  h+=mc('1M Ret',  s.change1m!=null?(s.change1m*100>0?'+':'')+( s.change1m*100).toFixed(1)+'%':na, s.change1m>0?'var(--green)':'var(--red)','');
+  h+=mc('3M Ret',  s.change3m!=null?(s.change3m*100>0?'+':'')+( s.change3m*100).toFixed(1)+'%':na, s.change3m>0?'var(--green)':'var(--red)','');
+  h+=mc('6M Ret',  s.change6m!=null?(s.change6m*100>0?'+':'')+( s.change6m*100).toFixed(1)+'%':na, s.change6m>0?'var(--green)':'var(--red)','');
+  h+=mc('1Y Ret',  s.change52w!=null?(s.change52w*100>0?'+':'')+(s.change52w*100).toFixed(1)+'%':na,s.change52w>0?'var(--green)':'var(--red)','');
+  h+=mc('52W Hi',  s.wk52Hi?'Rs.'+s.wk52Hi.toFixed(0):na, 'var(--text)',s.pctFromHigh!=null?s.pctFromHigh.toFixed(1)+'% away':'');
+  h+=mc('52W Lo',  s.wk52Lo?'Rs.'+s.wk52Lo.toFixed(0):na, 'var(--text)',px&&s.wk52Lo?'+'+(((px-s.wk52Lo)/s.wk52Lo)*100).toFixed(1)+'% above':'');
+  h+=mc('vs 200D', s.pctAbove200!=null?(s.pctAbove200>0?'+':'')+s.pctAbove200+'%':na, s.pctAbove200>0&&s.pctAbove200<25?'var(--green)':s.pctAbove200>30?'#f59e0b':'var(--red)','from 200DMA');
+  h+=mc('Vol%',    s.annualVol!=null?s.annualVol+'%':na,   s.annualVol<25?'var(--green)':s.annualVol<40?'var(--text)':'var(--red)','Annual vol');
+  h+='</div>';
+
+  // -- BUY ZONE for fallen angels ----------------------------------
+  if(isFallenAngel&&(s.dma50||s.dma200)){
+    h+='<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:8px 10px;margin-bottom:8px">';
+    h+='<div style="font-size:9px;font-weight:700;color:#f59e0b;margin-bottom:4px">Target Buy Zones</div>';
+    h+='<div style="font-size:10px;color:var(--text2);display:flex;gap:12px;flex-wrap:wrap">';
+    if(s.dma50)  h+='<span>50DMA: <b>Rs.'+s.dma50.toFixed(0)+'</b></span>';
+    if(s.dma200) h+='<span>200DMA: <b>Rs.'+s.dma200.toFixed(0)+'</b></span>';
+    if(s.rsi<=35)h+='<span style="color:var(--green)">RSI '+s.rsi.toFixed(0)+' - Oversold</span>';
+    h+='</div></div>';
+  }
+
+  // -- QUICK VERDICT -----------------------------------------------
+  var bullCount=0, bearCount=0;
+  if(s.goldenCross===true)bullCount+=2; if(s.goldenCross===false)bearCount+=2;
+  if(above200)bullCount++; else if(above200===false)bearCount++;
+  if(s.macdBull)bullCount++; else if(s.macdBull===false)bearCount++;
+  if(s.supertrendSig==='bullish')bullCount++; if(s.supertrendSig==='bearish')bearCount++;
+  if(s.rsi<40)bullCount++; else if(s.rsi>70)bearCount++;
+  if(s.accumDist==='Accumulation')bullCount++; else bearCount++;
+  if(s.roe>=15)bullCount++; else if(s.roe!=null&&s.roe<10)bearCount++;
+  if(s.debtToEq<=0.5)bullCount++; else if(s.debtToEq>2)bearCount++;
+  var total=bullCount+bearCount||1;
+  var bullPct=Math.round(bullCount/total*100);
+  var qv=bullPct>=70?{t:'Strong Buy',c:'var(--green)'}:bullPct>=55?{t:'Buy',c:'var(--green)'}:bullPct>=45?{t:'Hold/Watch',c:'#f59e0b'}:{t:'Avoid',c:'var(--red)'};
+  h+='<div style="display:flex;align-items:center;gap:8px">';
+  h+='<div style="flex:1;background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">';
+  h+='<div style="height:100%;background:'+qv.c+';width:'+bullPct+'%;border-radius:4px"></div></div>';
+  h+='<span style="font-size:11px;font-weight:700;color:'+qv.c+';white-space:nowrap">'+qv.t+'</span>';
+  h+='</div>';
+
+  h+='</div>';
+  return h;
+}
+
+  var h='<div style="background:var(--bg2);border:1.5px solid '+(isFallenAngel?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:12px;padding:16px;position:relative">';
+
+  // Fallen Angel ribbon
+  if(isFallenAngel){
+    var fallPct = Math.abs(s.pctFromHigh||0).toFixed(0);
+    h+='<div style="position:absolute;top:0;right:0;background:#f59e0b;color:#000;font-size:9px;font-weight:800;padding:3px 10px;border-radius:0 12px 0 8px">🔥 -'+fallPct+'% FROM PEAK</div>';
+  }
 
   // Header
   h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">';
@@ -2807,6 +2989,7 @@ function buildStockCard(s, medal){
   h+='<span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700">'+s.grp+'</span>';
   if(s.sector) h+='<span style="background:var(--bg3);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:9px">'+s.sector+'</span>';
   if(s.goldenCross) h+='<span style="background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:4px;padding:2px 8px;font-size:9px">⚡ Golden Cross</span>';
+  if(isFallenAngel&&(s.rsi||50)<=35) h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:2px 8px;font-size:9px">📉 RSI Oversold</span>';
   if(s.recKey) h+='<span style="background:'+gc2+'22;color:'+gc2+';border-radius:4px;padding:2px 8px;font-size:9px;font-weight:600">'+recMap[s.recKey]+'</span>';
   h+='</div>';
 
@@ -2816,36 +2999,33 @@ function buildStockCard(s, medal){
     +'<div style="font-size:9px;color:var(--text3)">'+l+'</div>'
     +'<div style="font-size:12px;font-weight:600;color:'+(c||'var(--text)')+'">'+v+'</div></div>'; }
 
-  h+=mc('Price',  s.price?'₹'+s.price.toFixed(1):'-');
+  h+=mc('Price',  s.price?'Rs.'+s.price.toFixed(1):'-');
   h+=mc('ROE',    s.roe!=null?s.roe.toFixed(1)+'%':'-',  s.roe>=20?'var(--green)':s.roe>=15?'#f59e0b':'var(--text)');
   h+=mc('P/E',    s.pe!=null?s.pe.toFixed(1)+'x':'-',   s.pe<15?'var(--green)':s.pe<25?'var(--text)':'var(--red)');
-  h+=mc('52W%',   s.wk52Change!=null?(s.wk52Change>0?'+':'')+s.wk52Change+'%':'-', s.wk52Change>0?'var(--green)':'var(--red)');
-  h+=mc('EPS Gr', s.earGrowth!=null?(s.earGrowth>0?'+':'')+s.earGrowth+'%':'-',  s.earGrowth>20?'var(--green)':s.earGrowth>0?'#f59e0b':'var(--red)');
-  h+=mc('Upside', s.upside!=null?(s.upside>0?'+':'')+s.upside+'%':'-',            s.upside>15?'var(--green)':s.upside>0?'var(--text)':'var(--red)');
+  if(isFallenAngel){
+    h+=mc('Down From Hi', s.pctFromHigh!=null?s.pctFromHigh.toFixed(1)+'%':'-', 'var(--red)');
+    h+=mc('RSI',  s.rsi!=null?s.rsi.toFixed(0):'-', (s.rsi||50)<35?'var(--green)':(s.rsi||50)<50?'#f59e0b':'var(--text)');
+    h+=mc('D/E',  s.debtToEq!=null?s.debtToEq.toFixed(2)+'x':'-', s.debtToEq<0.5?'var(--green)':s.debtToEq<1.5?'#f59e0b':'var(--red)');
+  } else {
+    h+=mc('52W%',   s.wk52Change!=null?(s.wk52Change>0?'+':'')+s.wk52Change+'%':'-', s.wk52Change>0?'var(--green)':'var(--red)');
+    h+=mc('EPS Gr', s.earGrowth!=null?(s.earGrowth>0?'+':'')+s.earGrowth+'%':'-',  s.earGrowth>20?'var(--green)':s.earGrowth>0?'#f59e0b':'var(--red)');
+    h+=mc('Upside', s.upside!=null?(s.upside>0?'+':'')+s.upside+'%':'-',            s.upside>15?'var(--green)':s.upside>0?'var(--text)':'var(--red)');
+  }
   h+='</div>';
 
-  // D/E and Op Margin
-  h+='<div style="display:flex;gap:10px;font-size:10px;color:var(--text3);flex-wrap:wrap">';
-  if(s.debtToEq!=null) h+='<span>D/E: <b style="color:'+(s.debtToEq<1?'var(--green)':s.debtToEq<2?'var(--text)':'var(--red)')+'">'+s.debtToEq.toFixed(2)+'x</b></span>';
-  if(s.opMargin!=null) h+='<span>Op Margin: <b>'+s.opMargin.toFixed(1)+'%</b></span>';
-  if(s.beta!=null)     h+='<span>Beta: <b>'+s.beta.toFixed(2)+'</b></span>';
-  if(s.instHeld!=null) h+='<span>Inst: <b>'+s.instHeld.toFixed(1)+'%</b></span>';
-  h+='</div>';
-
-  // Analyst target
-  if(s.targetMean){
-    h+='<div style="margin-top:10px;background:rgba(59,130,246,0.08);border-radius:6px;padding:6px 10px;font-size:10px">';
-    h+='<span style="color:var(--text3)">Analyst Target: </span>';
-    h+='<b style="color:var(--blue)">₹'+s.targetMean.toFixed(1)+'</b>';
-    if(s.targetLow&&s.targetHigh) h+=' <span style="color:var(--text4)">(₹'+s.targetLow.toFixed(1)+' - ₹'+s.targetHigh.toFixed(1)+')</span>';
-    if(s.upside!=null) h+=' <b style="color:'+(s.upside>15?'var(--green)':s.upside>0?'var(--text)':'var(--red)')+'">'+(s.upside>0?'+':'')+s.upside+'% upside</b>';
-    if(s.analystCnt)   h+=' <span style="color:var(--text4)">('+s.analystCnt+' analysts)</span>';
-    h+='</div>';
+  // For fallen angels - show buy zone suggestion
+  if(isFallenAngel){
+    var buyZoneText='';
+    if(s.dma200) buyZoneText='200DMA: Rs.'+s.dma200.toFixed(0);
+    if(s.dma50)  buyZoneText+=(buyZoneText?' | ':'')+'50DMA: Rs.'+s.dma50.toFixed(0);
+    if(buyZoneText){
+      h+='<div style="background:rgba(245,158,11,.1);border-radius:6px;padding:6px 10px;font-size:10px;margin-bottom:8px">';
+      h+='<span style="color:#f59e0b;font-weight:700">Buy zones: </span><span style="color:var(--text2)">'+buyZoneText+'</span>';
+      if(s.rsi<=35) h+=' <span style="color:var(--green);font-weight:600">| RSI oversold - potential bounce</span>';
+      h+='</div>';
+    }
   }
 
-  h+='</div>';
-  return h;
-}
 
 // -- End Stocks Recommendation --------------------------------------------------
 // -- Kite Token Management -----------------------------------------------------
