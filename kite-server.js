@@ -4407,3 +4407,444 @@ async function start() {
 }
 
 start();
+
+// =============================================================================
+// MIROFISH ENGINE — Multi-Agent Fallen Angel Recovery Predictor
+// Inspired by MiroFish's swarm intelligence approach
+// Uses Anthropic Claude API to run parallel agents with distinct personas
+// Each agent analyzes Fallen Angels from a different investment perspective
+// Synthesis agent produces final ranked recovery predictions
+// =============================================================================
+
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const MIROFISH_MODEL    = 'claude-sonnet-4-20250514';
+
+// Agent personas — each has a distinct investment philosophy
+const MIROFISH_AGENTS = [
+  {
+    id: 'fundamentalist',
+    name: 'Vikram Mehta — Fundamental Analyst',
+    persona: `You are a senior equity analyst at a top Indian brokerage with 20 years experience.
+You believe: businesses with strong ROE (>15%), low debt (D/E < 1), and growing EPS always recover.
+You distrust momentum. You trust balance sheets. You look for margin of safety.
+Sector expertise: Banking, FMCG, IT, Pharma.`,
+    weight: 0.25,
+  },
+  {
+    id: 'technician',
+    name: 'Priya Sharma — Technical Analyst',
+    persona: `You are a CMT-certified technical analyst with 12 years on NSE.
+You believe: price action never lies. RSI divergence, volume accumulation, and 200DMA reclaim = recovery.
+You are skeptical of stocks below 200DMA with declining OBV regardless of fundamentals.
+You use: RSI, MACD, Supertrend, Fibonacci, volume profile.`,
+    weight: 0.20,
+  },
+  {
+    id: 'contrarian',
+    name: 'Arjun Kapoor — Contrarian Investor',
+    persona: `You are a contrarian fund manager inspired by Howard Marks and Rakesh Jhunjhunwala.
+You believe: maximum pessimism = maximum opportunity. Stocks hated by everyone are often the best buys.
+You look for: highest quality businesses at maximum fear. RSI below 30 + strong ROE = buy signal.
+You are NOT afraid of stocks down 50%+ if fundamentals are intact.`,
+    weight: 0.20,
+  },
+  {
+    id: 'risk_manager',
+    name: 'Meera Nair — Risk Manager',
+    persona: `You are a risk manager who has seen 2008, 2020, and multiple NSE crashes.
+You believe: avoid value traps at all costs. A cheap stock can always get cheaper.
+Red flags: EPS declining, debt rising, promoter pledging, sector headwinds.
+You only recommend stocks where downside is clearly limited by strong balance sheet.`,
+    weight: 0.20,
+  },
+  {
+    id: 'quant',
+    name: 'Rahul Iyer — Quantitative Analyst',
+    persona: `You are a quant analyst who builds factor models for a hedge fund.
+You believe: recovery probability correlates with: depth of fall, RSI oversold level, ROE rank, sector momentum.
+You think in probabilities, not certainties. You size positions by conviction.
+You use historical base rates: stocks with RSI<30 + ROE>15% recover 73% of the time in 6 months.`,
+    weight: 0.15,
+  },
+];
+
+// In-memory store for simulation results
+let mfLastSimulation = null;
+let mfSimulationRunning = false;
+
+async function callAnthropicAgent(systemPrompt, userPrompt) {
+  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set in Railway env vars');
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key':         ANTHROPIC_API_KEY,
+    },
+    body: JSON.stringify({
+      model:      MIROFISH_MODEL,
+      max_tokens: 1200,
+      system:     systemPrompt,
+      messages:   [{ role: 'user', content: userPrompt }],
+    }),
+    signal: AbortSignal.timeout(45000),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`Anthropic API error ${resp.status}: ${err.slice(0,200)}`);
+  }
+  const data = await resp.json();
+  return data.content?.[0]?.text || '';
+}
+
+async function runMiroFishAgent(agent, fallenAngels) {
+  const stockList = fallenAngels.slice(0, 15).map((s, i) =>
+    `${i+1}. ${s.sym} (${s.name}) — Score:${s.score} FallenScore:${s.fallenScore||'?'} ` +
+    `Verdict:${s.fallenVerdict||'?'} Down:${Math.abs(s.pctFromHigh||0).toFixed(0)}% ` +
+    `RSI:${s.rsi||'?'} ROE:${s.roe||'?'}% D/E:${s.debtToEq||'?'}x ` +
+    `PE:${s.pe||'?'} EpsGr:${s.earGrowth||'?'}% OpMgn:${s.opMargin||'?'}% ` +
+    `MACD:${s.macdBull?'Bull':'Bear'} OBV:${s.obvRising?'Rising':'Falling'} ` +
+    `Sector:${s.sector||'?'}`
+  ).join('\n');
+
+  const system = `${agent.persona}
+
+You are part of a MiroFish multi-agent simulation analyzing Indian NSE stocks.
+Your job: analyze the Fallen Angels list and predict which will RECOVER in the next 3-6 months.
+
+RECOVERY means: stock price rises 15%+ from current levels within 6 months.
+
+Respond in this EXACT JSON format (no preamble, no markdown, pure JSON):
+{
+  "agent": "${agent.name}",
+  "top_picks": [
+    {
+      "sym": "SYMBOLNAME",
+      "conviction": 85,
+      "horizon": "3 months",
+      "target_upside": 28,
+      "thesis": "One sentence reason from YOUR perspective",
+      "risk": "Biggest single risk to this call"
+    }
+  ],
+  "avoid": ["SYM1", "SYM2"],
+  "market_view": "One sentence on current market conditions affecting recovery",
+  "agent_insight": "Your unique perspective that other agents might miss"
+}
+Pick exactly 5 top picks. top_picks ordered by conviction (highest first).
+conviction is 0-100. target_upside is % gain expected.`;
+
+  const user = `Current Fallen Angels on NSE (quality stocks fallen 20%+ from peak):\n\n${stockList}\n\nWhich 5 will recover? Respond only with JSON.`;
+
+  const raw = await callAnthropicAgent(system, user);
+
+  // Parse JSON — strip any markdown fences
+  const clean = raw.replace(/```json|```/g, '').trim();
+  return JSON.parse(clean);
+}
+
+async function runMiroFishSynthesis(agentResults, fallenAngels) {
+  const allPicks = {};
+  const allAvoids = new Set();
+
+  // Aggregate votes with weights
+  agentResults.forEach(({ agent, result, weight }) => {
+    (result.top_picks || []).forEach(p => {
+      if (!allPicks[p.sym]) allPicks[p.sym] = { sym:p.sym, votes:0, weightedConviction:0, theses:[], risks:[], horizons:[], upsides:[] };
+      allPicks[p.sym].votes++;
+      allPicks[p.sym].weightedConviction += (p.conviction||50) * weight;
+      allPicks[p.sym].theses.push(`${agent.split('—')[0].trim()}: ${p.thesis}`);
+      allPicks[p.sym].risks.push(p.risk);
+      allPicks[p.sym].horizons.push(p.horizon);
+      allPicks[p.sym].upsides.push(p.target_upside||15);
+    });
+    (result.avoid || []).forEach(s => allAvoids.add(s));
+  });
+
+  // Score each stock: votes × weighted conviction
+  const ranked = Object.values(allPicks)
+    .map(s => ({
+      ...s,
+      finalScore: Math.round(s.weightedConviction / s.votes * (s.votes / agentResults.length * 100)) / 10,
+      avgUpside:  Math.round(s.upsides.reduce((a,b)=>a+b,0)/s.upsides.length),
+      consensus:  s.votes >= 3 ? 'High' : s.votes === 2 ? 'Medium' : 'Low',
+    }))
+    .sort((a,b) => b.finalScore - a.finalScore);
+
+  // Synthesis agent — final verdict
+  const summaryText = ranked.slice(0,8).map(s =>
+    `${s.sym}: ${s.votes} agents picked it, conviction ${s.finalScore.toFixed(0)}, avg upside ${s.avgUpside}%, consensus: ${s.consensus}`
+  ).join('\n');
+
+  const system = `You are a senior portfolio manager synthesizing a MiroFish multi-agent analysis.
+5 agents have analyzed Fallen Angel stocks on NSE. Your job: produce the FINAL investment report.
+
+Respond in JSON only:
+{
+  "simulation_title": "MiroFish Fallen Angel Recovery Simulation — NSE",
+  "simulation_date": "${new Date().toLocaleDateString('en-IN')}",
+  "market_regime": "Bull/Bear/Sideways + one sentence explanation",
+  "top_recovery_picks": [
+    {
+      "rank": 1,
+      "sym": "SYMBOLNAME",
+      "verdict": "Strong Recovery / Likely Recovery / Speculative",
+      "conviction_score": 87,
+      "avg_target_upside": 32,
+      "recommended_horizon": "3 months",
+      "consensus": "High/Medium/Low",
+      "bull_case": "Why it recovers",
+      "bear_case": "Why it doesn't",
+      "position_sizing": "Core (5-8%) / Moderate (3-5%) / Small (1-3%)"
+    }
+  ],
+  "stocks_to_avoid": ["SYM1", "SYM2"],
+  "avoid_reason": "One sentence why these are value traps",
+  "key_risks": ["Risk 1", "Risk 2", "Risk 3"],
+  "agent_consensus_summary": "2-3 sentences on where all agents agreed and disagreed"
+}
+Pick top 7 recovery picks. Order by conviction.`;
+
+  const user = `Agent voting results:\n${summaryText}\n\nAgent market views:\n${
+    agentResults.map(a => `${a.agent}: ${a.result.market_view}`).join('\n')
+  }\n\nProduce the final synthesis report. JSON only.`;
+
+  const raw = await callAnthropicAgent(system, user);
+  const clean = raw.replace(/```json|```/g, '').trim();
+  const synthesis = JSON.parse(clean);
+
+  // Enrich synthesis with full stock data from ProTrader
+  synthesis.top_recovery_picks = synthesis.top_recovery_picks.map(pick => {
+    const stock = fallenAngels.find(s => s.sym === pick.sym);
+    return {
+      ...pick,
+      stock_data: stock ? {
+        price: stock.price, pctFromHigh: stock.pctFromHigh, rsi: stock.rsi,
+        roe: stock.roe, debtToEq: stock.debtToEq, pe: stock.pe,
+        earGrowth: stock.earGrowth, opMargin: stock.opMargin,
+        macdBull: stock.macdBull, obvRising: stock.obvRising,
+        bullishDiv: stock.bullishDiv, dma200: stock.dma200,
+        fallenScore: stock.fallenScore, fallenVerdict: stock.fallenVerdict,
+        stopLoss: stock.stopLoss, rrRatio: stock.rrRatio,
+      } : null,
+      agent_theses: ranked.find(r=>r.sym===pick.sym)?.theses || [],
+    };
+  });
+
+  return { synthesis, agentDetails: ranked, allAvoids: [...allAvoids] };
+}
+
+async function runMiroFishSimulation() {
+  if (mfSimulationRunning) return { error: 'Simulation already running' };
+  if (!ANTHROPIC_API_KEY)  return { error: 'Set ANTHROPIC_API_KEY in Railway environment variables' };
+
+  mfSimulationRunning = true;
+  console.log('🐟 MiroFish simulation starting...');
+
+  try {
+    // Get current Fallen Angels from scored stocks
+    const all = Object.values(stockFundamentals);
+    if (!all.length) return { error: 'No scored stocks yet. Wait for scoring to complete (~90s after start).' };
+
+    const fallenAngels = all
+      .filter(s => {
+        const score = (s.score || 0);
+        return score >= 45 && (s.pctFromHigh||0) <= -20 && (s.rsi||50) <= 55;
+      })
+      .sort((a,b) => (b.fallenScore||b.score||0) - (a.fallenScore||a.score||0))
+      .slice(0, 20);
+
+    if (!fallenAngels.length) return { error: 'No Fallen Angels found. Check scoring status.' };
+
+    console.log(`🐟 MiroFish: analyzing ${fallenAngels.length} Fallen Angels with ${MIROFISH_AGENTS.length} agents`);
+
+    // Run all agents in parallel
+    const agentPromises = MIROFISH_AGENTS.map(async agent => {
+      try {
+        console.log(`🐟 Agent running: ${agent.name}`);
+        const result = await runMiroFishAgent(agent, fallenAngels);
+        return { agent: agent.name, id: agent.id, result, weight: agent.weight };
+      } catch(e) {
+        console.log(`🐟 Agent ${agent.id} failed: ${e.message}`);
+        return null;
+      }
+    });
+
+    const agentResults = (await Promise.all(agentPromises)).filter(Boolean);
+    if (agentResults.length < 2) return { error: `Too few agents succeeded (${agentResults.length}). Check API key and rate limits.` };
+
+    console.log(`🐟 MiroFish: ${agentResults.length} agents done, running synthesis...`);
+    const { synthesis, agentDetails, allAvoids } = await runMiroFishSynthesis(agentResults, fallenAngels);
+
+    mfLastSimulation = {
+      ...synthesis,
+      agent_details:    agentDetails,
+      all_avoids:       allAvoids,
+      agent_count:      agentResults.length,
+      fallen_angels_analyzed: fallenAngels.length,
+      run_at:           Date.now(),
+      run_at_str:       new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+    };
+
+    // Persist to DB
+    await dbSet('mirofish_last_simulation', JSON.stringify(mfLastSimulation));
+    console.log(`🐟 MiroFish simulation complete. Top pick: ${synthesis.top_recovery_picks?.[0]?.sym}`);
+    return mfLastSimulation;
+
+  } catch(e) {
+    console.log('🐟 MiroFish error:', e.message);
+    return { error: e.message };
+  } finally {
+    mfSimulationRunning = false;
+  }
+}
+
+// Load last simulation from DB on startup
+(async () => {
+  try {
+    const cached = await dbGet('mirofish_last_simulation');
+    if (cached) {
+      mfLastSimulation = JSON.parse(cached);
+      console.log(`🐟 MiroFish: loaded last simulation from DB (${mfLastSimulation.run_at_str})`);
+    }
+  } catch(e) {}
+})();
+
+// API endpoints
+app.post('/api/mirofish/run', async(req,res) => {
+  if (!ANTHROPIC_API_KEY) {
+    return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables first.' });
+  }
+  if (mfSimulationRunning) {
+    return res.json({ running: true, message: 'Simulation in progress... check /api/mirofish/status' });
+  }
+  res.json({ message: 'MiroFish simulation started. 5 agents analyzing Fallen Angels...', estimated_time: '60-90 seconds' });
+  runMiroFishSimulation().catch(e => console.log('MiroFish run error:', e.message));
+});
+
+app.get('/api/mirofish/status', (req,res) => {
+  res.json({
+    running:          mfSimulationRunning,
+    hasResult:        !!mfLastSimulation,
+    lastRun:          mfLastSimulation?.run_at_str || null,
+    topPick:          mfLastSimulation?.top_recovery_picks?.[0]?.sym || null,
+    apiKeyConfigured: !!ANTHROPIC_API_KEY,
+  });
+});
+
+app.get('/api/mirofish/result', (req,res) => {
+  if (!mfLastSimulation) {
+    return res.json({ error: 'No simulation run yet. POST /api/mirofish/run to start.' });
+  }
+  res.json(mfLastSimulation);
+});
+
+// MF Wealth Projection — AI-powered per-fund prediction
+app.post('/api/mirofish/mf-predict', async(req,res) => {
+  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
+
+  const f = req.body; // all 55 fields
+  const catLabel = f.cat==='smallcap'?'Small Cap':f.cat==='midcap'?'Mid Cap':'Flexi Cap';
+  const n = v => (v==null||v===''||isNaN(v)) ? 'N/A' : (+v).toFixed(2);
+  const p = v => (v==null||v===''||isNaN(v)) ? 'N/A' : (+v).toFixed(2)+'%';
+  const cr = v => (v==null||v===''||isNaN(v)) ? 'N/A' : '₹'+Math.round(+v).toLocaleString('en-IN')+' Cr';
+
+  const system = `You are a panel of 3 senior Indian mutual fund analysts with 20+ years each.
+You have access to the COMPLETE Tickertape dataset for this fund — all 55 data points.
+Your job: analyze everything and produce a realistic long-term wealth prediction for ₹1 Lakh invested today.
+
+Rules:
+- Be brutally honest. Account for expense drag, mean reversion, AUM size effects, portfolio quality.
+- High AUM (>₹50K Cr) in small/mid cap = performance drag. Flag it.
+- High expense ratio = compounding headwind. Quantify it.
+- Alpha near 0 = manager not adding value above benchmark.
+- Low sharpe + high drawdown = bad risk/reward even if returns look good.
+- Your adjusted_cagr must be LOWER than historical if AUM is very large, expense is high, or alpha is 0.
+- For 40-year horizon: use 0.75x of adjusted_cagr (regulatory/structural headwinds compound).
+
+Respond ONLY in valid JSON, no markdown, no preamble:
+{
+  "prediction": "3-4 sentence realistic forward outlook covering returns, risks, and suitability",
+  "adjusted_cagr": 14.5,
+  "cagr_7y": 15.2,
+  "cagr_10y": 14.8,
+  "cagr_20y": 13.1,
+  "cagr_30y": 11.8,
+  "cagr_40y": 10.9,
+  "confidence": "High/Medium/Low",
+  "horizon": "7-40 years",
+  "key_driver": "Single most important factor for future returns",
+  "main_risk": "Single biggest risk to long-term performance",
+  "expense_drag_note": "How expense ratio hurts compounding over 40 years",
+  "aum_risk": "Impact of fund size on future alpha generation",
+  "verdict": "Strong Hold / Good for SIP / Reduce exposure / Avoid"
+}`;
+
+  const user = `=== COMPLETE FUND DATA (55 fields from Tickertape) ===
+
+IDENTITY
+  Fund: ${f.name} | Category: ${catLabel} (${f.sub_category||'N/A'})
+  AMC: ${f.amc||'N/A'} | Plan: ${f.plan||'N/A'}
+  Fund Manager: ${f.fund_manager||'N/A'}
+  Benchmark: ${f.benchmark||'N/A'}
+  SEBI Risk: ${f.sebi_risk||'N/A'} | SIP Allowed: ${f.sip_allowed||'N/A'}
+  Inception: ${f.months_inception||'N/A'} months ago
+  NAV: ₹${f.nav||'N/A'} | AUM: ${cr(f.aum)}
+  Min Lumpsum: ₹${f.min_lumpsum||'N/A'} | Min SIP: ₹${f.min_sip||'N/A'}
+  Exit Load: ${f.exit_load||'N/A'}% | Lock-in: ${f.lock_in||'N/A'} days
+
+RETURNS
+  1Y: ${p(f.ret_1y)} | 3M: ${p(f.ret_3m)} | 6M: ${p(f.ret_6m)}
+  3Y CAGR: ${p(f.cagr_3y)} | 5Y CAGR: ${p(f.cagr_5y)} | 10Y CAGR: ${p(f.cagr_10y)}
+  Rolling 3Y avg: ${p(f.rolling_3y)}
+  Alpha (vs benchmark): ${n(f.alpha)}
+  % from ATH: ${p(f.pct_from_ath)}
+
+vs CATEGORY (ratio: >1 = outperforming)
+  vs Cat 1Y: ${n(f.vs_cat_1y)} | vs Cat 3Y: ${n(f.vs_cat_3y)}
+  vs Cat 5Y: ${n(f.vs_cat_5y)} | vs Cat 10Y: ${n(f.vs_cat_10y)}
+
+RISK METRICS
+  Sharpe: ${n(f.sharpe)} | Sortino: ${n(f.sortino)}
+  Volatility: ${p(f.volatility)} | Category StdDev: ${p(f.category_stddev)}
+  Max Drawdown: ${p(f.max_drawdown)} | Tracking Error: ${n(f.tracking_error)}
+
+COST
+  Expense Ratio: ${p(f.expense_ratio)}
+  (Impact: ₹1L at ${p(f.expense_ratio)} drag over 40Y = ~₹${Math.round(100000*Math.pow(1.12,40)-100000*Math.pow(1.12-(+f.expense_ratio||0)/100,40)).toLocaleString('en-IN')} lost to fees)
+
+PORTFOLIO COMPOSITION
+  Equity: ${p(f.pct_equity)} | Debt: ${p(f.pct_debt)} | Cash: ${p(f.pct_cash)}
+  Large Cap: ${p(f.pct_largecap)} | Mid Cap: ${p(f.pct_midcap)} | Small Cap: ${p(f.pct_smallcap)}
+  Other: ${p(f.pct_other)}
+
+BOND QUALITY (if any debt)
+  A-rated: ${p(f.pct_a_bonds)} | B-rated: ${p(f.pct_b_bonds)} | Poor quality: ${p(f.pct_poor_bonds)}
+  Corp Debt: ${p(f.pct_corp_debt)} | Sovereign: ${p(f.pct_sovereign)}
+  Avg Maturity: ${n(f.avg_maturity)} yrs | Avg YTM: ${p(f.avg_ytm)} | Category YTM: ${p(f.category_ytm)}
+
+CONCENTRATION
+  Top 3 holdings: ${p(f.top3_conc)} | Top 5: ${p(f.top5_conc)} | Top 10: ${p(f.top10_conc)}
+
+VALUATION
+  PE Ratio: ${n(f.pe_ratio)}x | Category PE: ${n(f.category_pe)}x
+  (PE vs category: ${f.pe_ratio&&f.category_pe ? ((+f.pe_ratio/(+f.category_pe)-1)*100).toFixed(1)+'% premium/discount' : 'N/A'})
+
+PROTRADER SCORING
+  Score: ${f.score||'N/A'}/100 | Rank in category: #${f.rank||'N/A'}
+  AMC SEBI status: ${f.amc_sebi||'Clean'}
+
+=== QUESTION ===
+If ₹1,00,000 is invested today in lumpsum, what will it grow to in 7, 10, 20, 30, and 40 years?
+Give per-year CAGR for each horizon. Account for ALL the above data — especially AUM size, expense ratio, alpha, and mean reversion.`;
+
+  try {
+    const raw = await callAnthropicAgent(system, user);
+    const clean = raw.replace(/```json|```/g,'').trim();
+    res.json(JSON.parse(clean));
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
