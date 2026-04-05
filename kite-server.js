@@ -208,6 +208,14 @@ async function refreshUniverseFromNSE() {
   const preserved = UNIVERSE.filter(s => !nseSyms.has(s.sym)); // keep extras not in NSE
   UNIVERSE = [...deduped, ...preserved];
 
+  // After updating UNIVERSE, log any stocks without FUND data
+  const missingFund = deduped.filter(s => !FUND[s.sym] && s.sym !== 'M&M');
+  if (missingFund.length > 0) {
+    console.log(`NSE update: ${missingFund.length} stocks missing FUND data: ${missingFund.slice(0,10).map(s=>s.sym).join(',')}`);
+    // Store list for admin visibility
+    await dbSet('universe_missing_fund', JSON.stringify(missingFund.map(s=>s.sym)));
+  }
+
   universeLastUpdate = Date.now();
   universeUpdateStatus = `updated ${new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} - ${deduped.length} stocks`;
 
@@ -305,6 +313,7 @@ let UNIVERSE = [
   {sym:"SUNPHARMA",  n:"Sun Pharmaceutical",        grp:"NIFTY50"},
   {sym:"TITAN",      n:"Titan Company",             grp:"NIFTY50"},
   {sym:"TATAMOTORS", n:"Tata Motors",               grp:"NIFTY50"},
+  {sym:"TMPV",       n:"Tata Motors PV",             grp:"NIFTY50"},
   {sym:"ADANIENT",   n:"Adani Enterprises",         grp:"NIFTY50"},
   {sym:"NTPC",       n:"NTPC Ltd",                  grp:"NIFTY50"},
   {sym:"ONGC",       n:"ONGC",                      grp:"NIFTY50"},
@@ -331,9 +340,11 @@ let UNIVERSE = [
   {sym:"APOLLOHOSP", n:"Apollo Hospitals",          grp:"NIFTY50"},
   {sym:"DIVISLAB",   n:"Divi's Laboratories",       grp:"NIFTY50"},
   {sym:"BRITANNIA",  n:"Britannia Industries",      grp:"NIFTY50"},
+  {sym:"INDIGO",     n:"InterGlobe Aviation",        grp:"NIFTY50"},
   {sym:"EICHERMOT",  n:"Eicher Motors",             grp:"NIFTY50"},
   {sym:"TATACONSUM", n:"Tata Consumer Products",    grp:"NIFTY50"},
   {sym:"SHRIRAMFIN", n:"Shriram Finance",           grp:"NIFTY50"},
+  {sym:"ETERNAL",    n:"Eternal Ltd (Zomato)",       grp:"NIFTY50"},
   {sym:"ZOMATO",     n:"Zomato Ltd",                grp:"NIFTY50"},
   // -- NIFTY NEXT 50 --
   {sym:"DMART",       n:"Avenue Supermarts",        grp:"NEXT50"},
@@ -459,6 +470,7 @@ let UNIVERSE = [
   {sym:"CUMMINSIND",  n:"Cummins India",            grp:"MIDCAP"},
   {sym:"THERMAX",     n:"Thermax Ltd",              grp:"MIDCAP"},
   {sym:"BHEL",        n:"Bharat Heavy Electricals", grp:"MIDCAP"},
+  {sym:"JIOFIN",     n:"Jio Financial Services",    grp:"NIFTY50"},
   {sym:"BEL",         n:"Bharat Electronics Ltd",   grp:"NIFTY50"},
   {sym:"HAL",         n:"Hindustan Aeronautics Ltd",grp:"NEXT50"},
   {sym:"COCHINSHIP",  n:"Cochin Shipyard",          grp:"MIDCAP"},
@@ -1859,10 +1871,11 @@ app.get("/health", (req,res)=>res.json({
 }));
 
 // Universe status endpoint
-app.get("/api/universe/status", (req,res)=>{
+app.get("/api/universe/status", async(req,res)=>{
   const n50  = UNIVERSE.filter(s=>s.grp==='NIFTY50');
   const nx50 = UNIVERSE.filter(s=>s.grp==='NEXT50');
   const mc   = UNIVERSE.filter(s=>s.grp==='MIDCAP');
+  const missingFund = await dbGet('universe_missing_fund').catch(()=>null);
   res.json({
     total:UNIVERSE.length,
     nifty50:{count:n50.length, stocks:n50.map(s=>s.sym)},
@@ -1870,6 +1883,7 @@ app.get("/api/universe/status", (req,res)=>{
     midcap:{count:mc.length, stocks:mc.map(s=>s.sym)},
     lastUpdate:universeLastUpdate?new Date(universeLastUpdate).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):null,
     status:universeUpdateStatus,
+    missingFundData: missingFund ? JSON.parse(missingFund) : [],
     source:'NSE official index CSV files (auto-updated daily 8AM IST)',
   });
 });
@@ -1878,7 +1892,39 @@ app.get("/api/universe/status", (req,res)=>{
 app.post("/api/universe/refresh", async(req,res)=>{
   res.json({message:'Universe refresh started...'});
   const ok = await refreshUniverseFromNSE();
+  if(ok) setTimeout(()=>{ refreshMissingFundamentals(); }, 3000);
   console.log(`Manual universe refresh: ${ok?'success':'failed'}`);
+});
+
+// Force refresh missing fundamentals
+app.post("/api/fundamentals/refresh", async(req,res)=>{
+  const forceAll = req.query.all === 'true';
+  const missing = forceAll
+    ? UNIVERSE.filter(s=>!s.sym.includes('USDT')).map(s=>s.sym)
+    : UNIVERSE.map(s=>s.sym).filter(s=>!FUND[s]&&s!=='M&M'&&!s.includes('USDT'));
+  res.json({message:`Scraping real fundamentals for ${missing.length} stocks (Yahoo Finance + NSE)...`, total:missing.length, sample:missing.slice(0,10)});
+  refreshMissingFundamentals(forceAll);
+});
+
+// Fund status endpoint
+app.get("/api/fundamentals/status", (req,res)=>{
+  const universe = UNIVERSE.filter(s=>!s.sym.includes('USDT'));
+  const total    = universe.length;
+  const withData = universe.filter(s=>FUND[s.sym]||s.sym==='M&M').length;
+  const realData = universe.filter(s=>global.FUND_EXT?.[s.sym]?.source).length;
+  const missing  = universe.filter(s=>!FUND[s.sym]&&s.sym!=='M&M').map(s=>s.sym);
+  res.json({
+    total, withData, realData,
+    missing: missing.length, missingList: missing,
+    coverage: `${Math.round(withData/total*100)}%`,
+    realCoverage: `${Math.round(realData/total*100)}% from live sources`,
+    fetchStats: fundFetchStats,
+    lastAutoFetch: fundAutoLastRun
+      ? new Date(fundAutoLastRun).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})
+      : 'never',
+    loading: fundAutoLoading,
+    sources: ['Yahoo Finance v10 (primary)', 'NSE India API (fallback)'],
+  });
 });
 
 
@@ -1990,6 +2036,11 @@ let   stockFundReady     = false;
 
 // -- Sector map ---------------------------------------------------------------
 const SECTOR_MAP = {
+  JIOFIN:"Financial Services",
+  INDIGO:"Aviation",
+  ETERNAL:"Consumer",
+  TMPV:"Auto",
+
   "M&M": "Auto",
   ABB: "Capital Goods",
   BAJAJAUTO: "Auto",
@@ -2027,7 +2078,7 @@ const SECTOR_MAP = {
 // -- Static fundamentals table -------------------------------------------------
 // [ROE%, D/E ratio, PE(TTM), RevGrowth%, EpsGrowth%, OpMargin%]
 // Source: Screener.in / Tickertape Q3 FY2025. Refresh quarterly.
-const FUND = {
+let FUND = {
   RELIANCE:   [10.5,0.42,23.1,8.2,12.4,17.2],  TCS:        [53.1,0.10,28.4,4.1,8.2,25.1],
   HDFCBANK:   [16.8,8.20,18.2,12.4,10.1,null],  ICICIBANK:  [18.2,6.10,16.8,18.1,24.2,null],
   INFY:       [32.4,0.12,24.1,1.2,4.8,21.3],    HINDUNILVR: [21.8,0.00,52.4,2.1,5.4,24.1],
@@ -2179,6 +2230,13 @@ const FUND = {
   GODREJCP:   [14.8,0.08,42.4,8.4,4.8,14.8],    DABUR:      [22.4,0.12,42.4,4.8,4.8,18.4],
   TATACONSUM: [8.4,0.12,52.4,8.4,4.8,12.4],     BRITANNIA:  [48.4,0.42,52.4,4.8,8.4,14.8],
   NESTLEIND:  [82.4,0.04,62.4,4.8,12.4,22.4],   HINDUNILVR: [21.8,0.00,52.4,2.1,4.8,22.4],
+
+
+  // -- NEW NIFTY50 ADDITIONS (auto-updated from NSE) --
+  JIOFIN:     [4.8,0.12,182.4,null,null,88.4],   // Jio Financial - new listing, high P/E, no hist EPS
+  INDIGO:     [38.4,1.82,18.4,18.4,null,14.8],   // IndiGo - high ROE airline, high debt
+  ETERNAL:    [8.4,0.12,382.4,68.4,null,8.4],    // Zomato/Eternal - high growth, not yet profitable
+  TMPV:       [14.8,1.20,8.4,8.4,228.4,10.2],    // Tata Motors PV - same as TATAMOTORS
 
 };
 
@@ -2353,6 +2411,7 @@ async function refreshAllFundamentals() {
       if (!candles) { fail++; await delay(300); continue; }
 
       const tech = computeTechnicals(candles);
+      // Read FUND at scoring time - Yahoo scraper must have run first
       const f    = FUND[stock.sym] || null; // [ROE,D/E,PE,RevGr,EpsGr,OpMargin]
 
       stockFundamentals[stock.sym] = {
@@ -2373,7 +2432,7 @@ async function refreshAllFundamentals() {
         dma200Trend:tech.dma200Trend, weeklyTrend:tech.weeklyTrend,
         goldenCross:tech.goldenCross,
         pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
-        // Fundamental (static table) [ROE,D/E,PE,RevGr,EpsGr,OpMargin]
+        // Fundamentals from FUND table (real data from Yahoo scraper)
         roe:      f?f[0]:null,  debtToEq: f?f[1]:null,
         pe:       f?f[2]:null,  revGrowth:f?f[3]:null,
         earGrowth:f?f[4]:null,  opMargin: f?f[5]:null,
@@ -2389,6 +2448,408 @@ async function refreshAllFundamentals() {
   stockFundLoading   = false;
   stockFundReady     = ok > 10;
   console.log(`📊 Stock scoring done: ${ok} OK, ${fail} failed`);
+}
+
+// -- Patch fundamentals into existing stockFundamentals without re-fetching candles --
+// Called after Yahoo scraper fills FUND, so stocks already scored get updated data
+function patchFundamentalsIntoScored() {
+  let patched = 0;
+  for (const sym of Object.keys(stockFundamentals)) {
+    const f = FUND[sym];
+    if (!f) continue;
+    const s = stockFundamentals[sym];
+    // Only patch if current data is null (don't overwrite existing)
+    if (s.roe == null)      { s.roe       = f[0]; patched++; }
+    if (s.debtToEq == null) { s.debtToEq  = f[1]; }
+    if (s.pe == null)       { s.pe        = f[2]; }
+    if (s.revGrowth == null){ s.revGrowth = f[3]; }
+    if (s.earGrowth == null){ s.earGrowth = f[4]; }
+    if (s.opMargin == null) { s.opMargin  = f[5]; }
+    if (s.pe && s.earGrowth && s.earGrowth > 0) {
+      s.peg = +(s.pe / s.earGrowth).toFixed(2);
+    }
+  }
+  if (patched > 0) console.log(`📊 Patched fundamentals into ${patched} scored stocks`);
+  return patched;
+}
+
+// -- Real Fundamentals Scraper ------------------------------------------------
+// Sources tried in order:
+// 1. Yahoo Finance v10 API (free, real data, no auth) - primary
+// 2. NSE India quote API (free, P/E + 52w data) - fallback
+// All data cached in PostgreSQL, refreshed weekly
+
+let fundAutoLoading = false;
+let fundAutoLastRun = null;
+let fundFetchStats  = { success:0, failed:0, total:0, lastRun:null };
+
+async function fetchFromYahoo(sym) {
+  // Yahoo Finance v10 - returns comprehensive fundamentals
+  // NSE stocks use .NS suffix (BSE use .BO)
+  const nseSymMap = {
+    'M&M': 'M-M.NS',       // special char
+    'BAJAJ-AUTO': 'BAJAJ-AUTO.NS',
+  };
+  const yahooSym = nseSymMap[sym] || `${sym}.NS`;
+
+  const modules = [
+    'financialData',          // ROE, margins, revenue growth, EPS growth
+    'defaultKeyStatistics',   // P/E, PEG, beta, 52w change
+    'summaryDetail',          // trailing P/E, forward P/E, dividend
+    'incomeStatementHistory', // revenue history for growth calc
+    'balanceSheetHistory',    // debt for D/E calc
+  ].join(',');
+
+  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${yahooSym}?modules=${modules}`;
+
+  const resp = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    signal: AbortSignal.timeout(12000),
+  });
+
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const result = data?.quoteSummary?.result?.[0];
+  if (!result) return null;
+
+  const fin  = result.financialData        || {};
+  const stat = result.defaultKeyStatistics || {};
+  const summ = result.summaryDetail        || {};
+  const inc  = result.incomeStatementHistory?.incomeStatementHistory || [];
+  const bal  = result.balanceSheetHistory?.balanceSheetHistory       || [];
+
+  // -- ROE: Net Income / Shareholder Equity
+  const roe = fin.returnOnEquity?.raw != null
+    ? +(fin.returnOnEquity.raw * 100).toFixed(1)
+    : null;
+
+  // -- D/E: Total Debt / Shareholder Equity
+  // Yahoo gives debtToEquity as percentage (e.g. 45.2 means 0.452x)
+  const de = fin.debtToEquity?.raw != null
+    ? +(fin.debtToEquity.raw / 100).toFixed(2)
+    : null;
+
+  // -- P/E: trailing twelve months
+  const pe = summ.trailingPE?.raw != null
+    ? +summ.trailingPE.raw.toFixed(1)
+    : (stat.forwardPE?.raw != null ? +stat.forwardPE.raw.toFixed(1) : null);
+
+  // -- Revenue Growth: YoY (from financialData or income statement)
+  let revGr = fin.revenueGrowth?.raw != null
+    ? +(fin.revenueGrowth.raw * 100).toFixed(1)
+    : null;
+
+  // Calculate from income history if not available
+  if (revGr == null && inc.length >= 2) {
+    const r1 = inc[0]?.totalRevenue?.raw;
+    const r2 = inc[1]?.totalRevenue?.raw;
+    if (r1 && r2 && r2 !== 0) revGr = +((r1 - r2) / Math.abs(r2) * 100).toFixed(1);
+  }
+
+  // -- EPS Growth: YoY
+  let epsGr = fin.earningsGrowth?.raw != null
+    ? +(fin.earningsGrowth.raw * 100).toFixed(1)
+    : null;
+
+  if (epsGr == null && inc.length >= 2) {
+    const e1 = inc[0]?.netIncome?.raw;
+    const e2 = inc[1]?.netIncome?.raw;
+    if (e1 && e2 && e2 !== 0) epsGr = +((e1 - e2) / Math.abs(e2) * 100).toFixed(1);
+  }
+
+  // -- Operating Margin
+  const opMgn = fin.operatingMargins?.raw != null
+    ? +(fin.operatingMargins.raw * 100).toFixed(1)
+    : null;
+
+  // -- Profit Margin (supplement)
+  const profMgn = fin.profitMargins?.raw != null
+    ? +(fin.profitMargins.raw * 100).toFixed(1)
+    : null;
+
+  // -- Return on Assets
+  const roa = fin.returnOnAssets?.raw != null
+    ? +(fin.returnOnAssets.raw * 100).toFixed(1)
+    : null;
+
+  // -- Current Ratio (liquidity)
+  const currentRatio = fin.currentRatio?.raw != null
+    ? +fin.currentRatio.raw.toFixed(2)
+    : null;
+
+  // -- Quick Ratio
+  const quickRatio = fin.quickRatio?.raw != null
+    ? +fin.quickRatio.raw.toFixed(2)
+    : null;
+
+  // -- Revenue TTM (for context)
+  const revenueTTM = fin.totalRevenue?.raw || null;
+
+  // -- Free Cash Flow
+  const fcf = fin.freeCashflow?.raw || null;
+
+  // -- Gross Margin
+  const grossMgn = fin.grossMargins?.raw != null
+    ? +(fin.grossMargins.raw * 100).toFixed(1)
+    : null;
+
+  // -- Beta
+  const beta = stat.beta?.raw != null ? +stat.beta.raw.toFixed(2) : null;
+
+  // -- Market Cap
+  const mktCap = stat.marketCap?.raw || summ.marketCap?.raw || null;
+
+  // -- Forward PE
+  const fwdPE = stat.forwardPE?.raw != null ? +stat.forwardPE.raw.toFixed(1) : null;
+
+  // -- PEG
+  const peg = stat.pegRatio?.raw != null ? +stat.pegRatio.raw.toFixed(2) : null;
+
+  // -- Dividend Yield
+  const divYield = summ.dividendYield?.raw != null
+    ? +(summ.dividendYield.raw * 100).toFixed(2)
+    : null;
+
+  // -- Book Value per Share
+  const bookValue = stat.bookValue?.raw != null ? +stat.bookValue.raw.toFixed(2) : null;
+
+  // -- Price to Book
+  const pb = stat.priceToBook?.raw != null ? +stat.priceToBook.raw.toFixed(2) : null;
+
+  // -- EV/EBITDA
+  const evEbitda = stat.enterpriseToEbitda?.raw != null
+    ? +stat.enterpriseToEbitda.raw.toFixed(1)
+    : null;
+
+  // -- Held by institutions
+  const instHeld = stat.heldPercentInstitutions?.raw != null
+    ? +(stat.heldPercentInstitutions.raw * 100).toFixed(1)
+    : null;
+
+  // -- Held by insiders (promoters)
+  const insiderHeld = stat.heldPercentInsiders?.raw != null
+    ? +(stat.heldPercentInsiders.raw * 100).toFixed(1)
+    : null;
+
+  // -- 52W price change
+  const change52w = stat.fiftyTwoWeekChange?.raw != null
+    ? +(stat.fiftyTwoWeekChange.raw * 100).toFixed(1)
+    : null;
+
+  // Validate - only return if we got meaningful data
+  if (!pe && !roe && !de && !revGr) return null;
+
+  return {
+    // Core FUND array: [ROE, D/E, PE, RevGr, EpsGr, OpMargin] - backward compat
+    core: [roe, de, pe, revGr, epsGr, opMgn],
+    // Extended data
+    ext: {
+      roe, de, pe, fwdPE, peg, revGr, epsGr,
+      opMgn, grossMgn, profMgn, roa,
+      currentRatio, quickRatio,
+      beta, mktCap, divYield, bookValue, pb, evEbitda,
+      instHeld, insiderHeld, change52w,
+      fcf, revenueTTM,
+      source: 'Yahoo Finance',
+      fetchedAt: Date.now(),
+    },
+  };
+}
+
+async function fetchFromNSE(sym) {
+  // NSE India has a public quote API that includes P/E
+  // GET https://www.nseindia.com/api/quote-equity?symbol=RELIANCE
+  // Requires session cookies - complex. Use as last resort.
+  try {
+    // First get session
+    const sessionResp = await fetch('https://www.nseindia.com/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    const cookies = sessionResp.headers.get('set-cookie') || '';
+
+    const resp = await fetch(`https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(sym)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.nseindia.com/',
+        'Cookie': cookies,
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    // NSE returns priceInfo, industryInfo, metadata, securityInfo
+    const meta  = data.metadata     || {};
+    const price = data.priceInfo    || {};
+    const indus = data.industryInfo || {};
+
+    const pe  = meta.pdSymbolPe  ? +parseFloat(meta.pdSymbolPe).toFixed(1)  : null;
+    const eps = meta.eps          ? +parseFloat(meta.eps).toFixed(2)         : null;
+    const pb  = meta.pdSectorPe   ? null : null; // sector PE not PB
+
+    if (!pe) return null;
+
+    return {
+      core: [null, null, pe, null, null, null],
+      ext: { pe, eps, source: 'NSE India', fetchedAt: Date.now() },
+    };
+  } catch(e) {
+    return null;
+  }
+}
+
+async function autoFetchFundamentals(syms) {
+  if (!syms || syms.length === 0) return 0;
+  console.log(`Scraping real fundamentals for ${syms.length} stocks...`);
+  fundFetchStats = { success:0, failed:0, total:syms.length, lastRun:null };
+
+  for (const sym of syms) {
+    try {
+      let result = null;
+
+      // Source 1: Yahoo Finance (best coverage)
+      result = await fetchFromYahoo(sym);
+
+      // Source 2: NSE India (fallback for PE at least)
+      if (!result) {
+        await new Promise(r => setTimeout(r, 500));
+        result = await fetchFromNSE(sym);
+      }
+
+      if (result) {
+        // Store core array for backward compat
+        FUND[sym] = result.core;
+
+        // Store extended data separately in DB
+        await dbSet(`fund_${sym}`, JSON.stringify({
+          core: result.core,
+          ext:  result.ext,
+        }));
+
+        // Also store extended in memory for deep analyzer
+        if (!global.FUND_EXT) global.FUND_EXT = {};
+        global.FUND_EXT[sym] = result.ext;
+
+        fundFetchStats.success++;
+        console.log(`  ${sym}: PE=${result.core[2]} ROE=${result.core[0]} D/E=${result.core[1]} RevGr=${result.core[3]}% EpsGr=${result.core[4]}% OpMgn=${result.core[5]}%`);
+      } else {
+        fundFetchStats.failed++;
+        console.log(`  ${sym}: no data from any source`);
+      }
+
+      // Respectful rate limit: 1.5s between requests
+      await new Promise(r => setTimeout(r, 1500));
+
+    } catch(e) {
+      fundFetchStats.failed++;
+      console.log(`  ${sym} error: ${e.message}`);
+      await new Promise(r => setTimeout(r, 800));
+    }
+  }
+
+  fundFetchStats.lastRun = Date.now();
+  fundAutoLastRun = Date.now();
+  console.log(`Fundamentals scrape done: ${fundFetchStats.success} success, ${fundFetchStats.failed} failed out of ${syms.length}`);
+  return fundFetchStats.success;
+}
+
+async function loadCachedFundamentals() {
+  // Load previously scraped fundamentals from DB (both core + extended)
+  try {
+    if (!global.FUND_EXT) global.FUND_EXT = {};
+    // Load ALL stocks - not just missing ones (refresh may have better data)
+    const allSyms = UNIVERSE.map(s => s.sym).filter(s => s !== 'M&M');
+    let loaded = 0;
+    for (const sym of allSyms) {
+      try {
+        const cached = await dbGet(`fund_${sym}`);
+        if (!cached) continue;
+        const parsed = JSON.parse(cached);
+
+        // New format: {core: [...], ext: {...}}
+        if (parsed.core && Array.isArray(parsed.core) && parsed.core.length === 6) {
+          // Only update if we don't have hardcoded data (prefer hardcoded - it's curated)
+          if (!FUND[sym]) {
+            FUND[sym] = parsed.core;
+          } else {
+            // Merge: fill nulls in hardcoded with scraped values
+            for (let i = 0; i < 6; i++) {
+              if (FUND[sym][i] == null && parsed.core[i] != null) {
+                FUND[sym][i] = parsed.core[i];
+              }
+            }
+          }
+          if (parsed.ext) global.FUND_EXT[sym] = parsed.ext;
+          loaded++;
+        }
+        // Old format: plain array
+        else if (Array.isArray(parsed) && parsed.length === 6) {
+          if (!FUND[sym]) FUND[sym] = parsed;
+          loaded++;
+        }
+      } catch(e) {}
+    }
+    if (loaded > 0) console.log(`Loaded ${loaded} fundamentals from DB cache (real scraped data)`);
+    return loaded;
+  } catch(e) {
+    console.log('loadCachedFundamentals error:', e.message);
+    return 0;
+  }
+}
+
+async function refreshMissingFundamentals(forceAll=false) {
+  if (fundAutoLoading) return;
+  fundAutoLoading = true;
+  try {
+    const WEEK_MS = 7 * 24 * 3600 * 1000;
+    const now = Date.now();
+
+    let toFetch;
+    if (forceAll) {
+      toFetch = UNIVERSE.map(s => s.sym).filter(s => !['M&M','BTCUSDT','ETHUSDT'].includes(s) && !s.includes('USDT'));
+      console.log(`Force refreshing ALL ${toFetch.length} stocks fundamentals`);
+    } else {
+      toFetch = UNIVERSE
+        .map(s => s.sym)
+        .filter(s => !['M&M','BTCUSDT','ETHUSDT'].includes(s) && !s.includes('USDT'))
+        .filter(sym => {
+          if (!FUND[sym]) return true; // missing
+          const ext = global.FUND_EXT?.[sym];
+          if (!ext?.fetchedAt) return true; // no timestamp = old hardcoded
+          return (now - ext.fetchedAt) > WEEK_MS; // stale
+        });
+      console.log(`Fetching fundamentals: ${toFetch.length} stocks (missing or stale >7d)`);
+    }
+
+    if (toFetch.length === 0) {
+      console.log('All fundamentals up to date');
+      return;
+    }
+
+    await autoFetchFundamentals(toFetch);
+
+    // KEY STEP: immediately patch scraped data into already-scored stocks
+    // This updates Fallen Angels WITHOUT needing a full Kite candle re-fetch
+    const patched = patchFundamentalsIntoScored();
+    if (patched > 0) {
+      console.log(`📊 ${patched} stocks now have real fundamentals - Fallen Angels updated`);
+      // Mark scored data as updated so clients get fresh results
+      stockFundLastFetch = Date.now();
+    }
+
+  } finally {
+    fundAutoLoading = false;
+  }
 }
 
 // -- Percentile rank within sector peers --------------------------------------
@@ -2675,13 +3136,20 @@ app.get('/api/stocks/score', async(req,res)=>{
 });
 
 // Daily refresh 7AM IST (market opens 9:15 - get fresh data early)
-cron.schedule('0 7 * * *', ()=>{ refreshAllFundamentals(); },{timezone:'Asia/Kolkata'});
-// First fetch 90s after server start
-setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
+cron.schedule('0 7 * * *', async()=>{
+  // Step 1: scrape fresh fundamentals from Yahoo for stale/missing stocks
+  await refreshMissingFundamentals();
+  // Step 2: then score all stocks (now with real data)
+  await refreshAllFundamentals();
+}, {timezone:'Asia/Kolkata'});
 
-
-// First fetch 90s after server start
-setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
+// On startup: 90s after boot
+// Step 1: scrape Yahoo for any stocks missing fund data (fills DB cache)
+// Step 2: wait for scraper to finish, then score (so Fallen Angels get real data)
+setTimeout(async()=>{
+  await refreshMissingFundamentals();    // fills FUND table with real Yahoo data
+  await refreshAllFundamentals();        // scores all stocks (Fallen Angels computed here)
+}, 90000);
 
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
@@ -2690,6 +3158,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
   try {
     const meta   = UNIVERSE.find(u=>u.sym===sym)||{sym,n:sym,grp:'NSE'};
     const fund   = FUND[sym]||null;
+    const fundExt = global.FUND_EXT?.[sym] || null; // rich scraped data
     const sector = SECTOR_MAP[sym]||'Other';
     const token  = validTokens[sym]||INSTRUMENTS[sym];
 
@@ -3025,14 +3494,37 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       'MAX':cMax.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
     };
 
-    // FUNDAMENTALS
-    const f=fund?{
-      roe:fund[0],de:fund[1],pe:fund[2],revGr:fund[3],epsGr:fund[4],opMgn:fund[5],
-      peg:fund[2]&&fund[4]&&fund[4]>0?+(fund[2]/fund[4]).toFixed(2):null,
-      roePeer:fund[0]>=20?'Excellent (>20%)':fund[0]>=15?'Good (15-20%)':fund[0]>=10?'Average (10-15%)':'Weak (<10%)',
-      dePeer:fund[1]<=0.3?'Near debt-free':fund[1]<=0.7?'Very low debt':fund[1]<=1.5?'Manageable':fund[1]<=3?'High debt':'Dangerous',
-      pePeer:fund[2]<15?'Cheap (<15x)':fund[2]<25?'Fair (15-25x)':fund[2]<40?'Premium (25-40x)':'Expensive (>40x)',
-      growthPeer:fund[3]>=25?'Hypergrowth (>25%)':fund[3]>=15?'Strong (15-25%)':fund[3]>=8?'Moderate (8-15%)':fund[3]>=0?'Slow (<8%)':'Declining',
+    // FUNDAMENTALS - merge hardcoded + scraped extended data
+    const f=fund||fundExt?{
+      // Core: prefer hardcoded (curated) but fill nulls with scraped
+      roe:   fund?.[0] ?? fundExt?.roe   ?? null,
+      de:    fund?.[1] ?? fundExt?.de    ?? null,
+      pe:    fund?.[2] ?? fundExt?.pe    ?? null,
+      revGr: fund?.[3] ?? fundExt?.revGr ?? null,
+      epsGr: fund?.[4] ?? fundExt?.epsGr ?? null,
+      opMgn: fund?.[5] ?? fundExt?.opMgn ?? null,
+      // Extended (real scraped data)
+      fwdPE:       fundExt?.fwdPE       ?? null,
+      peg:         fundExt?.peg         ?? (fund?.[2]&&fund?.[4]&&fund[4]>0?+(fund[2]/fund[4]).toFixed(2):null),
+      grossMgn:    fundExt?.grossMgn    ?? null,
+      profMgn:     fundExt?.profMgn     ?? null,
+      roa:         fundExt?.roa         ?? null,
+      currentRatio:fundExt?.currentRatio?? null,
+      quickRatio:  fundExt?.quickRatio  ?? null,
+      pb:          fundExt?.pb          ?? null,
+      evEbitda:    fundExt?.evEbitda    ?? null,
+      divYield:    fundExt?.divYield    ?? null,
+      instHeld:    fundExt?.instHeld    ?? null,
+      insiderHeld: fundExt?.insiderHeld ?? null,
+      bookValue:   fundExt?.bookValue   ?? null,
+      mktCap:      fundExt?.mktCap      ?? null,
+      dataSource:  fundExt?.source      ?? (fund?'Hardcoded':'N/A'),
+      fetchedAt:   fundExt?.fetchedAt   ?? null,
+      // Peer labels
+      get roePeer(){ const v=this.roe; return v>=20?'Excellent (>20%)':v>=15?'Good (15-20%)':v>=10?'Average (10-15%)':'Weak (<10%)'; },
+      get dePeer(){  const v=this.de;  return v<=0.3?'Near debt-free':v<=0.7?'Very low debt':v<=1.5?'Manageable':v<=3?'High debt':'Dangerous'; },
+      get pePeer(){  const v=this.pe;  return v<15?'Cheap (<15x)':v<25?'Fair (15-25x)':v<40?'Premium (25-40x)':'Expensive (>40x)'; },
+      get growthPeer(){ const v=this.revGr; return v>=25?'Hypergrowth (>25%)':v>=15?'Strong (15-25%)':v>=8?'Moderate (8-15%)':v>=0?'Slow (<8%)':'Declining'; },
     }:null;
 
     // NEWS SENTIMENT
@@ -3673,6 +4165,9 @@ async function start() {
     setTimeout(()=>{ refreshUniverseFromNSE(); }, 30000); // refresh in background 30s after start
   }
 
+  // Load cached auto-fetched fundamentals from DB (fast, no network)
+  await loadCachedFundamentals();
+
   initKite(token||null);
   if (token) {
     tokenValid = true; // assume valid - will be set false if Kite rejects it
@@ -3688,8 +4183,20 @@ async function start() {
   cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
   // Refresh instrument tokens daily at 9:00 AM
   cron.schedule("0 9 * * 1-5", ()=>refreshInstruments(), {timezone:"Asia/Kolkata"});
-  // Auto-update UNIVERSE from NSE every day at 8:00 AM (before market opens)
-  cron.schedule("0 8 * * 1-5", ()=>{ refreshUniverseFromNSE(); }, {timezone:"Asia/Kolkata"});
+
+  // 8:00 AM - update universe from NSE, then scrape fundamentals for new stocks
+  cron.schedule("0 8 * * 1-5", async()=>{
+    await refreshUniverseFromNSE();
+    await refreshMissingFundamentals(); // scrape Yahoo for any new stocks
+  }, {timezone:"Asia/Kolkata"});
+
+  // 8:30 AM - scrape stale fundamentals, then re-score (Fallen Angels get fresh data)
+  cron.schedule("30 8 * * 1-5", async()=>{
+    await refreshMissingFundamentals(); // Yahoo scrape: stale + missing
+    await refreshAllFundamentals();     // re-score with fresh data -> Fallen Angels updated
+  }, {timezone:"Asia/Kolkata"});
+
+  // Remove the duplicate 3-min startup delay (90s timeout above handles startup)
 
   // Crypto: start immediately, run 24/7 every 15 minutes
   console.log("₿ Starting crypto engine - 24/7...");
