@@ -426,7 +426,16 @@ function setMode(mode){
   }
   if(mode==="aiportfolio"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
-    renderAIPortfolio();
+    try{ renderTopBar(); }catch(e){}
+    try{
+      renderAIPortfolio().catch(function(e){
+        var cont=document.getElementById('main-content');
+        if(cont) cont.innerHTML='<div style="padding:32px;text-align:center;color:#ef4444;font-size:13px">AI Portfolio error: '+e.message+'<br><br><button onclick="setMode(\'aiportfolio\')" style="margin-top:12px;background:rgba(34,211,238,0.15);color:#22d3ee;border:1px solid rgba(34,211,238,0.3);border-radius:6px;padding:8px 20px;cursor:pointer;font-size:12px">Retry</button></div>';
+      });
+    }catch(e){
+      var cont=document.getElementById('main-content');
+      if(cont) cont.innerHTML='<div style="padding:32px;text-align:center;color:#ef4444;font-size:13px">AI Portfolio error: '+e.message+'</div>';
+    }
     return;
   }
   try{ renderSubTabs(); }catch(e){}
@@ -3208,74 +3217,6 @@ function buildStockCard(s, medal){
   h+='</div>';
   return h;
 }
-
-  var h='<div style="background:var(--bg2);border:1.5px solid '+(isFallenAngel?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:12px;padding:16px;position:relative">';
-
-  // Fallen Angel ribbon
-  if(isFallenAngel){
-    var fallPct = Math.abs(s.pctFromHigh||0).toFixed(0);
-    h+='<div style="position:absolute;top:0;right:0;background:#f59e0b;color:#000;font-size:9px;font-weight:800;padding:3px 10px;border-radius:0 12px 0 8px">🔥 -'+fallPct+'% FROM PEAK</div>';
-  }
-
-  // Header
-  h+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">';
-  h+='<div style="display:flex;align-items:center;gap:8px">';
-  h+='<span style="font-size:22px">'+medal+'</span>';
-  h+='<div><div style="font-weight:700;font-size:16px">'+s.sym+'</div>'
-    +'<div style="font-size:10px;color:var(--text3)">'+s.name+'</div></div>';
-  h+='</div>';
-  h+='<div style="text-align:right">';
-  h+='<div style="font-size:22px;font-weight:800;color:'+sc+'">'+s.score+'</div>';
-  h+='<div style="font-size:9px;color:var(--text4)">/100 pts</div>';
-  h+='</div></div>';
-
-  // Score bar
-  var barPct=Math.min(100,s.score);
-  h+='<div style="background:var(--bg3);border-radius:4px;height:5px;margin-bottom:12px;overflow:hidden">'
-    +'<div style="height:100%;border-radius:4px;background:'+sc+';width:'+barPct+'%"></div></div>';
-
-  // Tags
-  h+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">';
-  h+='<span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700">'+s.grp+'</span>';
-  if(s.sector) h+='<span style="background:var(--bg3);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:9px">'+s.sector+'</span>';
-  if(s.goldenCross) h+='<span style="background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:4px;padding:2px 8px;font-size:9px">⚡ Golden Cross</span>';
-  if(isFallenAngel&&(s.rsi||50)<=35) h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:2px 8px;font-size:9px">📉 RSI Oversold</span>';
-  if(s.recKey) h+='<span style="background:'+gc2+'22;color:'+gc2+';border-radius:4px;padding:2px 8px;font-size:9px;font-weight:600">'+recMap[s.recKey]+'</span>';
-  h+='</div>';
-
-  // Metrics grid
-  h+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">';
-  function mc(l,v,c){ return '<div style="background:var(--bg3);border-radius:6px;padding:5px 8px;text-align:center">'
-    +'<div style="font-size:9px;color:var(--text3)">'+l+'</div>'
-    +'<div style="font-size:12px;font-weight:600;color:'+(c||'var(--text)')+'">'+v+'</div></div>'; }
-
-  h+=mc('Price',  s.price?'₹'+s.price.toFixed(1):'-');
-  h+=mc('ROE',    s.roe!=null?s.roe.toFixed(1)+'%':'-',  s.roe>=20?'var(--green)':s.roe>=15?'#f59e0b':'var(--text)');
-  h+=mc('P/E',    s.pe!=null?s.pe.toFixed(1)+'x':'-',   s.pe<15?'var(--green)':s.pe<25?'var(--text)':'var(--red)');
-  if(isFallenAngel){
-    h+=mc('Down From Hi', s.pctFromHigh!=null?s.pctFromHigh.toFixed(1)+'%':'-', 'var(--red)');
-    h+=mc('RSI',  s.rsi!=null?s.rsi.toFixed(0):'-', (s.rsi||50)<35?'var(--green)':(s.rsi||50)<50?'#f59e0b':'var(--text)');
-    h+=mc('D/E',  s.debtToEq!=null?s.debtToEq.toFixed(2)+'x':'-', s.debtToEq<0.5?'var(--green)':s.debtToEq<1.5?'#f59e0b':'var(--red)');
-  } else {
-    h+=mc('52W%',   s.wk52Change!=null?(s.wk52Change>0?'+':'')+s.wk52Change+'%':'-', s.wk52Change>0?'var(--green)':'var(--red)');
-    h+=mc('EPS Gr', s.earGrowth!=null?(s.earGrowth>0?'+':'')+s.earGrowth+'%':'-',  s.earGrowth>20?'var(--green)':s.earGrowth>0?'#f59e0b':'var(--red)');
-    h+=mc('Upside', s.upside!=null?(s.upside>0?'+':'')+s.upside+'%':'-',            s.upside>15?'var(--green)':s.upside>0?'var(--text)':'var(--red)');
-  }
-  h+='</div>';
-
-  // For fallen angels - show buy zone suggestion
-  if(isFallenAngel){
-    var buyZoneText='';
-    if(s.dma200) buyZoneText='200DMA: ₹'+s.dma200.toFixed(0);
-    if(s.dma50)  buyZoneText+=(buyZoneText?' | ':'')+'50DMA: ₹'+s.dma50.toFixed(0);
-    if(buyZoneText){
-      h+='<div style="background:rgba(245,158,11,.1);border-radius:6px;padding:6px 10px;font-size:10px;margin-bottom:8px">';
-      h+='<span style="color:#f59e0b;font-weight:700">Buy zones: </span><span style="color:var(--text2)">'+buyZoneText+'</span>';
-      if(s.rsi<=35) h+=' <span style="color:var(--green);font-weight:600">| RSI oversold - potential bounce</span>';
-      h+='</div>';
-    }
-  }
-
 
 // -- End Stocks Recommendation --------------------------------------------------
 // -- Kite Token Management -----------------------------------------------------
