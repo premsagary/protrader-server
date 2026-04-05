@@ -2013,10 +2013,13 @@ function closePasscode() {
   _pendingMode = null;
 }
 
-// Close on backdrop click
-document.getElementById('passcode-modal').addEventListener('click', function(e){
-  if (e.target === this) closePasscode();
+// Close on backdrop click — use event delegation since modal is after script
+document.addEventListener('click', function(e){
+  var modal = document.getElementById('passcode-modal');
+  if(modal && e.target === modal) closePasscode();
 });
+
+setMode("mf");
 fetchAll();
 fetchCryptoPrices();
 setInterval(fetchAll, 15000);
