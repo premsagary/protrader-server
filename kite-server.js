@@ -2229,159 +2229,397 @@ setTimeout(()=>{ refreshAllFundamentals(); }, 90000);
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
 app.get('/api/stocks/analyze/:sym', async(req,res)=>{
   const sym = req.params.sym.toUpperCase().trim();
+  const delay = ms => new Promise(r=>setTimeout(r,ms));
+
   try {
-    const meta = UNIVERSE.find(u=>u.sym===sym) || {sym, n:sym, grp:'NSE'};
-    const fund  = FUND[sym] || null;
+    const meta   = UNIVERSE.find(u=>u.sym===sym) || {sym, n:sym, grp:'NSE'};
+    const fund   = FUND[sym] || null;
     const sector = SECTOR_MAP[sym] || 'Other';
+    const token  = validTokens[sym] || INSTRUMENTS[sym];
 
-    // ── 1. Kite historical candles (1 year daily) ─────────────────────────────
-    let candles=[], tech={};
-    try {
-      const c = await fetchKiteDaily(sym);
-      if(c && c.length>=50){ candles=c; tech=computeTechnicals(c); }
-    } catch(e){}
+    // ── PARALLEL: fetch all Kite timeframes + news simultaneously ─────────────
+    const [
+      daily1y,   // 1 year daily
+      daily3y,   // 3 year daily
+      weekly5y,  // 5 year weekly
+      monthly,   // from inception monthly
+      hourly,    // 3 months hourly
+      newsData,  // RSS news
+    ] = await Promise.allSettled([
+      // 1Y daily
+      (async()=>{
+        if(!kite||!process.env.KITE_ACCESS_TOKEN||!token) return null;
+        const to=new Date(), from=new Date(Date.now()-366*24*60*60*1000);
+        return kite.getHistoricalData(token,'day',from.toISOString().split('T')[0],to.toISOString().split('T')[0]);
+      })(),
+      // 3Y daily
+      (async()=>{
+        if(!kite||!process.env.KITE_ACCESS_TOKEN||!token) return null;
+        const to=new Date(), from=new Date(Date.now()-3*366*24*60*60*1000);
+        return kite.getHistoricalData(token,'day',from.toISOString().split('T')[0],to.toISOString().split('T')[0]);
+      })(),
+      // 5Y weekly
+      (async()=>{
+        if(!kite||!process.env.KITE_ACCESS_TOKEN||!token) return null;
+        const to=new Date(), from=new Date(Date.now()-5*366*24*60*60*1000);
+        return kite.getHistoricalData(token,'week',from.toISOString().split('T')[0],to.toISOString().split('T')[0]);
+      })(),
+      // Monthly from ~2010
+      (async()=>{
+        if(!kite||!process.env.KITE_ACCESS_TOKEN||!token) return null;
+        return kite.getHistoricalData(token,'month','2010-01-01',new Date().toISOString().split('T')[0]);
+      })(),
+      // 3M hourly
+      (async()=>{
+        if(!kite||!process.env.KITE_ACCESS_TOKEN||!token) return null;
+        const to=new Date(), from=new Date(Date.now()-90*24*60*60*1000);
+        return kite.getHistoricalData(token,'60minute',from.toISOString().split('T')[0],to.toISOString().split('T')[0]);
+      })(),
+      // News RSS parallel
+      (async()=>{
+        const feeds=[
+          {url:'https://economictimes.indiatimes.com/markets/stocks/rss.cms',src:'Economic Times'},
+          {url:'https://www.moneycontrol.com/rss/MCtopnews.xml',src:'Moneycontrol'},
+          {url:'https://www.business-standard.com/rss/markets-106.rss',src:'Business Standard'},
+          {url:'https://www.livemint.com/rss/markets',src:'Mint'},
+        ];
+        const items=[];
+        await Promise.allSettled(feeds.map(async({url,src})=>{
+          try{
+            const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'},signal:AbortSignal.timeout(5000)});
+            if(!r.ok)return;
+            const xml=await r.text();
+            [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].forEach(m=>{
+              const it=m[1];
+              const title=(it.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/)?.[1]||it.match(/<title>(.*?)<\/title>/)?.[1]||'').trim();
+              const desc=(it.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/)?.[1]||'').replace(/<[^>]+>/g,'').trim().slice(0,300);
+              const link=(it.match(/<link>(.*?)<\/link>/)?.[1]||'').trim();
+              const pub=(it.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]||'').trim();
+              if(!title)return;
+              const txt=(title+' '+desc).toUpperCase();
+              if(!txt.includes(sym)&&!txt.includes(meta.n.toUpperCase().slice(0,8)))return;
+              const bull=['RISE','SURGE','JUMP','GAIN','RALLY','BUY','BULLISH','PROFIT','GROWTH','RECORD','OUTPERFORM','UPGRADE','TARGET RAISED','STRONG'].some(w=>txt.includes(w));
+              const bear=['FALL','DROP','DECLINE','SLIP','SELL','BEARISH','LOSS','WEAK','UNDERPERFORM','DOWNGRADE','TARGET CUT','CRASH'].some(w=>txt.includes(w));
+              const sentiment=bull&&!bear?'bullish':bear&&!bull?'bearish':'neutral';
+              const mins=pub?Math.round((Date.now()-new Date(pub))/60000):9999;
+              const timeAgo=mins<60?`${mins}m ago`:mins<1440?`${Math.round(mins/60)}h ago`:`${Math.round(mins/1440)}d ago`;
+              items.push({title,desc,link,src,sentiment,timeAgo,mins,pub});
+            });
+          }catch(e){}
+        }));
+        const seen=new Set();
+        return items
+          .filter(i=>{const k=i.title.slice(0,40);if(seen.has(k))return false;seen.add(k);return true;})
+          .sort((a,b)=>a.mins-b.mins).slice(0,15);
+      })(),
+    ]);
 
-    // ── 2. Kite historical candles (3 months weekly for trend) ────────────────
-    let weeklyCandles=[];
-    try {
-      if(kite && process.env.KITE_ACCESS_TOKEN){
-        const token = validTokens[sym]||INSTRUMENTS[sym];
-        if(token){
-          const to=new Date(), from=new Date(Date.now()-180*24*60*60*1000);
-          weeklyCandles = await kite.getHistoricalData(token,'week',
-            from.toISOString().split('T')[0], to.toISOString().split('T')[0]);
-        }
+    const c1y  = daily1y.status==='fulfilled'  && daily1y.value  ? daily1y.value  : [];
+    const c3y  = daily3y.status==='fulfilled'   && daily3y.value  ? daily3y.value  : [];
+    const c5yw = weekly5y.status==='fulfilled'  && weekly5y.value ? weekly5y.value : [];
+    const cMo  = monthly.status==='fulfilled'   && monthly.value  ? monthly.value  : [];
+    const c1h  = hourly.status==='fulfilled'    && hourly.value   ? hourly.value   : [];
+    const news  = (newsData.status==='fulfilled' && newsData.value) ? newsData.value : [];
+
+    // Use best available candle set
+    const candles = c1y.length>=50 ? c1y : c3y.slice(-252);
+    const px      = candles.length ? candles[candles.length-1].close : livePrices[sym]?.price || null;
+
+    // ── COMPREHENSIVE TECHNICALS ──────────────────────────────────────────────
+    function ema(arr, p){
+      const k=2/(p+1); let e=arr[0];
+      return arr.map(v=>{e=v*k+e*(1-k);return e;});
+    }
+    function sma(arr, p){ return arr.map((_,i)=>i<p-1?null:arr.slice(i-p+1,i+1).reduce((a,b)=>a+b)/p); }
+    function computeAll(cans){
+      if(!cans||cans.length<20) return {};
+      const C=cans.map(c=>c.close), H=cans.map(c=>c.high), L=cans.map(c=>c.low), V=cans.map(c=>c.volume||0);
+      const n=C.length;
+      const avg=(arr,s,l)=>arr.slice(s,s+l).reduce((a,b)=>a+b,0)/l;
+
+      // Moving averages
+      const dma20  = n>=20  ? avg(C,n-20,20)   : null;
+      const dma50  = n>=50  ? avg(C,n-50,50)   : null;
+      const dma100 = n>=100 ? avg(C,n-100,100) : null;
+      const dma200 = n>=200 ? avg(C,n-200,200) : null;
+      const ema9   = ema(C,9)[n-1];
+      const ema21  = ema(C,21)[n-1];
+
+      // MACD (12,26,9)
+      const ema12=ema(C,12), ema26=ema(C,26);
+      const macdLine=ema12.map((v,i)=>v-ema26[i]);
+      const signalLine=ema(macdLine,9);
+      const macdVal=macdLine[n-1], sigVal=signalLine[n-1], macdHist=macdVal-sigVal;
+
+      // RSI-14
+      let g=0,ls=0;
+      for(let i=n-14;i<n;i++){const d=C[i]-C[i-1];if(d>0)g+=d;else ls-=d;}
+      const rsi=ls===0?100:100-100/(1+g/14/(ls/14));
+
+      // Bollinger Bands (20,2)
+      const m20=avg(C,n-20,20);
+      const std=Math.sqrt(C.slice(n-20).reduce((a,v)=>a+(v-m20)**2,0)/20);
+      const bbUpper=m20+2*std, bbLower=m20-2*std, bbWidth=(bbUpper-bbLower)/m20*100;
+      const bbPct=(C[n-1]-bbLower)/(bbUpper-bbLower);
+
+      // ATR-14
+      const tr=cans.slice(1).map((c,i)=>Math.max(c.high-c.low,Math.abs(c.high-cans[i].close),Math.abs(c.low-cans[i].close)));
+      const atr=tr.slice(-14).reduce((a,b)=>a+b,0)/14;
+      const atrPct=atr/C[n-1]*100;
+
+      // Stochastic %K,%D (14,3)
+      const stochK=C.slice(-14).map((_,i,a)=>{
+        const lo14=Math.min(...L.slice(n-14+i,n-14+i+1)),hi14=Math.max(...H.slice(n-14+i,n-14+i+1));
+        return hi14===lo14?50:(C[n-14+i]-lo14)/(hi14-lo14)*100;
+      });
+      const kVal=stochK[stochK.length-1];
+      const dVal=stochK.slice(-3).reduce((a,b)=>a+b,0)/3;
+
+      // ADX (14) — simplified
+      let posD=0,negD=0,trSum=0;
+      for(let i=Math.max(1,n-14);i<n;i++){
+        const upMove=H[i]-H[i-1], downMove=L[i-1]-L[i];
+        if(upMove>downMove&&upMove>0)posD+=upMove;
+        if(downMove>upMove&&downMove>0)negD+=downMove;
+        trSum+=Math.max(H[i]-L[i],Math.abs(H[i]-C[i-1]),Math.abs(L[i]-C[i-1]));
       }
-    } catch(e){}
+      const adx=trSum>0?Math.abs(posD-negD)/trSum*100:25;
+      const trendStrength=adx>30?'Strong':adx>20?'Moderate':'Weak';
 
-    // ── 3. News + sentiment (existing endpoint logic inline) ──────────────────
-    const feeds=[
-      {url:`https://economictimes.indiatimes.com/markets/stocks/rss.cms`,source:"Economic Times"},
-      {url:`https://www.moneycontrol.com/rss/MCtopnews.xml`,source:"Moneycontrol"},
-      {url:`https://www.business-standard.com/rss/markets-106.rss`,source:"Business Standard"},
-      {url:`https://www.livemint.com/rss/markets`,source:"Mint"},
-    ];
-    const newsItems=[];
-    await Promise.allSettled(feeds.map(async({url,source})=>{
+      // Supertrend (10,3)
+      let st=null, stSignal='neutral';
       try{
-        const r=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0"},signal:AbortSignal.timeout(5000)});
-        if(!r.ok)return;
-        const xml=await r.text();
-        [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].forEach(m=>{
-          const item=m[1];
-          const title=(item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/)?.[1]||item.match(/<title>(.*?)<\/title>/)?.[1]||"").trim();
-          const desc=(item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/)?.[1]||"").replace(/<[^>]+>/g,"").trim().slice(0,300);
-          const link=(item.match(/<link>(.*?)<\/link>/)?.[1]||"").trim();
-          const pubDate=(item.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]||"").trim();
-          if(!title)return;
-          const text=(title+" "+desc).toUpperCase();
-          const nameUpper=meta.n.toUpperCase();
-          if(!text.includes(sym)&&!text.includes(nameUpper)&&!text.includes(sector.toUpperCase()))return;
-          const bull=["rise","surges","jumps","gains","rallies","positive","buy","bullish","growth","profit","strong","record","outperform","upgrade","beat","raises target"].some(w=>text.includes(w.toUpperCase()));
-          const bear=["fall","drops","decline","slips","negative","sell","bearish","loss","weak","underperform","crash","cut","downgrade","miss","lowers target"].some(w=>text.includes(w.toUpperCase()));
-          const sentiment=bull&&!bear?"bullish":bear&&!bull?"bearish":"neutral";
-          const mins=pubDate?Math.round((Date.now()-new Date(pubDate))/60000):9999;
-          const timeAgo=mins<60?`${mins}m ago`:mins<1440?`${Math.round(mins/60)}h ago`:`${Math.round(mins/1440)}d ago`;
-          newsItems.push({title,desc,source,sentiment,timeAgo,pubDate,link,mins});
+        const ats=cans.map((_,i)=>{
+          if(i<1)return tr[0]||1;
+          const ts=cans.slice(Math.max(0,i-10),i+1);
+          return ts.reduce((a,c,j)=>a+Math.max(c.high-c.low,j>0?Math.abs(c.high-ts[j-1].close):0,j>0?Math.abs(c.low-ts[j-1].close):0),0)/ts.length;
         });
+        let trend=1,stVal=0;
+        for(let i=1;i<n;i++){
+          const mid=(H[i]+L[i])/2;
+          const up=mid+3*ats[i], dn=mid-3*ats[i];
+          if(trend===1){stVal=Math.max(stVal||dn,dn);}
+          else{stVal=Math.min(stVal||up,up);}
+          if(C[i]<stVal&&trend===1)trend=-1;
+          else if(C[i]>stVal&&trend===-1)trend=1;
+        }
+        st=stVal; stSignal=trend===1?'bullish':'bearish';
       }catch(e){}
-    }));
-    const seen=new Set();
-    const news=newsItems
-      .filter(i=>{const k=i.title.slice(0,40);if(seen.has(k))return false;seen.add(k);return true;})
-      .sort((a,b)=>a.mins-b.mins).slice(0,12);
 
-    // ── 4. Sentiment summary ──────────────────────────────────────────────────
-    const bullCount = news.filter(n=>n.sentiment==='bullish').length;
-    const bearCount = news.filter(n=>n.sentiment==='bearish').length;
-    const neutCount = news.filter(n=>n.sentiment==='neutral').length;
-    const sentimentScore = news.length>0
-      ? Math.round((bullCount-bearCount)/news.length*100)
-      : 0;
+      // Volume analysis
+      const vol10=V.slice(-10).reduce((a,b)=>a+b,0)/10;
+      const vol50=V.slice(-50).reduce((a,b)=>a+b,0)/50;
+      const volRatio=vol50>0?vol10/vol50:1;
+      const volTrend=volRatio>1.3?'Accumulation':volRatio<0.7?'Distribution':'Normal';
 
-    // ── 5. Technical signals ──────────────────────────────────────────────────
-    const signals=[];
-    const px = tech.price || livePrices[sym]?.price;
-    if(px && tech.dma50)  signals.push({name:'50 DMA',  value:tech.dma50.toFixed(1),  signal:px>tech.dma50?'bullish':'bearish', detail:`Price ${px>tech.dma50?'above':'below'} 50-day avg`});
-    if(px && tech.dma200) signals.push({name:'200 DMA', value:tech.dma200.toFixed(1), signal:px>tech.dma200?'bullish':'bearish',detail:`Price ${px>tech.dma200?'above':'below'} 200-day avg`});
-    if(tech.goldenCross!=null) signals.push({name:'MA Cross',value:tech.goldenCross?'Golden':'Death',signal:tech.goldenCross?'bullish':'bearish',detail:tech.goldenCross?'50DMA > 200DMA — long-term uptrend':'50DMA < 200DMA — long-term downtrend'});
-    if(tech.rsi!=null)  signals.push({name:'RSI-14',   value:tech.rsi.toFixed(0),     signal:tech.rsi<35?'bullish':tech.rsi>70?'bearish':'neutral',detail:tech.rsi<35?'Oversold — potential buy zone':tech.rsi>70?'Overbought — caution':'Neutral momentum'});
-    if(tech.change52w!=null) signals.push({name:'52W Return',value:(tech.change52w*100).toFixed(1)+'%',signal:tech.change52w>0.15?'bullish':tech.change52w<-0.1?'bearish':'neutral',detail:`${(tech.change52w*100).toFixed(1)}% over last year`});
-    if(tech.volRatio!=null)  signals.push({name:'Volume',    value:tech.volRatio.toFixed(2)+'x',signal:tech.volRatio>1.3?'bullish':tech.volRatio<0.7?'bearish':'neutral',detail:tech.volRatio>1.3?'Above avg volume — institutional interest':tech.volRatio<0.7?'Below avg — low conviction':'Normal volume'});
-    if(tech.pctFromHigh!=null) signals.push({name:'From 52w Hi',value:tech.pctFromHigh.toFixed(1)+'%',signal:tech.pctFromHigh>-10?'bullish':tech.pctFromHigh<-30?'bearish':'neutral',detail:`${Math.abs(tech.pctFromHigh).toFixed(1)}% below 52-week high`});
-    if(tech.change6m!=null) signals.push({name:'6M Return', value:(tech.change6m*100).toFixed(1)+'%',signal:tech.change6m>0.08?'bullish':tech.change6m<-0.05?'bearish':'neutral',detail:`6-month price momentum`});
+      // 52w / returns
+      const yr=C.slice(-252);
+      const wk52Hi=Math.max(...yr), wk52Lo=Math.min(...yr);
+      const ret1y=yr.length>1?(C[n-1]-yr[0])/yr[0]*100:null;
+      const ret6m=C.length>=126?(C[n-1]-C[n-126])/C[n-126]*100:null;
+      const ret3m=C.length>=63 ?(C[n-1]-C[n-63])/C[n-63]*100:null;
+      const ret1m=C.length>=21 ?(C[n-1]-C[n-21])/C[n-21]*100:null;
+      const pctFromHigh=(C[n-1]-wk52Hi)/wk52Hi*100;
+      const pctFromLow =(C[n-1]-wk52Lo)/wk52Lo*100;
 
-    // ── 6. Fundamental signals ────────────────────────────────────────────────
-    const fundSignals=[];
-    if(fund){
-      const [roe,de,pe,revGr,epsGr,opMgn]=fund;
-      if(roe!=null) fundSignals.push({name:'ROE',       value:roe.toFixed(1)+'%',  signal:roe>=20?'bullish':roe>=12?'neutral':'bearish', detail:roe>=20?'Excellent capital efficiency':roe>=12?'Decent returns':'Poor returns on equity'});
-      if(de!=null)  fundSignals.push({name:'Debt/Equity',value:de.toFixed(2)+'x', signal:de<=0.5?'bullish':de<=1.5?'neutral':'bearish', detail:de<=0.5?'Very low debt — financial strength':de<=1.5?'Manageable debt':'High leverage — risky'});
-      if(pe!=null)  fundSignals.push({name:'P/E Ratio', value:pe.toFixed(1)+'x',  signal:pe<20?'bullish':pe<40?'neutral':'bearish',     detail:pe<20?'Attractively valued':pe<40?'Fairly valued':'Expensive relative to earnings'});
-      if(revGr!=null) fundSignals.push({name:'Rev Growth',value:revGr.toFixed(1)+'%',signal:revGr>=15?'bullish':revGr>=5?'neutral':'bearish',detail:revGr>=15?'Strong revenue momentum':revGr>=5?'Moderate growth':'Revenue declining'});
-      if(epsGr!=null&&epsGr<500) fundSignals.push({name:'EPS Growth',value:epsGr.toFixed(1)+'%',signal:epsGr>=15?'bullish':epsGr>=5?'neutral':'bearish',detail:epsGr>=15?'Strong earnings growth':epsGr>=5?'Moderate EPS growth':'Earnings declining'});
-      if(opMgn!=null) fundSignals.push({name:'Op Margin',value:opMgn.toFixed(1)+'%',signal:opMgn>=20?'bullish':opMgn>=10?'neutral':'bearish',detail:opMgn>=20?'High margin business':opMgn>=10?'Reasonable margins':'Thin margins — vulnerable'});
+      // ── SUPPORT & RESISTANCE (key price levels) ───────────────────────────
+      // Method: pivot points + price clustering on daily candles
+      const pivots=[];
+      const lookback=Math.min(n,500);
+      const data=cans.slice(n-lookback);
+      // Standard pivot: (H+L+C)/3
+      for(let i=5;i<data.length-5;i++){
+        const pivot=(data[i].high+data[i].low+data[i].close)/3;
+        const isHigh=data[i].high>=Math.max(...data.slice(i-5,i+5+1).map(c=>c.high));
+        const isLow =data[i].low <=Math.min(...data.slice(i-5,i+5+1).map(c=>c.low));
+        if(isHigh) pivots.push({price:data[i].high, type:'resistance', strength:0});
+        if(isLow)  pivots.push({price:data[i].low,  type:'support',    strength:0});
+      }
+      // Cluster nearby levels (within 1.5%)
+      const levels=[];
+      const used=new Set();
+      pivots.sort((a,b)=>a.price-b.price);
+      for(let i=0;i<pivots.length;i++){
+        if(used.has(i))continue;
+        const cluster=[pivots[i]];
+        for(let j=i+1;j<pivots.length;j++){
+          if(used.has(j))continue;
+          if(Math.abs(pivots[j].price-pivots[i].price)/pivots[i].price<0.015){
+            cluster.push(pivots[j]); used.add(j);
+          }
+        }
+        used.add(i);
+        const avgP=cluster.reduce((a,c)=>a+c.price,0)/cluster.length;
+        levels.push({price:+avgP.toFixed(2), strength:cluster.length, type:avgP<C[n-1]?'support':'resistance'});
+      }
+      // Top 5 support and top 5 resistance
+      const supports=levels.filter(l=>l.type==='support').sort((a,b)=>b.price-a.price).slice(0,6);
+      const resistances=levels.filter(l=>l.type==='resistance').sort((a,b)=>a.price-b.price).slice(0,6);
+
+      // ── BUY ZONE ANALYSIS ─────────────────────────────────────────────────
+      const strongestSupport=supports[0]?.price||null;
+      const nextResistance=resistances[0]?.price||null;
+      let buyZoneLow=null, buyZoneHigh=null, idealBuy=null;
+      if(strongestSupport){
+        buyZoneLow  = +(strongestSupport*0.99).toFixed(2);  // 1% below support
+        buyZoneHigh = +(strongestSupport*1.02).toFixed(2);  // 2% above support
+        idealBuy    = +(strongestSupport).toFixed(2);
+      }
+      // Also consider DMA50/200 as buy zones
+      const dma50BuyZone = dma50 ? {low:+(dma50*0.98).toFixed(2), high:+(dma50*1.01).toFixed(2)} : null;
+      const dma200BuyZone= dma200? {low:+(dma200*0.97).toFixed(2),high:+(dma200*1.01).toFixed(2)} : null;
+
+      // Upside potential to resistance
+      const upsidePct = nextResistance&&C[n-1] ? +((nextResistance-C[n-1])/C[n-1]*100).toFixed(1) : null;
+      const riskReward= idealBuy&&nextResistance&&C[n-1]
+        ? +((nextResistance-C[n-1])/(C[n-1]-idealBuy)).toFixed(2) : null;
+
+      return {
+        price:C[n-1],
+        // Moving averages
+        dma20,dma50,dma100,dma200,ema9,ema21,
+        goldenCross:dma50&&dma200?dma50>dma200:null,
+        // Oscillators
+        rsi:+rsi.toFixed(1), macd:+macdVal.toFixed(2), macdSignal:+sigVal.toFixed(2),
+        macdHist:+macdHist.toFixed(2), macdBull:macdVal>sigVal,
+        stochK:+kVal.toFixed(1), stochD:+dVal.toFixed(1),
+        bbUpper:+bbUpper.toFixed(2), bbLower:+bbLower.toFixed(2), bbMid:+m20.toFixed(2),
+        bbWidth:+bbWidth.toFixed(1), bbPct:+bbPct.toFixed(2),
+        // Trend
+        adx:+adx.toFixed(1), trendStrength, atr:+atr.toFixed(2), atrPct:+atrPct.toFixed(2),
+        supertrend:st?+st.toFixed(2):null, supertrendSignal:stSignal,
+        // Volume
+        volRatio:+volRatio.toFixed(2), volTrend,
+        // Returns
+        ret1y:ret1y?+ret1y.toFixed(1):null, ret6m:ret6m?+ret6m.toFixed(1):null,
+        ret3m:ret3m?+ret3m.toFixed(1):null, ret1m:ret1m?+ret1m.toFixed(1):null,
+        wk52Hi:+wk52Hi.toFixed(2), wk52Lo:+wk52Lo.toFixed(2),
+        pctFromHigh:+pctFromHigh.toFixed(1), pctFromLow:+pctFromLow.toFixed(1),
+        // Support/Resistance
+        supports, resistances,
+        // Buy zone
+        buyZoneLow, buyZoneHigh, idealBuy,
+        dma50BuyZone, dma200BuyZone,
+        upsidePct, riskReward,
+        // Raw for chart
+        candles: cans.slice(-252).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      };
     }
 
-    // ── 7. Overall score & recommendation ────────────────────────────────────
-    const allSigs=[...signals,...fundSignals,...news.map(n=>({signal:n.sentiment}))];
-    const bullSigs=allSigs.filter(s=>s.signal==='bullish').length;
-    const bearSigs=allSigs.filter(s=>s.signal==='bearish').length;
-    const totalSigs=allSigs.length||1;
-    const bullPct=Math.round(bullSigs/totalSigs*100);
+    // Compute technicals for each timeframe
+    const tech1y  = computeAll(candles);
+    const tech3y  = computeAll(c3y.length>50?c3y:null);
+    const tech5yw = computeAll(c5yw.length>20?c5yw:null);
+    const techMo  = computeAll(cMo.length>12?cMo:null);
+    const tech1h  = computeAll(c1h.length>20?c1h:null);
 
-    // Weighted score: fundamentals 40%, technicals 35%, news 25%
-    const techBull  = signals.filter(s=>s.signal==='bullish').length;
-    const techBear  = signals.filter(s=>s.signal==='bearish').length;
-    const fundBull  = fundSignals.filter(s=>s.signal==='bullish').length;
-    const fundBear  = fundSignals.filter(s=>s.signal==='bearish').length;
-    const techScore = signals.length   ? (techBull-techBear)/signals.length   : 0;
-    const fundScore = fundSignals.length? (fundBull-fundBear)/fundSignals.length:0;
-    const newsScore = news.length       ? (bullCount-bearCount)/news.length    : 0;
-    const composite = (fundScore*0.40 + techScore*0.35 + newsScore*0.25);
+    // Chart data for all timeframes
+    const charts={
+      '1Y': tech1y.candles||[],
+      '3Y': c3y.slice(-756).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      '5Y': c5yw.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      'MAX':cMo.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      '3M': c1h.slice(-500).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+    };
 
-    let verdict, verdictColor, confidence;
-    if(composite>=0.4)       { verdict='Strong Buy';    verdictColor='#22c55e'; confidence='High'; }
-    else if(composite>=0.2)  { verdict='Buy';           verdictColor='#86efac'; confidence='Moderate'; }
-    else if(composite>=0)    { verdict='Hold / Watch';  verdictColor='#f59e0b'; confidence='Low'; }
-    else if(composite>=-0.2) { verdict='Avoid for Now'; verdictColor='#f97316'; confidence='Moderate'; }
-    else                     { verdict='Do Not Buy';    verdictColor='#ef4444'; confidence='High'; }
+    // ── SENTIMENT ────────────────────────────────────────────────────────────
+    const bull=news.filter(n=>n.sentiment==='bullish').length;
+    const bear=news.filter(n=>n.sentiment==='bearish').length;
+    const neut=news.filter(n=>n.sentiment==='neutral').length;
+    const sentScore=news.length?Math.round((bull-bear)/news.length*100):0;
 
-    // Build candle data for chart (last 60 daily candles)
-    const chartData = candles.slice(-60).map(c=>({
-      t:new Date(c.date).getTime(), o:c.open, h:c.high, l:c.low, c:c.close, v:c.volume
-    }));
+    // ── COMPOSITE RECOMMENDATION ──────────────────────────────────────────────
+    const t=tech1y; // primary timeframe
+    let bullPts=0, bearPts=0, totalPts=0;
+
+    // Technicals (35 pts)
+    if(t.dma50&&t.dma200){totalPts+=5;if(t.goldenCross)bullPts+=5;else bearPts+=5;}
+    if(t.rsi!=null){totalPts+=5;if(t.rsi<40)bullPts+=5;else if(t.rsi>70)bearPts+=5;else if(t.rsi<60)bullPts+=3;}
+    if(t.macd!=null){totalPts+=5;if(t.macdBull)bullPts+=5;else bearPts+=5;}
+    if(t.supertrendSignal){totalPts+=5;if(t.supertrendSignal==='bullish')bullPts+=5;else bearPts+=5;}
+    if(t.adx!=null){totalPts+=5;if(t.adx>25&&t.goldenCross)bullPts+=5;else if(t.adx>25&&!t.goldenCross)bearPts+=3;}
+    if(t.bbPct!=null){totalPts+=5;if(t.bbPct<0.2)bullPts+=5;else if(t.bbPct>0.8)bearPts+=5;}
+    if(t.volTrend){totalPts+=5;if(t.volTrend==='Accumulation')bullPts+=5;else if(t.volTrend==='Distribution')bearPts+=5;}
+
+    // Fundamentals (40 pts)
+    if(fund){
+      const [roe,de,pe,revGr,epsGr,opMgn]=fund;
+      if(roe!=null){totalPts+=8;if(roe>=20)bullPts+=8;else if(roe>=12)bullPts+=5;else bearPts+=5;}
+      if(de!=null){totalPts+=6;if(de<=0.5)bullPts+=6;else if(de<=1.5)bullPts+=3;else bearPts+=4;}
+      if(pe!=null){totalPts+=6;if(pe<20)bullPts+=6;else if(pe<35)bullPts+=3;else bearPts+=3;}
+      if(epsGr!=null&&epsGr<500){totalPts+=10;if(epsGr>=20)bullPts+=10;else if(epsGr>=8)bullPts+=6;else if(epsGr>=0)bullPts+=2;else bearPts+=8;}
+      if(revGr!=null){totalPts+=6;if(revGr>=15)bullPts+=6;else if(revGr>=5)bullPts+=3;else bearPts+=4;}
+      if(opMgn!=null){totalPts+=4;if(opMgn>=20)bullPts+=4;else if(opMgn>=10)bullPts+=2;}
+    }
+
+    // Sentiment (25 pts)
+    if(news.length>0){
+      totalPts+=25;
+      const sp=Math.round((bull-bear)/news.length*25);
+      if(sp>0)bullPts+=Math.min(sp,25);
+      else bearPts+=Math.min(-sp,25);
+    }
+
+    const score=totalPts>0?Math.round((bullPts-bearPts)/totalPts*100):0;
+    const bullPct=totalPts>0?Math.round(bullPts/totalPts*100):50;
+
+    let verdict,verdictColor,verdictIcon,timeframe;
+    if(score>=50)     {verdict='Strong Buy'; verdictColor='#22c55e'; verdictIcon='🚀'; timeframe='Excellent long-term opportunity';}
+    else if(score>=25){verdict='Buy';        verdictColor='#86efac'; verdictIcon='✅'; timeframe='Good for long-term accumulation';}
+    else if(score>=5) {verdict='Accumulate'; verdictColor='#f59e0b'; verdictIcon='📈'; timeframe='Buy on dips near support levels';}
+    else if(score>=-15){verdict='Hold/Watch';verdictColor='#f97316'; verdictIcon='⏳'; timeframe='Wait for better entry or clarity';}
+    else if(score>=-35){verdict='Avoid';     verdictColor='#ef4444'; verdictIcon='⚠️'; timeframe='Risk outweighs reward currently';}
+    else              {verdict='Do Not Buy'; verdictColor='#dc2626'; verdictIcon='🚫'; timeframe='Multiple bearish signals — avoid';}
+
+    // ── WHEN TO BUY ───────────────────────────────────────────────────────────
+    const whenToBuy=[];
+    if(t.buyZoneLow&&t.buyZoneHigh) whenToBuy.push({type:'Support Zone',price:`₹${t.buyZoneLow}–₹${t.buyZoneHigh}`,reason:'Strong historical support — high probability bounce zone',priority:'HIGH'});
+    if(t.dma50BuyZone) whenToBuy.push({type:'50-DMA Zone',price:`₹${t.dma50BuyZone.low}–₹${t.dma50BuyZone.high}`,reason:'Institutional buying zone — 50-day moving average support',priority:'HIGH'});
+    if(t.dma200BuyZone) whenToBuy.push({type:'200-DMA Zone',price:`₹${t.dma200BuyZone.low}–₹${t.dma200BuyZone.high}`,reason:'Long-term value zone — 200-day MA is where institutions accumulate',priority:'MEDIUM'});
+    if(t.rsi>60) whenToBuy.push({type:'RSI Pullback',price:'Wait for RSI < 45',reason:`Current RSI ${t.rsi} is elevated — better entry on pullback`,priority:'LOW'});
+    if(t.rsi<35) whenToBuy.push({type:'RSI Oversold',price:`₹${px?.toFixed(2)} (NOW)`,reason:`RSI ${t.rsi} is oversold — potential reversal zone`,priority:'HIGH'});
+    if(t.bbPct<0.2) whenToBuy.push({type:'Lower Bollinger',price:`₹${t.bbLower}`,reason:'Price near lower Bollinger Band — mean reversion opportunity',priority:'MEDIUM'});
+
+    // Build comprehensive target prices
+    const targets=[];
+    if(t.resistances.length>0){
+      t.resistances.slice(0,4).forEach((r,i)=>targets.push({label:`Target ${i+1}`,price:r.price,upside:px?+((r.price-px)/px*100).toFixed(1):null,strength:r.strength}));
+    }
+    if(t.wk52Hi) targets.push({label:'52W High',price:t.wk52Hi,upside:px?+((t.wk52Hi-px)/px*100).toFixed(1):null,strength:0});
 
     res.json({
-      sym, name:meta.n, grp:meta.grp, sector,
-      price:px||null,
+      sym, name:meta.n, grp:meta.grp, sector, price:px,
+      // Timeframe technicals
+      tech:{primary:tech1y, weekly:tech5yw, monthly:techMo, hourly:tech1h},
+      tech3y,
+      // Charts
+      charts,
       // Fundamentals
-      fund: fund ? {roe:fund[0],de:fund[1],pe:fund[2],revGr:fund[3],epsGr:fund[4],opMgn:fund[5]} : null,
-      // Technicals
-      tech:{
-        dma50:tech.dma50, dma200:tech.dma200, rsi:tech.rsi,
-        wk52Hi:tech.wk52Hi, wk52Lo:tech.wk52Lo,
-        change52w:tech.change52w?+(tech.change52w*100).toFixed(1):null,
-        change6m:tech.change6m?+(tech.change6m*100).toFixed(1):null,
-        pctFromHigh:tech.pctFromHigh?+tech.pctFromHigh.toFixed(1):null,
-        volRatio:tech.volRatio?+tech.volRatio.toFixed(2):null,
-        beta:tech.beta?+tech.beta.toFixed(2):null,
-        goldenCross:tech.goldenCross,
-      },
-      // Signals
-      techSignals:signals, fundSignals, news,
-      // Sentiment
-      sentiment:{bull:bullCount, bear:bearCount, neutral:neutCount, score:sentimentScore},
+      fund:fund?{roe:fund[0],de:fund[1],pe:fund[2],revGr:fund[3],epsGr:fund[4],opMgn:fund[5]}:null,
+      // News
+      news, sentiment:{bull,bear,neutral:neut,score:sentScore},
+      // Support/Resistance
+      supports:t.supports, resistances:t.resistances,
+      // Buy guidance
+      whenToBuy, targets,
+      idealBuy:t.idealBuy,
+      buyZone:{low:t.buyZoneLow,high:t.buyZoneHigh},
+      upsidePct:t.upsidePct, riskReward:t.riskReward,
       // Verdict
-      verdict, verdictColor, confidence, composite:+composite.toFixed(2),
-      bullPct,
-      // Chart
-      chartData,
+      verdict, verdictColor, verdictIcon, verdictTimeframe:timeframe,
+      score, bullPct,
+      // Data availability
+      dataAvailable:{
+        kite1y:c1y.length>0, kite3y:c3y.length>0,
+        kite5yw:c5yw.length>0, kiteMonthly:cMo.length>0,
+        kite1h:c1h.length>0, news:news.length>0, fundamentals:!!fund,
+      }
     });
   } catch(e){
     res.status(500).json({error:e.message});
   }
 });
+
 
 
 // Aggregates paper trade signals + live prices into a ranked recommendation list
