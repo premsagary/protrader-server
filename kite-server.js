@@ -226,18 +226,21 @@ const UNIVERSE = [
   {sym:"TATACONSUM", n:"Tata Consumer Products",    grp:"NIFTY50"},
   {sym:"SHRIRAMFIN", n:"Shriram Finance",           grp:"NIFTY50"},
   {sym:"ZOMATO",     n:"Zomato Ltd",                grp:"NIFTY50"},
-  {sym:"BAJAJ-AUTO", n:"Bajaj Auto",                grp:"NIFTY50"},
   // -- NIFTY NEXT 50 --
   {sym:"DMART",       n:"Avenue Supermarts",        grp:"NEXT50"},
   {sym:"PIDILITIND",  n:"Pidilite Industries",      grp:"NEXT50"},
   {sym:"SIEMENS",     n:"Siemens Ltd",              grp:"NEXT50"},
+  {sym:"ABB",         n:"ABB India",                grp:"NEXT50"},
+  {sym:"BAJAJAUTO",  n:"Bajaj Auto",               grp:"NEXT50"},
+  {sym:"TVSMOTOR",   n:"TVS Motor Company",        grp:"NEXT50"},
+  {sym:"VARUNBEV",   n:"Varun Beverages",          grp:"NEXT50"},
   {sym:"HAVELLS",     n:"Havells India",            grp:"NEXT50"},
   {sym:"DABUR",       n:"Dabur India",              grp:"NEXT50"},
   {sym:"MARICO",      n:"Marico Ltd",               grp:"NEXT50"},
   {sym:"GODREJCP",    n:"Godrej Consumer Products", grp:"NEXT50"},
   {sym:"AMBUJACEM",   n:"Ambuja Cements",           grp:"NEXT50"},
-  {sym:"ACC",         n:"ACC Ltd",                  grp:"NEXT50"},
-  {sym:"BIOCON",      n:"Biocon Ltd",               grp:"NEXT50"},
+  {sym:"ACC",         n:"ACC Ltd",                  grp:"MIDCAP"},
+  {sym:"BIOCON",      n:"Biocon Ltd",               grp:"MIDCAP"},
   {sym:"BERGEPAINT",  n:"Berger Paints",            grp:"NEXT50"},
   {sym:"MUTHOOTFIN",  n:"Muthoot Finance",          grp:"NEXT50"},
   {sym:"CHOLAFIN",    n:"Cholamandalam Finance",    grp:"NEXT50"},
@@ -253,7 +256,7 @@ const UNIVERSE = [
   {sym:"ICICIGI",     n:"ICICI Lombard General",    grp:"NEXT50"},
   {sym:"NAUKRI",      n:"Info Edge (Naukri)",       grp:"NEXT50"},
   {sym:"PERSISTENT",  n:"Persistent Systems",       grp:"NEXT50"},
-  {sym:"COFORGE",     n:"Coforge Ltd",              grp:"NEXT50"},
+  {sym:"COFORGE",     n:"Coforge Ltd",              grp:"MIDCAP"},
   {sym:"MPHASIS",     n:"Mphasis Ltd",              grp:"NEXT50"},
   {sym:"TATAPOWER",   n:"Tata Power",               grp:"NEXT50"},
   {sym:"ADANIGREEN",  n:"Adani Green Energy",       grp:"NEXT50"},
@@ -269,14 +272,14 @@ const UNIVERSE = [
   {sym:"IRCTC",       n:"IRCTC Ltd",                grp:"NEXT50"},
   {sym:"CONCOR",      n:"Container Corp of India",  grp:"NEXT50"},
   {sym:"MOTHERSON",   n:"Samvardhana Motherson",    grp:"NEXT50"},
-  {sym:"BALKRISIND",  n:"Balkrishna Industries",    grp:"NEXT50"},
+  {sym:"BALKRISIND",  n:"Balkrishna Industries",    grp:"MIDCAP"},
   {sym:"MFSL",        n:"Max Financial Services",   grp:"NEXT50"},
   {sym:"INDHOTEL",    n:"Indian Hotels Co",         grp:"NEXT50"},
   {sym:"VOLTAS",      n:"Voltas Ltd",               grp:"NEXT50"},
-  {sym:"WHIRLPOOL",   n:"Whirlpool of India",       grp:"NEXT50"},
+  {sym:"WHIRLPOOL",   n:"Whirlpool of India",       grp:"MIDCAP"},
   {sym:"PAGEIND",     n:"Page Industries",          grp:"NEXT50"},
   {sym:"TRENT",       n:"Trent Ltd",                grp:"NEXT50"},
-  {sym:"UNITDSPR",    n:"United Spirits",           grp:"NEXT50"},
+  {sym:"UNITDSPR",    n:"United Spirits",           grp:"MIDCAP"},
   {sym:"JUBLFOOD",    n:"Jubilant Foodworks",       grp:"NEXT50"},
 
   // -- NIFTY MIDCAP 150 --
@@ -318,7 +321,6 @@ const UNIVERSE = [
   {sym:"WELSPUNIND",  n:"Welspun India",            grp:"MIDCAP"},
   {sym:"TRIDENT",     n:"Trident Ltd",              grp:"MIDCAP"},
   {sym:"KPRMILL",     n:"K.P.R. Mill",              grp:"MIDCAP"},
-  {sym:"PAGEIND",     n:"Page Industries",          grp:"MIDCAP"},
   {sym:"IDFCFIRSTB",  n:"IDFC First Bank",          grp:"MIDCAP"},
   {sym:"FEDERALBNK",  n:"Federal Bank",             grp:"MIDCAP"},
   {sym:"KARURVYSYA",  n:"Karur Vysya Bank",         grp:"MIDCAP"},
@@ -348,8 +350,8 @@ const UNIVERSE = [
   {sym:"CUMMINSIND",  n:"Cummins India",            grp:"MIDCAP"},
   {sym:"THERMAX",     n:"Thermax Ltd",              grp:"MIDCAP"},
   {sym:"BHEL",        n:"Bharat Heavy Electricals", grp:"MIDCAP"},
-  {sym:"BEL",         n:"Bharat Electronics",       grp:"MIDCAP"},
-  {sym:"HAL",         n:"Hindustan Aeronautics",    grp:"MIDCAP"},
+  {sym:"BEL",         n:"Bharat Electronics Ltd",   grp:"NIFTY50"},
+  {sym:"HAL",         n:"Hindustan Aeronautics Ltd",grp:"NEXT50"},
   {sym:"COCHINSHIP",  n:"Cochin Shipyard",          grp:"MIDCAP"},
   {sym:"GRSE",        n:"Garden Reach Shipbuilders",grp:"MIDCAP"},
   {sym:"MAZDOCK",     n:"Mazagon Dock",             grp:"MIDCAP"},
@@ -381,7 +383,6 @@ const UNIVERSE = [
   {sym:"BLUESTARCO",  n:"Blue Star Ltd",            grp:"MIDCAP"},
   {sym:"SYMPHONY",    n:"Symphony Ltd",             grp:"MIDCAP"},
   {sym:"KALYANKJIL",  n:"Kalyan Jewellers",         grp:"MIDCAP"},
-  {sym:"TITAN",       n:"Titan Company",            grp:"MIDCAP"},
   {sym:"PCJEWELLER",  n:"PC Jeweller",              grp:"MIDCAP"},
   {sym:"SENCO",       n:"Senco Gold",               grp:"MIDCAP"},
   {sym:"INOXWIND",    n:"Inox Wind",                grp:"MIDCAP"},
@@ -429,12 +430,12 @@ const UNIVERSE = [
   {sym:"CREDITACC",   n:"Credit Access Grameen",    grp:"MIDCAP"},
   {sym:"SPANDANA",    n:"Spandana Sphoorty",        grp:"MIDCAP"},
   {sym:"ARMAN",       n:"Arman Financial Services", grp:"MIDCAP"},
-  {sym:"LICI",        n:"Life Insurance Corp",      grp:"MIDCAP"},
+  {sym:"LICI",        n:"LIC of India",             grp:"NEXT50"},
   {sym:"ANGELONE",    n:"Angel One Ltd",            grp:"MIDCAP"},
   {sym:"5PAISA",      n:"5paisa Capital",           grp:"MIDCAP"},
   {sym:"CDSL",        n:"CDSL Ltd",                 grp:"MIDCAP"},
   {sym:"BSE",         n:"BSE Ltd",                  grp:"MIDCAP"},
-  {sym:"MCX",         n:"MCX India",                grp:"MIDCAP"},
+  {sym:"MCX",         n:"MCX India",                grp:"MIDCAP"}
 ];
 
 const INSTRUMENTS = {
@@ -989,7 +990,7 @@ app.get("/api/news", async(req,res)=>{
     {url:"https://www.moneycontrol.com/rss/MCtopnews.xml",                       source:"Moneycontrol"},
     {url:"https://www.business-standard.com/rss/markets-106.rss",               source:"Business Standard"},
     {url:"https://www.livemint.com/rss/markets",                                 source:"Mint"},
-    {url:"https://www.nseindia.com/api/cmsContent?url=/Regulations/corporateAction/corporateActionRss",source:"NSE India"},
+    {url:"https://www.nseindia.com/api/cmsContent?url=/Regulations/corporateAction/corporateActionRss",source:"NSE India"}
   ];
 
   const allItems = [];
@@ -1132,7 +1133,7 @@ const MF_SEED = [
   {code:"148697",name:"Aditya Birla SL Flexi Cap",       amc:"ABSL",       cat:"flexicap"},
   {code:"148462",name:"Mirae Asset Flexi Cap",           amc:"Mirae",      cat:"flexicap"},
   {code:"148514",name:"Tata Flexi Cap",                  amc:"Tata",       cat:"flexicap"},
-  {code:"150091",name:"Groww Nifty India Defence ETF FoF",amc:"Groww",     cat:"flexicap"},
+  {code:"150091",name:"Groww Nifty India Defence ETF FoF",amc:"Groww",     cat:"flexicap"}
 ];
 
 // Auto-discover all small/mid/flexicap direct growth funds from MFAPI scheme list
@@ -1202,7 +1203,7 @@ function extractAMC(name) {
     ["Mirae","Mirae"],["Motilal","Motilal"],["Navi","Navi"],["Nippon","Nippon"],
     ["PGIM","PGIM"],["PPFAS","PPFAS"],["Parag Parikh","PPFAS"],["Quant","Quant"],
     ["SBI","SBI"],["Sundaram","Sundaram"],["Tata","Tata"],["Union","Union"],
-    ["UTI","UTI"],["WhiteOak","WhiteOak"],["360 ONE","360 ONE"],["Groww","Groww"],
+    ["UTI","UTI"],["WhiteOak","WhiteOak"],["360 ONE","360 ONE"],["Groww","Groww"]
   ];
   for (const [key,short] of amcMap) {
     if (name.includes(key)) return short;
@@ -1854,6 +1855,12 @@ let   stockFundReady     = false;
 
 // -- Sector map ---------------------------------------------------------------
 const SECTOR_MAP = {
+  "M&M": "Auto",
+  ABB: "Capital Goods",
+  BAJAJAUTO: "Auto",
+  TVSMOTOR: "Auto",
+  VARUNBEV: "Consumer",
+
   RELIANCE:'Energy',TCS:'IT',HDFCBANK:'Banking',ICICIBANK:'Banking',INFY:'IT',
   HINDUNILVR:'FMCG',ITC:'FMCG',SBIN:'Banking',BHARTIARTL:'Telecom',
   BAJFINANCE:'NBFC',KOTAKBANK:'Banking',LT:'Capital Goods',HCLTECH:'IT',
@@ -2575,7 +2582,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
           {url:'https://economictimes.indiatimes.com/markets/stocks/rss.cms',src:'ET Markets'},
           {url:'https://www.moneycontrol.com/rss/MCtopnews.xml',src:'Moneycontrol'},
           {url:'https://www.business-standard.com/rss/markets-106.rss',src:'Business Standard'},
-          {url:'https://www.livemint.com/rss/markets',src:'Mint'},
+          {url:'https://www.livemint.com/rss/markets',src:'Mint'}
         ];
         const items=[];
         await Promise.allSettled(feeds.map(async({url,src})=>{
@@ -2606,7 +2613,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
         const seen=new Set();
         return items.filter(i=>{const k=i.title.slice(0,40);if(seen.has(k))return false;seen.add(k);return true;})
           .sort((a,b)=>a.mins-b.mins).slice(0,15);
-      })(),
+      })()
     ]);
 
     const c1y  = r1y.status==='fulfilled'  && r1y.value  ? r1y.value  : [];
@@ -3260,7 +3267,7 @@ const CRYPTO_UNIVERSE = [
   {sym:"ARBUSDT",  name:"Arbitrum",       base:"ARB"},
   {sym:"OPUSDT",   name:"Optimism",       base:"OP"},
   {sym:"INJUSDT",  name:"Injective",      base:"INJ"},
-  {sym:"SUIUSDT",  name:"Sui",            base:"SUI"},
+  {sym:"SUIUSDT",  name:"Sui",            base:"SUI"}
 ];
 
 // Fetch candles - try multiple endpoints
@@ -3269,7 +3276,7 @@ async function fetchCryptoCandles(sym) {
     `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
     `https://api1.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
     `https://api2.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
-    `https://api3.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`,
+    `https://api3.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`
   ];
   for (const url of endpoints) {
     try {
@@ -3311,7 +3318,7 @@ async function fetchCryptoPricesREST() {
     `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
     `https://api1.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
     `https://api2.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
-    `https://api3.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`,
+    `https://api3.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(syms)}`
   ];
   for (const url of endpoints) {
     try {
@@ -3405,6 +3412,14 @@ const CRYPTO_CONFIG = {
   CAPITAL_PER_TRADE:5000,
   SL_PCT:           3.0,
   TGT_PCT:          6.0,
+
+  // -- NEW ADDITIONS --
+  "M&M":      [18.4,0.12,24.8,14.2,28.4,12.4],
+  ABB:        [22.4,0.08,58.4,14.8,18.4,14.8],
+  BAJAJAUTO:  [22.4,0.04,32.4,8.4,18.4,18.4],
+  TVSMOTOR:   [22.4,0.62,42.4,22.4,28.4,8.4],
+  VARUNBEV:   [22.4,0.62,52.4,28.4,28.4,12.4],
+
 };
 
 async function scanCrypto() {
