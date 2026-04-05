@@ -3671,7 +3671,7 @@ async function renderAIPortfolio() {
   h+='<option value="mf">&#x1F4CA; Mutual Funds ('+mfList.length+')</option>';
   h+='</select>';
   h+='<div style="position:relative;flex:1;min-width:200px">';
-  h+='<input id="aip-search" type="text" placeholder="Type to search..." oninput="aipSearch()" onfocus="aipSearch()" autocomplete="off" ';
+  h+='<input id="aip-search" type="text" placeholder="Search & select from list below..." oninput="aipSearch()" onfocus="aipSearch()" autocomplete="off" ';
   h+='style="width:100%;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;box-sizing:border-box">';
   h+='<div id="aip-dd" style="display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;max-height:240px;overflow-y:auto;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.6)"></div>';
   h+='</div>';
@@ -3789,13 +3789,31 @@ function aipPickItem(el){
 
 function aipAdd(){
   var item=window._aipSelected;
+
+  // Auto-select if user typed text but didn't click dropdown — match from filtered list
+  if(!item){
+    var searchEl=document.getElementById('aip-search');
+    var typeEl=document.getElementById('aip-type');
+    var q=(searchEl?searchEl.value:'').trim().toLowerCase();
+    if(q.length>0){
+      var list=typeEl&&typeEl.value==='mf'?(window._aipMFList||[]):(window._aipStockList||[]);
+      // Exact sym match first, then name starts-with, then name includes
+      item = list.find(function(x){return x.sym.toLowerCase()===q;})
+          || list.find(function(x){return x.name.toLowerCase().startsWith(q);})
+          || list.find(function(x){return x.name.toLowerCase().includes(q)||x.sym.toLowerCase().includes(q);});
+      if(!item && window._aipFiltered && window._aipFiltered.length>0){
+        item=window._aipFiltered[0]; // take top dropdown result
+      }
+    }
+  }
+
   var amtEl=document.getElementById('aip-amount');
   var amt=parseInt(amtEl?amtEl.value:'100000')||0;
   var sel=document.getElementById('aip-sel');
   function msg(t,c){if(sel){sel.textContent=t;sel.style.color=c||'var(--red)';}}
-  if(!item){msg('Search and select a stock or fund from the dropdown first');return;}
-  if(amt<100){msg('Enter a valid amount (minimum \u20b91,000)');return;}
-  if(_aiPortfolioItems.find(function(x){return x.sym===item.sym;})){msg(item.sym+' is already in your portfolio');return;}
+  if(!item){msg('\u26a0 Search and select a stock or fund from the dropdown first');return;}
+  if(amt<100){msg('\u26a0 Enter a valid amount (minimum \u20b91,000)');return;}
+  if(_aiPortfolioItems.find(function(x){return x.sym===item.sym;})){msg('\u26a0 '+item.sym+' is already in your portfolio');return;}
   _aiPortfolioItems.push(Object.assign({},item,{amount:amt}));
   window._aipSelected=null;
   var s=document.getElementById('aip-search');if(s)s.value='';
@@ -3839,11 +3857,19 @@ function aipSetYears(y,btn){
 }
 
 async function aipRunPrediction(){
+  // Auto-add any pending selected item before running
+  if(window._aipSelected || (function(){
+    var s=document.getElementById('aip-search');
+    return s&&s.value.trim().length>2;
+  })()){
+    aipAdd();
+  }
+
   var sel=document.getElementById('aip-sel');
   var btn=document.getElementById('aip-predict-btn');
   var result=document.getElementById('aip-result');
   if(!_aiPortfolioItems||!_aiPortfolioItems.length){
-    if(sel){sel.textContent='\u26a0 Add at least one investment first';sel.style.color='var(--red)';}
+    if(sel){sel.textContent='\u26a0 Add at least one investment using the + Add button first';sel.style.color='var(--red)';}
     return;
   }
   if(!result) return;
