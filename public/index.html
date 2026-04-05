@@ -1386,7 +1386,7 @@ async function renderMFPage(){
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
-      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> &middot; '+(catFunds.length-eligibleFunds.length)+' not eligible &middot; top 5 shown</span></div>';
+      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> &middot; '+(catFunds.length-eligibleFunds.length)+' not eligible &middot; top 5 cards · show more available</span></div>';
       html+='<div id="cards-'+catId+'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px"></div>';
       html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">'+catFunds.length+' total funds &middot; <b>'+eligibleFunds.length+' eligible</b> (AUM &ge;&#8377;1K Cr, age &ge;5Y, 3Y data) &middot; scroll right for all columns &middot; Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
@@ -1544,15 +1544,65 @@ async function renderMFPage(){
              : (f.filter_reasons&&f.filter_reasons[0] ? f.filter_reasons[0] : 'Not eligible')},
         ];
 
-        html+='<tr style="'+(isEligible?'':'opacity:0.45;')+'border-bottom:1px solid var(--border2);">';
+        html+='<tr data-ri="'+i+'" style="'+(isEligible?'':'opacity:0.45;')+'border-bottom:1px solid var(--border2);">';
         cells.forEach(function(c){
           html+='<td style="padding:5px 8px;'+c.s+'">'+c.v+'</td>';
         });
         html+='</tr>';
       });
+      // Show more row — hidden rows beyond 10 shown on click
+      var TABLE_INITIAL = 10;
+      html+='<tr id="tbl-more-'+cat+'" style="display:none"><td colspan="99" style="text-align:center;padding:10px;border-top:1px solid var(--border2)"><span onclick="tblExpand(\''+cat+'\')" style="cursor:pointer;font-size:11px;color:'+cfg.color+';font-weight:600;padding:4px 16px;border:1px solid '+cfg.color+'60;border-radius:20px;display:inline-block">Show more ▾</span></td></tr>';
       html+='</tbody></table></div></div>';
     });
     catsEl.innerHTML=html;
+
+    // Hide table rows beyond 10 per category, show "show more" button
+    var TABLE_INITIAL = 10;
+    ['smallcap','midcap','flexicap'].forEach(function(cat){
+      var allRows = catsEl.querySelectorAll('tr[data-ri]');
+      var catRows = [];
+      // Filter rows belonging to this cat's table
+      // Use the tbl-more row as anchor to find parent table
+      var moreRow = document.getElementById('tbl-more-'+cat);
+      if(!moreRow) return;
+      var tbody = moreRow.parentNode;
+      if(!tbody) return;
+      var rows = tbody.querySelectorAll('tr[data-ri]');
+      var hasHidden = false;
+      rows.forEach(function(r){
+        var ri = parseInt(r.getAttribute('data-ri'));
+        if(ri >= TABLE_INITIAL){
+          r.style.display = 'none';
+          hasHidden = true;
+        }
+      });
+      if(hasHidden) moreRow.style.display = '';
+    });
+
+    // Global expand function for tables
+    window.tblExpand = function(cat){
+      var moreRow = document.getElementById('tbl-more-'+cat);
+      if(!moreRow) return;
+      var tbody = moreRow.parentNode;
+      var rows = tbody.querySelectorAll('tr[data-ri]');
+      var allVisible = true;
+      rows.forEach(function(r){ if(r.style.display==='none') allVisible=false; });
+      if(!allVisible){
+        // Show all
+        rows.forEach(function(r){ r.style.display=''; });
+        var btn = moreRow.querySelector('span');
+        if(btn) btn.textContent = 'Show less ▴';
+      } else {
+        // Collapse back
+        rows.forEach(function(r){
+          var ri = parseInt(r.getAttribute('data-ri'));
+          if(ri >= TABLE_INITIAL) r.style.display = 'none';
+        });
+        var btn = moreRow.querySelector('span');
+        if(btn) btn.textContent = 'Show more ▾';
+      }
+    };
 
     // ── DO NOT INVEST summary table ─────────────────────────────────
     // Build and insert before the fund categories
@@ -1560,10 +1610,11 @@ async function renderMFPage(){
     data.funds.forEach(function(f){ if(f.eligible!==false && f.dni) dniAllFunds.push(f); });
 
     if(dniAllFunds.length > 0){
+      var DNI_INITIAL = 5;
       var dniContainer = document.createElement('div');
       dniContainer.style.cssText = 'margin-bottom:28px;border-radius:12px;overflow:hidden;border:1.5px solid rgba(239,68,68,0.4)';
 
-      // Header
+      // Header — clicking toggles expand
       var dniHeader = document.createElement('div');
       dniHeader.style.cssText = 'background:rgba(239,68,68,0.1);padding:12px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(239,68,68,0.3)';
       var dniTitle = document.createElement('div');
@@ -1580,11 +1631,10 @@ async function renderMFPage(){
       var dniTable = document.createElement('table');
       dniTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px';
 
-      // Column headers
       var dniThead = document.createElement('thead');
       var dniTr = document.createElement('tr');
       dniTr.style.cssText = 'background:var(--bg3)';
-      [['Fund','text-align:left;padding:8px 12px;color:var(--text3);font-weight:600;width:35%'],
+      [['Fund','text-align:left;padding:8px 12px;color:var(--text3);font-weight:600;width:30%'],
        ['Category','text-align:left;padding:8px 12px;color:var(--text3);font-weight:600;width:10%'],
        ['Severity','text-align:center;padding:8px 12px;color:var(--text3);font-weight:600;width:10%'],
        ['Reason','text-align:left;padding:8px 12px;color:var(--text3);font-weight:600'],
@@ -1596,7 +1646,6 @@ async function renderMFPage(){
       dniThead.appendChild(dniTr);
       dniTable.appendChild(dniThead);
 
-      // Rows — red first, then amber
       var dniTbody = document.createElement('tbody');
       var sortedDni = dniAllFunds.slice().sort(function(a,b){
         var aRed = a.dni.level==='red' ? 0 : 1;
@@ -1605,22 +1654,21 @@ async function renderMFPage(){
         return (a.sub_category||'').localeCompare(b.sub_category||'');
       });
 
+      var dniRows = [];
       sortedDni.forEach(function(f, idx){
         var isRed = f.dni.level==='red';
         var row = document.createElement('tr');
         row.style.cssText = 'border-top:1px solid var(--border2);'+(idx%2===0?'background:var(--bg)':'background:var(--bg2)');
+        if(idx >= DNI_INITIAL) row.style.display = 'none'; // hidden initially
 
-        // Fund name
         var tdName = document.createElement('td');
         tdName.style.cssText = 'padding:9px 12px;font-weight:600;color:'+(isRed?'var(--red)':'var(--amber)');
         tdName.textContent = f.name;
 
-        // Category
         var tdCat = document.createElement('td');
         tdCat.style.cssText = 'padding:9px 12px;color:var(--text3)';
         tdCat.textContent = (f.sub_category||'').replace(' Fund','').replace(' Cap','Cap');
 
-        // Severity badge
         var tdSev = document.createElement('td');
         tdSev.style.cssText = 'padding:9px 12px;text-align:center';
         var badge = document.createElement('span');
@@ -1630,7 +1678,6 @@ async function renderMFPage(){
         badge.textContent = isRed ? '🚫 Avoid' : '⚠️ Caution';
         tdSev.appendChild(badge);
 
-        // Reason
         var tdReason = document.createElement('td');
         tdReason.style.cssText = 'padding:9px 12px;color:var(--text2);line-height:1.5';
         var shortSpan = document.createElement('span');
@@ -1644,32 +1691,74 @@ async function renderMFPage(){
         row.appendChild(tdName); row.appendChild(tdCat);
         row.appendChild(tdSev); row.appendChild(tdReason);
         dniTbody.appendChild(row);
+        dniRows.push(row);
       });
 
       dniTable.appendChild(dniTbody);
       dniContainer.appendChild(dniTable);
 
-      // Insert before catsEl
+      // Show more / Show less button
+      if(sortedDni.length > DNI_INITIAL){
+        var dniMore = document.createElement('div');
+        dniMore.style.cssText = 'text-align:center;padding:10px;background:var(--bg2);border-top:1px solid var(--border2);cursor:pointer';
+        var dniMoreBtn = document.createElement('span');
+        dniMoreBtn.style.cssText = 'font-size:11px;color:var(--red);font-weight:600;cursor:pointer;padding:4px 14px;border:1px solid rgba(239,68,68,0.4);border-radius:20px';
+        var dniExpanded = false;
+        dniMoreBtn.textContent = 'Show all '+(sortedDni.length - DNI_INITIAL)+' more flagged funds ▾';
+        dniMoreBtn.onclick = function(){
+          dniExpanded = !dniExpanded;
+          dniRows.forEach(function(r, i){
+            if(i >= DNI_INITIAL) r.style.display = dniExpanded ? '' : 'none';
+          });
+          dniMoreBtn.textContent = dniExpanded
+            ? 'Show less ▴'
+            : 'Show all '+(sortedDni.length - DNI_INITIAL)+' more flagged funds ▾';
+        };
+        dniMore.appendChild(dniMoreBtn);
+        dniContainer.appendChild(dniMore);
+      }
+
       catsEl.parentNode.insertBefore(dniContainer, catsEl);
     }
 
-    // Set cards using DOM appendChild — avoids any innerHTML parsing issues
-    // DNI red funds excluded from top-5 cards (shown in table but not recommended)
+    // Set cards + table with show more
     ["smallcap","midcap","flexicap"].forEach(function(cat){
       var catFunds2=grouped[cat], cfg2=MF_CAT[cat];
       if(!catFunds2||!catFunds2.length) return;
       var catId2='cat-'+cat.replace(/\s/g,'-');
       var el=document.getElementById('cards-'+catId2);
       if(!el) return;
-      // Eligible, non-red-DNI funds for cards (amber DNI still show with warning)
+      // DNI red funds excluded from recommendation cards
       var eligFunds=catFunds2.filter(function(f){
         return f.eligible!==false && !(f.dni && f.dni.level==='red');
       });
       var maxS2=eligFunds[0]?eligFunds[0].score:1;
+      var CARDS_INITIAL=5;
       el.innerHTML='';
-      eligFunds.slice(0,5).forEach(function(f,i){
-        el.appendChild(mfCardEl(f,i+1,cfg2,maxS2));
+      var cardEls=[];
+      eligFunds.slice(0,10).forEach(function(f,i){
+        var cardEl=mfCardEl(f,i+1,cfg2,maxS2);
+        if(i>=CARDS_INITIAL) cardEl.style.display='none';
+        el.appendChild(cardEl);
+        cardEls.push(cardEl);
       });
+      // Show more button for cards
+      if(eligFunds.length > CARDS_INITIAL){
+        var moreCardBtn=document.createElement('div');
+        moreCardBtn.style.cssText='grid-column:1/-1;text-align:center;padding:4px 0 8px';
+        var moreCardSpan=document.createElement('span');
+        moreCardSpan.style.cssText='font-size:11px;color:'+cfg2.color+';font-weight:600;cursor:pointer;padding:5px 18px;border:1px solid '+cfg2.color+'60;border-radius:20px;display:inline-block';
+        var cardsExpanded=false;
+        var remaining=Math.min(eligFunds.length,10)-CARDS_INITIAL;
+        moreCardSpan.textContent='Show '+(remaining)+' more funds ▾';
+        moreCardSpan.onclick=function(){
+          cardsExpanded=!cardsExpanded;
+          cardEls.forEach(function(c,i){ if(i>=CARDS_INITIAL) c.style.display=cardsExpanded?'':'none'; });
+          moreCardSpan.textContent=cardsExpanded?'Show less ▴':'Show '+(remaining)+' more funds ▾';
+        };
+        moreCardBtn.appendChild(moreCardSpan);
+        el.appendChild(moreCardBtn);
+      }
     });
 
     document.getElementById("mf-footer").innerHTML=
