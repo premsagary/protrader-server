@@ -1195,6 +1195,50 @@ function pts(pct, mx) {
 }
 
 // ── AMC quality scores (Morningstar Stewardship Pillar) ──────────
+// ── DO NOT INVEST flags — research-based professional overlays ───────
+// Funds that pass eligibility filters but have specific disqualifying
+// characteristics. Shown in red on cards with reason.
+const DO_NOT_INVEST = {
+  // 🔴 SEBI ACTIVE INVESTIGATIONS — capital at risk
+  "Quant Small Cap Fund":      { level:"red",   short:"SEBI Investigation",         reason:"SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved." },
+  "Quant Mid Cap Fund":        { level:"red",   short:"SEBI Investigation",         reason:"SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved." },
+  "Quant Flexi Cap Fund":      { level:"red",   short:"SEBI Investigation",         reason:"SEBI raided Quant AMC in 2024 for front-running. Active probe ongoing. Do not invest until resolved." },
+  // 🔴 EXTREME UNDERPERFORMERS
+  "UTI Flexi Cap Fund":        { level:"red",   short:"Consistent Underperformer",  reason:"3Y CAGR only 8.5%, 5Y only 5.9%. Dead last among eligible flexi cap funds. No reason to hold when peers deliver 16-22%." },
+  "LIC MF Flexi Cap Fund":     { level:"red",   short:"Worst Performer + Expensive",reason:"3Y CAGR 12.6%, 5Y 10%, 10Y 10.4% — worst long-term returns in flexi cap. Expense 1.59% is expensive for consistently poor results." },
+  "SBI Small Cap Fund":        { level:"red",   short:"Too Large + Underperformer", reason:"AUM ₹35,000 Cr — far too large for small cap. Fund is forced to hold mid/large cap to deploy capital. 3Y CAGR 12.6%, ranked last among eligible small caps." },
+  // ⚠️ SEBI ENFORCEMENT ACTIONS
+  "Axis Flexi Cap Fund":       { level:"amber", short:"SEBI Enforcement Action",    reason:"Axis AMC had 21 entities barred by SEBI in 2022 — most serious action among eligible funds. 3Y CAGR only 13.6%, ranked #19 of 21 flexi caps." },
+  "Axis Midcap Fund":          { level:"amber", short:"SEBI Enforcement Action",    reason:"Axis AMC 2022 enforcement action. Score already reduced 15%. Better mid cap alternatives exist at similar price." },
+  "Axis Small Cap Fund":       { level:"amber", short:"SEBI Enforcement Action",    reason:"Axis AMC 2022 enforcement action. Despite decent 10Y numbers, governance concern remains. Better alternatives available." },
+  "Aditya Birla SL Flexi Cap Fund":  { level:"amber", short:"SEBI Fine + Below Average",  reason:"SEBI minor fine on record. 3Y CAGR 16.6% is mediocre for the AMC's resources. Ranked #7 of 21 flexi caps." },
+  "Aditya Birla SL Midcap Fund":     { level:"amber", short:"SEBI Fine + Underperformance",reason:"SEBI minor fine 2024. Sharpe -0.13, ranked #22 of 23 mid caps. Worst drawdown in mid cap at 45.1%." },
+  "Aditya Birla SL Small Cap Fund":  { level:"amber", short:"SEBI Fine + Worst Drawdown",  reason:"SEBI fine on record. Maximum drawdown 57.4% — worst in eligible small cap universe. High risk, mediocre returns." },
+  "Franklin India Flexi Cap Fund":   { level:"amber", short:"Reputation Risk + SEBI History",reason:"Franklin India's 2020 debt fund closure shook investor trust. SEBI fine on record. 3Y CAGR 16%, ranked #14 of 21. Choose peers instead." },
+  "Franklin India Mid Cap Fund":     { level:"amber", short:"SEBI History + Below Average",  reason:"Franklin AMC SEBI history. 3Y CAGR 19.1% but ranked #17 of 23 mid caps. Multiple better alternatives exist." },
+  "Franklin India Small Cap Fund":   { level:"amber", short:"SEBI History + Below Average",  reason:"Franklin AMC SEBI history. 3Y CAGR 16.8%, ranked #13 of 21 small caps. Better small cap options available." },
+  // ⚠️ AUM TOO LARGE FOR CATEGORY
+  "HDFC Small Cap Fund":       { level:"amber", short:"AUM Too Large for Small Cap", reason:"AUM ₹37,424 Cr — way above ₹15K Cr ideal for small cap. Cannot find enough small cap stocks. Forced into mid/large cap, defeating the purpose." },
+  // ⚠️ CHRONIC UNDERPERFORMERS
+  "SBI Flexicap Fund":         { level:"amber", short:"Chronic Underperformer",     reason:"3Y CAGR 11.2%, 5Y 10.2%. Bottom quartile in every metric. SBI's scale and bureaucracy works against active management here." },
+  "SBI Midcap Fund":           { level:"amber", short:"Chronic Underperformer",     reason:"3Y CAGR 14.8%, Sharpe -0.50 — worst among established mid cap funds. Ranked #20 of 23 eligible." },
+  "UTI Mid Cap Fund":          { level:"amber", short:"Consistent Underperformer",  reason:"3Y CAGR 16%, ranked #21 of 23 eligible mid caps. UTI funds have underperformed peers consistently for 5+ years." },
+  "Kotak Small Cap Fund":      { level:"amber", short:"Declining Performance",      reason:"3Y CAGR only 13.9%, ranked #19 of 21 despite 13Y track record. Strategy has clearly drifted from its historically strong approach." },
+  "Tata Small Cap Fund":       { level:"amber", short:"Worst Risk-Adjusted Returns",reason:"Sharpe -0.97 — worst risk-adjusted return in eligible small cap. 3Y CAGR 12.2%. Taking maximum risk for minimum reward." },
+  "PGIM India Flexi Cap Fund": { level:"amber", short:"Consistent Underperformer",  reason:"3Y CAGR 11.2%, 5Y 11.2%. Ranked near bottom of flexi cap. PGIM India has had fund manager instability concerns." },
+  "DSP Midcap Fund":           { level:"amber", short:"Declining 5Y Performance",   reason:"3Y CAGR 18.9% looks ok but 5Y only 12.8% — significantly below peers. DSP Midcap has been losing ground steadily." },
+  "Canara Rob Small Cap Fund": { level:"amber", short:"Below Average",              reason:"3Y CAGR 14.7%, ranked #12 of 21 eligible small caps. Consistently below median peer performance." },
+  "Canara Rob Flexi Cap Fund": { level:"amber", short:"Below Average",              reason:"3Y CAGR 13.6%, 5Y 12%. Ranked #8 of 21 flexi caps. Multiple better alternatives at similar or lower cost." },
+  // ⚠️ HIGH RISK, SPECIFIC CONCERNS
+  "Motilal Oswal Midcap Fund": { level:"amber", short:"High Volatility Momentum Fund",reason:"Rolling 30.8% looks great but 1Y return -9.6%, Sharpe -0.64 worst in eligible mid caps. Motilal's concentrated momentum strategy falls hard in corrections. 26.6% below ATH." },
+  "JM Flexicap Fund":          { level:"amber", short:"Aggressive Strategy, Inconsistent",reason:"1Y return -5.6%, Sharpe -0.59, 21.2% below ATH. JM funds use aggressive sector bets that work in bull runs but crash hard. Not suitable for stable wealth creation." },
+  "Sundaram Small Cap Fund":   { level:"amber", short:"Worst Drawdown in Category", reason:"Maximum drawdown 57.1% — worst in eligible small cap universe. 3Y CAGR 18.6% does not justify catastrophic correction risk." },
+  "HSBC Small Cap Fund":       { level:"amber", short:"High Drawdown, Weak Returns",reason:"Max drawdown 52.5% — second worst in eligible small cap. 3Y CAGR only 14.9%. Poor risk-reward trade-off." },
+  "ICICI Pru Midcap Fund":     { level:"amber", short:"Highest Cost in Category",   reason:"Expense ratio 1.03% — highest among eligible mid cap funds. Good Sharpe but high cost compounds against you over time. Better value peers available." },
+  "Bandhan Flexi Cap Fund":    { level:"amber", short:"Underperformer + Expensive",  reason:"3Y CAGR 14.2%, 5Y 11.8%, ranked #13 of 21 flexi caps. Expense 1.13% — one of highest in category. Poor value proposition." },
+  "HSBC Flexi Cap Fund":       { level:"amber", short:"Expensive for Returns",      reason:"Expense 1.20% — one of most expensive eligible flexi cap funds. 3Y CAGR 16.4% ranked #9. High cost will compound against long-term returns." },
+};
+
 const AMC_QUAL = {
   "PPFAS":10,"HDFC":9,"Nippon":9,"ICICI":8,"SBI":8,"Kotak":8,
   "DSP":8,"Mirae":8,"UTI":7,"Canara":7,"Motilal":7,"Edelweiss":7,
@@ -1429,12 +1473,17 @@ function scoreMFTickertape(f) {
     score += 1; hits[`AUM ₹${Math.round(aum).toLocaleString('en-IN')} Cr (small fund)`] = 1;
   }
 
-  // 9. TRACK RECORD (5 pts) ─────────────────────────────────────────
-  // All eligible funds are 5Y+ (filter ensures this).
-  // 10Y = full bull+bear cycle including 2020 crash + 2024-25 correction.
-  if      (months >= 120) { score += 5; hits[`Track record: ${Math.round(months)} months (10Y+ full cycle)`] = 5; }
-  else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+)`] = 4; }
-  else if (months >= 60)  { score += 3; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 3; }
+  // 9. TRACK RECORD (9 pts) ─────────────────────────────────────────
+  // 10Y matters far more than we were giving it.
+  // A 10Y fund survived: demonetisation (2016), IL&FS crisis (2018),
+  // COVID crash (2020 -38%), 2022 global selloff, 2024-25 correction.
+  // That is 5 distinct stress events. A 5Y fund caught only 2 of them.
+  // Morningstar weights 10Y returns at 50% of their star rating.
+  // New scale: 5Y=2pts, 7Y=4pts, 10Y=7pts, 13Y=9pts
+  if      (months >= 156) { score += 9; hits[`Track record: ${Math.round(months)} months (13Y+ — pre-taper tantrum history)`] = 9; }
+  else if (months >= 120) { score += 7; hits[`Track record: ${Math.round(months)} months (10Y+ — full bull-bear cycle)`] = 7; }
+  else if (months >= 84)  { score += 4; hits[`Track record: ${Math.round(months)} months (7Y+ — two corrections)`] = 4; }
+  else if (months >= 60)  { score += 2; hits[`Track record: ${Math.round(months)} months (5Y minimum)`] = 2; }
 
   // 10. AMC QUALITY (10 pts) ────────────────────────────────────────
   // Morningstar Stewardship Pillar: governance, team depth, SEBI record.
@@ -1449,6 +1498,9 @@ function scoreMFTickertape(f) {
   else if (qual.sebi === 'action') { score = Math.round(score * 0.85 * 10)/10; hits['Past SEBI enforcement action: -15% score penalty'] = 0; }
   else if (qual.sebi === 'minor')  { score = Math.round(score * 0.95 * 10)/10; hits['Minor SEBI fine on record: -5% score penalty'] = 0; }
 
+  // Professional overlay — DO NOT INVEST flag
+  const dniFlag = DO_NOT_INVEST[f.name] || null;
+
   return {
     score: Math.round(score * 10) / 10,
     hits,
@@ -1456,6 +1508,7 @@ function scoreMFTickertape(f) {
     amc_sebi:    qual.sebi,
     amc_warning: qual.warning,
     amc_note:    qual.note || null,
+    dni:         dniFlag,   // {level, short, reason} or null
   };
 }
 
@@ -1565,8 +1618,8 @@ app.get("/api/mf/funds", async(req,res)=>{
 
     // ── STEP 4: SCORE ELIGIBLE FUNDS ────────────────────────────────
     const scoredEligible = eligible.map(f => {
-      const {score, hits, cat, amc_sebi, amc_warning, amc_note} = scoreMFTickertape(f);
-      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, eligible: true, filter_reasons: []};
+      const {score, hits, cat, amc_sebi, amc_warning, amc_note, dni} = scoreMFTickertape(f);
+      return {...f, score, hits, cat, amc_sebi, amc_warning, amc_note, dni, eligible: true, filter_reasons: []};
     });
 
     // ── STEP 5: MARK INELIGIBLE FUNDS (shown in table, not scored) ──
@@ -1584,8 +1637,12 @@ app.get("/api/mf/funds", async(req,res)=>{
     const allFunds = [...scoredEligible, ...scoredIneligible];
     allFunds.sort((a,b) => {
       if (a.sub_category !== b.sub_category) return a.sub_category.localeCompare(b.sub_category);
+      // eligible before ineligible
       if (a.eligible && !b.eligible) return -1;
       if (!a.eligible && b.eligible) return 1;
+      // within eligible: DNI red at very bottom, DNI amber above that, clean funds at top
+      const dniRank = f => !f.dni ? 0 : f.dni.level==='red' ? 2 : 1;
+      if (dniRank(a) !== dniRank(b)) return dniRank(a) - dniRank(b);
       return (b.score||0) - (a.score||0);
     });
 
