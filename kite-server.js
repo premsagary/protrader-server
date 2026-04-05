@@ -1780,59 +1780,61 @@ app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTr
 
 // ── Stock Fundamental Scoring Engine ─────────────────────────────────────────
 // 100-point multi-factor model: Quality(25) + Value(20) + Momentum(20) + Growth(20) + Technical(15)
-// Methodology matches NSE Quality/Value/Momentum institutional indices
-const stockFundamentals = {}; // cache keyed by NSE symbol
+// Data: Yahoo Finance v7 quote (batch, fast) + Kite live prices
+const stockFundamentals = {};
 let stockFundamentalsLastFetch = 0;
 let stockFundamentalsLoading  = false;
+let stockFundamentalsReady    = false; // true once we have at least partial data
 
-function toYahooSym(s) { return s + '.NS'; }
-
-async function fetchOneFundamental(nseSym) {
-  const ySym = toYahooSym(nseSym);
-  const url = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${ySym}`
-    + `?modules=financialData,defaultKeyStatistics,summaryDetail,price,assetProfile`;
+// Yahoo Finance v7 quote — supports batch of up to 10 symbols at once
+// Much faster and more reliable than v11/quoteSummary per-symbol
+async function fetchYahooBatch(symbols) {
+  const syms = symbols.map(s => s + '.NS').join(',');
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=`
+    + `regularMarketPrice,fiftyTwoWeekHigh,fiftyTwoWeekLow,fiftyDayAverage,`
+    + `twoHundredDayAverage,regularMarketChangePercent,regularMarketVolume,`
+    + `averageDailyVolume3Month,trailingPE,forwardPE,priceToBook,`
+    + `epsTrailingTwelveMonths,epsForward,bookValue,dividendYield,`
+    + `marketCap,beta,fiftyTwoWeekChangePercent,sector,industry,`
+    + `shortName,longName,regularMarketPreviousClose`;
   try {
     const res = await fetch(url, {
-      headers:{'User-Agent':'Mozilla/5.0 (ProTrader/2.0)'},
-      signal: AbortSignal.timeout(8000)
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return j.quoteResponse?.result || [];
+  } catch(e) { return []; }
+}
+
+// Yahoo Finance v11 quoteSummary for deeper fundamentals (ROE, D/E, growth etc.)
+// Called for smaller batches after v7 gives us price data
+async function fetchYahooSummary(nseSym) {
+  const url = `https://query1.finance.yahoo.com/v11/finance/quoteSummary/${nseSym}.NS`
+    + `?modules=financialData,defaultKeyStatistics`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(6000)
     });
     if (!res.ok) return null;
     const j = await res.json();
     const r = j.quoteSummary?.result?.[0];
     if (!r) return null;
-    const fd=r.financialData||{}, ks=r.defaultKeyStatistics||{},
-          sd=r.summaryDetail||{}, pr=r.price||{}, ap=r.assetProfile||{};
-    const n=v=>v?.raw!=null?v.raw:(typeof v==='number'?v:null);
+    const fd = r.financialData || {}, ks = r.defaultKeyStatistics || {};
+    const n = v => v?.raw != null ? v.raw : (typeof v === 'number' ? v : null);
     return {
-      sym:nseSym,
-      // Quality
-      roe:n(fd.returnOnEquity), roa:n(fd.returnOnAssets),
-      debtToEq:n(fd.debtToEquity), currentR:n(fd.currentRatio),
-      opMargin:n(fd.operatingMargins), profitMgn:n(fd.profitMargins),
-      grossMgn:n(fd.grossMargins), freeCF:n(fd.freeCashflow),
-      // Value
-      trailPE:n(sd.trailingPE)||n(ks.trailingPE), fwdPE:n(ks.forwardPE),
-      pb:n(ks.priceToBook), peg:n(ks.pegRatio),
-      divYield:n(sd.dividendYield), evEbitda:n(ks.enterpriseToEbitda),
-      // Growth
-      revGrowth:n(fd.revenueGrowth), earGrowth:n(fd.earningsGrowth),
-      trailEps:n(ks.trailingEps), fwdEps:n(ks.forwardEps),
-      // Analyst
-      targetMean:n(fd.targetMeanPrice), targetHigh:n(fd.targetHighPrice),
-      targetLow:n(fd.targetLowPrice), recKey:fd.recommendationKey||null,
-      recMean:n(fd.recommendationMean), analystCnt:n(fd.numberOfAnalystOpinions),
-      // Momentum / Price
-      price:n(pr.regularMarketPrice)||n(fd.currentPrice),
-      marketCap:n(pr.marketCap)||n(sd.marketCap),
-      wk52Hi:n(sd.fiftyTwoWeekHigh), wk52Lo:n(sd.fiftyTwoWeekLow),
-      dma50:n(sd.fiftyDayAverage), dma200:n(sd.twoHundredDayAverage),
-      change52w:n(ks['52WeekChange']), beta:n(ks.beta),
-      avgVol:n(sd.averageVolume), avgVol10d:n(sd.averageVolume10days),
-      // Institutional
-      instHeld:n(ks.heldPercentInstitutions),
-      // Meta
-      sector:ap.sector||'Unknown', industry:ap.industry||'',
-      fetchedAt:Date.now(),
+      roe: n(fd.returnOnEquity), roa: n(fd.returnOnAssets),
+      debtToEq: n(fd.debtToEquity), currentR: n(fd.currentRatio),
+      opMargin: n(fd.operatingMargins), profitMgn: n(fd.profitMargins),
+      grossMgn: n(fd.grossMargins), freeCF: n(fd.freeCashflow),
+      revGrowth: n(fd.revenueGrowth), earGrowth: n(fd.earningsGrowth),
+      targetMean: n(fd.targetMeanPrice), targetHigh: n(fd.targetHighPrice),
+      targetLow: n(fd.targetLowPrice), recKey: fd.recommendationKey || null,
+      recMean: n(fd.recommendationMean), analystCnt: n(fd.numberOfAnalystOpinions),
+      peg: n(ks.pegRatio), instHeld: n(ks.heldPercentInstitutions),
+      fwdEps: n(ks.forwardEps), trailEps: n(ks.trailingEps),
     };
   } catch(e) { return null; }
 }
@@ -1840,18 +1842,74 @@ async function fetchOneFundamental(nseSym) {
 async function refreshAllFundamentals() {
   if (stockFundamentalsLoading) return;
   stockFundamentalsLoading = true;
-  console.log('📊 Fetching stock fundamentals from Yahoo Finance...');
-  const delay = ms => new Promise(r=>setTimeout(r,ms));
-  let ok=0, fail=0;
-  for (const stock of UNIVERSE) {
-    const d = await fetchOneFundamental(stock.sym);
-    if (d) { stockFundamentals[stock.sym]={...d,name:stock.n,grp:stock.grp}; ok++; }
-    else fail++;
-    await delay(150); // ~150ms between calls → ~38s for 252 stocks
+  console.log('📊 Starting stock fundamentals refresh...');
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  const BATCH = 8; // Yahoo v7 handles 8 symbols reliably
+  const syms = UNIVERSE.map(s => s.sym);
+
+  // ── PHASE 1: Fast batch price + basic fundamentals via v7 ──────
+  console.log(`📊 Phase 1: Fetching price data for ${syms.length} stocks in batches of ${BATCH}...`);
+  let phase1ok = 0;
+  for (let i = 0; i < syms.length; i += BATCH) {
+    const batch = syms.slice(i, i + BATCH);
+    const results = await fetchYahooBatch(batch);
+    for (const q of results) {
+      const nseSym = q.symbol?.replace('.NS', '');
+      if (!nseSym) continue;
+      const meta = UNIVERSE.find(u => u.sym === nseSym) || { n: nseSym, grp: 'NSE' };
+      stockFundamentals[nseSym] = {
+        sym: nseSym, name: meta.n, grp: meta.grp,
+        // Price / momentum from v7
+        price:     q.regularMarketPrice,
+        wk52Hi:    q.fiftyTwoWeekHigh,
+        wk52Lo:    q.fiftyTwoWeekLow,
+        dma50:     q.fiftyDayAverage,
+        dma200:    q.twoHundredDayAverage,
+        change52w: q.fiftyTwoWeekChangePercent != null ? q.fiftyTwoWeekChangePercent / 100 : null,
+        beta:      q.beta,
+        avgVol:    q.averageDailyVolume3Month,
+        avgVol10d: q.regularMarketVolume,
+        // Valuation from v7
+        trailPE:   q.trailingPE,
+        fwdPE:     q.forwardPE,
+        pb:        q.priceToBook,
+        divYield:  q.dividendYield,
+        trailEps:  q.epsTrailingTwelveMonths,
+        fwdEps:    q.epsForward,
+        marketCap: q.marketCap,
+        // Meta
+        sector:    q.sector || 'Unknown',
+        industry:  q.industry || '',
+        // Deep fundamentals — filled in phase 2
+        roe: null, roa: null, debtToEq: null, opMargin: null,
+        revGrowth: null, earGrowth: null, peg: null,
+        targetMean: null, targetHigh: null, targetLow: null,
+        recKey: null, recMean: null, analystCnt: null,
+        instHeld: null, freeCF: null,
+        fetchedAt: Date.now(),
+      };
+      phase1ok++;
+    }
+    await delay(300); // 300ms between batches
+  }
+  console.log(`📊 Phase 1 done: ${phase1ok}/${syms.length} stocks`);
+  stockFundamentalsReady = phase1ok > 0;
+
+  // ── PHASE 2: Deep fundamentals via v11 (sequential, slower) ───
+  console.log('📊 Phase 2: Fetching deep fundamentals (ROE, growth, analyst)...');
+  let phase2ok = 0;
+  for (const nseSym of syms) {
+    if (!stockFundamentals[nseSym]) continue; // skip if phase 1 failed
+    const deep = await fetchYahooSummary(nseSym);
+    if (deep) {
+      Object.assign(stockFundamentals[nseSym], deep);
+      phase2ok++;
+    }
+    await delay(200);
   }
   stockFundamentalsLastFetch = Date.now();
-  stockFundamentalsLoading   = false;
-  console.log(`📊 Fundamentals done: ${ok} OK, ${fail} failed`);
+  stockFundamentalsLoading = false;
+  console.log(`📊 Phase 2 done: ${phase2ok}/${syms.length} deep. Full refresh complete.`);
 }
 
 function pctRankStk(val, arr, higherBetter=true) {
@@ -1977,17 +2035,17 @@ app.get('/api/stocks/score', async(req,res)=>{
     const stale = Date.now()-stockFundamentalsLastFetch > 23*3600*1000;
     const empty  = Object.keys(stockFundamentals).length === 0;
 
-    if (empty) {
-      // First request — trigger and wait
-      await refreshAllFundamentals();
+    if (empty && !stockFundamentalsLoading) {
+      // Trigger phase 1 only — don't await, return loading state immediately
+      refreshAllFundamentals();
+      return res.json({stocks:[], loading:true, loadingMsg:'Fetching price data for 252 stocks… (10-20 seconds)'});
+    } else if (empty && stockFundamentalsLoading) {
+      return res.json({stocks:[], loading:true, loadingMsg:'Fetching price data… please wait'});
     } else if (stale && !stockFundamentalsLoading) {
-      refreshAllFundamentals(); // background
+      refreshAllFundamentals(); // background refresh, serve stale data now
     }
 
     const all = Object.values(stockFundamentals);
-    if (!all.length) {
-      return res.json({stocks:[],loading:true,message:'Loading fundamentals from Yahoo Finance (~40s)…'});
-    }
 
     // Pre-compute derived fields for peer ranking
     all.forEach(f=>{
@@ -2060,6 +2118,7 @@ app.get('/api/stocks/score', async(req,res)=>{
       last_refresh: lastFetch,
       market_open: isMarketOpen(),
       loading: stockFundamentalsLoading,
+      loadingMsg: stockFundamentalsLoading ? 'Fetching deep fundamentals in background…' : null,
       scoring: {
         pillars:[
           {name:'Quality',  pts:25, factors:['ROE','ROA','Debt/Equity','Operating Margin']},
