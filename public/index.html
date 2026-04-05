@@ -462,7 +462,7 @@ function renderTopBar(){
     ].join("");
   } else if(S.mode==="stockrec"){
     document.getElementById("topbar-stats").innerHTML=[
-      stat("Universe","252 stocks","var(--text2)"),
+      stat("Universe", (window._universeCount||252)+" stocks", "var(--text2)"),
       stat("Criteria","100 pts","#f59e0b"),
       stat("Pillars","5 factors","#f59e0b"),
       stat("Scope","Long term","var(--green)"),
@@ -2071,6 +2071,13 @@ async function pollStockRec(){
       return;
     }
     stockRecData = d;
+    // Update universe count in header dynamically
+    if(d.universe_total) {
+      window._universeCount = d.universe_total;
+      // Update the stat pill if visible
+      var uEl = document.querySelector('[data-stat="universe"]');
+      if(uEl) uEl.textContent = d.universe_total + ' stocks';
+    }
     renderStockRecPage();
   } catch(e){
     var cont2 = document.getElementById('main-content');
@@ -3103,12 +3110,16 @@ function showTokenMsg(text, color) {
 }
 
 // Check token status on load and every 5 minutes
-checkTokenStatus();
-_tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
+document.addEventListener('DOMContentLoaded', function() {
+  checkTokenStatus();
+  _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000);
+  setMode("mf");
+  fetchAll();
+  fetchCryptoPrices();
+  setInterval(fetchAll, 15000);
+  setInterval(fetchCryptoPrices, 30000);
+});
 
-// -- Passcode gate for Stocks & Crypto -----------------------------------------
-var _unlocked = false;
-var _pendingMode = null;
 
 function checkAccess(mode) {
   if (_unlocked) {
@@ -3157,11 +3168,9 @@ document.addEventListener('click', function(e){
   if(modal && e.target === modal) closePasscode();
 });
 
-setMode("mf");
-fetchAll();
-fetchCryptoPrices();
-setInterval(fetchAll, 15000);
-setInterval(fetchCryptoPrices, 30000);
+// -- Passcode gate for Stocks & Crypto -----------------------------------------
+var _unlocked = false;
+var _pendingMode = null;
 </script>
 <!-- Passcode Modal -->
 <div id="passcode-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.75);backdrop-filter:blur(6px);align-items:center;justify-content:center">
