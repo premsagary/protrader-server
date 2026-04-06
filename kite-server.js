@@ -108,7 +108,58 @@ async function initDB() {
         message    TEXT
       )
     `);
-    console.log("✅ DB ready");
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS screener_fundamentals (
+        sym                   VARCHAR(20) PRIMARY KEY,
+        name                  VARCHAR(150),
+        nse_code              VARCHAR(20),
+        bse_code              VARCHAR(20),
+        industry              VARCHAR(100),
+        industry_group        VARCHAR(100),
+        -- Core 6 (maps to FUND array)
+        roe                   DECIMAL(10,2),
+        de                    DECIMAL(10,2),
+        pe                    DECIMAL(10,2),
+        rev_gr_3y             DECIMAL(10,2),
+        eps_gr_3y             DECIMAL(10,2),
+        opm                   DECIMAL(10,2),
+        -- Extended
+        roa                   DECIMAL(10,2),
+        pb                    DECIMAL(10,2),
+        peg                   DECIMAL(10,2),
+        int_cov               DECIMAL(10,2),
+        promoter_holding      DECIMAL(10,2),
+        pledged_pct           DECIMAL(10,2),
+        promoter_chg          DECIMAL(10,2),
+        mkt_cap               DECIMAL(18,2),
+        current_price         DECIMAL(18,2),
+        eps                   DECIMAL(10,2),
+        debt                  DECIMAL(18,2),
+        current_ratio         DECIMAL(10,2),
+        div_yield             DECIMAL(10,2),
+        sales_gr_1y           DECIMAL(10,2),
+        sales_gr_5y           DECIMAL(10,2),
+        eps_gr_1y             DECIMAL(10,2),
+        eps_gr_5y             DECIMAL(10,2),
+        roe_3y_avg            DECIMAL(10,2),
+        roe_5y_avg            DECIMAL(10,2),
+        ret_1y                DECIMAL(10,2),
+        ret_3y                DECIMAL(10,2),
+        ret_5y                DECIMAL(10,2),
+        ret_6m                DECIMAL(10,2),
+        ret_3m                DECIMAL(10,2),
+        ev_ebitda             DECIMAL(10,2),
+        industry_pe           DECIMAL(10,2),
+        pat_qtr               DECIMAL(18,2),
+        sales_qtr             DECIMAL(18,2),
+        pat_annual            DECIMAL(18,2),
+        sales_annual          DECIMAL(18,2),
+        pat_qtr_yoy           DECIMAL(10,2),
+        sales_qtr_yoy         DECIMAL(10,2),
+        imported_at           TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log("✅ DB ready (screener_fundamentals included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -150,6 +201,7 @@ async function refreshUniverseFromNSE() {
     NIFTY50:  'https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv',
     NEXT50:   'https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv',
     MIDCAP:   'https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv',
+    SMALLCAP: 'https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv',
   };
 
   const headers = {
@@ -1930,6 +1982,372 @@ app.get("/health", (req,res)=>res.json({
 }));
 
 // Universe status endpoint
+// =============================================================================
+// SCREENER.IN FUNDAMENTALS IMPORT
+// CSV columns: Name,BSE Code,NSE Code,ISIN Code,Industry Group,Industry,
+//   Current Price,Price to Earning,Market Capitalization,Dividend yield,
+//   Net Profit latest quarter,YOY Quarterly profit growth,Sales latest quarter,
+//   YOY Quarterly sales growth,Return on capital employed,Return over 6months,
+//   Return over 3months,PEG Ratio,Interest Coverage Ratio,Current ratio,
+//   Enterprise Value,EVEBITDA,Price to Free Cash Flow,Price to Sales,
+//   Profit growth,Sales growth,Industry PE,Pledged percentage,Earnings yield,
+//   Change in promoter holding,Promoter holding,Debt,EPS,Return on equity,
+//   Debt to equity,Return on assets,Price to book value,Profit after tax latest quarter,
+//   Profit after tax,OPM,Sales,Sales growth 3Years,Sales growth 5Years,
+//   Profit growth 3Years,Profit growth 5Years,Average return on equity 5Years,
+//   Average return on equity 3Years,Return over 1year,Return over 3years,Return over 5years
+// =============================================================================
+
+function parseCSVLine(line) {
+  const result = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; }
+    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+    else { cur += c; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function parseNum(v) {
+  if (v === null || v === undefined || v === '' || v === 'N/A') return null;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+async function importScreenerCSV(csvText) {
+  const lines = csvText.split('\n').filter(l => l.trim());
+  if (lines.length < 2) throw new Error('CSV too short');
+
+  // Parse header
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+  const col = (name) => headers.indexOf(name.toLowerCase());
+
+  // Column indices
+  const C = {
+    name:          col('name'),
+    nse:           col('nse code'),
+    bse:           col('bse code'),
+    industry:      col('industry'),
+    indGroup:      col('industry group'),
+    price:         col('current price'),
+    pe:            col('price to earning'),
+    mktCap:        col('market capitalization'),
+    divYield:      col('dividend yield'),
+    patQtr:        col('net profit latest quarter'),
+    patQtrYoy:     col('yoy quarterly profit growth'),
+    salesQtr:      col('sales latest quarter'),
+    salesQtrYoy:   col('yoy quarterly sales growth'),
+    peg:           col('peg ratio'),
+    intCov:        col('interest coverage ratio'),
+    currentRatio:  col('current ratio'),
+    evEbitda:      col('evebitda'),
+    salesGr1y:     col('sales growth'),
+    epsGr1y:       col('profit growth'),
+    indPE:         col('industry pe'),
+    pledged:       col('pledged percentage'),
+    promoterChg:   col('change in promoter holding'),
+    promoter:      col('promoter holding'),
+    debt:          col('debt'),
+    eps:           col('eps'),
+    roe:           col('return on equity'),
+    de:            col('debt to equity'),
+    roa:           col('return on assets'),
+    pb:            col('price to book value'),
+    patAnnual:     col('profit after tax'),
+    patLatest:     col('profit after tax latest quarter'),
+    opm:           col('opm'),
+    sales:         col('sales'),
+    salesGr3y:     col('sales growth 3years'),
+    salesGr5y:     col('sales growth 5years'),
+    epsGr3y:       col('profit growth 3years'),
+    epsGr5y:       col('profit growth 5years'),
+    roe5yAvg:      col('average return on equity 5years'),
+    roe3yAvg:      col('average return on equity 3years'),
+    ret1y:         col('return over 1year'),
+    ret3y:         col('return over 3years'),
+    ret5y:         col('return over 5years'),
+    ret6m:         col('return over 6months'),
+    ret3m:         col('return over 3months'),
+  };
+
+  let imported = 0, skipped = 0;
+  const get = (row, idx) => idx >= 0 ? parseNum(row[idx]) : null;
+  const str = (row, idx) => idx >= 0 ? (row[idx]||'').replace(/"/g,'').trim() : '';
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = parseCSVLine(lines[i]);
+    if (row.length < 5) continue;
+
+    const sym = str(row, C.nse) || str(row, C.bse);
+    if (!sym) { skipped++; continue; }
+
+    const data = {
+      sym,
+      name:             str(row, C.name),
+      nse_code:         str(row, C.nse),
+      bse_code:         str(row, C.bse),
+      industry:         str(row, C.industry),
+      industry_group:   str(row, C.indGroup),
+      roe:              get(row, C.roe),
+      de:               get(row, C.de),
+      pe:               get(row, C.pe),
+      rev_gr_3y:        get(row, C.salesGr3y),
+      eps_gr_3y:        get(row, C.epsGr3y),
+      opm:              get(row, C.opm),
+      roa:              get(row, C.roa),
+      pb:               get(row, C.pb),
+      peg:              get(row, C.peg),
+      int_cov:          get(row, C.intCov),
+      promoter_holding: get(row, C.promoter),
+      pledged_pct:      get(row, C.pledged),
+      promoter_chg:     get(row, C.promoterChg),
+      mkt_cap:          get(row, C.mktCap),
+      current_price:    get(row, C.price),
+      eps:              get(row, C.eps),
+      debt:             get(row, C.debt),
+      current_ratio:    get(row, C.currentRatio),
+      div_yield:        get(row, C.divYield),
+      sales_gr_1y:      get(row, C.salesGr1y),
+      sales_gr_5y:      get(row, C.salesGr5y),
+      eps_gr_1y:        get(row, C.epsGr1y),
+      eps_gr_5y:        get(row, C.epsGr5y),
+      roe_3y_avg:       get(row, C.roe3yAvg),
+      roe_5y_avg:       get(row, C.roe5yAvg),
+      ret_1y:           get(row, C.ret1y),
+      ret_3y:           get(row, C.ret3y),
+      ret_5y:           get(row, C.ret5y),
+      ret_6m:           get(row, C.ret6m),
+      ret_3m:           get(row, C.ret3m),
+      ev_ebitda:        get(row, C.evEbitda),
+      industry_pe:      get(row, C.indPE),
+      pat_qtr:          get(row, C.patQtr),
+      sales_qtr:        get(row, C.salesQtr),
+      pat_annual:       get(row, C.patAnnual),
+      sales_annual:     get(row, C.sales),
+      pat_qtr_yoy:      get(row, C.patQtrYoy),
+      sales_qtr_yoy:    get(row, C.salesQtrYoy),
+    };
+
+    try {
+      await pool.query(`
+        INSERT INTO screener_fundamentals
+          (sym,name,nse_code,bse_code,industry,industry_group,
+           roe,de,pe,rev_gr_3y,eps_gr_3y,opm,roa,pb,peg,int_cov,
+           promoter_holding,pledged_pct,promoter_chg,mkt_cap,current_price,
+           eps,debt,current_ratio,div_yield,sales_gr_1y,sales_gr_5y,
+           eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
+           ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
+           pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,imported_at)
+        VALUES
+          ($1,$2,$3,$4,$5,$6,
+           $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+           $17,$18,$19,$20,$21,
+           $22,$23,$24,$25,$26,$27,
+           $28,$29,$30,$31,$32,$33,$34,
+           $35,$36,$37,$38,$39,$40,
+           $41,$42,$43,$44,NOW())
+        ON CONFLICT (sym) DO UPDATE SET
+          name=EXCLUDED.name, industry=EXCLUDED.industry,
+          roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
+          rev_gr_3y=EXCLUDED.rev_gr_3y, eps_gr_3y=EXCLUDED.eps_gr_3y, opm=EXCLUDED.opm,
+          roa=EXCLUDED.roa, pb=EXCLUDED.pb, peg=EXCLUDED.peg, int_cov=EXCLUDED.int_cov,
+          promoter_holding=EXCLUDED.promoter_holding, pledged_pct=EXCLUDED.pledged_pct,
+          promoter_chg=EXCLUDED.promoter_chg, mkt_cap=EXCLUDED.mkt_cap,
+          current_price=EXCLUDED.current_price, eps=EXCLUDED.eps, debt=EXCLUDED.debt,
+          current_ratio=EXCLUDED.current_ratio, div_yield=EXCLUDED.div_yield,
+          sales_gr_1y=EXCLUDED.sales_gr_1y, sales_gr_5y=EXCLUDED.sales_gr_5y,
+          eps_gr_1y=EXCLUDED.eps_gr_1y, eps_gr_5y=EXCLUDED.eps_gr_5y,
+          roe_3y_avg=EXCLUDED.roe_3y_avg, roe_5y_avg=EXCLUDED.roe_5y_avg,
+          ret_1y=EXCLUDED.ret_1y, ret_3y=EXCLUDED.ret_3y, ret_5y=EXCLUDED.ret_5y,
+          ret_6m=EXCLUDED.ret_6m, ret_3m=EXCLUDED.ret_3m,
+          ev_ebitda=EXCLUDED.ev_ebitda, industry_pe=EXCLUDED.industry_pe,
+          pat_qtr=EXCLUDED.pat_qtr, sales_qtr=EXCLUDED.sales_qtr,
+          pat_annual=EXCLUDED.pat_annual, sales_annual=EXCLUDED.sales_annual,
+          pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
+          imported_at=NOW()
+      `, [
+        data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
+        data.roe, data.de, data.pe, data.rev_gr_3y, data.eps_gr_3y, data.opm,
+        data.roa, data.pb, data.peg, data.int_cov,
+        data.promoter_holding, data.pledged_pct, data.promoter_chg, data.mkt_cap, data.current_price,
+        data.eps, data.debt, data.current_ratio, data.div_yield, data.sales_gr_1y, data.sales_gr_5y,
+        data.eps_gr_1y, data.eps_gr_5y, data.roe_3y_avg, data.roe_5y_avg,
+        data.ret_1y, data.ret_3y, data.ret_5y, data.ret_6m, data.ret_3m,
+        data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
+        data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
+      ]);
+
+      // Immediately patch into live FUND + FUND_EXT memory
+      patchScreenerIntoFUND(sym, data);
+      imported++;
+    } catch(e) {
+      console.log(`Screener import error ${sym}:`, e.message);
+      skipped++;
+    }
+  }
+
+  console.log(`✅ Screener import: ${imported} stocks imported, ${skipped} skipped`);
+  return { imported, skipped, total: lines.length - 1 };
+}
+
+// Patch one stock from screener data into FUND + FUND_EXT memory (live update)
+function patchScreenerIntoFUND(sym, d) {
+  if (!global.FUND_EXT) global.FUND_EXT = {};
+
+  // Update FUND core array — [ROE, D/E, PE, RevGr, EpsGr, OpMargin]
+  // Use screener as primary source (real data), override hardcoded stale values
+  FUND[sym] = [
+    d.roe     ?? FUND[sym]?.[0] ?? null,
+    d.de      ?? FUND[sym]?.[1] ?? null,
+    d.pe      ?? FUND[sym]?.[2] ?? null,
+    d.rev_gr_3y ?? FUND[sym]?.[3] ?? null,
+    d.eps_gr_3y ?? FUND[sym]?.[4] ?? null,
+    d.opm     ?? FUND[sym]?.[5] ?? null,
+  ];
+
+  // Update FUND_EXT with all extended fields
+  global.FUND_EXT[sym] = {
+    ...(global.FUND_EXT[sym] || {}),
+    roe:          d.roe,
+    de:           d.de,
+    pe:           d.pe,
+    revGr:        d.rev_gr_3y,
+    epsGr:        d.eps_gr_3y,
+    opMgn:        d.opm,
+    roa:          d.roa,
+    pb:           d.pb,
+    peg:          d.peg,
+    intCov:       d.int_cov,
+    promoter:     d.promoter_holding,
+    pledged:      d.pledged_pct,
+    promoterChg:  d.promoter_chg,
+    mktCap:       d.mkt_cap,
+    price:        d.current_price,
+    eps:          d.eps,
+    debt:         d.debt,
+    currentRatio: d.current_ratio,
+    divYield:     d.div_yield,
+    salesGr1y:    d.sales_gr_1y,
+    salesGr5y:    d.sales_gr_5y,
+    epsGr1y:      d.eps_gr_1y,
+    epsGr5y:      d.eps_gr_5y,
+    roe3yAvg:     d.roe_3y_avg,
+    roe5yAvg:     d.roe_5y_avg,
+    ret1y:        d.ret_1y,
+    ret3y:        d.ret_3y,
+    ret5y:        d.ret_5y,
+    ret6m:        d.ret_6m,
+    ret3m:        d.ret_3m,
+    evEbitda:     d.ev_ebitda,
+    industryPE:   d.industry_pe,
+    patQtr:       d.pat_qtr,
+    salesQtr:     d.sales_qtr,
+    patAnnual:    d.pat_annual,
+    salesAnnual:  d.sales_annual,
+    patQtrYoy:    d.pat_qtr_yoy,
+    salesQtrYoy:  d.sales_qtr_yoy,
+    industry:     d.industry,
+    source:       'Screener.in',
+    fetchedAt:    Date.now(),
+  };
+}
+
+// Load screener data from DB into memory on startup
+async function loadScreenerFundamentals() {
+  try {
+    const { rows } = await pool.query('SELECT * FROM screener_fundamentals');
+    if (!rows.length) return 0;
+    rows.forEach(row => patchScreenerIntoFUND(row.sym, {
+      roe: row.roe, de: row.de, pe: row.pe,
+      rev_gr_3y: row.rev_gr_3y, eps_gr_3y: row.eps_gr_3y, opm: row.opm,
+      roa: row.roa, pb: row.pb, peg: row.peg, int_cov: row.int_cov,
+      promoter_holding: row.promoter_holding, pledged_pct: row.pledged_pct,
+      promoter_chg: row.promoter_chg, mkt_cap: row.mkt_cap,
+      current_price: row.current_price, eps: row.eps, debt: row.debt,
+      current_ratio: row.current_ratio, div_yield: row.div_yield,
+      sales_gr_1y: row.sales_gr_1y, sales_gr_5y: row.sales_gr_5y,
+      eps_gr_1y: row.eps_gr_1y, eps_gr_5y: row.eps_gr_5y,
+      roe_3y_avg: row.roe_3y_avg, roe_5y_avg: row.roe_5y_avg,
+      ret_1y: row.ret_1y, ret_3y: row.ret_3y, ret_5y: row.ret_5y,
+      ret_6m: row.ret_6m, ret_3m: row.ret_3m,
+      ev_ebitda: row.ev_ebitda, industry_pe: row.industry_pe,
+      pat_qtr: row.pat_qtr, sales_qtr: row.sales_qtr,
+      pat_annual: row.pat_annual, sales_annual: row.sales_annual,
+      pat_qtr_yoy: row.pat_qtr_yoy, sales_qtr_yoy: row.sales_qtr_yoy,
+      industry: row.industry,
+    }));
+    console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
+    return rows.length;
+  } catch(e) {
+    // Table may not exist yet on first boot — that's fine
+    if (!e.message.includes('does not exist')) console.log('Screener load error:', e.message);
+    return 0;
+  }
+}
+
+// POST /api/fundamentals/import — accepts raw CSV text in body
+// Usage: curl -X POST https://your-app.railway.app/api/fundamentals/import \
+//   -H "Content-Type: text/plain" --data-binary @screener_export.csv
+app.post('/api/fundamentals/import', async (req, res) => {
+  try {
+    let csv = '';
+    // Accept text/plain or application/json {csv: "..."}
+    if (typeof req.body === 'string') {
+      csv = req.body;
+    } else if (req.body?.csv) {
+      csv = req.body.csv;
+    } else {
+      return res.status(400).json({ error: 'Send CSV as text/plain body or JSON {csv: "..."}' });
+    }
+    if (!csv || csv.length < 100) return res.status(400).json({ error: 'CSV too short or empty' });
+
+    const result = await importScreenerCSV(csv);
+
+    // Re-score all stocks with new fundamental data
+    console.log('📊 Screener import done — re-scoring all stocks...');
+    refreshAllFundamentals(); // background, non-blocking
+
+    res.json({
+      success: true,
+      imported: result.imported,
+      skipped:  result.skipped,
+      total:    result.total,
+      message:  `${result.imported} stocks imported. Re-scoring started in background.`,
+    });
+  } catch(e) {
+    console.error('Screener import error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/fundamentals/screener-status — how many stocks have screener data
+app.get('/api/fundamentals/screener-status', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT COUNT(*) as total,
+             MAX(imported_at) as last_import,
+             COUNT(CASE WHEN roe IS NOT NULL THEN 1 END) as has_roe,
+             COUNT(CASE WHEN pe  IS NOT NULL THEN 1 END) as has_pe,
+             COUNT(CASE WHEN promoter_holding IS NOT NULL THEN 1 END) as has_promoter
+      FROM screener_fundamentals
+    `);
+    const r = rows[0];
+    res.json({
+      total:        parseInt(r.total),
+      last_import:  r.last_import,
+      has_roe:      parseInt(r.has_roe),
+      has_pe:       parseInt(r.has_pe),
+      has_promoter: parseInt(r.has_promoter),
+      in_memory:    Object.keys(global.FUND_EXT || {}).filter(s => global.FUND_EXT[s]?.source === 'Screener.in').length,
+    });
+  } catch(e) {
+    res.json({ total: 0, error: e.message });
+  }
+});
+
 // Lightweight list of all stocks for analyzer dropdown
 app.get("/api/universe/list", (req,res)=>{
   const scored = Object.values(stockFundamentals);
@@ -1953,12 +2371,14 @@ app.get("/api/universe/status", async(req,res)=>{
   const n50  = UNIVERSE.filter(s=>s.grp==='NIFTY50');
   const nx50 = UNIVERSE.filter(s=>s.grp==='NEXT50');
   const mc   = UNIVERSE.filter(s=>s.grp==='MIDCAP');
+  const sc   = UNIVERSE.filter(s=>s.grp==='SMALLCAP');
   const missingFund = await dbGet('universe_missing_fund').catch(()=>null);
   res.json({
     total:UNIVERSE.length,
-    nifty50:{count:n50.length, stocks:n50.map(s=>s.sym)},
-    next50:{count:nx50.length, stocks:nx50.map(s=>s.sym)},
-    midcap:{count:mc.length, stocks:mc.map(s=>s.sym)},
+    nifty50: {count:n50.length,  stocks:n50.map(s=>s.sym)},
+    next50:  {count:nx50.length, stocks:nx50.map(s=>s.sym)},
+    midcap:  {count:mc.length,   stocks:mc.map(s=>s.sym)},
+    smallcap:{count:sc.length,   stocks:sc.map(s=>s.sym)},
     lastUpdate:universeLastUpdate?new Date(universeLastUpdate).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):null,
     status:universeUpdateStatus,
     missingFundData: missingFund ? JSON.parse(missingFund) : [],
@@ -2530,9 +2950,10 @@ async function refreshAllFundamentals() {
         if (!candles) { fail++; return; }
         const tech = computeTechnicals(candles);
         const f    = FUND[stock.sym] || null;
+        const ext = global.FUND_EXT?.[stock.sym];
         stockFundamentals[stock.sym] = {
           sym:stock.sym, name:stock.n, grp:stock.grp,
-          sector: SECTOR_MAP[stock.sym] || 'Other',
+          sector: SECTOR_MAP[stock.sym] || ext?.industry || 'Other',
           price:tech.price,
           dma20:tech.dma20, dma50:tech.dma50, dma100:tech.dma100, dma200:tech.dma200,
           wk52Hi:tech.wk52Hi, wk52Lo:tech.wk52Lo,
@@ -2548,9 +2969,32 @@ async function refreshAllFundamentals() {
           goldenCross:tech.goldenCross,
           pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
           rsiTrend:tech.rsiTrend, bullishDiv:tech.bullishDiv, bearishDiv:tech.bearishDiv,
-          roe:f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
+          // Core fundamentals — screener overrides hardcoded FUND
+          roe:      f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
           revGrowth:f?f[3]:null, earGrowth:f?f[4]:null, opMargin:f?f[5]:null,
-          peg:f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null,
+          peg:      ext?.peg ?? (f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null),
+          // Extended from Screener.in
+          roa:          ext?.roa          ?? null,
+          pb:           ext?.pb           ?? null,
+          intCov:       ext?.intCov       ?? null,
+          promoter:     ext?.promoter     ?? null,
+          pledged:      ext?.pledged      ?? null,
+          promoterChg:  ext?.promoterChg  ?? null,
+          mktCap:       ext?.mktCap       ?? null,
+          divYield:     ext?.divYield     ?? null,
+          eps:          ext?.eps          ?? null,
+          currentRatio: ext?.currentRatio ?? null,
+          salesGr1y:    ext?.salesGr1y    ?? null,
+          salesGr5y:    ext?.salesGr5y    ?? null,
+          epsGr1y:      ext?.epsGr1y      ?? null,
+          epsGr5y:      ext?.epsGr5y      ?? null,
+          roe3yAvg:     ext?.roe3yAvg     ?? null,
+          roe5yAvg:     ext?.roe5yAvg     ?? null,
+          ret1y:        ext?.ret1y        ?? null,
+          ret3y:        ext?.ret3y        ?? null,
+          ret5y:        ext?.ret5y        ?? null,
+          industryPE:   ext?.industryPE   ?? null,
+          dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
         ok++;
@@ -3379,9 +3823,35 @@ function scoreOneStock(f, peers) {
   // -- HARD DISQUALIFIERS (Varsity: red flags that override good scores) --------
   // Varsity Ch12: "If you find red flags, drop the stock regardless of attractiveness"
 
-  // Interest coverage < 1.5x — Varsity: "danger zone, company barely covering interest"
-  // We proxy with D/E > 3 + negative EPS (no direct interest coverage in our data)
-  // TODO: add interest coverage when available from screener data
+  // Interest Coverage — Varsity: "<1.5x = danger zone, barely covering interest payments"
+  // Now available directly from Screener.in
+  if(na(f.intCov)){
+    if(f.intCov>=5)      { s+=4; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (comfortable)`]=4; }
+    else if(f.intCov>=3) { s+=3; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (adequate)`]=3; }
+    else if(f.intCov>=1.5){ s+=1; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (thin)`]=1; }
+    else { s-=5; hits[`⚠ Interest Coverage: ${f.intCov.toFixed(1)}x (DANGER ZONE — Varsity red flag)`]=-5; }
+  }
+
+  // Promoter Holding — Varsity: "promoter stake declining = warning signal"
+  if(na(f.promoter)){
+    const pp = f.promoter>=60?3 : f.promoter>=50?2 : f.promoter>=40?1 : 0;
+    if(pp){ s+=pp; hits[`Promoter holding: ${f.promoter.toFixed(1)}%`]=pp; }
+  }
+  // Pledged promoter shares — Varsity Ch12 red flag
+  if(na(f.pledged)&&f.pledged>30){
+    s-=5; hits[`⚠ Promoter pledged ${f.pledged.toFixed(1)}% (Varsity red flag)`]=-5;
+  }
+  // Promoter decreasing stake
+  if(na(f.promoterChg)&&f.promoterChg<-2){
+    s-=2; hits[`⚠ Promoter selling: ${f.promoterChg.toFixed(1)}% reduction`]=-2;
+  }
+
+  // P/BV — Varsity: "price to book is primary for banks; below 1 = deep value"
+  if(na(f.pb)&&f.pb>0){
+    const peerPct = pr(f.pb,'pb',false); // lower = better
+    const pp = peerPct>=80?3 : peerPct>=60?2 : peerPct>=40?1 : 0;
+    if(pp){ s+=pp; hits[`P/BV: ${f.pb.toFixed(2)}x (cheaper than ${peerPct.toFixed(0)}% of peers)`]=pp; }
+  }
 
   // EPS collapse — Varsity: collapsing earnings = value trap signal
   if(na(f.earGrowth)&&f.earGrowth<-20){
@@ -3425,8 +3895,8 @@ function scoreFallenAngel(f) {
   // FALLEN ANGEL SCORING — 100 points
   // Built entirely from Zerodha Varsity Modules 2 (TA) + 3 (FA) + 15 (Sector)
   //
-  // A Fallen Angel = HIGH QUALITY business that fell 20%+ from peak
-  // due to market fear / temporary setback — NOT structural breakdown.
+  // Size-aware: Varsity says smaller caps need stricter quality but reward
+  // deeper falls more — higher volatility = bigger overshoot = bigger opportunity
   //
   // Framework:
   //   PILLAR 1: Business Quality  (40 pts) — Varsity M3: ROE, D/E, margins, EPS
@@ -3441,6 +3911,11 @@ function scoreFallenAngel(f) {
   const hits = {};
   const na = v => v != null && isFinite(v);
   const px = f.price || livePrices[f.sym]?.price;
+
+  // Cap size context — affects scoring weights
+  const isSmall = f.grp === 'SMALLCAP';
+  const isMid   = f.grp === 'MIDCAP';
+  const capLabel = isSmall ? 'SmallCap' : isMid ? 'MidCap' : 'LargeCap';
 
   // ==========================================================================
   // PILLAR 1: BUSINESS QUALITY (40 pts)
@@ -3501,17 +3976,16 @@ function scoreFallenAngel(f) {
   // PILLAR 2: DEPTH OF FALL (15 pts)
   // Varsity Dow Theory: "Bear Market Phase 3 = maximum fear = maximum opportunity"
   // Deeper fall on an intact business = more margin of safety = better Fallen Angel
-  // But: >60% fall needs extra scrutiny — may be structural not temporary
+  // Varsity on smallcap: "Market overshoots more on smaller names — deeper falls are
+  // more likely to be temporary rather than structural"
   // ==========================================================================
   if (na(f.pctFromHigh)) {
     const d = Math.abs(f.pctFromHigh);
-    const pp = d >= 55 ? 15  // extreme fear — if business intact, max opportunity
-             : d >= 45 ? 13
-             : d >= 35 ? 11
-             : d >= 25 ? 8
-             : d >= 20 ? 5 : 0;
+    // Smallcaps get extra points for deep falls — market overshoots more
+    const bonus = isSmall ? 2 : isMid ? 1 : 0;
+    const pp = Math.min(15, (d >= 55 ? 15 : d >= 45 ? 13 : d >= 35 ? 11 : d >= 25 ? 8 : d >= 20 ? 5 : 0) + bonus);
     s += pp;
-    hits[`Fallen ${d.toFixed(0)}% from 52W peak`] = pp;
+    hits[`${capLabel} fallen ${d.toFixed(0)}% from peak${bonus ? ` (+${bonus} smallcap overshoot bonus)` : ''}`] = pp;
   }
 
   // Proximity to 52W Low — Varsity: near 52W low = maximum pessimism zone
@@ -3749,15 +4223,27 @@ app.get('/api/stocks/score', async(req,res)=>{
       // 1. Score >= 50 (business quality screen — only quality businesses can be Fallen Angels)
       // 2. Down >= 20% from 52W high (fear-driven fall, not gradual decline)
       // 3. RSI <= 52 (not overbought — momentum must be subdued or oversold)
-      // 4. D/E <= 2 (Varsity: high debt during fall = bankruptcy risk, not opportunity)
-      // 5. EPS not collapsing > -25% (structural problems ≠ temporary setback)
-      // 6. Operating margin > -10% (business still generating some operating income)
-      const isFa = score >= 50
-        && (f.pctFromHigh || 0) <= -20
+      // Size-aware Fallen Angel filter — Varsity: smaller caps need stricter quality gates
+      // SMALLCAP: D/E ≤ 1.0, pledged ≤ 20%, intCov ≥ 2x, fall ≥ 25%, EPS > -15%
+      // MIDCAP:   D/E ≤ 1.5, pledged ≤ 35%, intCov ≥ 1.5x, fall ≥ 20%, EPS > -20%
+      // LARGECAP: D/E ≤ 2.0, pledged ≤ 50%, intCov ≥ 1.0x, fall ≥ 20%, EPS > -25%
+      const isSmall = f.grp === 'SMALLCAP';
+      const isMid   = f.grp === 'MIDCAP';
+      const deThresh    = isSmall ? 1.0  : isMid ? 1.5  : 2.0;
+      const pledgeThresh= isSmall ? 20   : isMid ? 35   : 50;
+      const intCovThresh= isSmall ? 2.0  : isMid ? 1.5  : 1.0;
+      const fallThresh  = isSmall ? -25  : -20;   // smallcap needs deeper fall to qualify
+      const epsThresh   = isSmall ? -15  : isMid ? -20  : -25;
+      const scoreThresh = isSmall ? 55   : isMid ? 52   : 50;  // higher quality bar for smaller caps
+
+      const isFa = score >= scoreThresh
+        && (f.pctFromHigh || 0) <= fallThresh
         && (f.rsi || 50) <= 52
-        && (f.debtToEq == null || f.debtToEq <= 2.0)
-        && (f.earGrowth == null || f.earGrowth > -25)
-        && (f.opMargin == null || f.opMargin > -10);
+        && (f.debtToEq == null || f.debtToEq <= deThresh)
+        && (f.earGrowth == null || f.earGrowth > epsThresh)
+        && (f.opMargin == null || f.opMargin > -10)
+        && (f.pledged  == null || f.pledged  <= pledgeThresh)
+        && (f.intCov   == null || f.intCov   >= intCovThresh);
       const faData = isFa ? scoreFallenAngel(f) : {};
       // Stop loss + R:R (Meera: Risk Analyst)
       const stopData = px ? computeStopAndTarget({...f, price:px}) : null;
@@ -3769,7 +4255,7 @@ app.get('/api/stocks/score', async(req,res)=>{
         stopLoss: stopData?.stopLoss, target: stopData?.target,
         riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
         rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
-        // Fundamentals
+        // Fundamentals — core
         roe:f.roe!=null?+f.roe.toFixed(1):null,
         debtToEq:f.debtToEq!=null?+f.debtToEq.toFixed(2):null,
         opMargin:f.opMargin!=null?+f.opMargin.toFixed(1):null,
@@ -3777,6 +4263,23 @@ app.get('/api/stocks/score', async(req,res)=>{
         peg:f.peg!=null?+f.peg.toFixed(2):null,
         revGrowth:f.revGrowth!=null?+f.revGrowth.toFixed(1):null,
         earGrowth:f.earGrowth!=null?+f.earGrowth.toFixed(1):null,
+        // Fundamentals — from Screener.in
+        roa:         f.roa!=null?+f.roa.toFixed(1):null,
+        pb:          f.pb!=null?+f.pb.toFixed(2):null,
+        intCov:      f.intCov!=null?+f.intCov.toFixed(1):null,
+        promoter:    f.promoter!=null?+f.promoter.toFixed(1):null,
+        pledged:     f.pledged!=null?+f.pledged.toFixed(1):null,
+        promoterChg: f.promoterChg!=null?+f.promoterChg.toFixed(1):null,
+        mktCap:      f.mktCap!=null?+f.mktCap.toFixed(0):null,
+        divYield:    f.divYield!=null?+f.divYield.toFixed(2):null,
+        eps:         f.eps!=null?+f.eps.toFixed(2):null,
+        roe3yAvg:    f.roe3yAvg!=null?+f.roe3yAvg.toFixed(1):null,
+        salesGr1y:   f.salesGr1y!=null?+f.salesGr1y.toFixed(1):null,
+        salesGr5y:   f.salesGr5y!=null?+f.salesGr5y.toFixed(1):null,
+        epsGr5y:     f.epsGr5y!=null?+f.epsGr5y.toFixed(1):null,
+        ret1y:       f.ret1y!=null?+f.ret1y.toFixed(1):null,
+        industryPE:  f.industryPE!=null?+f.industryPE.toFixed(1):null,
+        dataSource:  f.dataSource||'Hardcoded',
         // Technical - full set
         price:px,
         dma20:f.dma20, dma50:f.dma50, dma100:f.dma100, dma200:f.dma200,
@@ -3834,6 +4337,265 @@ cron.schedule('0 7 * * *', async()=>{
   // Step 2: then score all stocks (now with real data)
   await refreshAllFundamentals();
 }, {timezone:'Asia/Kolkata'});
+
+// Daily refresh 7AM IST (market opens 9:15 - get fresh data early)
+cron.schedule('0 7 * * *', async()=>{
+  // Step 1: scrape fresh fundamentals from Yahoo for stale/missing stocks
+  await refreshMissingFundamentals();
+  // Step 2: then score all stocks (now with real data)
+  await refreshAllFundamentals();
+}, {timezone:'Asia/Kolkata'});
+
+// =============================================================================
+// APIFY SCREENER.IN AUTO-FETCH
+// Calls shashwattrivedi/screener-in actor on Apify to get live fundamental data
+// for all NSE stocks — no manual CSV download needed
+// Set APIFY_TOKEN in Railway env vars to enable
+// =============================================================================
+
+async function fetchScreenerViaApify() {
+  const token = process.env.APIFY_TOKEN;
+  if (!token) {
+    console.log('⚠ APIFY_TOKEN not set — skipping Screener fetch');
+    return { success: false, error: 'APIFY_TOKEN not set' };
+  }
+  if (!process.env.SCREENER_USERNAME || !process.env.SCREENER_PASSWORD) {
+    console.log('⚠ SCREENER_USERNAME or SCREENER_PASSWORD not set');
+    return { success: false, error: 'SCREENER_USERNAME and SCREENER_PASSWORD required' };
+  }
+
+  const ACTOR_ID = 'shashwattrivedi~screener-in';
+  const BASE     = 'https://api.apify.com/v2';
+  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
+  const ps = v => (v||'').toString().trim();
+
+  try {
+    // STEP 1: Start the Actor run (async — returns immediately)
+    console.log('📊 Starting Apify Screener.in actor run...');
+    const startResp = await fetch(`${BASE}/acts/${ACTOR_ID}/runs?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        crawlerMode:      'query',
+        screenQuery:      'Market Capitalization > 0',
+        screenerUsername: process.env.SCREENER_USERNAME,
+        screenerPassword: process.env.SCREENER_PASSWORD,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!startResp.ok) throw new Error(`Failed to start actor: ${startResp.status} ${await startResp.text()}`);
+    const runInfo = await startResp.json();
+    const runId         = runInfo.data?.id;
+    const datasetId     = runInfo.data?.defaultDatasetId;
+    if (!runId) throw new Error('No run ID returned from Apify');
+    console.log(`📊 Actor run started: ${runId} — polling for completion...`);
+
+    // STEP 2: Poll GET /runs/RUN_ID until status is SUCCEEDED or FAILED
+    let status = 'RUNNING';
+    let attempts = 0;
+    const MAX_WAIT = 120; // max 120 polls × 10s = 20 minutes
+    while (status === 'RUNNING' || status === 'READY') {
+      await new Promise(r => setTimeout(r, 10000)); // wait 10s between polls
+      attempts++;
+      if (attempts > MAX_WAIT) throw new Error('Apify run timed out after 20 minutes');
+
+      const pollResp = await fetch(`${BASE}/acts/${ACTOR_ID}/runs/${runId}?token=${token}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!pollResp.ok) continue; // transient error — keep polling
+      const pollData = await pollResp.json();
+      status = pollData.data?.status || 'RUNNING';
+      if (attempts % 6 === 0) console.log(`📊 Apify run status: ${status} (${attempts * 10}s elapsed)`);
+    }
+
+    if (status !== 'SUCCEEDED') throw new Error(`Apify run finished with status: ${status}`);
+    console.log(`📊 Apify run SUCCEEDED — fetching dataset items...`);
+
+    // STEP 3: Fetch dataset items (paginated — max 250k per request, more than enough)
+    const dataId = datasetId || runInfo.data?.defaultDatasetId;
+    const dataResp = await fetch(
+      `${BASE}/datasets/${dataId}/items?token=${token}&format=json&limit=5000`,
+      { signal: AbortSignal.timeout(60000) }
+    );
+    if (!dataResp.ok) throw new Error(`Failed to fetch dataset: ${dataResp.status}`);
+    const items = await dataResp.json();
+
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('Dataset is empty — actor may have failed to scrape');
+    }
+    console.log(`📊 Got ${items.length} stocks from Apify — importing to DB...`);
+
+    // Log first item so we can see the field names
+    console.log('📊 Sample item keys:', Object.keys(items[0] || {}).slice(0, 15).join(', '));
+
+    // STEP 4: Import all items
+    let imported = 0, skipped = 0;
+    for (const item of items) {
+      // Try all known key variants — actor may use different casing
+      const g = (...keys) => {
+        for (const k of keys) { if (item[k] !== undefined && item[k] !== '') return pn(item[k]); }
+        return null;
+      };
+      const gs = (...keys) => {
+        for (const k of keys) { if (item[k] !== undefined) return ps(item[k]); }
+        return '';
+      };
+
+      const sym = gs('NSE Code','nseCode','NSE_Code','nse_code','Symbol','symbol');
+      if (!sym) { skipped++; continue; }
+
+      const data = {
+        sym,
+        name:             gs('Name','name','companyName'),
+        nse_code:         sym,
+        bse_code:         gs('BSE Code','bseCode','BSE_Code'),
+        industry:         gs('Industry','industry','sector'),
+        industry_group:   gs('Industry Group','industryGroup'),
+        roe:              g('Return on equity','returnOnEquity','roe','ROE'),
+        de:               g('Debt to equity','debtToEquity','de','D/E'),
+        pe:               g('Price to Earning','priceToEarning','pe','PE','P/E'),
+        rev_gr_3y:        g('Sales growth 3Years','salesGrowth3Years','salesGrowth3Y','rev_gr_3y'),
+        eps_gr_3y:        g('Profit growth 3Years','profitGrowth3Years','profitGrowth3Y','eps_gr_3y'),
+        opm:              g('OPM','opm','operatingProfitMargin','OPM last year'),
+        roa:              g('Return on assets','returnOnAssets','roa','ROA'),
+        pb:               g('Price to book value','priceToBook','pb','P/B'),
+        peg:              g('PEG Ratio','pegRatio','peg','PEG'),
+        int_cov:          g('Interest Coverage Ratio','interestCoverage','int_cov'),
+        promoter_holding: g('Promoter holding','promoterHolding','promoter'),
+        pledged_pct:      g('Pledged percentage','pledgedPercentage','pledged'),
+        promoter_chg:     g('Change in promoter holding','promoterHoldingChange','promoterChg'),
+        mkt_cap:          g('Market Capitalization','marketCap','mktCap'),
+        current_price:    g('Current Price','currentPrice','price','CMP'),
+        eps:              g('EPS','eps','earningsPerShare'),
+        debt:             g('Debt','debt','totalDebt'),
+        current_ratio:    g('Current ratio','currentRatio'),
+        div_yield:        g('Dividend yield','dividendYield','divYield'),
+        sales_gr_1y:      g('Sales growth','salesGrowth','salesGrowth1Y'),
+        sales_gr_5y:      g('Sales growth 5Years','salesGrowth5Years','salesGrowth5Y'),
+        eps_gr_1y:        g('Profit growth','profitGrowth','profitGrowth1Y'),
+        eps_gr_5y:        g('Profit growth 5Years','profitGrowth5Years','profitGrowth5Y'),
+        roe_3y_avg:       g('Average return on equity 3Years','avgRoe3Years','roe3YAvg'),
+        roe_5y_avg:       g('Average return on equity 5Years','avgRoe5Years','roe5YAvg'),
+        ret_1y:           g('Return over 1year','return1Year','ret1Y','1YReturn'),
+        ret_3y:           g('Return over 3years','return3Years','ret3Y'),
+        ret_5y:           g('Return over 5years','return5Years','ret5Y'),
+        ret_6m:           g('Return over 6months','return6Months','ret6M'),
+        ret_3m:           g('Return over 3months','return3Months','ret3M'),
+        ev_ebitda:        g('EVEBITDA','evEbitda','EV/EBITDA'),
+        industry_pe:      g('Industry PE','industryPE','sectorPE'),
+        pat_qtr:          g('Net Profit latest quarter','netProfitLatestQuarter','patQtr'),
+        sales_qtr:        g('Sales latest quarter','salesLatestQuarter','salesQtr'),
+        pat_annual:       g('Profit after tax','profitAfterTax','pat','PAT'),
+        sales_annual:     g('Sales','sales','revenue','totalRevenue'),
+        pat_qtr_yoy:      g('YOY Quarterly profit growth','yoyQuarterlyProfitGrowth','patQtrYoy'),
+        sales_qtr_yoy:    g('YOY Quarterly sales growth','yoyQuarterlySalesGrowth','salesQtrYoy'),
+      };
+
+      // Auto-compute PEG if missing
+      if (!data.peg && data.pe && data.eps_gr_3y && data.eps_gr_3y > 0) {
+        data.peg = +(data.pe / data.eps_gr_3y).toFixed(2);
+      }
+
+      try {
+        await pool.query(`
+          INSERT INTO screener_fundamentals
+            (sym,name,nse_code,bse_code,industry,industry_group,
+             roe,de,pe,rev_gr_3y,eps_gr_3y,opm,roa,pb,peg,int_cov,
+             promoter_holding,pledged_pct,promoter_chg,mkt_cap,current_price,
+             eps,debt,current_ratio,div_yield,sales_gr_1y,sales_gr_5y,
+             eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
+             ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
+             pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,imported_at)
+          VALUES
+            ($1,$2,$3,$4,$5,$6,
+             $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+             $17,$18,$19,$20,$21,
+             $22,$23,$24,$25,$26,$27,
+             $28,$29,$30,$31,$32,$33,$34,
+             $35,$36,$37,$38,$39,$40,
+             $41,$42,$43,$44,NOW())
+          ON CONFLICT (sym) DO UPDATE SET
+            name=EXCLUDED.name, industry=EXCLUDED.industry,
+            roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
+            rev_gr_3y=EXCLUDED.rev_gr_3y, eps_gr_3y=EXCLUDED.eps_gr_3y, opm=EXCLUDED.opm,
+            roa=EXCLUDED.roa, pb=EXCLUDED.pb, peg=EXCLUDED.peg, int_cov=EXCLUDED.int_cov,
+            promoter_holding=EXCLUDED.promoter_holding, pledged_pct=EXCLUDED.pledged_pct,
+            promoter_chg=EXCLUDED.promoter_chg, mkt_cap=EXCLUDED.mkt_cap,
+            current_price=EXCLUDED.current_price, eps=EXCLUDED.eps, debt=EXCLUDED.debt,
+            current_ratio=EXCLUDED.current_ratio, div_yield=EXCLUDED.div_yield,
+            sales_gr_1y=EXCLUDED.sales_gr_1y, sales_gr_5y=EXCLUDED.sales_gr_5y,
+            eps_gr_1y=EXCLUDED.eps_gr_1y, eps_gr_5y=EXCLUDED.eps_gr_5y,
+            roe_3y_avg=EXCLUDED.roe_3y_avg, roe_5y_avg=EXCLUDED.roe_5y_avg,
+            ret_1y=EXCLUDED.ret_1y, ret_3y=EXCLUDED.ret_3y, ret_5y=EXCLUDED.ret_5y,
+            ret_6m=EXCLUDED.ret_6m, ret_3m=EXCLUDED.ret_3m,
+            ev_ebitda=EXCLUDED.ev_ebitda, industry_pe=EXCLUDED.industry_pe,
+            pat_qtr=EXCLUDED.pat_qtr, sales_qtr=EXCLUDED.sales_qtr,
+            pat_annual=EXCLUDED.pat_annual, sales_annual=EXCLUDED.sales_annual,
+            pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
+            imported_at=NOW()
+        `, [
+          data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
+          data.roe, data.de, data.pe, data.rev_gr_3y, data.eps_gr_3y, data.opm,
+          data.roa, data.pb, data.peg, data.int_cov,
+          data.promoter_holding, data.pledged_pct, data.promoter_chg, data.mkt_cap, data.current_price,
+          data.eps, data.debt, data.current_ratio, data.div_yield, data.sales_gr_1y, data.sales_gr_5y,
+          data.eps_gr_1y, data.eps_gr_5y, data.roe_3y_avg, data.roe_5y_avg,
+          data.ret_1y, data.ret_3y, data.ret_5y, data.ret_6m, data.ret_3m,
+          data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
+          data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
+        ]);
+        patchScreenerIntoFUND(sym, data);
+        imported++;
+      } catch(e) {
+        console.log(`Screener upsert error ${sym}:`, e.message);
+        skipped++;
+      }
+    }
+
+    console.log(`✅ Apify Screener: ${imported} imported, ${skipped} skipped — re-scoring...`);
+    refreshAllFundamentals(); // non-blocking re-score
+    await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, skipped, total: items.length }));
+    return { success: true, imported, skipped, total: items.length };
+
+  } catch(e) {
+    console.error('❌ Apify Screener fetch error:', e.message);
+    await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), error: e.message })).catch(()=>{});
+    return { success: false, error: e.message };
+  }
+}
+
+// Run Apify Screener fetch every day at 8PM IST (after market close at 3:30PM)
+// Screener.in updates data daily after market hours — fresh data every evening
+cron.schedule('0 20 * * *', async () => {
+  console.log('📊 Daily Screener.in refresh via Apify...');
+  await fetchScreenerViaApify();
+}, { timezone: 'Asia/Kolkata' });
+
+// Manual trigger endpoint
+app.post('/api/screener/fetch', async (req, res) => {
+  if (!process.env.APIFY_TOKEN) {
+    return res.status(400).json({ error: 'Set APIFY_TOKEN in Railway environment variables' });
+  }
+  res.json({ message: 'Screener fetch started — check /api/fundamentals/screener-status in ~5 minutes' });
+  fetchScreenerViaApify().catch(e => console.error('Screener fetch error:', e.message));
+});
+
+// Check last fetch time
+app.get('/api/screener/status', async (req, res) => {
+  try {
+    const last = await dbGet('screener_last_fetch');
+    const status = await pool.query('SELECT COUNT(*) as total, MAX(imported_at) as last_import FROM screener_fundamentals');
+    res.json({
+      apify_token_set:    !!process.env.APIFY_TOKEN,
+      screener_creds_set: !!(process.env.SCREENER_USERNAME && process.env.SCREENER_PASSWORD),
+      last_fetch:         last ? JSON.parse(last) : null,
+      db_total:           parseInt(status.rows[0].total),
+      db_last_import:     status.rows[0].last_import,
+      in_memory:          Object.keys(global.FUND_EXT || {}).filter(s => global.FUND_EXT[s]?.source === 'Screener.in').length,
+      next_auto_fetch:    'Every day 8PM IST (after market close)',
+    });
+  } catch(e) { res.json({ error: e.message }); }
+});
 
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
@@ -5053,6 +5815,15 @@ async function start() {
   // Load cached auto-fetched fundamentals from DB (fast, no network)
   await loadCachedFundamentals();
 
+  // Load Screener.in fundamentals (real quarterly data — overrides hardcoded FUND)
+  const screenerCount = await loadScreenerFundamentals();
+
+  // If APIFY_TOKEN + Screener creds set and no screener data yet, fetch immediately
+  if (process.env.APIFY_TOKEN && process.env.SCREENER_USERNAME && screenerCount === 0) {
+    console.log('📊 No Screener data found — fetching via Apify on startup...');
+    fetchScreenerViaApify().catch(e => console.error('Startup Screener fetch error:', e.message));
+  }
+
   // Load previously scored stocks from DB cache — makes Stocks tab instant on restart
   try {
     const cached = await dbGet('scored_stocks_cache');
@@ -5212,13 +5983,14 @@ async function callAnthropicAgent(systemPrompt, userPrompt, maxTokens) {
 
 async function runMiroFishAgent(agent, fallenAngels) {
   const stockList = fallenAngels.slice(0, 15).map((s, i) =>
-    `${i+1}. ${s.sym} (${s.name}) | Score:${s.score} FA:${s.fallenScore||'?'} ${s.fallenVerdict||'?'}\n` +
+    `${i+1}. ${s.sym} (${s.name}) [${s.grp||'NSE'}] | Score:${s.score} FA:${s.fallenScore||'?'} ${s.fallenVerdict||'?'}\n` +
     `   Fall: ${Math.abs(s.pctFromHigh||0).toFixed(0)}% from peak | RSI:${s.rsi||'?'} | Stoch:${s.stochK||'?'} | BB%B:${s.bbPct!=null?s.bbPct.toFixed(2):'?'}\n` +
     `   ROE:${s.roe||'?'}% | D/E:${s.debtToEq||'?'}x | OpMgn:${s.opMargin||'?'}% | EPS:${s.earGrowth||'?'}% | RevGr:${s.revGrowth||'?'}%\n` +
-    `   PE:${s.pe||'?'}x | PE/ROE:${s.roe&&s.pe?(s.pe/s.roe).toFixed(2):'?'} | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'}\n` +
+    `   PE:${s.pe||'?'}x | PE/ROE:${s.roe&&s.pe?(s.pe/s.roe).toFixed(2):'?'} | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'} | IntCov:${s.intCov||'?'}x\n` +
+    `   Promoter:${s.promoter||'?'}% | Pledged:${s.pledged||'?'}% | MktCap:₹${s.mktCap?Math.round(s.mktCap)+'Cr':'?'}\n` +
     `   MACD:${s.macdBull?'Bull':'Bear'} | OBV:${s.obvRising?'Rising':'Falling'} | VolRatio:${s.volRatio||'?'}x | BullDiv:${s.bullishDiv?'YES':'no'}\n` +
     `   200DMA:₹${s.dma200||'?'} | 52WLo:₹${s.wk52Lo||'?'} | Stop:₹${s.stopLoss||'?'} | Target:₹${s.target||'?'} | RR:${s.rrRatio||'?'}x\n` +
-    `   Sector:${s.sector||'?'} | Supertrend:${s.supertrendSig||'?'}`
+    `   Sector:${s.sector||'?'} | Cap:${s.grp||'?'} | Supertrend:${s.supertrendSig||'?'}`
   ).join('\n\n');
 
   const system = `${agent.persona}
@@ -5228,12 +6000,19 @@ Your job: analyze the Fallen Angels list and predict which will RECOVER in the n
 
 RECOVERY means: stock price rises 15%+ from current levels within 6 months.
 
+CRITICAL — SIZE-AWARE ANALYSIS (Varsity Module 15):
+- SMALLCAP Fallen Angels: Higher risk but market OVERSHOOTS more. Need: ROE>15%, D/E<1, IntCov>2x, Promoter>50%, Pledged<20%. If quality intact, deeper falls = bigger opportunity. Position size: smaller, staggered entry.
+- MIDCAP Fallen Angels: Balanced risk/reward. Need: ROE>12%, D/E<1.5. Often best risk-adjusted opportunities.
+- LARGECAP Fallen Angels: Lowest risk, most liquid. Slower recovery but high certainty.
+Each stock brief shows [NIFTY50/NEXT50/MIDCAP/SMALLCAP] — factor this into your analysis.
+
 Respond in this EXACT JSON format (no preamble, no markdown, pure JSON):
 {
   "agent": "${agent.name}",
   "top_picks": [
     {
       "sym": "SYMBOLNAME",
+      "cap": "SMALLCAP/MIDCAP/LARGECAP",
       "conviction": 85,
       "horizon": "3 months",
       "target_upside": 28,
@@ -5363,14 +6142,20 @@ async function runMiroFishSimulation() {
     const fallenAngels = all
       .filter(s => {
         const score = (s.score || 0);
-        return score >= 45 && (s.pctFromHigh||0) <= -20 && (s.rsi||50) <= 55;
+        const minScore = s.grp === 'SMALLCAP' ? 55 : s.grp === 'MIDCAP' ? 52 : 45;
+        const minFall  = s.grp === 'SMALLCAP' ? -25 : -20;
+        return score >= minScore && (s.pctFromHigh||0) <= minFall && (s.rsi||50) <= 55;
       })
       .sort((a,b) => (b.fallenScore||b.score||0) - (a.fallenScore||a.score||0))
       .slice(0, 20);
 
-    if (!fallenAngels.length) return { error: 'No Fallen Angels found. Check scoring status.' };
-
-    console.log(`🐟 MiroFish: analyzing ${fallenAngels.length} Fallen Angels with ${MIROFISH_AGENTS.length} agents`);
+    const capBreakdown = {
+      NIFTY50:  fallenAngels.filter(s=>s.grp==='NIFTY50').length,
+      NEXT50:   fallenAngels.filter(s=>s.grp==='NEXT50').length,
+      MIDCAP:   fallenAngels.filter(s=>s.grp==='MIDCAP').length,
+      SMALLCAP: fallenAngels.filter(s=>s.grp==='SMALLCAP').length,
+    };
+    console.log(`🐟 MiroFish: ${fallenAngels.length} Fallen Angels — ${JSON.stringify(capBreakdown)}`);
 
     // Run all agents in parallel
     const agentPromises = MIROFISH_AGENTS.map(async agent => {
@@ -5396,6 +6181,7 @@ async function runMiroFishSimulation() {
       all_avoids:       allAvoids,
       agent_count:      agentResults.length,
       fallen_angels_analyzed: fallenAngels.length,
+      cap_breakdown:    capBreakdown,
       run_at:           Date.now(),
       run_at_str:       new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
     };
