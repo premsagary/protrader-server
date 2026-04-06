@@ -4474,6 +4474,14 @@ async function adminRunAll() {
   await adminRun('screener');
 }
 
+// Preload MiroFish lookup data (non-blocking)
+async function loadMiroFishLookup() {
+  try {
+    const r = await fetch('/api/mirofish/status');
+    if (r.ok) { const d = await r.json(); window._mfishStatus = d; }
+  } catch(e) { /* non-critical — MiroFish loads on demand */ }
+}
+
 function _init() {
   // Load MiroFish lookup silently on startup (reads from DB, no Anthropic call)
   setTimeout(loadMiroFishLookup, 2000);
