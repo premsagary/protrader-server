@@ -408,7 +408,6 @@ const CRYPTO_TABS = [
 function setMode(mode){
   S.mode=mode;
   window._currentMode = mode;
-
   try{ document.getElementById("mode-stocks").className   ="mode-tab stocks"  +(mode==="stocks"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
@@ -3092,12 +3091,11 @@ async function checkTokenStatus() {
     var banner = document.getElementById('token-banner');
     if (!banner) return;
 
-    // Show banner ONLY when token was explicitly rejected by Kite
-    // Never show on cold boot / startup / market closed / ticker not yet connected
-    var needsToken = d.tokenRejected || !d.hasToken;
+    // Show banner if: no token at all, OR token is expired (Kite rejected it)
+    var needsToken = !d.hasToken || d.tokenExpired;
     banner.style.display = needsToken ? 'flex' : 'none';
 
-    // Market badge
+    // Market badge - show during market hours
     var mb = document.getElementById('market-badge');
     if (mb) {
       if (d.marketOpen) {
@@ -3109,13 +3107,12 @@ async function checkTokenStatus() {
       }
     }
 
-    // Logo dot
+    // Logo dot: green=ticker live, amber=token valid but market closed or ticker not yet on, grey=no/bad token
     var dot = document.querySelector('.logo-dot');
     if (dot) {
-      dot.style.background = d.tickerOn      ? '#22c55e'
-        : d.tokenRejected                   ? '#ef4444'
-        : d.hasToken                        ? '#f59e0b'
-        : '#64748b';
+      dot.style.background = d.tickerOn         ? '#22c55e'
+        : (d.hasToken && d.tokenValid)          ? '#f59e0b'
+        : '#ef4444'; // red = no token or expired
     }
   } catch(e) {}
 }
@@ -4215,7 +4212,7 @@ async function aipPredict() {
 
 function _init() {
   try { checkTokenStatus(); } catch(e){}
-  try { _tokenCheckInterval = setInterval(checkTokenStatus, 5 * 60 * 1000); } catch(e){}
+  try { _tokenCheckInterval = setInterval(checkTokenStatus, 10 * 60 * 1000); } catch(e){}
   // Load MiroFish lookup silently on startup (reads from DB, no Anthropic call)
   setTimeout(loadMiroFishLookup, 2000);
   // Start with MF Recommendation - loads instantly from in-memory cache
