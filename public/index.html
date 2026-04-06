@@ -4368,6 +4368,11 @@ async function adminLoadStatus() {
       ? 'Running... last updated every 10 stocks'
       : scr.db_last_import ? 'Last: '+new Date(scr.db_last_import).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : 'Never imported';
     h += adminCard('Screener Data', scrLabel, scrSub, scrRunning?'#f59e0b':'#10b981');
+
+    // Log screener progress to log area when running
+    if (scrRunning && scr.progress) {
+      adminLog('📊 Screener: '+scr.progress.done+'/'+scr.progress.total+' done, '+scr.progress.errors+' errors');
+    }
     // Scored
     var scoreCount = score.stocks ? score.stocks.length : 0;
     var scoreSub = score.loading ? 'Loading Kite candles...' : score.last_scored||'–';
@@ -4380,9 +4385,8 @@ async function adminLoadStatus() {
     // Keep polling while screener or scoring is running
     if (scrRunning || score.loading) {
       if (!_adminPollTimer) {
-        _adminPollTimer = setInterval(function(){
-          adminLoadStatus();
-          if (scrRunning) adminLog('Screener: '+scr.progress?.done+'/'+scr.progress?.total+' done, '+scr.progress?.errors+' errors');
+        _adminPollTimer = setInterval(async function(){
+          await adminLoadStatus(); // fetches fresh scr/score inside
         }, 5000);
       }
     } else {
