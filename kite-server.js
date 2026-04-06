@@ -1917,8 +1917,8 @@ async function buildMFCache() {
     console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
 }
-// Build on startup and every 6h
-setTimeout(buildMFCache, 10000);
+// Build MF cache immediately on startup and every 6h
+buildMFCache();
 cron.schedule('0 */6 * * *', buildMFCache);
 
 
@@ -3836,33 +3836,29 @@ cron.schedule('0 7 * * *', async()=>{
   await refreshAllFundamentals();
 }, {timezone:'Asia/Kolkata'});
 
-// On startup: load scored stocks from DB cache IMMEDIATELY (before Kite refresh)
-// This makes Stocks Recommendation available instantly on every restart
+// On startup: load DB cache first (sync-ish via IIFE), then kick off background refreshes immediately
+// No delays — everything runs in background, UI is never blocked
 (async () => {
+  // Step 1: load previously scored stocks from DB cache → Stocks tab shows data instantly
   try {
     const cached = await dbGet('scored_stocks_cache');
     if (cached) {
       const { stocks, fetchedAt } = JSON.parse(cached);
-      const ageHours = (Date.now() - fetchedAt) / 3600000;
       const count = Object.keys(stocks).length;
       if (count > 10) {
         Object.assign(stockFundamentals, stocks);
         stockFundLastFetch = fetchedAt;
         stockFundReady = true;
-        console.log(`📊 Loaded ${count} scored stocks from DB cache (${ageHours.toFixed(1)}h old) — Stocks tab ready immediately`);
+        const ageH = ((Date.now()-fetchedAt)/3600000).toFixed(1);
+        console.log(`📊 ${count} scored stocks loaded from cache (${ageH}h old)`);
       }
     }
-  } catch(e) { console.log('📊 No stock cache found, will fetch fresh from Kite'); }
-})();
+  } catch(e) {}
 
-// On startup: 10s after boot (gives DB connection time to settle)
-// refreshAllFundamentals: Kite candles → scores → stock list ready (~90s)
-// refreshMissingFundamentals: Yahoo scraper → enriches fundamentals (runs in parallel)
-// DB cache loaded above means fundamentals are already populated before this runs
-setTimeout(()=>{
-  refreshAllFundamentals();
-  refreshMissingFundamentals().catch(e => console.log('Scraper error:', e.message));
-}, 10000);
+  // Step 2: immediately start background refresh — no setTimeout, no waiting
+  refreshAllFundamentals();                                                   // Kite candles → scores
+  refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message)); // Yahoo enrichment
+})();
 
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
