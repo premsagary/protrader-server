@@ -429,6 +429,9 @@ function setMode(mode){
     renderAdmin();
     return;
   }
+  // Stop admin log polling when leaving admin tab
+  if(_adminLogTimer){ clearInterval(_adminLogTimer); _adminLogTimer=null; }
+  if(_adminPollTimer){ clearInterval(_adminPollTimer); _adminPollTimer=null; }
   try{ renderSubTabs(); }catch(e){}
   render();
 }
@@ -4263,88 +4266,133 @@ async function renderAdmin() {
   var cont = document.getElementById('main-content');
   if (!cont) return;
 
-  var h = '<div style="padding:24px;max-width:800px;margin:0 auto">';
-  h += '<div style="font-weight:700;font-size:18px;margin-bottom:4px">⚙ ProTrader Admin</div>';
-  h += '<div style="font-size:11px;color:var(--text3);margin-bottom:24px">Database management — run operations manually or check status</div>';
+  cont.innerHTML = `
+  <div style="padding:20px;max-width:900px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div>
+        <div style="font-weight:700;font-size:18px">⚙ ProTrader Admin</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Database management · Live logs · All operations</div>
+      </div>
+      <div style="font-size:10px;color:var(--text4);text-align:right">
+        Schedules: 7AM score · 8AM universe · 9AM tokens · 8PM screener
+      </div>
+    </div>
 
-  // Status cards
-  h += '<div id="admin-status" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">';
-  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">';
-  h += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Loading status...</div></div>';
-  h += '</div>';
+    <!-- Status Cards -->
+    <div id="admin-status" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;color:var(--text3);font-size:11px">Loading...</div>
+    </div>
 
-  // Operations
-  var ops = [
-    {
-      title: '1. Refresh Universe from NSE',
-      desc:  'Fetches Nifty50 + Next50 + Midcap150 + Smallcap250 CSVs from NSE. Saves all stock names & symbols to DB.',
-      time:  '~10 seconds',
-      color: '#3b82f6',
-      fn:    'adminRun("universe")',
-    },
-    {
-      title: '2. Fetch Fundamentals via Apify',
-      desc:  'Runs akash9078/apify-screenerin-scraper for every stock in DB. Saves ROE, D/E, PE, margins, promoter%, pledged%, interest coverage etc.',
-      time:  '~1 hour (runs in background)',
-      color: '#f59e0b',
-      fn:    'adminRun("screener")',
-    },
-    {
-      title: '3. Re-score All Stocks',
-      desc:  'Fetches Kite daily candles for all stocks, computes 15+ technical indicators, applies Varsity scoring framework, saves to DB.',
-      time:  '~90 seconds',
-      color: '#10b981',
-      fn:    'adminRun("rescore")',
-    },
-    {
-      title: '4. Refresh MF Cache',
-      desc:  'Re-fetches mutual fund data (NAV, ratios, AUM) and rebuilds the MF recommendation scores.',
-      time:  '~30 seconds',
-      color: '#8b5cf6',
-      fn:    'adminRun("mfcache")',
-    },
-    {
-      title: '5. Full Reset & Reload',
-      desc:  'Runs all 4 steps in sequence. Use on first deploy or after major data issues.',
-      time:  '~1 hour total',
-      color: '#ef4444',
-      fn:    'adminRunAll()',
-    },
-  ];
+    <!-- Operations -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-weight:700;font-size:12px;color:#3b82f6;margin-bottom:4px">1. Refresh Universe</div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">NSE CSVs → stock_universe DB<br>Nifty50 + Next50 + Midcap + Smallcap</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="adminRun('universe')" style="background:#3b82f622;color:#3b82f6;border:1px solid #3b82f644;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~10s)</button>
+          <span id="ar-universe" style="font-size:10px;color:var(--text3)"></span>
+        </div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-weight:700;font-size:12px;color:#f59e0b;margin-bottom:4px">2. Fetch Screener Fundamentals</div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">🚀 Bulk mode · shashwattrivedi/screener-in<br>ROE · D/E · PE · margins · promoter% · pledged%</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="adminRun('screener')" style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~30min)</button>
+          <span id="ar-screener" style="font-size:10px;color:var(--text3)"></span>
+        </div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-weight:700;font-size:12px;color:#10b981;margin-bottom:4px">3. Re-score All Stocks</div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">Kite candles (20yr) → technicals → Varsity score<br>→ stock_scores DB · Fallen Angels updated</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="adminRun('rescore')" style="background:#10b98122;color:#10b981;border:1px solid #10b98144;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~90s)</button>
+          <span id="ar-rescore" style="font-size:10px;color:var(--text3)"></span>
+        </div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div style="font-weight:700;font-size:12px;color:#8b5cf6;margin-bottom:4px">4. Refresh MF Cache</div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">mf_tickertape → Varsity Module 11 scoring<br>Rebuilds MF recommendations</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="adminRun('mfcache')" style="background:#8b5cf622;color:#8b5cf6;border:1px solid #8b5cf644;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~30s)</button>
+          <span id="ar-mfcache" style="font-size:10px;color:var(--text3)"></span>
+        </div>
+      </div>
+    </div>
 
-  ops.forEach(function(op) {
-    h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">';
-    h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">';
-    h += '<div style="font-weight:700;font-size:13px;color:'+op.color+'">'+op.title+'</div>';
-    h += '<span style="font-size:10px;color:var(--text4);background:var(--bg3);padding:2px 8px;border-radius:4px">'+op.time+'</span>';
-    h += '</div>';
-    h += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.6">'+op.desc+'</div>';
-    h += '<button onclick="'+op.fn+'" style="background:'+op.color+'22;color:'+op.color+';border:1px solid '+op.color+'44;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer">▶ Run</button>';
-    h += '<span id="admin-result-'+op.fn.replace(/[^a-z]/gi,'').slice(0,10)+'" style="margin-left:12px;font-size:11px;color:var(--text3)"></span>';
-    h += '</div>';
-  });
+    <!-- Full Reset -->
+    <div style="background:var(--bg2);border:1px solid #ef444444;border-radius:10px;padding:14px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:700;font-size:12px;color:#ef4444;margin-bottom:2px">5. Full Reset & Reload</div>
+          <div style="font-size:10px;color:var(--text3)">Runs 1 → 3 → 4 → 2 in sequence. Use on first deploy or after data issues. ~1 hour total.</div>
+        </div>
+        <button onclick="adminRunAll()" style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;border-radius:6px;padding:6px 18px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;margin-left:16px">▶ Full Reset</button>
+      </div>
+    </div>
 
-  // Log area
-  h += '<div style="background:var(--bg3);border-radius:8px;padding:12px;margin-top:8px">';
-  h += '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:8px">LOG</div>';
-  h += '<div id="admin-log" style="font-size:10px;color:var(--text2);font-family:monospace;line-height:1.8;min-height:40px">Ready.</div>';
-  h += '</div>';
+    <!-- Live Server Logs -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:700;color:var(--text2)">📋 Live Server Logs</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="log-status" style="font-size:10px;color:var(--text4)">Connecting...</span>
+          <button onclick="adminClearLog()" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px;color:var(--text3);cursor:pointer">Clear</button>
+          <button onclick="adminScrollLog()" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px;color:var(--text3);cursor:pointer">↓ Bottom</button>
+        </div>
+      </div>
+      <div id="admin-log" style="font-size:10px;font-family:monospace;line-height:1.7;padding:10px 14px;height:300px;overflow-y:auto;background:#0a0a0a;color:#94a3b8"></div>
+    </div>
+  </div>`;
 
-  h += '</div>';
-  cont.innerHTML = h;
-
-  // Load status immediately
   adminLoadStatus();
+  adminStartLogPoll();
 }
 
 var _adminPollTimer = null;
+var _adminLogTimer  = null;
+var _adminLogSince  = 0;
 
-function adminLog(msg) {
+function adminLog(msg, level) {
   var el = document.getElementById('admin-log');
   if (!el) return;
-  var t = new Date().toLocaleTimeString('en-IN');
-  el.innerHTML += '<br>['+t+'] '+msg;
-  el.scrollTop = el.scrollHeight;
+  var t   = new Date().toLocaleTimeString('en-IN');
+  var col = level === 'error' ? '#f87171' : level === 'warn' ? '#fbbf24' : '#94a3b8';
+  var atBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 20;
+  el.innerHTML += '<div style="color:'+col+'"><span style="color:#475569">['+t+']</span> '+msg.replace(/</g,'&lt;')+'</div>';
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function adminClearLog() {
+  var el = document.getElementById('admin-log');
+  if (el) el.innerHTML = '';
+}
+
+function adminScrollLog() {
+  var el = document.getElementById('admin-log');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function adminStartLogPoll() {
+  if (_adminLogTimer) clearInterval(_adminLogTimer);
+  _adminLogSince = Date.now() - 60000; // start with last 60s of logs
+  adminFetchLogs(true); // immediate first fetch
+  _adminLogTimer = setInterval(adminFetchLogs, 3000); // poll every 3s
+}
+
+async function adminFetchLogs(initial) {
+  var statusEl = document.getElementById('log-status');
+  try {
+    var r = await fetch('/api/admin/logs?since='+_adminLogSince);
+    var d = await r.json();
+    if (d.lines && d.lines.length) {
+      d.lines.forEach(function(l) { adminLog(l.msg, l.level); });
+      _adminLogSince = d.now;
+    }
+    if (statusEl) statusEl.textContent = '● Live';
+    if (statusEl) statusEl.style.color = '#10b981';
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '○ Disconnected'; statusEl.style.color = '#ef4444'; }
+  }
 }
 
 async function adminLoadStatus() {
@@ -4352,98 +4400,78 @@ async function adminLoadStatus() {
   if (!el) return;
   try {
     var [univ, scr, score] = await Promise.all([
-      fetch('/api/universe/status').then(r=>r.json()),
-      fetch('/api/screener/status').then(r=>r.json()),
-      fetch('/api/stocks/score').then(r=>r.json()),
+      fetch('/api/universe/status').then(r=>r.json()).catch(()=>({})),
+      fetch('/api/screener/status').then(r=>r.json()).catch(()=>({})),
+      fetch('/api/stocks/score').then(r=>r.json()).catch(()=>({})),
     ]);
-    var h = '';
-    // Universe
-    h += adminCard('Universe (DB)', univ.total+' stocks', univ.status||'–', '#3b82f6');
-    // Screener
     var scrRunning = scr.running;
-    var scrLabel = scrRunning
-      ? '⏳ '+scr.progress?.done+'/'+scr.progress?.total+' stocks ('+scr.progress?.errors+' errors)'
-      : (scr.db_total||0)+' stocks in DB';
-    var scrSub = scrRunning
-      ? 'Running... last updated every 10 stocks'
-      : scr.db_last_import ? 'Last: '+new Date(scr.db_last_import).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : 'Never imported';
-    h += adminCard('Screener Data', scrLabel, scrSub, scrRunning?'#f59e0b':'#10b981');
-
-    // Log screener progress to log area when running
-    if (scrRunning && scr.progress) {
-      adminLog('📊 Screener: '+scr.progress.done+'/'+scr.progress.total+' done, '+scr.progress.errors+' errors');
-    }
-    // Scored
+    var scrMode    = scr.last_fetch?.mode === 'bulk' ? '🚀 Bulk' : '📡 Per-stock';
+    var scrVal     = scrRunning
+      ? '⏳ '+scr.progress?.done+'/'+scr.progress?.total+' ('+scr.progress?.errors+' err)'
+      : (scr.db_total||0)+' stocks';
+    var scrSub     = scrRunning ? 'Running '+scrMode+'...'
+      : scr.db_last_import ? new Date(scr.db_last_import).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
+      : 'Never run';
     var scoreCount = score.stocks ? score.stocks.length : 0;
-    var scoreSub = score.loading ? 'Loading Kite candles...' : score.last_scored||'–';
-    h += adminCard('Scored Stocks', score.loading ? '⏳ Scoring...' : scoreCount+' stocks', scoreSub, '#10b981');
-    // In memory fundamentals
-    var inMem = Object.keys((window._adminFundExt)||{}).length;
-    h += adminCard('Screener In Memory', (scr.in_memory||0)+' stocks', 'Source: Screener.in via Apify', '#8b5cf6');
-    el.innerHTML = h;
 
-    // Keep polling while screener or scoring is running
+    el.innerHTML =
+      adminCard('🌐 Universe', (univ.total||0)+' stocks', univ.status||'Not loaded', '#3b82f6') +
+      adminCard('📊 Screener '+scrMode, scrVal, scrSub, scrRunning?'#f59e0b':'#10b981') +
+      adminCard('⚡ Scored', score.loading?'⏳ Scoring...':scoreCount+' stocks', score.loading?'Fetching Kite candles...':score.last_scored||'–', '#10b981') +
+      adminCard('💾 In Memory', (scr.in_memory||0)+' fundamental', 'Loaded from screener_fundamentals', '#8b5cf6');
+
+    // Auto-poll while anything is running
     if (scrRunning || score.loading) {
       if (!_adminPollTimer) {
-        _adminPollTimer = setInterval(async function(){
-          await adminLoadStatus(); // fetches fresh scr/score inside
-        }, 5000);
+        _adminPollTimer = setInterval(adminLoadStatus, 5000);
       }
     } else {
       if (_adminPollTimer) {
         clearInterval(_adminPollTimer);
         _adminPollTimer = null;
-        adminLog('✅ All operations complete.');
       }
     }
   } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);font-size:11px">Status load error: '+e.message+'</div>';
+    el.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:12px">Status load error: '+e.message+'</div>';
   }
 }
 
 function adminCard(title, value, sub, color) {
-  return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+  return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px">'
     +'<div style="font-size:10px;color:var(--text3);margin-bottom:4px">'+title+'</div>'
-    +'<div style="font-size:16px;font-weight:700;color:'+color+';margin-bottom:2px">'+value+'</div>'
+    +'<div style="font-size:15px;font-weight:700;color:'+color+';margin-bottom:2px">'+value+'</div>'
     +'<div style="font-size:10px;color:var(--text4)">'+sub+'</div>'
     +'</div>';
 }
 
 async function adminRun(op) {
-  adminLog('▶ Starting: '+op+'...');
+  var tagEl = document.getElementById('ar-'+op);
+  if (tagEl) { tagEl.textContent = '⏳ Starting...'; tagEl.style.color = '#f59e0b'; }
   var endpoints = {
-    universe: ['/api/universe/refresh', 'POST'],
-    screener: ['/api/screener/fetch',   'POST'],
-    rescore:  ['/api/stocks/rescore',   'POST'],
-    mfcache:  ['/api/mf/rebuild-cache', 'POST'],
+    universe: '/api/universe/refresh',
+    screener: '/api/screener/fetch',
+    rescore:  '/api/stocks/rescore',
+    mfcache:  '/api/mf/rebuild-cache',
   };
-  var ep = endpoints[op];
-  if (!ep) { adminLog('Unknown op: '+op); return; }
   try {
-    var r = await fetch(ep[0], {method: ep[1]});
+    var r = await fetch(endpoints[op], {method:'POST'});
     var d = await r.json();
-    adminLog('✓ '+op+': '+(d.message||JSON.stringify(d).slice(0,100)));
-    // Start polling status
+    if (tagEl) { tagEl.textContent = '✓ '+( d.message||'Started').slice(0,40); tagEl.style.color = '#10b981'; }
+    setTimeout(adminLoadStatus, 2000);
     if (_adminPollTimer) clearInterval(_adminPollTimer);
-    _adminPollTimer = setInterval(function(){
-      adminLoadStatus();
-    }, 5000);
-    adminLoadStatus();
+    _adminPollTimer = setInterval(adminLoadStatus, 5000);
   } catch(e) {
-    adminLog('❌ ERROR: '+e.message);
+    if (tagEl) { tagEl.textContent = '❌ '+e.message.slice(0,40); tagEl.style.color = '#ef4444'; }
   }
 }
 
 async function adminRunAll() {
-  adminLog('=== FULL RESET STARTING ===');
   await adminRun('universe');
-  adminLog('⏳ Waiting 10s for universe to settle...');
-  await new Promise(r=>setTimeout(r,10000));
+  await new Promise(r=>setTimeout(r,12000));
   await adminRun('rescore');
   await adminRun('mfcache');
-  adminLog('⏳ Starting Screener fetch (~1 hour in background)...');
+  await new Promise(r=>setTimeout(r,2000));
   await adminRun('screener');
-  adminLog('=== All operations triggered ===');
 }
 
 function _init() {
