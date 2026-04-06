@@ -3855,13 +3855,14 @@ cron.schedule('0 7 * * *', async()=>{
   } catch(e) { console.log('📊 No stock cache found, will fetch fresh from Kite'); }
 })();
 
-// On startup: 90s after boot
-// Step 1: scrape Yahoo for any stocks missing fund data (fills DB cache)
-// Step 2: wait for scraper to finish, then score (so Fallen Angels get real data)
-setTimeout(async()=>{
-  await refreshMissingFundamentals();    // fills FUND table with real Yahoo data
-  await refreshAllFundamentals();        // scores all stocks (Fallen Angels computed here)
-}, 90000);
+// On startup: 10s after boot (gives DB connection time to settle)
+// refreshAllFundamentals: Kite candles → scores → stock list ready (~90s)
+// refreshMissingFundamentals: Yahoo scraper → enriches fundamentals (runs in parallel)
+// DB cache loaded above means fundamentals are already populated before this runs
+setTimeout(()=>{
+  refreshAllFundamentals();
+  refreshMissingFundamentals().catch(e => console.log('Scraper error:', e.message));
+}, 10000);
 
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
