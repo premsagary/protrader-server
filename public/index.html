@@ -2092,12 +2092,12 @@ async function renderStockRec(forceRefresh){
       +'<button class="btn btn-sm" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">'
-      +['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP'].map(function(f){
+      +['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'].map(function(f){
         return '<div style="padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--bg2);font-size:11px;color:var(--text3)">'+f+'</div>';
       }).join('')
       +'</div>'
       +'<div style="text-align:center;padding:40px 0">'
-      +'<div id="srec-loading-msg" style="font-size:13px;color:var(--text2);margin-bottom:6px">Fetching Kite candles for 252 stocks...</div>'
+      +'<div id="srec-loading-msg" style="font-size:13px;color:var(--text2);margin-bottom:6px">Fetching Kite candles for all stocks...</div>'
       +'<div id="srec-loading-sub" style="font-size:11px;color:var(--text3);margin-bottom:16px">First load takes ~60s. Subsequent loads are instant from cache.</div>'
       +'<div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;max-width:280px;margin:0 auto">'
       +'<div style="height:100%;background:#f59e0b;border-radius:2px;width:40%;animation:mfpulse 1.5s ease-in-out infinite"></div></div>'
@@ -2132,10 +2132,10 @@ async function pollStockRec(){
     if(d.loading){
       stockRecRetries++;
       var elapsed = stockRecRetries * 4;
-      if(msgEl) msgEl.textContent = d.loadingMsg || 'Fetching Kite candles for 252 stocks...';
+      if(msgEl) msgEl.textContent = d.loadingMsg || 'Fetching Kite candles for all stocks...';
       if(subEl) subEl.textContent = elapsed < 60
         ? 'Loading in background... first fetch takes ~90s'
-        : 'Still loading (' + elapsed + 's) — Kite historical API for 252 stocks takes time';
+        : 'Still loading (' + elapsed + 's) — Kite historical API for all stocks takes time';
       setTimeout(pollStockRec, 4000); // keep polling forever while server is loading
       return;
     }
@@ -2690,7 +2690,7 @@ function renderStockRecPage(){
   var data = stockRecData;
   var allStocks = data.stocks || [];
   if (allStocks.length) azBuild(allStocks); // populate analyzer dropdown with scored stocks
-  // Also fetch full universe (337 stocks) in background to fill unscored ones
+  // Also fetch full universe (all stocks) in background to fill unscored ones
   if (!window._azUniverseLoaded) {
     window._azUniverseLoaded = true;
     fetch('/api/universe/list').then(function(r){ return r.json(); }).then(function(d){
@@ -2731,6 +2731,7 @@ function renderStockRecPage(){
     if(stockRecFilter==='NIFTY50') return s.grp==='NIFTY50';
     if(stockRecFilter==='NEXT50')  return s.grp==='NEXT50';
     if(stockRecFilter==='MIDCAP')  return s.grp==='MIDCAP';
+    if(stockRecFilter==='SMALLCAP') return s.grp==='SMALLCAP';
     return s.sector===stockRecFilter;
   });
   if(stockRecFilter==='FALLEN') filtered = fallenAngels;
@@ -2774,6 +2775,7 @@ function renderStockRecPage(){
     {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
     {l:'Next50',          v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length,  c:'#8b5cf6'},
     {l:'Midcap',          v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length,  c:'#f59e0b'},
+    {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'#10b981'},
   ];
   pills.forEach(function(p){
     html+='<div style="background:'+(p.hot?'rgba(245,158,11,.1)':'var(--bg2)')+';border:1px solid '+(p.hot?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:8px;padding:7px 13px;cursor:'+(p.hot?'pointer':'default')+'"'
@@ -2784,7 +2786,7 @@ function renderStockRecPage(){
   });
   html += '</div>';
 
-  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP'].concat(sectors.slice(0,8));
+  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'].concat(sectors.slice(0,8));
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
@@ -2872,7 +2874,7 @@ function renderStockRecPage(){
     +'</tr></thead>';
 
   html += '<tbody>';
-  var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b'};
+  var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'};
 
   filtered.slice(0, showCount).forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
@@ -2961,7 +2963,7 @@ function renderStockRecPage(){
 }
 
 function buildStockCard(s, medal){
-  var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b'}[s.grp]||'var(--text3)';
+  var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
   var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
   var isFallenAngel = s.score>=50 && (s.pctFromHigh||0)<=-20 && (s.rsi||50)<=50;
   var px = s.price;
@@ -3262,7 +3264,10 @@ async function renderMiroFish() {
   h += '<div style="background:rgba(188,140,255,.08);border:1px solid rgba(188,140,255,.2);border-radius:10px;padding:12px 16px;margin-bottom:20px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">';
   h += '<span style="font-size:11px;font-weight:700;color:#bc8cff">MARKET REGIME</span>';
   h += '<span style="font-size:12px;color:var(--text2)">'+(d.market_regime||'—')+'</span>';
-  h += '<span style="margin-left:auto;font-size:10px;color:var(--text3)">'+d.agent_count+' agents · '+d.fallen_angels_analyzed+' stocks analyzed · '+d.run_at_str+'</span>';
+  var capBreakdown = d.cap_breakdown || {};
+  var capStr = Object.entries(capBreakdown).filter(function(e){return e[1]>0;})
+    .map(function(e){return e[1]+' '+e[0];}).join(' · ');
+  h += '<span style="margin-left:auto;font-size:10px;color:var(--text3)">'+d.agent_count+' agents · '+d.fallen_angels_analyzed+' stocks ('+capStr+') · '+d.run_at_str+'</span>';
   h += '</div>';
 
   // Top recovery picks
@@ -3278,8 +3283,14 @@ async function renderMiroFish() {
 
     // Stock header
     h += '<div style="display:flex;justify-content:space-between;margin-bottom:10px">';
-    h += '<div><div style="font-size:16px;font-weight:700;color:var(--text)">'+pick.sym+'</div>';
-    h += '<div style="font-size:10px;color:var(--text3)">'+pick.verdict+'</div></div>';
+    h += '<div>';
+    h += '<div style="font-size:16px;font-weight:700;color:var(--text)">'+pick.sym+'</div>';
+    h += '<div style="font-size:10px;color:var(--text3)">'+pick.verdict+'</div>';
+    // Cap badge from stock data
+    var pickGrp = sd.grp || pick.cap || '';
+    var capBadgeCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[pickGrp]||'#64748b';
+    if(pickGrp) h += '<span style="background:'+capBadgeCol+'22;color:'+capBadgeCol+';border-radius:4px;padding:1px 7px;font-size:9px;font-weight:700;margin-top:3px;display:inline-block">'+pickGrp+'</span>';
+    h += '</div>';
     h += '<div style="text-align:right">';
     h += '<div style="font-size:20px;font-weight:800;color:'+verdictColor+'">+'+pick.avg_target_upside+'%</div>';
     h += '<div style="font-size:9px;color:var(--text4)">target upside</div>';
@@ -3300,6 +3311,10 @@ async function renderMiroFish() {
       h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">ROE</div><div style="font-size:10px;font-weight:600;color:'+(sd.roe>=15?'var(--green)':'var(--text)')+'">'+sd.roe+'%</div></div>';
       h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">FA Score</div><div style="font-size:10px;font-weight:600;color:#bc8cff">'+(sd.fallenScore||'—')+'/100</div></div>';
       h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">R:R</div><div style="font-size:10px;font-weight:600;color:'+(sd.rrRatio>=2?'var(--green)':'var(--text)')+'">'+sd.rrRatio+'x</div></div>';
+      // Screener fields if available
+      if(sd.promoter!=null) h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">Promoter</div><div style="font-size:10px;font-weight:600;color:'+(sd.promoter>=50?'var(--green)':'var(--text)')+'">'+sd.promoter+'%</div></div>';
+      if(sd.pledged!=null)   h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">Pledged</div><div style="font-size:10px;font-weight:600;color:'+(sd.pledged>20?'var(--red)':'var(--green)')+'">'+sd.pledged+'%</div></div>';
+      if(sd.intCov!=null)    h += '<div style="background:var(--bg3);border-radius:5px;padding:4px;text-align:center"><div style="font-size:8px;color:var(--text4)">Int. Cov</div><div style="font-size:10px;font-weight:600;color:'+(sd.intCov>=3?'var(--green)':sd.intCov>=1.5?'var(--text)':'var(--red)')+'">'+sd.intCov+'x</div></div>';
       h += '</div>';
     }
 
