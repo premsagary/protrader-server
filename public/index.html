@@ -206,6 +206,7 @@ select option{background:var(--bg3)}
     <button class="mode-tab stocks" onclick="checkAccess('stocks')" id="mode-stocks">🔒 Stocks</button>
     <button class="mode-tab crypto" onclick="checkAccess('crypto')" id="mode-crypto">🔒 Crypto</button>
     <button class="mode-tab" onclick="setMode('aiportfolio')" id="mode-aiportfolio" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#60a5fa;border-color:#60a5fa40">📊 AI Portfolio</button>
+    <button class="mode-tab" onclick="checkAccess('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
 </div>
@@ -396,6 +397,7 @@ function setMode(mode){
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
   try{ document.getElementById("mode-aiportfolio").className ="mode-tab"      +(mode==="aiportfolio"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-admin").className    ="mode-tab"         +(mode==="admin"    ?" active":""); }catch(e){}
   if(mode==="mf"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){ console.log("renderTopBar error:", e.message); }
@@ -420,6 +422,11 @@ function setMode(mode){
       var cont=document.getElementById('main-content');
       if(cont) cont.innerHTML='<div style="padding:32px;text-align:center;color:#ef4444;font-size:13px">AI Portfolio error: '+e.message+'</div>';
     }
+    return;
+  }
+  if(mode==="admin"){
+    try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
+    renderAdmin();
     return;
   }
   try{ renderSubTabs(); }catch(e){}
@@ -4249,6 +4256,192 @@ async function aipPredict() {
   aipSyncBtn();
 }
 
+// =============================================================================
+// ADMIN PANEL
+// =============================================================================
+async function renderAdmin() {
+  var cont = document.getElementById('main-content');
+  if (!cont) return;
+
+  var h = '<div style="padding:24px;max-width:800px;margin:0 auto">';
+  h += '<div style="font-weight:700;font-size:18px;margin-bottom:4px">⚙ ProTrader Admin</div>';
+  h += '<div style="font-size:11px;color:var(--text3);margin-bottom:24px">Database management — run operations manually or check status</div>';
+
+  // Status cards
+  h += '<div id="admin-status" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">';
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">';
+  h += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Loading status...</div></div>';
+  h += '</div>';
+
+  // Operations
+  var ops = [
+    {
+      title: '1. Refresh Universe from NSE',
+      desc:  'Fetches Nifty50 + Next50 + Midcap150 + Smallcap250 CSVs from NSE. Saves all stock names & symbols to DB.',
+      time:  '~10 seconds',
+      color: '#3b82f6',
+      fn:    'adminRun("universe")',
+    },
+    {
+      title: '2. Fetch Fundamentals via Apify',
+      desc:  'Runs akash9078/apify-screenerin-scraper for every stock in DB. Saves ROE, D/E, PE, margins, promoter%, pledged%, interest coverage etc.',
+      time:  '~1 hour (runs in background)',
+      color: '#f59e0b',
+      fn:    'adminRun("screener")',
+    },
+    {
+      title: '3. Re-score All Stocks',
+      desc:  'Fetches Kite daily candles for all stocks, computes 15+ technical indicators, applies Varsity scoring framework, saves to DB.',
+      time:  '~90 seconds',
+      color: '#10b981',
+      fn:    'adminRun("rescore")',
+    },
+    {
+      title: '4. Refresh MF Cache',
+      desc:  'Re-fetches mutual fund data (NAV, ratios, AUM) and rebuilds the MF recommendation scores.',
+      time:  '~30 seconds',
+      color: '#8b5cf6',
+      fn:    'adminRun("mfcache")',
+    },
+    {
+      title: '5. Full Reset & Reload',
+      desc:  'Runs all 4 steps in sequence. Use on first deploy or after major data issues.',
+      time:  '~1 hour total',
+      color: '#ef4444',
+      fn:    'adminRunAll()',
+    },
+  ];
+
+  ops.forEach(function(op) {
+    h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">';
+    h += '<div style="font-weight:700;font-size:13px;color:'+op.color+'">'+op.title+'</div>';
+    h += '<span style="font-size:10px;color:var(--text4);background:var(--bg3);padding:2px 8px;border-radius:4px">'+op.time+'</span>';
+    h += '</div>';
+    h += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.6">'+op.desc+'</div>';
+    h += '<button onclick="'+op.fn+'" style="background:'+op.color+'22;color:'+op.color+';border:1px solid '+op.color+'44;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer">▶ Run</button>';
+    h += '<span id="admin-result-'+op.fn.replace(/[^a-z]/gi,'').slice(0,10)+'" style="margin-left:12px;font-size:11px;color:var(--text3)"></span>';
+    h += '</div>';
+  });
+
+  // Log area
+  h += '<div style="background:var(--bg3);border-radius:8px;padding:12px;margin-top:8px">';
+  h += '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:8px">LOG</div>';
+  h += '<div id="admin-log" style="font-size:10px;color:var(--text2);font-family:monospace;line-height:1.8;min-height:40px">Ready.</div>';
+  h += '</div>';
+
+  h += '</div>';
+  cont.innerHTML = h;
+
+  // Load status immediately
+  adminLoadStatus();
+}
+
+var _adminPollTimer = null;
+
+function adminLog(msg) {
+  var el = document.getElementById('admin-log');
+  if (!el) return;
+  var t = new Date().toLocaleTimeString('en-IN');
+  el.innerHTML += '<br>['+t+'] '+msg;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function adminLoadStatus() {
+  var el = document.getElementById('admin-status');
+  if (!el) return;
+  try {
+    var [univ, scr, score] = await Promise.all([
+      fetch('/api/universe/status').then(r=>r.json()),
+      fetch('/api/screener/status').then(r=>r.json()),
+      fetch('/api/stocks/score').then(r=>r.json()),
+    ]);
+    var h = '';
+    // Universe
+    h += adminCard('Universe (DB)', univ.total+' stocks', univ.status||'–', '#3b82f6');
+    // Screener
+    var scrRunning = scr.running;
+    var scrLabel = scrRunning
+      ? '⏳ '+scr.progress?.done+'/'+scr.progress?.total+' stocks ('+scr.progress?.errors+' errors)'
+      : (scr.db_total||0)+' stocks in DB';
+    var scrSub = scrRunning
+      ? 'Running... last updated every 10 stocks'
+      : scr.db_last_import ? 'Last: '+new Date(scr.db_last_import).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : 'Never imported';
+    h += adminCard('Screener Data', scrLabel, scrSub, scrRunning?'#f59e0b':'#10b981');
+    // Scored
+    var scoreCount = score.stocks ? score.stocks.length : 0;
+    var scoreSub = score.loading ? 'Loading Kite candles...' : score.last_scored||'–';
+    h += adminCard('Scored Stocks', score.loading ? '⏳ Scoring...' : scoreCount+' stocks', scoreSub, '#10b981');
+    // In memory fundamentals
+    var inMem = Object.keys((window._adminFundExt)||{}).length;
+    h += adminCard('Screener In Memory', (scr.in_memory||0)+' stocks', 'Source: Screener.in via Apify', '#8b5cf6');
+    el.innerHTML = h;
+
+    // Keep polling while screener or scoring is running
+    if (scrRunning || score.loading) {
+      if (!_adminPollTimer) {
+        _adminPollTimer = setInterval(function(){
+          adminLoadStatus();
+          if (scrRunning) adminLog('Screener: '+scr.progress?.done+'/'+scr.progress?.total+' done, '+scr.progress?.errors+' errors');
+        }, 5000);
+      }
+    } else {
+      if (_adminPollTimer) {
+        clearInterval(_adminPollTimer);
+        _adminPollTimer = null;
+        adminLog('✅ All operations complete.');
+      }
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red);font-size:11px">Status load error: '+e.message+'</div>';
+  }
+}
+
+function adminCard(title, value, sub, color) {
+  return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:4px">'+title+'</div>'
+    +'<div style="font-size:16px;font-weight:700;color:'+color+';margin-bottom:2px">'+value+'</div>'
+    +'<div style="font-size:10px;color:var(--text4)">'+sub+'</div>'
+    +'</div>';
+}
+
+async function adminRun(op) {
+  adminLog('▶ Starting: '+op+'...');
+  var endpoints = {
+    universe: ['/api/universe/refresh', 'POST'],
+    screener: ['/api/screener/fetch',   'POST'],
+    rescore:  ['/api/stocks/rescore',   'POST'],
+    mfcache:  ['/api/mf/rebuild-cache', 'POST'],
+  };
+  var ep = endpoints[op];
+  if (!ep) { adminLog('Unknown op: '+op); return; }
+  try {
+    var r = await fetch(ep[0], {method: ep[1]});
+    var d = await r.json();
+    adminLog('✓ '+op+': '+(d.message||JSON.stringify(d).slice(0,100)));
+    // Start polling status
+    if (_adminPollTimer) clearInterval(_adminPollTimer);
+    _adminPollTimer = setInterval(function(){
+      adminLoadStatus();
+    }, 5000);
+    adminLoadStatus();
+  } catch(e) {
+    adminLog('❌ ERROR: '+e.message);
+  }
+}
+
+async function adminRunAll() {
+  adminLog('=== FULL RESET STARTING ===');
+  await adminRun('universe');
+  adminLog('⏳ Waiting 10s for universe to settle...');
+  await new Promise(r=>setTimeout(r,10000));
+  await adminRun('rescore');
+  await adminRun('mfcache');
+  adminLog('⏳ Starting Screener fetch (~1 hour in background)...');
+  await adminRun('screener');
+  adminLog('=== All operations triggered ===');
+}
+
 function _init() {
   // Load MiroFish lookup silently on startup (reads from DB, no Anthropic call)
   setTimeout(loadMiroFishLookup, 2000);
@@ -4288,6 +4481,12 @@ function submitPasscode() {
     document.getElementById('mode-crypto').textContent = 'Crypto';
     document.getElementById('mode-stocks').onclick = function(){ setMode('stocks'); };
     document.getElementById('mode-crypto').onclick = function(){ setMode('crypto'); };
+    // Unlock admin tab too
+    var adminBtn = document.getElementById('mode-admin');
+    if (adminBtn) {
+      adminBtn.onclick = function(){ setMode('admin'); };
+      adminBtn.style.color = '#f59e0b';
+    }
     if (_pendingMode) setMode(_pendingMode);
   } else {
     err.style.display = 'block';
@@ -4319,7 +4518,7 @@ var _pendingMode = null;
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:32px;width:320px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)">
     <div style="font-size:36px;margin-bottom:12px">🔒</div>
     <div style="font-weight:700;font-size:16px;margin-bottom:6px">Private Section</div>
-    <div style="font-size:12px;color:var(--text3);margin-bottom:24px;line-height:1.6">This section is restricted.<br>Enter passcode to continue.</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:24px;line-height:1.6">This section is restricted.<br>Enter passcode to unlock Stocks, Crypto & Admin.</div>
     <input id="passcode-input" type="password" placeholder="Enter passcode"
       style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px;text-align:center;letter-spacing:2px"
       onkeydown="if(event.key==='Enter')submitPasscode()"/>
