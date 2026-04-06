@@ -3838,26 +3838,6 @@ cron.schedule('0 7 * * *', async()=>{
   await refreshAllFundamentals();
 }, {timezone:'Asia/Kolkata'});
 
-// On startup: load DB cache + kick off background refreshes
-// refreshAllFundamentals is called AFTER refreshInstruments in the main init below
-// This IIFE only handles the cache load
-(async () => {
-  try {
-    const cached = await dbGet('scored_stocks_cache');
-    if (cached) {
-      const { stocks, fetchedAt } = JSON.parse(cached);
-      const count = Object.keys(stocks).length;
-      if (count > 10) {
-        Object.assign(stockFundamentals, stocks);
-        stockFundLastFetch = fetchedAt;
-        stockFundReady = true;
-        const ageH = ((Date.now()-fetchedAt)/3600000).toFixed(1);
-        console.log(`📊 ${count} scored stocks loaded from cache (${ageH}h old)`);
-      }
-    }
-  } catch(e) {}
-})();
-
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
 app.get('/api/stocks/analyze/:sym', async(req,res)=>{
@@ -5075,6 +5055,21 @@ async function start() {
 
   // Load cached auto-fetched fundamentals from DB (fast, no network)
   await loadCachedFundamentals();
+
+  // Load previously scored stocks from DB cache — makes Stocks tab instant on restart
+  try {
+    const cached = await dbGet('scored_stocks_cache');
+    if (cached) {
+      const { stocks, fetchedAt } = JSON.parse(cached);
+      const count = Object.keys(stocks).length;
+      if (count > 10) {
+        Object.assign(stockFundamentals, stocks);
+        stockFundLastFetch = fetchedAt;
+        stockFundReady = true;
+        console.log(`📊 ${count} scored stocks from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old) — Stocks tab ready`);
+      }
+    }
+  } catch(e) { console.log('📊 No score cache — will fetch fresh'); }
 
   initKite(token||null);
   if (token) {
