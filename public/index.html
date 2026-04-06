@@ -2134,36 +2134,85 @@ async function pollStockRec(){
     var d = await r.json();
     var msgEl  = document.getElementById('srec-loading-msg');
     var subEl  = document.getElementById('srec-loading-sub');
-    if(d.loading && (!d.stocks || d.stocks.length===0)){
+
+    // Got data — render it (even partial data is fine)
+    if (d.stocks && d.stocks.length > 0) {
+      stockRecData = d;
+      if (d.universe_total) {
+        window._universeCount = d.universe_total;
+        var uEl = document.querySelector('[data-stat="universe"]');
+        if (uEl) uEl.textContent = d.universe_total + ' stocks';
+      }
+      renderStockRecPage();
+      return;
+    }
+
+    // Still loading — keep polling
+    if (d.loading) {
       stockRecRetries++;
-      var msg = d.loadingMsg || 'Fetching data...';
-      if(msgEl) msgEl.textContent = msg;
-      if(subEl) subEl.textContent = 'Retry '+stockRecRetries+' - refreshing every 4 seconds...';
-      if(stockRecRetries < 30){
+      var msg = d.loadingMsg || 'Fetching Kite candle data for 252 stocks...';
+      if (msgEl) msgEl.textContent = msg;
+
+      // Progressive messaging based on retry count
+      var sub = stockRecRetries < 8
+        ? 'First load takes ~60s — fetching 252 stocks from Kite historical API...'
+        : stockRecRetries < 20
+        ? 'Still loading... (' + (stockRecRetries * 4) + 's elapsed). Kite API takes time on first boot.'
+        : 'Taking longer than usual. Kite may be slow. Will keep trying...';
+      if (subEl) subEl.textContent = sub;
+
+      // Keep retrying indefinitely while loading (up to 5 minutes = 75 retries)
+      if (stockRecRetries < 75) {
         setTimeout(pollStockRec, 4000);
       } else {
-        if(cont) cont.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">'
-          +'<div style="font-size:24px;margin-bottom:12px">⚠️</div>'
-          +'<div style="margin-bottom:8px">Kite token expired or unavailable</div>'
-          +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Kite token may be expired. Update your token using the banner above.</div>'
-          +'<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
-          +'</div>';
+        // After 5 minutes, check actual token status to give accurate error
+        var tokenOk = true;
+        try {
+          var tr = await fetch('/api/token/status');
+          var td = await tr.json();
+          tokenOk = td.hasToken && !td.tokenRejected;
+        } catch(e) {}
+
+        if (!tokenOk) {
+          cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--red)">'
+            + '<div style="font-size:24px;margin-bottom:12px">🔑</div>'
+            + '<div style="font-weight:700;margin-bottom:8px;font-size:14px">Kite Token Expired</div>'
+            + '<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Generate a new access token from Kite and paste it in the token bar.</div>'
+            + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry after updating token</button>'
+            + '</div>';
+        } else {
+          cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)">'
+            + '<div style="font-size:24px;margin-bottom:12px">⏱</div>'
+            + '<div style="font-weight:700;margin-bottom:8px;color:var(--text)">Taking unusually long</div>'
+            + '<div style="font-size:11px;margin-bottom:16px">Token is valid. Kite API may be slow or rate-limiting. Try again in a minute.</div>'
+            + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
+            + '</div>';
+        }
       }
       return;
     }
-    stockRecData = d;
-    // Update universe count in header dynamically
-    if(d.universe_total) {
-      window._universeCount = d.universe_total;
-      // Update the stat pill if visible
-      var uEl = document.querySelector('[data-stat="universe"]');
-      if(uEl) uEl.textContent = d.universe_total + ' stocks';
+
+    // d.loading is false but stocks is empty — something else wrong
+    stockRecData = d.stocks && d.stocks.length > 0 ? d : null;
+    if (stockRecData) { renderStockRecPage(); return; }
+
+    // Unknown state — retry a few more times
+    stockRecRetries++;
+    if (stockRecRetries < 5) {
+      setTimeout(pollStockRec, 3000);
+    } else {
+      cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)">'
+        + '<div style="font-size:20px;margin-bottom:12px">📡</div>'
+        + '<div style="margin-bottom:8px">No stock data returned</div>'
+        + '<div style="font-size:11px;margin-bottom:16px">Server may still be starting up. Try refreshing.</div>'
+        + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
+        + '</div>';
     }
-    renderStockRecPage();
-  } catch(e){
+
+  } catch(e) {
     var cont2 = document.getElementById('main-content');
-    if(cont2) cont2.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">Error: '+e.message
-      +'<br><button class="btn btn-sm" style="margin-top:12px" onclick="stockRecData=null;renderStockRec(true)">↻ Retry</button></div>';
+    if (cont2) cont2.innerHTML = '<div style="text-align:center;padding:60px;color:var(--red)">Error: ' + e.message
+      + '<br><button class="btn btn-sm" style="margin-top:12px" onclick="stockRecData=null;renderStockRec(true)">↻ Retry</button></div>';
   }
 }
 
