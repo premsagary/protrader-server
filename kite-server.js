@@ -261,7 +261,6 @@ const livePrices  = {};
 const subscribers = new Set();
 let   tickerOn      = false;
 let   tokenValid  = false; // set true when ticker connects, false when error/disconnect
-const serverStarted = Date.now();
 
 function broadcast(data) {
   const msg = JSON.stringify(data);
@@ -1989,20 +1988,11 @@ app.get("/api/fundamentals/status", (req,res)=>{
 
 
 app.get("/api/token/status", (req,res)=>{
-  const hasToken   = !!process.env.KITE_ACCESS_TOKEN;
-  const marketOpen = isMarketOpen();
-  const uptimeSecs = (Date.now() - serverStarted) / 1000;
-
-  // Token expired = has token but Kite rejected it AND we've been running long enough
-  // Grace period: 120s after boot — ticker needs time to connect on startup
-  // This prevents the banner flashing on cold boot before ticker has connected
-  const tokenExpired = hasToken && !tokenValid && uptimeSecs > 120 && (
-    Object.keys(livePrices).length === 0
-  );
-
-  const isWorking = tickerOn || Object.keys(livePrices).length > 0 || (tokenValid && !marketOpen);
+  const hasToken = !!process.env.KITE_ACCESS_TOKEN;
+  const isWorking = tickerOn || Object.keys(livePrices).length > 0 || (tokenValid && !isMarketOpen());
   res.json({
-    hasToken, isWorking, tickerOn, tokenValid, tokenExpired, marketOpen,
+    hasToken, isWorking, tickerOn, tokenValid,
+    marketOpen: isMarketOpen(),
     livePrices: Object.keys(livePrices).length,
     loginUrl: kite ? kite.getLoginURL() : null,
   });
