@@ -1930,6 +1930,25 @@ app.get("/health", (req,res)=>res.json({
 }));
 
 // Universe status endpoint
+// Lightweight list of all stocks for analyzer dropdown
+app.get("/api/universe/list", (req,res)=>{
+  const scored = Object.values(stockFundamentals);
+  // Merge UNIVERSE (has all 337) with scored data (has scores + sector)
+  const scoredMap = {};
+  scored.forEach(s => { scoredMap[s.sym] = s; });
+  const list = UNIVERSE.map(s => {
+    const sc = scoredMap[s.sym];
+    return {
+      sym:    s.sym,
+      name:   s.n || sc?.name || s.sym,
+      grp:    s.grp,
+      sector: sc?.sector || '',
+      score:  sc?.score  || 0,
+    };
+  }).sort((a,b) => b.score - a.score);
+  res.json({ stocks: list, total: list.length });
+});
+
 app.get("/api/universe/status", async(req,res)=>{
   const n50  = UNIVERSE.filter(s=>s.grp==='NIFTY50');
   const nx50 = UNIVERSE.filter(s=>s.grp==='NEXT50');
