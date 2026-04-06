@@ -2565,6 +2565,17 @@ async function refreshAllFundamentals() {
   stockFundLoading   = false;
   stockFundReady     = ok > 10;
   console.log(`📊 Stock scoring done: ${ok} OK, ${fail} failed`);
+
+  // Persist scored stocks to DB so next restart loads instantly from cache
+  if (ok > 10) {
+    try {
+      await dbSet('scored_stocks_cache', JSON.stringify({
+        stocks: stockFundamentals,
+        fetchedAt: stockFundLastFetch,
+      }));
+      console.log(`📊 Scored stocks saved to DB cache (${ok} stocks)`);
+    } catch(e) { console.log('📊 Cache save failed:', e.message); }
+  }
 }
 
 // -- Patch fundamentals into existing stockFundamentals without re-fetching candles --
@@ -3711,13 +3722,13 @@ app.get('/api/stocks/score', async(req,res)=>{
     const stale = Date.now()-stockFundLastFetch > 23*3600*1000;
 
     if (empty && !stockFundLoading) {
-      refreshAllFundamentals(); // trigger background, return loading immediately
-      return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks... (~60s)'});
+      refreshAllFundamentals();
+      return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks... (~90s)'});
     }
     if (empty && stockFundLoading) {
       return res.json({stocks:[],loading:true,loadingMsg:'Loading Kite candles... please wait'});
     }
-    if (stale && !stockFundLoading) refreshAllFundamentals(); // background refresh
+    if (stale && !stockFundLoading) refreshAllFundamentals();
 
     const all = Object.values(stockFundamentals);
 
@@ -3824,6 +3835,25 @@ cron.schedule('0 7 * * *', async()=>{
   // Step 2: then score all stocks (now with real data)
   await refreshAllFundamentals();
 }, {timezone:'Asia/Kolkata'});
+
+// On startup: load scored stocks from DB cache IMMEDIATELY (before Kite refresh)
+// This makes Stocks Recommendation available instantly on every restart
+(async () => {
+  try {
+    const cached = await dbGet('scored_stocks_cache');
+    if (cached) {
+      const { stocks, fetchedAt } = JSON.parse(cached);
+      const ageHours = (Date.now() - fetchedAt) / 3600000;
+      const count = Object.keys(stocks).length;
+      if (count > 10) {
+        Object.assign(stockFundamentals, stocks);
+        stockFundLastFetch = fetchedAt;
+        stockFundReady = true;
+        console.log(`📊 Loaded ${count} scored stocks from DB cache (${ageHours.toFixed(1)}h old) — Stocks tab ready immediately`);
+      }
+    }
+  } catch(e) { console.log('📊 No stock cache found, will fetch fresh from Kite'); }
+})();
 
 // On startup: 90s after boot
 // Step 1: scrape Yahoo for any stocks missing fund data (fills DB cache)
