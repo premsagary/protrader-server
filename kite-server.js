@@ -19,6 +19,19 @@
 
 require("dotenv").config();
 const express   = require("express");
+
+// ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
+const LOG_BUFFER = [];
+const _origLog = console.log.bind(console);
+const _origErr = console.error.bind(console);
+function _capture(level, args) {
+  const line = { t: Date.now(), level, msg: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') };
+  LOG_BUFFER.push(line);
+  if (LOG_BUFFER.length > 500) LOG_BUFFER.shift();
+}
+console.log   = (...a) => { _origLog(...a);   _capture('info',  a); };
+console.error = (...a) => { _origErr(...a);   _capture('error', a); };
+// ─────────────────────────────────────────────────────────────────────────────
 const cors      = require("cors");
 const http      = require("http");
 const WebSocket = require("ws");
@@ -2808,18 +2821,17 @@ let FUND = {
 
 };
 
-// -- Fetch 1yr daily candles from Kite ----------------------------------------
+// -- Fetch MAX daily candles from Kite (full history) --------------------------
 async function fetchKiteDaily(sym) {
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return null;
   const token = validTokens[sym] || INSTRUMENTS[sym];
   if (!token) return null;
   try {
     const to   = new Date();
-    const from = new Date(Date.now() - 366*24*60*60*1000);
-    // 10s timeout — never let a single stock hang the whole batch
+    const from = new Date(Date.now() - 20*366*24*60*60*1000); // 20 years back
     const candles = await Promise.race([
       kite.getHistoricalData(token,'day',from.toISOString().split('T')[0],to.toISOString().split('T')[0]),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),10000))
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),15000))
     ]);
     return (candles && candles.length >= 50) ? candles : null;
   } catch(e) { return null; }
@@ -4429,122 +4441,44 @@ app.get('/api/stocks/score', async(req,res)=>{
   } catch(e){ res.status(500).json({error:e.message,stocks:[]}); }
 });
 
-// Daily refresh 7AM IST (market opens 9:15 - get fresh data early)
-cron.schedule('0 7 * * *', async()=>{
-  // Step 1: scrape fresh fundamentals from Yahoo for stale/missing stocks
-  await refreshMissingFundamentals();
-  // Step 2: then score all stocks (now with real data)
-  await refreshAllFundamentals();
-}, {timezone:'Asia/Kolkata'});
+// =============================================================================
+// DAILY SCHEDULES — all DB tables updated, memory reloaded after each run
+// =============================================================================
 
-// Daily refresh 7AM IST (market opens 9:15 - get fresh data early)
-cron.schedule('0 7 * * *', async()=>{
-  // Step 1: scrape fresh fundamentals from Yahoo for stale/missing stocks
-  await refreshMissingFundamentals();
-  // Step 2: then score all stocks (now with real data)
-  await refreshAllFundamentals();
-}, {timezone:'Asia/Kolkata'});
+// 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
+cron.schedule('0 7 * * *', async () => {
+  console.log('📊 7AM: Daily stock scoring starting...');
+  await refreshMissingFundamentals(); // Yahoo scraper for any missing FUND data
+  await refreshAllFundamentals();     // Kite candles → score → save to stock_scores DB
+}, { timezone: 'Asia/Kolkata' });
+
+// 8AM IST — refresh stock universe from NSE CSVs → stock_universe DB
+cron.schedule('0 8 * * *', async () => {
+  console.log('📋 8AM: Refreshing universe from NSE...');
+  await refreshUniverseFromNSE();
+}, { timezone: 'Asia/Kolkata' });
+
+// 9AM IST — refresh Kite instrument tokens → stock_instruments DB
+cron.schedule('0 9 * * 1-5', async () => {
+  console.log('📋 9AM: Refreshing instrument tokens from Kite...');
+  await refreshInstruments();
+}, { timezone: 'Asia/Kolkata' });
+
+// 8PM IST — fetch Screener.in fundamentals (after market close, data is fresh) → screener_fundamentals DB
+cron.schedule('0 20 * * *', () => {
+  console.log('📊 8PM: Daily Screener fundamentals refresh starting...');
+  fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
+}, { timezone: 'Asia/Kolkata' });
 
 // =============================================================================
-// SCREENER.IN FUNDAMENTALS — per-ticker via akash9078/apify-screenerin-scraper
-// Runs all UNIVERSE stocks sequentially in background. UI stays up throughout.
-// Each stock = 1 Apify run (~5s). 340 stocks ≈ 30 min total.
-// Runs daily at 8PM IST after market close. APIFY_TOKEN required.
+// SCREENER.IN FUNDAMENTALS — bulk mode via shashwattrivedi/screener-in
+// One Apify run → all stocks at once via runQuery
+// Requires SCREENER_USERNAME + SCREENER_PASSWORD in Railway env vars
 // =============================================================================
 
 let screenerRunning = false;
 let screenerProgress = { done: 0, total: 0, errors: 0, startedAt: null };
 
-async function fetchOneStockFromScreener(sym, token) {
-  const BASE  = 'https://api.apify.com/v2';
-  const ACTOR = 'akash9078~indian-stocks-financial-data-scraper'; // correct actor ID
-  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
-  const ps = v => (v||'').toString().trim();
-
-  // Start run
-  const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${token}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stockSymbol: sym }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!startResp.ok) {
-    const errText = await startResp.text().catch(()=>'');
-    throw new Error(`Start failed ${startResp.status}: ${errText.slice(0,100)}`);
-  }
-  const runInfo = await startResp.json();
-  const runId = runInfo.data?.id;
-  const datasetId = runInfo.data?.defaultDatasetId;
-  if (!runId) throw new Error('No run ID');
-
-  // Poll until done (max 2 min per stock)
-  let status = 'RUNNING', attempts = 0;
-  while ((status === 'RUNNING' || status === 'READY') && attempts < 24) {
-    await new Promise(r => setTimeout(r, 5000));
-    attempts++;
-    const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${token}`, { signal: AbortSignal.timeout(10000) });
-    if (!poll.ok) continue;
-    status = (await poll.json()).data?.status || 'RUNNING';
-  }
-  if (status !== 'SUCCEEDED') throw new Error(`Run status: ${status}`);
-
-  // Fetch result
-  const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${token}&limit=5`, { signal: AbortSignal.timeout(15000) });
-  if (!dataResp.ok) throw new Error(`Dataset fetch failed: ${dataResp.status}`);
-  const items = await dataResp.json();
-  if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
-
-  const item = items[0];
-  const g = (...keys) => { for (const k of keys) { if (item[k]!=null && item[k]!=='') return pn(item[k]); } return null; };
-  const gs = (...keys) => { for (const k of keys) { if (item[k]!=null) return ps(item[k]); } return ''; };
-
-  return {
-    sym,
-    name:             gs('companyName','name','Company Name','Name'),
-    nse_code:         sym,
-    bse_code:         gs('bseCode','BSE Code','bse_code'),
-    industry:         gs('industry','Industry','sector'),
-    industry_group:   gs('industryGroup','Industry Group'),
-    roe:              g('roe','ROE','returnOnEquity','Return on Equity','return_on_equity'),
-    de:               g('debtToEquity','D/E','debt_to_equity','Debt to Equity','de'),
-    pe:               g('pe','PE','priceToEarning','Price to Earning','price_to_earning'),
-    rev_gr_3y:        g('salesGrowth3y','salesGrowth3Years','Sales Growth 3Years','revenue_growth_3y'),
-    eps_gr_3y:        g('profitGrowth3y','profitGrowth3Years','Profit Growth 3Years','eps_growth_3y'),
-    opm:              g('opm','OPM','operatingProfitMargin','Operating Profit Margin'),
-    roa:              g('roa','ROA','returnOnAssets','Return on Assets'),
-    pb:               g('pb','PB','priceToBook','Price to Book','price_to_book'),
-    peg:              g('peg','PEG','pegRatio','PEG Ratio'),
-    int_cov:          g('interestCoverageRatio','interestCoverage','Interest Coverage','interest_coverage'),
-    promoter_holding: g('promoterHolding','Promoter Holding','promoter_holding'),
-    pledged_pct:      g('pledgedPercentage','Pledged Percentage','pledged'),
-    promoter_chg:     g('promoterHoldingChange','Change in Promoter Holding','promoter_change'),
-    mkt_cap:          g('marketCap','Market Cap','market_capitalization','Market Capitalization'),
-    current_price:    g('currentPrice','Current Price','price','cmp'),
-    eps:              g('eps','EPS','earningsPerShare'),
-    debt:             g('debt','Debt','totalDebt'),
-    current_ratio:    g('currentRatio','Current Ratio','current_ratio'),
-    div_yield:        g('dividendYield','Dividend Yield','dividend_yield'),
-    sales_gr_1y:      g('salesGrowth','salesGrowth1y','Sales Growth','revenue_growth'),
-    sales_gr_5y:      g('salesGrowth5y','salesGrowth5Years','Sales Growth 5Years'),
-    eps_gr_1y:        g('profitGrowth','profitGrowth1y','Profit Growth','eps_growth'),
-    eps_gr_5y:        g('profitGrowth5y','profitGrowth5Years','Profit Growth 5Years'),
-    roe_3y_avg:       g('avgRoe3y','averageROE3Years','Average ROE 3Years'),
-    roe_5y_avg:       g('avgRoe5y','averageROE5Years','Average ROE 5Years'),
-    ret_1y:           g('return1y','Return 1Year','1_year_return','1YReturn'),
-    ret_3y:           g('return3y','Return 3Years','3_year_return'),
-    ret_5y:           g('return5y','Return 5Years','5_year_return'),
-    ret_6m:           g('return6m','Return 6Months','6_month_return'),
-    ret_3m:           g('return3m','Return 3Months','3_month_return'),
-    ev_ebitda:        g('evEbitda','EV/EBITDA','ev_ebitda'),
-    industry_pe:      g('industryPE','Industry PE','industry_pe'),
-    pat_qtr:          g('netProfitLatestQuarter','Net Profit Latest Quarter','quarterly_pat'),
-    sales_qtr:        g('salesLatestQuarter','Sales Latest Quarter','quarterly_sales'),
-    pat_annual:       g('profitAfterTax','PAT','pat','Profit After Tax'),
-    sales_annual:     g('sales','Sales','revenue','Revenue'),
-    pat_qtr_yoy:      g('yoyQuarterlyProfitGrowth','YOY Quarterly Profit Growth'),
-    sales_qtr_yoy:    g('yoyQuarterlySalesGrowth','YOY Quarterly Sales Growth'),
-  };
-}
 
 async function upsertScreenerData(data) {
   if (!data.peg && data.pe && data.eps_gr_3y && data.eps_gr_3y > 0) {
@@ -4600,70 +4534,157 @@ async function upsertScreenerData(data) {
   patchScreenerIntoFUND(data.sym, data);
 }
 
+// Bulk mode — one Apify run gets all stocks via runQuery
+// Much faster than 567 separate runs. Requires Screener.in login.
+async function fetchAllScreenerBulk(token) {
+  if (screenerRunning) return { error: 'Already running' };
+  screenerRunning = true;
+  const BASE  = 'https://api.apify.com/v2';
+  const ACTOR = 'shashwattrivedi~screener-in';
+  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
+  const ps = v => (v||'').toString().trim();
+
+  screenerProgress = { done: 0, total: 0, errors: 0, startedAt: Date.now() };
+  console.log('📊 Screener bulk fetch starting via runQuery...');
+
+  try {
+    // Start one run with runQuery — gets all stocks matching Market Cap > 0
+    const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode:        'runQuery',
+        queryString: 'Market Capitalization > 0',
+        username:    process.env.SCREENER_USERNAME,
+        password:    process.env.SCREENER_PASSWORD,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!startResp.ok) throw new Error(`Start failed: ${startResp.status} ${await startResp.text().catch(()=>'')}`);
+    const runInfo = await startResp.json();
+    const runId     = runInfo.data?.id;
+    const datasetId = runInfo.data?.defaultDatasetId;
+    if (!runId) throw new Error('No run ID returned');
+    console.log(`📊 Bulk run started: ${runId} — polling...`);
+
+    // Poll until done (max 30 min for bulk)
+    let status = 'RUNNING', attempts = 0;
+    while ((status === 'RUNNING' || status === 'READY') && attempts < 180) {
+      await new Promise(r => setTimeout(r, 10000));
+      attempts++;
+      const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${token}`, { signal: AbortSignal.timeout(15000) });
+      if (poll.ok) status = (await poll.json()).data?.status || 'RUNNING';
+      if (attempts % 6 === 0) {
+        console.log(`📊 Bulk status: ${status} (${Math.round(attempts*10/60)}m elapsed)`);
+        screenerProgress.done = Math.min(attempts * 3, screenerProgress.total); // estimate
+      }
+    }
+    if (status !== 'SUCCEEDED') throw new Error(`Run ended with status: ${status}`);
+
+    // Fetch all dataset items
+    const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${token}&limit=10000`, { signal: AbortSignal.timeout(60000) });
+    if (!dataResp.ok) throw new Error(`Dataset fetch failed: ${dataResp.status}`);
+    const items = await dataResp.json();
+    if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
+
+    console.log(`📊 Bulk got ${items.length} items — importing...`);
+    screenerProgress.total = items.length;
+
+    // Log first item field names
+    console.log('📊 Bulk field names:', Object.keys(items[0]).slice(0,20).join(', '));
+    console.log('📊 Bulk sample:', JSON.stringify(items[0]).slice(0, 400));
+
+    // Process each item
+    let imported = 0, errors = 0;
+    for (const item of items) {
+      const g  = (...keys) => { for (const k of keys) { if (item[k]!=null && item[k]!=='') return pn(item[k]); } return null; };
+      const gs = (...keys) => { for (const k of keys) { if (item[k]!=null) return ps(item[k]); } return ''; };
+
+      const sym = gs('nseCode','NSE Code','nse_code','symbol','Symbol');
+      if (!sym) { errors++; continue; }
+
+      const data = {
+        sym, name: gs('companyName','name','Name'),
+        nse_code: sym,
+        industry: gs('industry','Industry','sector'),
+        roe:              g('roe','ROE','returnOnEquity'),
+        de:               g('debtToEquity','D/E','de'),
+        pe:               g('pe','PE','priceToEarning'),
+        rev_gr_3y:        g('salesGrowth3y','salesGrowth3Years','Sales growth 3Years'),
+        eps_gr_3y:        g('profitGrowth3y','profitGrowth3Years','Profit growth 3Years'),
+        opm:              g('opm','OPM','operatingProfitMargin'),
+        roa:              g('roa','ROA','returnOnAssets'),
+        pb:               g('pb','PB','priceToBook'),
+        peg:              g('peg','PEG','pegRatio'),
+        int_cov:          g('interestCoverage','Interest Coverage Ratio'),
+        promoter_holding: g('promoterHolding','Promoter holding'),
+        pledged_pct:      g('pledgedPercentage','Pledged percentage'),
+        promoter_chg:     g('promoterHoldingChange','Change in promoter holding'),
+        mkt_cap:          g('marketCap','Market Capitalization'),
+        current_price:    g('currentPrice','Current Price','price'),
+        eps:              g('eps','EPS'),
+        debt:             g('debt','Debt'),
+        current_ratio:    g('currentRatio','Current ratio'),
+        div_yield:        g('dividendYield','Dividend yield'),
+        sales_gr_1y:      g('salesGrowth','Sales growth'),
+        sales_gr_5y:      g('salesGrowth5y','Sales growth 5Years'),
+        eps_gr_1y:        g('profitGrowth','Profit growth'),
+        eps_gr_5y:        g('profitGrowth5y','Profit growth 5Years'),
+        roe_3y_avg:       g('avgRoe3y','Average return on equity 3Years'),
+        roe_5y_avg:       g('avgRoe5y','Average return on equity 5Years'),
+        ret_1y:           g('return1y','Return over 1year'),
+        ret_3y:           g('return3y','Return over 3years'),
+        ret_5y:           g('return5y','Return over 5years'),
+        ret_6m:           g('return6m','Return over 6months'),
+        ret_3m:           g('return3m','Return over 3months'),
+        ev_ebitda:        g('evEbitda','EVEBITDA'),
+        industry_pe:      g('industryPE','Industry PE'),
+        pat_qtr:          g('netProfitLatestQuarter','Net Profit latest quarter'),
+        sales_qtr:        g('salesLatestQuarter','Sales latest quarter'),
+        pat_annual:       g('profitAfterTax','Profit after tax'),
+        sales_annual:     g('sales','Sales'),
+        pat_qtr_yoy:      g('yoyQuarterlyProfitGrowth','YOY Quarterly profit growth'),
+        sales_qtr_yoy:    g('yoyQuarterlySalesGrowth','YOY Quarterly sales growth'),
+      };
+      if (!data.peg && data.pe && data.eps_gr_3y && data.eps_gr_3y > 0) data.peg = +(data.pe/data.eps_gr_3y).toFixed(2);
+
+      try {
+        await upsertScreenerData(data);
+        imported++;
+        screenerProgress.done = imported;
+      } catch(e) { errors++; screenerProgress.errors++; }
+    }
+
+    screenerRunning = false;
+    console.log(`✅ Bulk Screener: ${imported} imported, ${errors} errors`);
+    refreshAllFundamentals();
+    await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: items.length, mode: 'bulk' }));
+    return { imported, errors, total: items.length };
+
+  } catch(e) {
+    screenerRunning = false;
+    console.error('❌ Bulk Screener error:', e.message);
+    await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), error: e.message })).catch(()=>{});
+    return { error: e.message };
+  }
+}
+
 async function fetchAllScreenerData() {
   if (screenerRunning) return { error: 'Already running' };
   const token = process.env.APIFY_TOKEN;
   if (!token) return { error: 'APIFY_TOKEN not set' };
-
-  screenerRunning = true;
-  // Fetch all 4 groups — NIFTY50 + NEXT50 + MIDCAP + SMALLCAP
-  // ~500 stocks × 7s each = ~1 hour. Runs at 8PM IST, UI stays up throughout.
-  const syms = UNIVERSE
-    .filter(s => ['NIFTY50','NEXT50','MIDCAP','SMALLCAP'].includes(s.grp))
-    .map(s => s.sym);
-
-  screenerProgress = { done: 0, total: syms.length, errors: 0, startedAt: Date.now() };
-  console.log(`📊 Screener fetch starting: ${syms.length} stocks via Apify...`);
-
-  let imported = 0, errors = 0;
-  // Log first stock's raw data to verify field mapping
-  let firstLogged = false;
-
-  for (const sym of syms) {
-    if (!screenerRunning) break; // allow cancellation
-    try {
-      const data = await fetchOneStockFromScreener(sym, token);
-
-      // Log first result to verify field mapping
-      if (!firstLogged) {
-        console.log(`📊 First stock sample (${sym}):`, JSON.stringify(data));
-        firstLogged = true;
-      }
-
-      await upsertScreenerData(data);
-      imported++;
-      screenerProgress.done++;
-      if (imported % 10 === 0) {
-        console.log(`📊 Screener: ${imported}/${syms.length} done (${errors} errors)`);
-        // Patch scoring after every 10 stocks so data improves incrementally
-        patchFundamentalsIntoScored();
-      }
-    } catch(e) {
-      errors++;
-      screenerProgress.errors++;
-      // Log first 3 errors in full detail to diagnose
-      if (errors <= 3) console.log(`📊 ${sym} ERROR: ${e.message}`);
-      else if (errors === 4) console.log('📊 Suppressing further error logs...');
-    }
-    // 2s delay between stocks to be respectful
-    await new Promise(r => setTimeout(r, 2000));
+  if (!process.env.SCREENER_USERNAME || !process.env.SCREENER_PASSWORD) {
+    return { error: 'SCREENER_USERNAME and SCREENER_PASSWORD required in Railway env vars' };
   }
-
-  screenerRunning = false;
-  screenerProgress.done = syms.length;
-  console.log(`✅ Screener fetch done: ${imported} imported, ${errors} errors`);
-
-  // Final re-score with all new data
-  refreshAllFundamentals();
-  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: syms.length }));
-  return { imported, errors, total: syms.length };
+  return fetchAllScreenerBulk(token);
 }
 
-// Daily at 8PM IST — after market close, Screener data is fresh
-cron.schedule('0 20 * * *', () => {
-  console.log('📊 Daily Screener fundamentals refresh starting...');
-  fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
+// Admin: server logs endpoint
+app.get('/api/admin/logs', (req, res) => {
+  const since = parseInt(req.query.since || '0');
+  const lines = since ? LOG_BUFFER.filter(l => l.t > since) : LOG_BUFFER.slice(-100);
+  res.json({ lines, now: Date.now() });
+});
 
 // Manual rescore trigger
 app.post('/api/stocks/rescore', (req, res) => {
@@ -4676,6 +4697,48 @@ app.post('/api/stocks/rescore', (req, res) => {
 app.post('/api/mf/rebuild-cache', (req, res) => {
   res.json({ message: 'MF cache rebuild started' });
   buildMFCache();
+});
+
+// Test: run bulk query filtered to ONE stock to verify Apify + field mapping
+app.get('/api/screener/test/:sym', async (req, res) => {
+  const sym = req.params.sym.toUpperCase();
+  const token = process.env.APIFY_TOKEN;
+  if (!token) return res.json({ error: 'APIFY_TOKEN not set' });
+  if (!process.env.SCREENER_USERNAME) return res.json({ error: 'SCREENER_USERNAME not set' });
+  try {
+    const BASE  = 'https://api.apify.com/v2';
+    const ACTOR = 'shashwattrivedi~screener-in';
+    const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'getstockdetails',
+        url: `https://www.screener.in/company/${sym}/consolidated/`,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!startResp.ok) return res.json({ error: `Start failed: ${startResp.status}` });
+    const runInfo = await startResp.json();
+    const runId = runInfo.data?.id;
+    const datasetId = runInfo.data?.defaultDatasetId;
+    if (!runId) return res.json({ error: 'No run ID' });
+
+    // Poll until done (max 2 min)
+    let status = 'RUNNING', attempts = 0;
+    while ((status === 'RUNNING' || status === 'READY') && attempts < 24) {
+      await new Promise(r => setTimeout(r, 5000));
+      attempts++;
+      const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${token}`, { signal: AbortSignal.timeout(10000) });
+      if (poll.ok) status = (await poll.json()).data?.status || 'RUNNING';
+    }
+    if (status !== 'SUCCEEDED') return res.json({ error: `Run ended: ${status}` });
+
+    const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${token}&limit=5`, { signal: AbortSignal.timeout(15000) });
+    const items = await dataResp.json();
+    res.json({ success: true, sym, run_id: runId, item_count: items.length, fields: items[0] ? Object.keys(items[0]) : [], sample: items[0] || null });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
 });
 
 // Manual trigger
@@ -4714,24 +4777,23 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     const sector = SECTOR_MAP[sym]||'Other';
     const token  = validTokens[sym]||INSTRUMENTS[sym];
 
-    // ALL DATA IN PARALLEL
-    const [r1y,r3y,r10w,rMax,r1h,rNews] = await Promise.allSettled([
+    // ALL DATA IN PARALLEL — fetch MAX available candles from Kite
+    const [rDay,rWeek,rMonth,r1h,rNews] = await Promise.allSettled([
       (async()=>{ if(!kite||!token)return null;
-        const t=new Date(),f=new Date(Date.now()-366*864e5);
+        // Daily candles — Kite gives up to ~20 years
+        const t=new Date(),f=new Date(Date.now()-20*366*864e5);
         return kite.getHistoricalData(token,'day',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
       })(),
       (async()=>{ if(!kite||!token)return null;
-        const t=new Date(),f=new Date(Date.now()-3*366*864e5);
-        return kite.getHistoricalData(token,'day',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
+        // Weekly candles — full available history
+        return kite.getHistoricalData(token,'week','2000-01-01',new Date().toISOString().split('T')[0]);
       })(),
       (async()=>{ if(!kite||!token)return null;
-        const t=new Date(),f=new Date(Date.now()-10*366*864e5);
-        return kite.getHistoricalData(token,'week',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
-      })(),
-      (async()=>{ if(!kite||!token)return null;
+        // Monthly candles — full available history back to 1994
         return kite.getHistoricalData(token,'month','1994-01-01',new Date().toISOString().split('T')[0]);
       })(),
       (async()=>{ if(!kite||!token)return null;
+        // 60min candles — last 6 months for intraday patterns
         const t=new Date(),f=new Date(Date.now()-180*864e5);
         return kite.getHistoricalData(token,'60minute',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
       })(),
@@ -4774,14 +4836,14 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       })()
     ]);
 
-    const c1y  = r1y.status==='fulfilled'  && r1y.value  ? r1y.value  : [];
-    const c3y  = r3y.status==='fulfilled'  && r3y.value  ? r3y.value  : [];
-    const c10w = r10w.status==='fulfilled' && r10w.value ? r10w.value : [];
-    const cMax = rMax.status==='fulfilled' && rMax.value ? rMax.value : [];
-    const c1h  = r1h.status==='fulfilled'  && r1h.value  ? r1h.value  : [];
-    const news = rNews.status==='fulfilled'&& rNews.value? rNews.value: [];
+    const cDay  = rDay.status==='fulfilled'   && rDay.value   ? rDay.value   : [];
+    const cWeek = rWeek.status==='fulfilled'  && rWeek.value  ? rWeek.value  : [];
+    const cMonth= rMonth.status==='fulfilled' && rMonth.value ? rMonth.value : [];
+    const c1h   = r1h.status==='fulfilled'    && r1h.value    ? r1h.value    : [];
+    const news  = rNews.status==='fulfilled'  && rNews.value  ? rNews.value  : [];
 
-    const candles = c3y.length>=50?c3y : c1y.length>=50?c1y : c10w.length>=30?c10w : cMax.length>=12?cMax:[];
+    // Use daily as primary candle set (most data), fall back to weekly/monthly
+    const candles = cDay.length>=50 ? cDay : cWeek.length>=30 ? cWeek : cMonth.length>=12 ? cMonth : [];
     const px = candles.length?candles[candles.length-1].close : livePrices[sym]?.price||null;
 
     // FULL TECHNICAL ENGINE
@@ -5032,18 +5094,17 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     }
 
     const safeCompute=(cans)=>{try{return fullTech(cans);}catch(e){console.error(`tech err ${sym}:`,e.message);return {};}};
-    const techCandles=c3y.length>=50?c3y:c1y.length>=50?c1y:c10w.length>=30?c10w:candles;
-    const t  = safeCompute(techCandles);
-    const tw = safeCompute(c10w.length>30?c10w:null);
-    const tm = safeCompute(cMax.length>12?cMax:null);
-    const th = safeCompute(c1h.length>20?c1h:null);
+    const t  = safeCompute(cDay.length>=50 ? cDay : candles);
+    const tw = safeCompute(cWeek.length>30 ? cWeek : null);
+    const tm = safeCompute(cMonth.length>12 ? cMonth : null);
+    const th = safeCompute(c1h.length>20 ? c1h : null);
 
     const charts={
       '3M': c1h.slice(-500).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
-      '1Y': c1y.slice(-365).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
-      '3Y': c3y.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
-      '10Y':c10w.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
-      'MAX':cMax.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      '1Y': cDay.slice(-365).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      '3Y': cDay.slice(-756).map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      '10Y':cWeek.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
+      'MAX':cMonth.map(c=>({t:new Date(c.date).getTime(),o:+c.open.toFixed(2),h:+c.high.toFixed(2),l:+c.low.toFixed(2),c:+c.close.toFixed(2),v:c.volume||0})),
     };
 
     // FUNDAMENTALS - merge hardcoded + scraped extended data
@@ -5984,20 +6045,8 @@ async function start() {
   // NSE: every 3 min during market hours Mon-Fri
   cron.schedule("*/3 9-15 * * 1-5", ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
   cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
-  // Refresh instrument tokens daily at 9:00 AM
-  cron.schedule("0 9 * * 1-5", ()=>refreshInstruments(), {timezone:"Asia/Kolkata"});
-
-  // 8:00 AM - update universe from NSE, then scrape fundamentals for new stocks
-  cron.schedule("0 8 * * 1-5", async()=>{
-    await refreshUniverseFromNSE();
-    await refreshMissingFundamentals(); // scrape Yahoo for any new stocks
-  }, {timezone:"Asia/Kolkata"});
-
-  // 8:30 AM - scrape stale fundamentals, then re-score (Fallen Angels get fresh data)
-  cron.schedule("30 8 * * 1-5", async()=>{
-    await refreshMissingFundamentals(); // Yahoo scrape: stale + missing
-    await refreshAllFundamentals();     // re-score with fresh data -> Fallen Angels updated
-  }, {timezone:"Asia/Kolkata"});
+  // All other daily schedules (universe 8AM, instruments 9AM, screener 8PM, scoring 7AM)
+  // are defined centrally above — no duplicates here
 
   // Remove the duplicate 3-min startup delay (90s timeout above handles startup)
 
