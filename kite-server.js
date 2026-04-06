@@ -4657,6 +4657,19 @@ cron.schedule('0 20 * * *', () => {
   fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
 }, { timezone: 'Asia/Kolkata' });
 
+// Manual rescore trigger
+app.post('/api/stocks/rescore', (req, res) => {
+  if (stockFundLoading) return res.json({ message: 'Already scoring...' });
+  res.json({ message: 'Re-scoring started in background' });
+  refreshAllFundamentals();
+});
+
+// MF cache rebuild trigger
+app.post('/api/mf/rebuild-cache', (req, res) => {
+  res.json({ message: 'MF cache rebuild started' });
+  buildMFCache();
+});
+
 // Manual trigger
 app.post('/api/screener/fetch', async (req, res) => {
   if (!process.env.APIFY_TOKEN) return res.status(400).json({ error: 'Set APIFY_TOKEN in Railway env vars' });
