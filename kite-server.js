@@ -2336,11 +2336,11 @@ async function fetchKiteDaily(sym) {
   try {
     const to   = new Date();
     const from = new Date(Date.now() - 366*24*60*60*1000);
-    const candles = await kite.getHistoricalData(
-      token, 'day',
-      from.toISOString().split('T')[0],
-      to.toISOString().split('T')[0]
-    );
+    // 10s timeout — never let a single stock hang the whole batch
+    const candles = await Promise.race([
+      kite.getHistoricalData(token,'day',from.toISOString().split('T')[0],to.toISOString().split('T')[0]),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),10000))
+    ]);
     return (candles && candles.length >= 50) ? candles : null;
   } catch(e) { return null; }
 }
@@ -2517,48 +2517,50 @@ async function refreshAllFundamentals() {
     console.log('📊 Kite not ready - skipping stock refresh'); return;
   }
   stockFundLoading = true;
-  console.log('📊 Stock scoring: fetching Kite daily candles...');
-  const delay = ms => new Promise(r=>setTimeout(r,ms));
+  console.log('📊 Stock scoring: fetching Kite daily candles in parallel batches...');
   let ok=0, fail=0;
 
-  for (const stock of UNIVERSE) {
-    try {
-      const candles = await fetchKiteDaily(stock.sym);
-      if (!candles) { fail++; await delay(300); continue; }
+  // Fetch in parallel batches of 10 — Kite allows ~10 req/s
+  // Each call has a 12s timeout so a hanging stock never blocks the batch
+  const BATCH = 10;
+  const stocks = [...UNIVERSE];
 
-      const tech = computeTechnicals(candles);
-      // Read FUND at scoring time - Yahoo scraper must have run first
-      const f    = FUND[stock.sym] || null; // [ROE,D/E,PE,RevGr,EpsGr,OpMargin]
-
-      stockFundamentals[stock.sym] = {
-        sym:stock.sym, name:stock.n, grp:stock.grp,
-        sector: SECTOR_MAP[stock.sym] || 'Other',
-        // Technical (Kite) - full set
-        price:tech.price,
-        dma20:tech.dma20,       dma50:tech.dma50,     dma100:tech.dma100,   dma200:tech.dma200,
-        wk52Hi:tech.wk52Hi,     wk52Lo:tech.wk52Lo,
-        change52w:tech.change52w, change6m:tech.change6m, change3m:tech.change3m, change1m:tech.change1m,
-        rsi:tech.rsi,
-        macd:tech.macd,         macdBull:tech.macdBull, macdHist:tech.macdHist,
-        bbPct:tech.bbPct,       bbUpper:tech.bbUpper,   bbLower:tech.bbLower,
-        stochK:tech.stochK,     adx:tech.adx,
-        supertrend:tech.supertrend, supertrendSig:tech.supertrendSig,
-        volRatio:tech.volRatio, volTrend:tech.volTrend, obvRising:tech.obvRising, accumDist:tech.accumDist,
-        beta:tech.beta,         annualVol:tech.annualVol,
-        dma200Trend:tech.dma200Trend, weeklyTrend:tech.weeklyTrend,
-        goldenCross:tech.goldenCross,
-        pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
-        rsiTrend:tech.rsiTrend, bullishDiv:tech.bullishDiv, bearishDiv:tech.bearishDiv,
-        // Fundamentals from FUND table (real data from Yahoo scraper)
-        roe:      f?f[0]:null,  debtToEq: f?f[1]:null,
-        pe:       f?f[2]:null,  revGrowth:f?f[3]:null,
-        earGrowth:f?f[4]:null,  opMargin: f?f[5]:null,
-        peg:      f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null,
-        fetchedAt:Date.now(),
-      };
-      ok++;
-    } catch(e) { fail++; trackError('scoring', e); }
-    await delay(250);
+  for (let i = 0; i < stocks.length; i += BATCH) {
+    const batch = stocks.slice(i, i + BATCH);
+    await Promise.all(batch.map(async stock => {
+      try {
+        const candles = await fetchKiteDaily(stock.sym);
+        if (!candles) { fail++; return; }
+        const tech = computeTechnicals(candles);
+        const f    = FUND[stock.sym] || null;
+        stockFundamentals[stock.sym] = {
+          sym:stock.sym, name:stock.n, grp:stock.grp,
+          sector: SECTOR_MAP[stock.sym] || 'Other',
+          price:tech.price,
+          dma20:tech.dma20, dma50:tech.dma50, dma100:tech.dma100, dma200:tech.dma200,
+          wk52Hi:tech.wk52Hi, wk52Lo:tech.wk52Lo,
+          change52w:tech.change52w, change6m:tech.change6m, change3m:tech.change3m, change1m:tech.change1m,
+          rsi:tech.rsi,
+          macd:tech.macd, macdBull:tech.macdBull, macdHist:tech.macdHist,
+          bbPct:tech.bbPct, bbUpper:tech.bbUpper, bbLower:tech.bbLower,
+          stochK:tech.stochK, adx:tech.adx,
+          supertrend:tech.supertrend, supertrendSig:tech.supertrendSig,
+          volRatio:tech.volRatio, volTrend:tech.volTrend, obvRising:tech.obvRising, accumDist:tech.accumDist,
+          beta:tech.beta, annualVol:tech.annualVol,
+          dma200Trend:tech.dma200Trend, weeklyTrend:tech.weeklyTrend,
+          goldenCross:tech.goldenCross,
+          pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
+          rsiTrend:tech.rsiTrend, bullishDiv:tech.bullishDiv, bearishDiv:tech.bearishDiv,
+          roe:f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
+          revGrowth:f?f[3]:null, earGrowth:f?f[4]:null, opMargin:f?f[5]:null,
+          peg:f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null,
+          fetchedAt:Date.now(),
+        };
+        ok++;
+      } catch(e) { fail++; }
+    }));
+    // Small pause between batches to respect Kite rate limits
+    if (i + BATCH < stocks.length) await new Promise(r=>setTimeout(r,200));
   }
 
   stockFundLastFetch = Date.now();
@@ -3836,10 +3838,10 @@ cron.schedule('0 7 * * *', async()=>{
   await refreshAllFundamentals();
 }, {timezone:'Asia/Kolkata'});
 
-// On startup: load DB cache first (sync-ish via IIFE), then kick off background refreshes immediately
-// No delays — everything runs in background, UI is never blocked
+// On startup: load DB cache + kick off background refreshes
+// refreshAllFundamentals is called AFTER refreshInstruments in the main init below
+// This IIFE only handles the cache load
 (async () => {
-  // Step 1: load previously scored stocks from DB cache → Stocks tab shows data instantly
   try {
     const cached = await dbGet('scored_stocks_cache');
     if (cached) {
@@ -3854,10 +3856,6 @@ cron.schedule('0 7 * * *', async()=>{
       }
     }
   } catch(e) {}
-
-  // Step 2: immediately start background refresh — no setTimeout, no waiting
-  refreshAllFundamentals();                                                   // Kite candles → scores
-  refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message)); // Yahoo enrichment
 })();
 
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
@@ -5083,7 +5081,10 @@ async function start() {
     tokenValid = true; tokenRejected = false; // fresh token from DB, assume valid
     console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") - starting smart engine...");
     startTicker(token);
-    await refreshInstruments();  // fetch real tokens from Kite
+    await refreshInstruments();  // fetch real tokens from Kite — must complete before scoring
+    // Now validTokens is populated — kick off background scoring immediately
+    refreshAllFundamentals();                                                    // Kite candles → scores (background)
+    refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message));  // Yahoo enrichment (background)
     setTimeout(scanAndTrade, 5000);
   } else {
     console.log("⚠️  No token - visit /auth/login or paste token in dashboard");
