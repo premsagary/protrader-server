@@ -2764,14 +2764,12 @@ function renderStockRecPage(){
   var buys = allStocks.filter(function(s){ return s.recKey==='buy'||s.recKey==='strong_buy'; }).length;
   var golden = allStocks.filter(function(s){ return s.goldenCross; }).length;
   var highRoe = allStocks.filter(function(s){ return s.roe&&s.roe>=15; }).length;
-  var analysts = allStocks.filter(function(s){ return s.upside&&s.upside>15; }).length;
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
   var pills = [
     {l:'Total Stocks',    v:allStocks.length,    c:'var(--text)'},
     {l:'Fallen Angels',   v:fallenAngels.length, c:'#f59e0b', hot:true},
     {l:'ROE >= 15%',      v:highRoe,             c:'var(--green)'},
     {l:'Golden Cross',    v:golden,              c:'#f59e0b'},
-    {l:'Upside >15%',     v:analysts,            c:'var(--blue)'},
     {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
     {l:'Next50',          v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length,  c:'#8b5cf6'},
     {l:'Midcap',          v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length,  c:'#f59e0b'},
