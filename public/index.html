@@ -407,14 +407,7 @@ const CRYPTO_TABS = [
 
 function setMode(mode){
   S.mode=mode;
-  window._currentMode = mode; // track for token banner logic
-
-  // Hide banner immediately when switching to tabs that don't need Kite
-  var kiteFreeModes = ['mf', 'stockrec', 'aiportfolio'];
-  if (kiteFreeModes.indexOf(mode) >= 0) {
-    var b = document.getElementById('token-banner');
-    if (b) b.style.display = 'none';
-  }
+  window._currentMode = mode;
 
   try{ document.getElementById("mode-stocks").className   ="mode-tab stocks"  +(mode==="stocks"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
@@ -2128,91 +2121,43 @@ async function renderStockRec(forceRefresh){
 
 async function pollStockRec(){
   var cont = document.getElementById('main-content');
-  if(!cont) return;
+  if(!cont || window._currentMode !== 'stockrec') return;
   try {
     var r = await fetch('/api/stocks/score');
     var d = await r.json();
-    var msgEl  = document.getElementById('srec-loading-msg');
-    var subEl  = document.getElementById('srec-loading-sub');
+    var msgEl = document.getElementById('srec-loading-msg');
+    var subEl = document.getElementById('srec-loading-sub');
 
-    // Got data — render it (even partial data is fine)
-    if (d.stocks && d.stocks.length > 0) {
+    if(d.stocks && d.stocks.length > 0){
       stockRecData = d;
-      if (d.universe_total) {
+      if(d.universe_total){
         window._universeCount = d.universe_total;
         var uEl = document.querySelector('[data-stat="universe"]');
-        if (uEl) uEl.textContent = d.universe_total + ' stocks';
+        if(uEl) uEl.textContent = d.universe_total + ' stocks';
       }
       renderStockRecPage();
       return;
     }
 
-    // Still loading — keep polling
-    if (d.loading) {
+    if(d.loading){
       stockRecRetries++;
-      var msg = d.loadingMsg || 'Fetching Kite candle data for 252 stocks...';
-      if (msgEl) msgEl.textContent = msg;
-
-      // Progressive messaging based on retry count
-      var sub = stockRecRetries < 8
-        ? 'First load takes ~60s — fetching 252 stocks from Kite historical API...'
-        : stockRecRetries < 20
-        ? 'Still loading... (' + (stockRecRetries * 4) + 's elapsed). Kite API takes time on first boot.'
-        : 'Taking longer than usual. Kite may be slow. Will keep trying...';
-      if (subEl) subEl.textContent = sub;
-
-      // Keep retrying indefinitely while loading (up to 5 minutes = 75 retries)
-      if (stockRecRetries < 75) {
-        setTimeout(pollStockRec, 4000);
-      } else {
-        // After 5 minutes, check actual token status to give accurate error
-        var tokenOk = true;
-        try {
-          var tr = await fetch('/api/token/status');
-          var td = await tr.json();
-          tokenOk = td.hasToken && !td.tokenRejected;
-        } catch(e) {}
-
-        if (!tokenOk) {
-          cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--red)">'
-            + '<div style="font-size:24px;margin-bottom:12px">🔑</div>'
-            + '<div style="font-weight:700;margin-bottom:8px;font-size:14px">Kite Token Expired</div>'
-            + '<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Generate a new access token from Kite and paste it in the token bar.</div>'
-            + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry after updating token</button>'
-            + '</div>';
-        } else {
-          cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)">'
-            + '<div style="font-size:24px;margin-bottom:12px">⏱</div>'
-            + '<div style="font-weight:700;margin-bottom:8px;color:var(--text)">Taking unusually long</div>'
-            + '<div style="font-size:11px;margin-bottom:16px">Token is valid. Kite API may be slow or rate-limiting. Try again in a minute.</div>'
-            + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
-            + '</div>';
-        }
-      }
+      var elapsed = stockRecRetries * 4;
+      if(msgEl) msgEl.textContent = d.loadingMsg || 'Fetching Kite candles for 252 stocks...';
+      if(subEl) subEl.textContent = elapsed < 60
+        ? 'Loading in background... first fetch takes ~90s'
+        : 'Still loading (' + elapsed + 's) — Kite historical API for 252 stocks takes time';
+      setTimeout(pollStockRec, 4000); // keep polling forever while server is loading
       return;
     }
 
-    // d.loading is false but stocks is empty — something else wrong
-    stockRecData = d.stocks && d.stocks.length > 0 ? d : null;
-    if (stockRecData) { renderStockRecPage(); return; }
-
-    // Unknown state — retry a few more times
+    // loading:false but empty — retry briefly
     stockRecRetries++;
-    if (stockRecRetries < 5) {
-      setTimeout(pollStockRec, 3000);
-    } else {
-      cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)">'
-        + '<div style="font-size:20px;margin-bottom:12px">📡</div>'
-        + '<div style="margin-bottom:8px">No stock data returned</div>'
-        + '<div style="font-size:11px;margin-bottom:16px">Server may still be starting up. Try refreshing.</div>'
-        + '<button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
-        + '</div>';
-    }
+    if(stockRecRetries < 5){ setTimeout(pollStockRec, 3000); return; }
+    if(cont) cont.innerHTML='<div style="text-align:center;padding:60px;color:var(--text3)"><div style="font-size:20px;margin-bottom:12px">📡</div><div style="margin-bottom:16px">No data from server. Check Railway logs.</div><button class="btn" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button></div>';
 
-  } catch(e) {
-    var cont2 = document.getElementById('main-content');
-    if (cont2) cont2.innerHTML = '<div style="text-align:center;padding:60px;color:var(--red)">Error: ' + e.message
-      + '<br><button class="btn btn-sm" style="margin-top:12px" onclick="stockRecData=null;renderStockRec(true)">↻ Retry</button></div>';
+  } catch(e){
+    var c2 = document.getElementById('main-content');
+    if(c2) c2.innerHTML='<div style="text-align:center;padding:60px;color:var(--red)">Error: '+e.message+'<br><button class="btn btn-sm" style="margin-top:12px" onclick="stockRecData=null;renderStockRec(true)">↻ Retry</button></div>';
   }
 }
 
@@ -3147,20 +3092,12 @@ async function checkTokenStatus() {
     var banner = document.getElementById('token-banner');
     if (!banner) return;
 
-    // Only show banner when:
-    // 1. Token has been EXPLICITLY rejected by Kite (tokenRejected=true), OR
-    // 2. No token at all AND market is open (Kite features genuinely unavailable)
-    // NEVER show banner just because ticker hasn't connected yet (startup race condition)
-    var needsToken = d.tokenRejected || (!d.hasToken && d.marketOpen);
+    // Show banner ONLY when token was explicitly rejected by Kite
+    // Never show on cold boot / startup / market closed / ticker not yet connected
+    var needsToken = d.tokenRejected || !d.hasToken;
+    banner.style.display = needsToken ? 'flex' : 'none';
 
-    // Also: never show banner if user is on a tab that doesn't need Kite
-    var currentMode = window._currentMode || 'mf';
-    var kiteRequiredModes = ['stocks', 'crypto', 'stockrec'];
-    var onKiteTab = kiteRequiredModes.indexOf(currentMode) >= 0;
-
-    banner.style.display = (needsToken && onKiteTab) ? 'flex' : 'none';
-
-    // Market badge - show during market hours
+    // Market badge
     var mb = document.getElementById('market-badge');
     if (mb) {
       if (d.marketOpen) {
@@ -3172,13 +3109,13 @@ async function checkTokenStatus() {
       }
     }
 
-    // Logo dot: green=ticker live, amber=token valid/market closed, red=explicitly rejected
+    // Logo dot
     var dot = document.querySelector('.logo-dot');
     if (dot) {
-      dot.style.background = d.tickerOn          ? '#22c55e'
-        : d.tokenRejected                        ? '#ef4444'
-        : (d.hasToken && !d.tokenRejected)       ? '#f59e0b'
-        : '#64748b'; // grey = no token
+      dot.style.background = d.tickerOn      ? '#22c55e'
+        : d.tokenRejected                   ? '#ef4444'
+        : d.hasToken                        ? '#f59e0b'
+        : '#64748b';
     }
   } catch(e) {}
 }
