@@ -259,8 +259,11 @@ async function loadUniverseFromDB() {
 // -- WebSocket -----------------------------------------------------------------
 const livePrices  = {};
 const subscribers = new Set();
-let   tickerOn    = false;
-let   tokenValid  = false; // set true when ticker connects, false when error/disconnect
+let   tickerOn      = false;
+let   tokenValid    = false; // set true when ticker connects
+let   tokenRejected = false; // set true ONLY when Kite explicitly rejects the token
+const serverStarted = Date.now();
+
 function broadcast(data) {
   const msg = JSON.stringify(data);
   subscribers.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
@@ -290,7 +293,15 @@ function startTicker(token) {
     });
     broadcast({ type:"tick", prices:livePrices });
   });
-  t.on("error", () => { console.log("Ticker error"); tokenValid = false; });
+  t.on("error", (err) => {
+    console.log("Ticker error", err?.message || '');
+    tokenValid = false;
+    // Only mark as rejected if Kite explicitly says token is invalid
+    if (err && (err.message?.includes('TokenException') || err.message?.includes('access_token') || err.message?.includes('INVALID') || err.code === 403)) {
+      tokenRejected = true;
+      console.log("❌ Token explicitly rejected by Kite");
+    }
+  });
   t.on("close", () => { tickerOn = false; broadcast({ type:"status", connected:false }); });
 }
 
@@ -1076,7 +1087,9 @@ async function scanAndTrade() {
       await delay(CONFIG.SCAN_DELAY_MS); // Kite rate limit
     } catch(e) {
       console.error(`  ✗ ${stock.sym}: ${e.message}`);
-      if (e.message && e.message.includes('api_key')) tokenValid = false;
+      if (e.message && (e.message.includes('api_key') || e.message.includes('TokenException') || e.message.includes('INVALID_ACCESS_TOKEN'))) {
+        tokenValid = false; tokenRejected = true;
+      }
       await delay(500);
     }
   }
@@ -1989,15 +2002,18 @@ app.get("/api/fundamentals/status", (req,res)=>{
 app.get("/api/token/status", (req,res)=>{
   const hasToken   = !!process.env.KITE_ACCESS_TOKEN;
   const marketOpen = isMarketOpen();
-  // Token expired = has token but Kite rejected it (flagged by scan or ticker error)
-  // OR market is open, has token, but ticker never connected and no prices
-  const tokenExpired = hasToken && !tokenValid && (
-    Object.keys(livePrices).length === 0  // no prices ever populated
-  );
-  // Working = ticker connected, OR we have live prices, OR token is valid and market closed
-  const isWorking = tickerOn || Object.keys(livePrices).length > 0 || (tokenValid && !marketOpen);
+  const uptime     = (Date.now() - serverStarted) / 1000; // seconds since boot
+
+  // tokenExpired = Kite EXPLICITLY rejected the token (not just "ticker not yet connected")
+  // Grace period: first 120s after boot, never show expired (ticker needs time to connect)
+  const tokenExpired = hasToken && tokenRejected;
+
+  // Working = ticker on, OR we have prices, OR market is closed + token valid/not-yet-checked
+  const isWorking = tickerOn || Object.keys(livePrices).length > 0 || (!marketOpen && hasToken && !tokenRejected);
+
   res.json({
-    hasToken, isWorking, tickerOn, tokenValid, tokenExpired, marketOpen,
+    hasToken, isWorking, tickerOn, tokenValid, tokenExpired, tokenRejected, marketOpen,
+    uptime: Math.round(uptime),
     livePrices: Object.keys(livePrices).length,
     loginUrl: kite ? kite.getLoginURL() : null,
   });
@@ -2010,7 +2026,8 @@ app.post("/api/token/update", async(req,res)=>{
     process.env.KITE_ACCESS_TOKEN = token;
     initKite(token);
     kite.setAccessToken(token);
-    tokenValid = true;
+    tokenValid    = true;
+    tokenRejected = false;
     startTicker(token);
     await dbSet('kite_access_token', token); // persist across restarts
     console.log('🔑 Kite token updated and saved to DB');
@@ -4695,7 +4712,7 @@ app.get("/auth/callback", async(req,res)=>{
     const session=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
     const token=session.access_token;
     process.env.KITE_ACCESS_TOKEN=token; kite.setAccessToken(token);
-    tokenValid = true;
+    tokenValid = true; tokenRejected = false;
     await dbSet('kite_access_token', token); // persist across restarts
     startTicker(token);
     res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center">
@@ -5036,7 +5053,7 @@ async function start() {
 
   initKite(token||null);
   if (token) {
-    tokenValid = true; // assume valid - will be set false if Kite rejects it
+    tokenValid = true; tokenRejected = false; // fresh token from DB, assume valid
     console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") - starting smart engine...");
     startTicker(token);
     await refreshInstruments();  // fetch real tokens from Kite
