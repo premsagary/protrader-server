@@ -1615,12 +1615,62 @@ function scoreMFTickertape(f) {
     hits[`From ATH: ${ath.toFixed(1)}% below peak`] = athPts;
   }
 
-  // -- STYLE DRIFT PENALTY (Varsity sector analysis) ----------------------------
-  // Mid cap funds holding >25% small cap = taking hidden risk beyond mandate
-  if(subcat.includes('Mid')){
+  // -- PILLAR J: CAPTURE RATIOS (6 pts) ----------------------------------------
+  // Varsity Ch22: "Ideal fund: UCR>100 AND DCR<100 = captures more upside, less downside"
+  // UCR/DCR is the purest test of asymmetric skill — beat market in bull, protect in bear
+  const ucr = get('upside_capture') || get('upside_capture_ratio') || null;
+  const dcr  = get('downside_capture') || get('downside_capture_ratio') || null;
+  if (ucr != null && dcr != null && ucr > 0 && dcr > 0) {
+    let ucrPts = 0;
+    if      (ucr > 110 && dcr < 85)   { ucrPts=6; hits[`Capture: UCR ${ucr.toFixed(0)} / DCR ${dcr.toFixed(0)} — captures more up, falls less down (ideal)`]=6; }
+    else if (ucr > 100 && dcr < 95)   { ucrPts=4; hits[`Capture: UCR ${ucr.toFixed(0)} / DCR ${dcr.toFixed(0)} — good asymmetry`]=4; }
+    else if (ucr > 100 && dcr < 105)  { ucrPts=2; hits[`Capture: UCR ${ucr.toFixed(0)} / DCR ${dcr.toFixed(0)} — captures upside but limited downside protection`]=2; }
+    else if (ucr < 100 && dcr > 100)  { ucrPts=0; hits[`⚠ Capture: UCR ${ucr.toFixed(0)} / DCR ${dcr.toFixed(0)} — underperforms on both sides`]=0; score-=1; }
+    else                               { ucrPts=1; hits[`Capture: UCR ${ucr.toFixed(0)} / DCR ${dcr.toFixed(0)} — mixed`]=1; }
+    score += ucrPts;
+    // Bonus: UCR/DCR ratio > 1.2 = strong asymmetric alpha
+    const ratio = ucr / dcr;
+    if (ratio > 1.25) { score+=1; hits[`UCR/DCR ratio ${ratio.toFixed(2)}x — strong asymmetric alpha generation`]=1; }
+  }
+
+  // -- PILLAR K: ROLLING RETURN FLOOR (3 pts) -----------------------------------
+  // Varsity Ch19: "High average AND low variance = consistently good fund"
+  // A fund that never gives negative 3Y rolling returns = far superior to one with high avg + crashes
+  const rollMin = get('rolling_3y_min') || get('min_rolling_3y') || null;
+  if (rollMin != null) {
+    const minPts = rollMin >= 12 ? 3
+                 : rollMin >= 6  ? 2
+                 : rollMin >= 0  ? 1 : 0;
+    score += minPts;
+    hits[`Rolling 3Y floor: ${rollMin.toFixed(1)}% min ${rollMin>=0?'(never negative on 3Y roll — consistency)':'(went negative)'}`] = minPts;
+    if (rollMin < -3) { score -= 1; hits[`⚠ Rolling 3Y went deeply negative (${rollMin.toFixed(1)}%) in at least one period`] = -1; }
+  }
+
+  // -- STYLE DRIFT PENALTIES (Varsity sector analysis) --------------------------
+  // Varsity: "A fund's mandate defines its risk profile. Drift = hidden risk investors didn't sign up for"
+  if (subcat.includes('Small')) {
+    // Small cap fund should be ≥65% small cap — less = it's not really a small cap fund
+    const scPct = get('pct_smallcap') || 0;
+    if (scPct > 0 && scPct < 50) { score-=2; hits[`Style drift: only ${scPct.toFixed(1)}% small cap in small cap fund — mandate breach`]=-2; }
+  }
+  if (subcat.includes('Mid')) {
     const smallCapPct = get('pct_smallcap') || 0;
-    if(smallCapPct > 27){ score-=2; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap in mid cap fund`]=-2; }
-    else if(smallCapPct > 20){ score-=1; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap (elevated)`]=-1; }
+    if      (smallCapPct > 27) { score-=2; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap in mid cap fund — mandate breach`]=-2; }
+    else if (smallCapPct > 20) { score-=1; hits[`Style drift: ${smallCapPct.toFixed(1)}% small cap in mid cap (elevated risk)`]=-1; }
+  }
+  if (subcat.includes('Large')) {
+    const scPct2 = get('pct_smallcap') || 0;
+    const mcPct2 = get('pct_midcap')   || 0;
+    if      (scPct2 > 15)          { score-=2; hits[`Style drift: ${scPct2.toFixed(1)}% small cap in large cap fund — mandate breach`]=-2; }
+    else if (scPct2 > 8||mcPct2>40){ score-=1; hits[`Style drift: elevated mid/small in large cap fund`]=-1; }
+  }
+  if (subcat.includes('Flexi')) {
+    // Flexi cap concentrated >70% in one segment = effectively not flexi
+    const lc = get('pct_largecap') || 0;
+    const mc = get('pct_midcap')   || 0;
+    const sc = get('pct_smallcap') || 0;
+    const maxSeg = Math.max(lc, mc, sc);
+    if (maxSeg > 72) { score-=1; hits[`Flexi cap concentrated: ${maxSeg.toFixed(0)}% in one segment — not truly diversified`]=-1; }
   }
 
   // -- PILLAR H: AUM + TRACK RECORD (12 pts) ------------------------------------
@@ -4181,15 +4231,182 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     // 6. RISK:REWARD
     checklist.rrRatio    ={pass:t.riskReward>=2,pts:t.riskReward>=2?3:t.riskReward>=1?1:0,max:3,label:`R:R ratio ${t.riskReward||'N/A'}x`,detail:t.riskReward>=2?`Good R:R of ${t.riskReward}x - risk ${px&&t.supports?.[0]?.price?(px-t.supports[0].price).toFixed(0):'?'}, target ${t.resistances?.[0]?.price||'?'}`:t.riskReward?`R:R of ${t.riskReward}x - minimum 2x preferred`:'Cannot calculate R:R'};
 
-    // 7. FUNDAMENTALS (from static data)
-    checklist.roeCheck   ={pass:f&&f.roe>=15,pts:f?f.roe>=20?8:f.roe>=15?6:f.roe>=10?3:0:0,max:8,label:`ROE: ${f?f.roe+'%':'N/A'}`,detail:f?`${f.roePeer}. ${f.roe>=15?'Management creating shareholder value.':'Below 15% threshold - weak returns on equity.'}`:'No fundamental data'};
-    checklist.debtCheck  ={pass:f&&f.de<=1,pts:f?f.de<=0.3?6:f.de<=0.7?5:f.de<=1?3:0:0,max:6,label:`Debt/Equity: ${f?f.de+'x':'N/A'}`,detail:f?`${f.dePeer}. ${f.de<=1?'Healthy balance sheet.':'High leverage increases risk.'}`:'N/A'};
-    checklist.peCheck    ={pass:f&&f.pe<40,pts:f?f.pe<15?5:f.pe<25?4:f.pe<40?2:0:0,max:5,label:`P/E: ${f?f.pe+'x':'N/A'}`,detail:f?`${f.pePeer} vs market`:'N/A'};
-    checklist.growthCheck={pass:f&&f.epsGr>=10,pts:f&&f.epsGr<400?f.epsGr>=25?6:f.epsGr>=15?5:f.epsGr>=10?3:f.epsGr>=0?1:0:0,max:6,label:`EPS Growth: ${f?f.epsGr+'%':'N/A'}`,detail:f?`${f.epsGr>=15?'Strong earnings growth - key long-term driver':f.epsGr>=0?'Modest growth':'Earnings declining - red flag'}`:'N/A'};
-    checklist.marginCheck={pass:f&&f.opMgn>=15,pts:f?f.opMgn>=20?3:f.opMgn>=15?2:f.opMgn>=10?1:0:0,max:3,label:`Op Margin: ${f?f.opMgn+'%':'N/A'}`,detail:f?`${f.opMgn>=20?'High margin business - pricing power':'${f.opMgn>=10?"Reasonable margins":"Thin margins - vulnerable to cost pressure"}'}`:'N/A'};
+    // 7. FUNDAMENTALS — Varsity Chapter 12 complete checklist
+    // ==========================================================================
+    // Varsity: "Run through this checklist before you put a single rupee to work"
+    // Added: CFO quality proxy, Interest Coverage, P/BV, PEG, ROA, Revenue Growth
+    // ==========================================================================
 
-    // 8. SENTIMENT
-    checklist.newsCheck  ={pass:sentScore>=0,pts:sentScore>30?3:sentScore>0?2:sentScore===0?1:0,max:3,label:`News: ${bull}B/${bear}Be/${neut}N`,detail:news.length>0?`${sentScore>0?'Positive':'Negative'} news flow. ${bull} bullish, ${bear} bearish articles found.`:'No recent news found in feeds'};
+    // ROE — Varsity: "#1 quality signal; >15% consistently = management excellence"
+    checklist.roeCheck = {
+      pass: f && f.roe >= 15,
+      pts:  f ? (f.roe>=22?8 : f.roe>=18?7 : f.roe>=15?6 : f.roe>=12?3 : f.roe>=8?1 : 0) : 0,
+      max:  8,
+      label:`ROE: ${f ? f.roe+'%' : 'N/A'}`,
+      detail: f ? `${f.roePeer}. ${f.roe>=15 ? 'Strong ROE — management compounding capital well. Varsity: >15% = quality threshold.' : 'Below 15% — capital not being deployed efficiently.'}` : 'No fundamental data',
+    };
+
+    // D/E Ratio — Varsity: "High debt during a fall = amplified risk; D/E<1 = safe"
+    checklist.debtCheck = {
+      pass: f && f.de <= 1,
+      pts:  f ? (f.de<=0.2?6 : f.de<=0.5?5 : f.de<=1?4 : f.de<=1.5?2 : 0) : 0,
+      max:  6,
+      label:`D/E: ${f ? f.de+'x' : 'N/A'}`,
+      detail: f ? `${f.dePeer}. ${f.de<=1 ? 'Healthy balance sheet — company survives slowdowns without distress.' : 'High leverage — interest costs amplify losses in downturns. Varsity: D/E>2 = risky.'}` : 'N/A',
+    };
+
+    // Interest Coverage — Varsity: "<1.5x = danger zone; company barely covering interest"
+    // Proxy: if D/E and opMgn both available, estimate coverage quality
+    const intCovProxy = f && f.de != null && f.opMgn != null
+      ? (f.de <= 0.3 ? 'High (>5x)' : f.de <= 0.7 ? 'Comfortable (3-5x)' : f.de <= 1.5 ? 'Moderate (1.5-3x)' : 'Low (<1.5x — danger)')
+      : null;
+    const intCovPass = f && f.de != null && f.de <= 1.5;
+    checklist.intCovCheck = {
+      pass:   intCovPass,
+      pts:    f && f.de != null ? (f.de<=0.3?5 : f.de<=0.7?4 : f.de<=1.5?2 : 0) : 0,
+      max:    5,
+      label:  `Interest Coverage (est): ${intCovProxy || 'N/A'}`,
+      detail: f && f.de != null
+        ? `Estimated from D/E ${f.de}x. ${f.de<=1.5 ? 'Varsity: comfortable coverage — company not strained by debt servicing.' : 'Varsity: D/E>1.5 suggests tight interest coverage — earnings cliff risk if business slows.'}`
+        : 'No debt data available',
+    };
+
+    // EPS Growth — Varsity: "Earnings growth = engine of long-term wealth creation"
+    checklist.growthCheck = {
+      pass: f && f.epsGr >= 10,
+      pts:  f && f.epsGr < 400 ? (f.epsGr>=25?6 : f.epsGr>=15?5 : f.epsGr>=10?3 : f.epsGr>=5?2 : f.epsGr>=0?1 : 0) : 0,
+      max:  6,
+      label:`EPS Growth: ${f ? f.epsGr+'%' : 'N/A'}`,
+      detail: f ? `${f.epsGr>=15 ? 'Strong earnings growth — stock price will follow over time. Varsity: EPS growth is the long-term stock driver.' : f.epsGr>=0 ? 'Modest growth — acceptable but not exciting.' : 'EPS declining — major red flag. Stock price eventually follows earnings down.'}` : 'N/A',
+    };
+
+    // Revenue Growth — Varsity: "Top-line growth validates business expansion"
+    // Operating leverage bonus: EPS growing faster than revenue = margin expansion
+    const revGr = f ? (f.revGr || f.revGrowth || null) : null;
+    const opLeverage = f && revGr != null && f.epsGr != null && f.epsGr > (revGr + 5);
+    checklist.revGrowth = {
+      pass:   revGr != null && revGr >= 8,
+      pts:    revGr != null ? (revGr>=20?4 : revGr>=12?3 : revGr>=6?2 : revGr>=0?1 : 0) + (opLeverage?1:0) : 0,
+      max:    5,
+      label:  `Revenue Growth: ${revGr != null ? revGr+'%' : 'N/A'}${opLeverage ? ' + Op Leverage' : ''}`,
+      detail: revGr != null
+        ? `${revGr>=10 ? 'Revenue growing — business expanding.' : revGr>=0 ? 'Slow revenue growth — limited business expansion.' : 'Revenue declining — structural concern.'}${opLeverage ? ' EPS outpacing revenue = operating leverage = margin expansion (Varsity: strong quality signal).' : ''}` : 'N/A',
+    };
+
+    // Operating Margin — Varsity: "Increasing margin = management efficiency improving"
+    checklist.marginCheck = {
+      pass: f && f.opMgn >= 15,
+      pts:  f ? (f.opMgn>=25?4 : f.opMgn>=18?3 : f.opMgn>=12?2 : f.opMgn>=6?1 : 0) : 0,
+      max:  4,
+      label:`Op Margin: ${f ? f.opMgn+'%' : 'N/A'}`,
+      detail: f ? `${f.opMgn>=20 ? 'High margin business — strong pricing power and cost discipline.' : f.opMgn>=12 ? 'Reasonable margins — acceptable for most sectors.' : f.opMgn>=0 ? 'Thin margins — vulnerable to cost pressure or price competition.' : 'Negative margins — operating at a loss. Very concerning.'}` : 'N/A',
+    };
+
+    // CFO Quality proxy — Varsity: "PAT should convert to CFO. PAT high + CFO low = manipulation"
+    // Proxy: ROA > 0 and margin trend (no direct CFO/PAT ratio from static data)
+    const roa = f ? (f.roa || null) : null;
+    const cfoPasses = roa != null ? roa >= 5 : (f && f.opMgn >= 10 && f.roe >= 12);
+    checklist.cfoQuality = {
+      pass:   cfoPasses,
+      pts:    roa != null ? (roa>=12?4 : roa>=8?3 : roa>=5?2 : roa>=2?1 : 0) : (f&&f.roe>=15&&f.opMgn>=12?2 : f&&f.roe>=10?1 : 0),
+      max:    4,
+      label:  `CFO Quality${roa != null ? ` / ROA: ${roa}%` : ' (proxy)'}`,
+      detail: roa != null
+        ? `ROA ${roa}% ${roa>=8 ? '— solid asset productivity; profits are converting to real cash.' : roa>=4 ? '— moderate. Check that PAT is genuinely converting to operating cash flow.' : '— low ROA despite profits may indicate working capital problems or revenue recognition issues. Varsity: most critical earnings quality check.'}`
+        : f ? `No direct CFO data. Using ROE ${f.roe}% + OpMgn ${f.opMgn}% as quality proxy. Varsity: ideally verify CFO > PAT in annual report before investing.` : 'N/A',
+    };
+
+    // P/E Valuation — Varsity: "P/E without growth context = incomplete"
+    checklist.peCheck = {
+      pass: f && f.pe > 0 && f.pe < 40,
+      pts:  f && f.pe > 0 ? (f.pe<12?5 : f.pe<20?4 : f.pe<30?3 : f.pe<45?1 : 0) : 0,
+      max:  5,
+      label:`P/E: ${f ? f.pe+'x' : 'N/A'}`,
+      detail: f && f.pe > 0 ? `${f.pePeer}. ${f.pe<20 ? 'Cheap valuation — paying less for earnings. Margin of safety present.' : f.pe<35 ? 'Fair valuation — priced for moderate growth.' : 'Expensive — high P/E needs high earnings growth to justify. Any disappointment = sharp fall.'}` : 'N/A',
+    };
+
+    // PEG Ratio — Varsity/Lynch: "PEG<1 = growth at discount; PEG>2 = paying too much for growth"
+    const peg = f ? (f.peg || (f.pe>0 && f.epsGr>0 ? +(f.pe/f.epsGr).toFixed(2) : null)) : null;
+    checklist.pegCheck = {
+      pass:   peg != null && peg < 1.5,
+      pts:    peg != null ? (peg<0.5?4 : peg<1?3 : peg<1.5?2 : peg<2?1 : 0) : 0,
+      max:    4,
+      label:  `PEG Ratio: ${peg != null ? peg : 'N/A'}`,
+      detail: peg != null
+        ? `PEG = P/E ${f.pe} ÷ EPS Growth ${f.epsGr}%. ${peg<1 ? 'PEG below 1 = growth available at a discount. Peter Lynch: best stocks have PEG<1.' : peg<1.5 ? 'Fair — paying a slight premium for growth. Acceptable.' : 'High PEG — paying too much for the growth rate. Varsity: margin of safety eroded.'}`
+        : f ? 'Cannot compute — need positive EPS growth' : 'N/A',
+    };
+
+    // P/BV — Varsity Module 3: "P/BV primary for banks; P/BV<1 = below liquidation value"
+    const pb = f ? (f.pb || null) : null;
+    checklist.pbvCheck = {
+      pass:   pb != null ? pb < 4 : true,
+      pts:    pb != null ? (pb<1?4 : pb<2?3 : pb<3?2 : pb<5?1 : 0) : 0,
+      max:    4,
+      label:  `P/BV: ${pb != null ? pb+'x' : 'N/A'}`,
+      detail: pb != null
+        ? `${pb<1 ? 'Below book value — trading at discount to liquidation value. Deep value if business is healthy.' : pb<2 ? 'Reasonable premium to book — fair for a profitable business.' : pb<4 ? 'Moderate premium — justified if ROE is high (high ROE businesses deserve high P/BV).' : 'High P/BV — priced for perfection. Risk of multiple compression if growth disappoints.'} ${d.sector==='Banking'?'(Varsity: P/BV is the primary valuation metric for banks)':''}`
+        : 'Book value data not available',
+    };
+
+    // 8. TECHNICAL SIGNALS — additional Varsity signals not in trend section
+    // ADX — Varsity Module 2: "ADX measures trend STRENGTH, not direction"
+    const adxVal = t.adx || 0;
+    const adxTrending = adxVal >= 25;
+    checklist.adxCheck = {
+      pass:   adxTrending && t.adxPlus > t.adxMinus,
+      pts:    adxTrending && t.adxPlus > t.adxMinus ? 3 : adxTrending ? 1 : 0,
+      max:    3,
+      label:  `ADX: ${adxVal.toFixed(0)} (${t.trendStrength || 'N/A'})`,
+      detail: adxVal >= 40
+        ? `Very strong trend (ADX ${adxVal.toFixed(0)}). ${t.adxPlus>t.adxMinus?'+DI above -DI = bullish trend confirmed.':'-DI above +DI = strong downtrend — avoid.'}`
+        : adxVal >= 25
+        ? `Trending market (ADX ${adxVal.toFixed(0)}). ${t.adxPlus>t.adxMinus?'+DI above -DI — uptrend has momentum.':'Downtrend in progress.'} Varsity: ADX>25 = trade with the trend.`
+        : `Weak/sideways market (ADX ${adxVal.toFixed(0)}). No clear trend. Varsity: ADX<20 = avoid breakout trades, use range strategies.`,
+    };
+
+    // Stochastic — Varsity: double confirmation with RSI
+    const stochK = t.stochK || 50;
+    const stochHealthy = stochK >= 35 && stochK <= 70;
+    checklist.stochCheck = {
+      pass:   stochHealthy || stochK <= 20,
+      pts:    stochK <= 20 ? 3 : stochK <= 30 ? 2 : stochHealthy ? 2 : stochK >= 80 ? 0 : 1,
+      max:    3,
+      label:  `Stochastic: ${stochK.toFixed(0)}`,
+      detail: stochK <= 20
+        ? `Stochastic ${stochK.toFixed(0)} — extreme oversold. Varsity: Stoch + RSI both oversold = double confirmation of buy zone.`
+        : stochK <= 35
+        ? `Stochastic in oversold zone (${stochK.toFixed(0)}) — accumulation opportunity with RSI confirmation.`
+        : stochHealthy
+        ? `Stochastic in healthy range (${stochK.toFixed(0)}) — momentum balanced, entry reasonable.`
+        : `Stochastic overbought (${stochK.toFixed(0)}) — avoid chasing. Wait for pullback below 70.`,
+    };
+
+    // RSI Bullish Divergence — Varsity: "#1 reversal signal for oversold quality stocks"
+    const hasBullDiv = !!(t.bullishDiv);
+    const hasBearDiv = !!(t.bearishDiv);
+    checklist.rsiDivCheck = {
+      pass:   hasBullDiv && !hasBearDiv,
+      pts:    hasBullDiv ? 4 : hasBearDiv ? 0 : 1,
+      max:    4,
+      label:  `RSI Divergence: ${hasBullDiv ? 'Bullish ⬆' : hasBearDiv ? 'Bearish ⬇' : 'None'}`,
+      detail: hasBullDiv
+        ? `RSI Bullish Divergence detected — price made lower low but RSI made higher low. Varsity: #1 reversal signal. Selling pressure is exhausting. High probability bounce incoming.`
+        : hasBearDiv
+        ? `RSI Bearish Divergence — price made higher high but RSI made lower high. Varsity: buying pressure weakening. Potential reversal downward. Caution.`
+        : `No RSI divergence. Trend likely to continue in current direction. Watch for divergence to signal turning points.`,
+    };
+
+    // 9. SENTIMENT
+    checklist.newsCheck = {
+      pass:   sentScore >= 0,
+      pts:    sentScore > 30 ? 3 : sentScore > 0 ? 2 : sentScore === 0 ? 1 : 0,
+      max:    3,
+      label:  `News: ${bull}B / ${bear}Be / ${neut}N`,
+      detail: news.length > 0
+        ? `${sentScore > 0 ? 'Positive' : 'Negative'} news flow. ${bull} bullish, ${bear} bearish articles. News sentiment often leads price action by days.`
+        : 'No recent news found in feeds',
+    };
 
     // TOTAL SCORE
     const totalPts=Object.values(checklist).reduce((a,c)=>a+c.pts,0);
@@ -4249,22 +4466,41 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     else if(nearDma50) analysis.push({cat:'Entry Timing',icon:'🎯',signal:'positive',title:'Near 50 DMA - Continuation Buy Zone',text:`Price is near its 50-day average of ${t.dma50?.toFixed(0)}, which is a classic "dip buy" zone in an uptrend. Stocks in uptrends regularly dip to their 50 DMA and then resume higher.`});
     else if(nearSupport) analysis.push({cat:'Entry Timing',icon:'🎯',signal:'positive',title:`Near Key Support (${t.buyZoneLow}-${t.buyZoneHigh})`,text:`Price is near a strong historical support zone. This is where buyers have repeatedly stepped in over months/years. The more times a support level holds, the stronger it becomes.`});
 
-    // Fundamentals
-    if(f){
-      if(f.roe>=15) analysis.push({cat:'Quality',icon:'💰',signal:'positive',title:`ROE ${f.roe}% - ${f.roePeer}`,text:`Return on Equity of ${f.roe}% means for every ₹100 of your money in the company, it generates ₹${f.roe} of profit. Above 15% is the threshold for a quality business. Compare: Infosys has ~30%, HDFC Bank ~16%. This shows management can put capital to work efficiently.`});
-      else analysis.push({cat:'Quality',icon:'⚠️',signal:'negative',title:`ROE ${f.roe}% - ${f.roePeer}`,text:`ROE of ${f.roe}% is below the 15% threshold. The company isn't generating strong returns on shareholder capital. Look for improvement trend before investing.`});
+    // Fundamentals — extended Varsity analysis
+    if (f) {
+      if (f.roe >= 15) analysis.push({cat:'Quality',icon:'💰',signal:'positive',title:`ROE ${f.roe}% — ${f.roePeer}`,text:`Return on Equity of ${f.roe}% means for every ₹100 of shareholder capital, the company generates ₹${f.roe} in profit. Varsity benchmark: >15% consistently = excellent quality business. This shows management is compounding capital efficiently. Compare: Infosys ~30%, HDFC Bank ~16%.`});
+      else analysis.push({cat:'Quality',icon:'⚠️',signal:'negative',title:`ROE ${f.roe}% — ${f.roePeer}`,text:`ROE of ${f.roe}% is below the 15% Varsity threshold. The company isn't generating strong returns on shareholder capital. Low ROE sustained over years = value destruction for investors.`});
 
-      if(f.de<=0.7) analysis.push({cat:'Balance Sheet',icon:'💪',signal:'positive',title:`Low Debt (D/E: ${f.de}x) - ${f.dePeer}`,text:`Debt-to-equity of ${f.de}x is excellent. A company with low debt can survive recessions, doesn't need to keep paying interest, and can invest in growth opportunities. During market downturns, low-debt companies suffer much less than highly leveraged ones.`});
-      else if(f.de>2) analysis.push({cat:'Balance Sheet',icon:'🚨',signal:'negative',title:`High Debt (D/E: ${f.de}x) - Risky`,text:`Debt-to-equity of ${f.de}x is dangerous. When interest rates rise or business slows, high-debt companies can spiral quickly. This is a serious risk factor, especially in uncertain times.`});
+      if (f.de <= 0.7) analysis.push({cat:'Balance Sheet',icon:'💪',signal:'positive',title:`Low Debt D/E: ${f.de}x — ${f.dePeer}`,text:`Debt-to-equity of ${f.de}x is excellent. Varsity: D/E<0.5 = near debt-free, can survive recessions and fund growth organically. Low-debt companies outperform significantly during economic slowdowns.`});
+      else if (f.de > 2) analysis.push({cat:'Balance Sheet',icon:'🚨',signal:'negative',title:`High Debt D/E: ${f.de}x — Risky`,text:`D/E of ${f.de}x is dangerous. Varsity: D/E>2 = high leverage. Rising interest rates or a business slowdown can spiral into a debt trap. Interest coverage becomes critical — if EBIT < Interest, the company is technically insolvent.`});
 
-      if(f.epsGr!=null&&f.epsGr<400){
-        if(f.epsGr>=15) analysis.push({cat:'Growth',icon:'🚀',signal:'positive',title:`EPS Growing ${f.epsGr}% - ${f.growthPeer}`,text:`Earnings per share growing at ${f.epsGr}% is strong. A stock price ultimately follows earnings over time. If a company compounds earnings at ${f.epsGr}% annually, the stock will likely follow. This is the engine of long-term wealth creation.`});
-        else if(f.epsGr<0) analysis.push({cat:'Growth',icon:'📉',signal:'negative',title:`EPS Declining ${f.epsGr}% - Red Flag`,text:`Earnings are shrinking. Stock prices eventually follow earnings. If the company keeps earning less, the stock price will likely fall over time. This needs to reverse before long-term investing makes sense.`});
+      if (f.epsGr != null && f.epsGr < 400) {
+        if (f.epsGr >= 15) analysis.push({cat:'Growth',icon:'🚀',signal:'positive',title:`EPS Growing ${f.epsGr}% — ${f.growthPeer}`,text:`Earnings per share growing at ${f.epsGr}%. Varsity: EPS growth is the primary engine of long-term stock price appreciation. A company compounding earnings at this rate will see its stock follow over 3-5 years.`});
+        else if (f.epsGr < 0) analysis.push({cat:'Growth',icon:'📉',signal:'negative',title:`EPS Declining ${f.epsGr}% — Red Flag`,text:`Earnings are shrinking. Varsity: declining EPS sustained for 2+ years signals business deterioration, not temporary setback. Stock prices follow earnings over time — if earnings keep falling, the stock will too.`});
       }
 
-      if(f.pe<25) analysis.push({cat:'Valuation',icon:'🏷️',signal:'positive',title:`P/E ${f.pe}x - ${f.pePeer}`,text:`You're paying ₹${f.pe} for every ₹1 of annual earnings. At this P/E, the stock isn't expensive. ${f.peg!=null?`PEG ratio of ${f.peg} (P/E divided by growth) - ${f.peg<1?'below 1.0 suggests undervalued relative to growth':'above 1.0 - fair to slightly expensive for growth rate'}.`:''}`});
-      else if(f.pe>40) analysis.push({cat:'Valuation',icon:'💸',signal:'negative',title:`P/E ${f.pe}x - ${f.pePeer}`,text:`You're paying ₹${f.pe} for every ₹1 of earnings. This is expensive. High P/E stocks can fall sharply on any earnings disappointment. Make sure the growth rate justifies this premium.`});
+      if (peg != null) {
+        if (peg < 1) analysis.push({cat:'Valuation',icon:'🏷️',signal:'positive',title:`PEG ${peg} — Growth at Discount`,text:`PEG ratio below 1 means you're paying less for the earnings growth than the growth rate justifies. Peter Lynch's golden rule: PEG<1 = potentially undervalued despite seemingly high P/E. At P/E ${f.pe} with ${f.epsGr}% EPS growth, this is attractive.`});
+        else if (peg > 2) analysis.push({cat:'Valuation',icon:'💸',signal:'negative',title:`PEG ${peg} — Overpriced for Growth`,text:`PEG above 2 means you're paying a heavy premium for the growth rate. Varsity: high PEG removes margin of safety. If growth disappoints even slightly, the stock can fall sharply as the multiple compresses.`});
+      }
+
+      if (roa != null) {
+        if (roa >= 8) analysis.push({cat:'Quality',icon:'🏭',signal:'positive',title:`ROA ${roa}% — Strong Asset Productivity`,text:`Return on Assets of ${roa}% shows the company converts its assets into profit efficiently. Varsity: high ROA = real cash generation, not accounting profit. This is the CFO quality proxy — if PAT is high but ROA is low, investigate if profits are converting to actual cash.`});
+        else if (roa < 3) analysis.push({cat:'Quality',icon:'⚠️',signal:'negative',title:`ROA ${roa}% — Low Asset Productivity`,text:`Low ROA despite profits can indicate working capital issues, poor capital allocation, or that earnings may not be converting to real cash flow. Varsity's most critical check: PAT should eventually convert to CFO. Verify in the annual report.`});
+      }
+
+      if (pb != null) {
+        if (pb < 1.5) analysis.push({cat:'Valuation',icon:'📚',signal:'positive',title:`P/BV ${pb}x — Below/At Book Value`,text:`Trading near book value means you're buying the company at or below its liquidation worth. Varsity: P/BV<1 = deep value if business is healthy. For banks, P/BV is the primary valuation metric (target 1.5-3x for quality banks).`});
+        else if (pb > 6) analysis.push({cat:'Valuation',icon:'💸',signal:'negative',title:`P/BV ${pb}x — High Premium to Book`,text:`High P/BV requires high sustained ROE to justify. Varsity formula: fair P/BV ≈ ROE/Cost of Capital. If ROE is ${f.roe}% and cost of capital is ~12%, fair P/BV ≈ ${(f.roe/12).toFixed(1)}x. Premium beyond this = speculative.`});
+      }
+
+      if (f.pe < 25) analysis.push({cat:'Valuation',icon:'🏷️',signal:'positive',title:`P/E ${f.pe}x — ${f.pePeer}`,text:`Paying ₹${f.pe} for every ₹1 of annual earnings. Varsity: low P/E alone isn't enough — combine with PEG and P/BV for complete valuation picture. ${peg!=null?`PEG ${peg} ${peg<1?'confirms value.':'suggests growth priced in.'}`  :''}`});
+      else if (f.pe > 40) analysis.push({cat:'Valuation',icon:'💸',signal:'negative',title:`P/E ${f.pe}x — ${f.pePeer}`,text:`Paying ₹${f.pe} for ₹1 of earnings. Expensive. Varsity: high P/E stocks fall sharply on any earnings miss. Only justified if EPS growth rate is very high and sustained (check PEG ratio).`});
     }
+
+    // RSI Divergence — Varsity #1 reversal signal
+    if (t.bullishDiv) analysis.push({cat:'Momentum',icon:'🔔',signal:'positive',title:'RSI Bullish Divergence — Strongest Reversal Signal',text:`Price made a lower low but RSI made a higher low. Varsity: this is the #1 signal to watch on quality stocks. It means selling pressure is exhausting — sellers are running out of ammunition. High probability that price reverses upward from here. Combine with oversold RSI<35 for maximum conviction.`});
+    if (t.bearishDiv) analysis.push({cat:'Momentum',icon:'⚠️',signal:'negative',title:'RSI Bearish Divergence — Selling Signal',text:`Price made a higher high but RSI made a lower high. Varsity: buying pressure is weakening — bulls are running out of conviction. Often precedes a meaningful price correction. Consider reducing position or tightening stop.`});
 
     // Ichimoku
     if(t.ichimoku?.tenkan){
