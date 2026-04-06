@@ -285,7 +285,7 @@ async function refreshUniverseFromNSE() {
   });
 
   // Persist to stock_universe DB table — authoritative source of truth
-  let dbSaved = 0;
+  let dbSaved = 0, dbErrors = 0;
   for (const s of deduped) {
     try {
       await pool.query(
@@ -294,12 +294,15 @@ async function refreshUniverseFromNSE() {
          ON CONFLICT (sym) DO UPDATE SET
            name=EXCLUDED.name, grp=EXCLUDED.grp, industry=EXCLUDED.industry,
            isin=EXCLUDED.isin, series=EXCLUDED.series, updated_at=NOW()`,
-        [s.sym, s.n, s.grp, s.industry, s.isin, s.series]
+        [s.sym, s.n, s.grp, s.industry||'', s.isin||'', s.series||'EQ']
       );
       dbSaved++;
-    } catch(e) { console.log(`Universe DB save error ${s.sym}:`, e.message); }
+    } catch(e) {
+      dbErrors++;
+      if (dbErrors <= 2) console.log(`Universe DB save error ${s.sym}:`, e.message);
+    }
   }
-  console.log(`NSE universe: ${dbSaved}/${deduped.length} saved to stock_universe table`);
+  console.log(`NSE universe: ${dbSaved} saved, ${dbErrors} errors to stock_universe table`);
 
   // Update in-memory UNIVERSE
   const nseSyms = new Set(deduped.map(s => s.sym));
@@ -4453,8 +4456,8 @@ let screenerRunning = false;
 let screenerProgress = { done: 0, total: 0, errors: 0, startedAt: null };
 
 async function fetchOneStockFromScreener(sym, token) {
-  const BASE = 'https://api.apify.com/v2';
-  const ACTOR = 'akash9078~apify-screenerin-scraper';
+  const BASE  = 'https://api.apify.com/v2';
+  const ACTOR = 'akash9078~indian-stocks-financial-data-scraper'; // correct actor ID
   const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
   const ps = v => (v||'').toString().trim();
 
@@ -4465,7 +4468,10 @@ async function fetchOneStockFromScreener(sym, token) {
     body: JSON.stringify({ stockSymbol: sym }),
     signal: AbortSignal.timeout(15000),
   });
-  if (!startResp.ok) throw new Error(`Start failed: ${startResp.status}`);
+  if (!startResp.ok) {
+    const errText = await startResp.text().catch(()=>'');
+    throw new Error(`Start failed ${startResp.status}: ${errText.slice(0,100)}`);
+  }
   const runInfo = await startResp.json();
   const runId = runInfo.data?.id;
   const datasetId = runInfo.data?.defaultDatasetId;
@@ -4635,7 +4641,9 @@ async function fetchAllScreenerData() {
     } catch(e) {
       errors++;
       screenerProgress.errors++;
-      console.log(`📊 ${sym}: ${e.message}`);
+      // Log first 3 errors in full detail to diagnose
+      if (errors <= 3) console.log(`📊 ${sym} ERROR: ${e.message}`);
+      else if (errors === 4) console.log('📊 Suppressing further error logs...');
     }
     // 2s delay between stocks to be respectful
     await new Promise(r => setTimeout(r, 2000));
