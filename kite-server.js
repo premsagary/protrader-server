@@ -805,6 +805,209 @@ function adx(candles, n=14) {
 }
 
 // ===============================================================================
+// PHASE 1: ENHANCED TECHNICAL INDICATORS (Varsity Module 2)
+// ===============================================================================
+
+// Fibonacci retracement levels — Varsity M2 Ch 16
+function fibonacci(high, low) {
+  const range = high - low;
+  return {
+    r0:    high,
+    r236:  +(high - range * 0.236).toFixed(2),
+    r382:  +(high - range * 0.382).toFixed(2),
+    r500:  +(high - range * 0.500).toFixed(2),
+    r618:  +(high - range * 0.618).toFixed(2),
+    r786:  +(high - range * 0.786).toFixed(2),
+    r1:    low,
+    // Extension levels
+    e1272: +(low  - range * 0.272).toFixed(2),
+    e1618: +(low  - range * 0.618).toFixed(2),
+  };
+}
+
+// ADX with +DI and -DI lines — Varsity M2 Ch 21
+function adxFull(candles, n=14) {
+  if (candles.length < n+2) return { adx:20, pdi:15, ndi:15, trending:false };
+  const dms = candles.slice(1).map((c,i) => {
+    const prev = candles[i];
+    const um = c.high - prev.high, dm = prev.low - c.low;
+    return {
+      pdm: um>dm&&um>0?um:0,
+      ndm: dm>um&&dm>0?dm:0,
+      tr:  Math.max(c.high-c.low,Math.abs(c.high-prev.close),Math.abs(c.low-prev.close)),
+    };
+  });
+  const last = dms.slice(-n);
+  const atrSum = last.reduce((s,d)=>s+d.tr,0);
+  const pdi = atrSum>0 ? last.reduce((s,d)=>s+d.pdm,0)/atrSum*100 : 0;
+  const ndi = atrSum>0 ? last.reduce((s,d)=>s+d.ndm,0)/atrSum*100 : 0;
+  const adxVal = pdi+ndi>0 ? Math.abs(pdi-ndi)/(pdi+ndi)*100 : 0;
+  return {
+    adx:     +adxVal.toFixed(1),
+    pdi:     +pdi.toFixed(1),
+    ndi:     +ndi.toFixed(1),
+    trending: adxVal > 25,
+    bullTrend: pdi > ndi && adxVal > 20,  // +DI > -DI = bullish trend
+    bearTrend: ndi > pdi && adxVal > 20,
+    diCross:   Math.abs(pdi - ndi) < 3,   // crossover zone
+  };
+}
+
+// Ichimoku Cloud — Varsity M2 Ch 21
+function ichimoku(candles) {
+  if (candles.length < 52) return null;
+  const n = candles.length;
+  const midpoint = (period) => {
+    const sl = candles.slice(n-period);
+    return (Math.max(...sl.map(c=>c.high)) + Math.min(...sl.map(c=>c.low))) / 2;
+  };
+  const tenkan  = midpoint(9);   // Conversion line
+  const kijun   = midpoint(26);  // Base line
+  const senkouA = (tenkan + kijun) / 2;
+  const senkouB = midpoint(52);
+  const chikou  = candles[n-1].close;
+  const price   = candles[n-1].close;
+  const aboveCloud = price > Math.max(senkouA, senkouB);
+  const belowCloud = price < Math.min(senkouA, senkouB);
+  const tkCross  = tenkan > kijun;  // TK cross bullish
+  return {
+    tenkan: +tenkan.toFixed(2), kijun: +kijun.toFixed(2),
+    senkouA: +senkouA.toFixed(2), senkouB: +senkouB.toFixed(2),
+    chikou: +chikou.toFixed(2),
+    aboveCloud, belowCloud, tkCross,
+    signal: aboveCloud && tkCross ? 'bullish' : belowCloud && !tkCross ? 'bearish' : 'neutral',
+  };
+}
+
+// Candlestick Pattern Recognition — Varsity M2 Ch 5-11
+function detectCandlePatterns(candles) {
+  const patterns = [];
+  const n = candles.length;
+  if (n < 3) return patterns;
+
+  const isGreen = c => c.close > c.open;
+  const isRed   = c => c.close < c.open;
+  const body    = c => Math.abs(c.close - c.open);
+  const range   = c => c.high - c.low;
+  const upper   = c => c.high - Math.max(c.open, c.close);
+  const lower   = c => Math.min(c.open, c.close) - c.low;
+  const mid     = c => (c.open + c.close) / 2;
+
+  const c1 = candles[n-1]; // latest
+  const c2 = candles[n-2];
+  const c3 = candles[n-3];
+
+  // --- SINGLE CANDLE PATTERNS ---
+
+  // Marubozu — Varsity: "full body, no shadows = strong conviction"
+  if (body(c1) > range(c1)*0.9 && range(c1) > 0) {
+    patterns.push({ pattern: isGreen(c1)?'Bullish Marubozu':'Bearish Marubozu', type: isGreen(c1)?'bullish':'bearish', reliability: 2 });
+  }
+
+  // Doji — Varsity: "indecision, direction depends on prior trend"
+  if (body(c1) < range(c1)*0.1 && range(c1) > 0) {
+    patterns.push({ pattern: 'Doji', type: 'neutral', reliability: 1 });
+  }
+
+  // Hammer / Hanging Man — Varsity M2 Ch 7: "lower shadow >= 2x body, tiny upper shadow"
+  if (lower(c1) >= body(c1)*2 && upper(c1) < body(c1)*0.3 && body(c1) > 0) {
+    const prevTrend = c2.close < c3.close; // prior downtrend
+    patterns.push({
+      pattern: prevTrend ? 'Hammer' : 'Hanging Man',
+      type:    prevTrend ? 'bullish' : 'bearish',
+      reliability: 2,
+    });
+  }
+
+  // Inverted Hammer / Shooting Star
+  if (upper(c1) >= body(c1)*2 && lower(c1) < body(c1)*0.3 && body(c1) > 0) {
+    const prevTrend = c2.close < c3.close;
+    patterns.push({
+      pattern: prevTrend ? 'Inverted Hammer' : 'Shooting Star',
+      type:    prevTrend ? 'bullish' : 'bearish',
+      reliability: 2,
+    });
+  }
+
+  // Spinning Top — small body, long shadows both sides
+  if (body(c1) < range(c1)*0.3 && upper(c1) > body(c1) && lower(c1) > body(c1) && range(c1) > 0) {
+    patterns.push({ pattern: 'Spinning Top', type: 'neutral', reliability: 1 });
+  }
+
+  // --- DOUBLE CANDLE PATTERNS ---
+
+  // Bullish Engulfing — Varsity M2 Ch 8: "green candle engulfs prior red candle"
+  if (isRed(c2) && isGreen(c1) && c1.open < c2.close && c1.close > c2.open && body(c1) > body(c2)) {
+    patterns.push({ pattern: 'Bullish Engulfing', type: 'bullish', reliability: 3 });
+  }
+
+  // Bearish Engulfing
+  if (isGreen(c2) && isRed(c1) && c1.open > c2.close && c1.close < c2.open && body(c1) > body(c2)) {
+    patterns.push({ pattern: 'Bearish Engulfing', type: 'bearish', reliability: 3 });
+  }
+
+  // Piercing Pattern — Varsity M2 Ch 8
+  if (isRed(c2) && isGreen(c1) && c1.open < c2.low && c1.close > mid(c2) && c1.close < c2.open) {
+    patterns.push({ pattern: 'Piercing Pattern', type: 'bullish', reliability: 2 });
+  }
+
+  // Dark Cloud Cover
+  if (isGreen(c2) && isRed(c1) && c1.open > c2.high && c1.close < mid(c2) && c1.close > c2.open) {
+    patterns.push({ pattern: 'Dark Cloud Cover', type: 'bearish', reliability: 2 });
+  }
+
+  // Bullish Harami — small candle inside prior large candle
+  if (isRed(c2) && isGreen(c1) && c1.open > c2.close && c1.close < c2.open && body(c1) < body(c2)*0.5) {
+    patterns.push({ pattern: 'Bullish Harami', type: 'bullish', reliability: 1 });
+  }
+
+  // Bearish Harami
+  if (isGreen(c2) && isRed(c1) && c1.open < c2.close && c1.close > c2.open && body(c1) < body(c2)*0.5) {
+    patterns.push({ pattern: 'Bearish Harami', type: 'bearish', reliability: 1 });
+  }
+
+  // --- TRIPLE CANDLE PATTERNS ---
+
+  // Morning Star — Varsity M2 Ch 9: strongest bullish reversal
+  if (isRed(c3) && body(c2)<body(c3)*0.3 && isGreen(c1) && c1.close>mid(c3) && body(c3)>0) {
+    patterns.push({ pattern: 'Morning Star', type: 'bullish', reliability: 3 });
+  }
+
+  // Evening Star
+  if (isGreen(c3) && body(c2)<body(c3)*0.3 && isRed(c1) && c1.close<mid(c3) && body(c3)>0) {
+    patterns.push({ pattern: 'Evening Star', type: 'bearish', reliability: 3 });
+  }
+
+  // Three White Soldiers — three consecutive green candles, each closing higher
+  if (isGreen(c1)&&isGreen(c2)&&isGreen(c3) && c1.close>c2.close&&c2.close>c3.close && c1.open>c2.open&&c2.open>c3.open) {
+    patterns.push({ pattern: 'Three White Soldiers', type: 'bullish', reliability: 3 });
+  }
+
+  // Three Black Crows
+  if (isRed(c1)&&isRed(c2)&&isRed(c3) && c1.close<c2.close&&c2.close<c3.close && c1.open<c2.open&&c2.open<c3.open) {
+    patterns.push({ pattern: 'Three Black Crows', type: 'bearish', reliability: 3 });
+  }
+
+  return patterns;
+}
+
+// Multi-timeframe trend check — Varsity M2 Ch 18
+// Returns whether daily trend confirms intraday signal
+function dailyTrendBullish(dailyCandles) {
+  if (!dailyCandles || dailyCandles.length < 50) return null;
+  const C   = dailyCandles.map(c=>c.close);
+  const n   = C.length;
+  const avg = (arr,s,l) => arr.slice(s,s+l).reduce((a,b)=>a+b,0)/l;
+  const dma50  = avg(C,n-50,50);
+  const dma200 = n>=200 ? avg(C,n-200,200) : null;
+  const price  = C[n-1];
+  const above200 = dma200 ? price > dma200 : null;
+  const above50  = price > dma50;
+  const golden   = dma200 ? dma50 > dma200 : null;
+  return above200 !== false && above50 && (golden !== false);
+}
+
+// ===============================================================================
 // -- MARKET REGIME DETECTOR ----------------------------------------------------
 // ===============================================================================
 
@@ -1040,20 +1243,63 @@ function stratVolumeSpike(candles) {
            sl:score>=5?closes[n]*0.986:null, tgt:score>=5?closes[n]*1.03:null };
 }
 
+// Strategy 8: MACD Crossover — Varsity M2 Ch 15
+// Signal line crossover + histogram reversal + zero-line confirmation
+function stratMACDCrossover(candles) {
+  const closes = candles.map(c=>c.close);
+  const n = closes.length-1;
+  if (n < 35) return { score:0, signal:'NEUTRAL', detail:'Not enough data', strategy:'MACD_CROSSOVER' };
+
+  const calcEma = (arr, p) => { const k=2/(p+1); let e=arr[0]; return arr.map(v=>{e=v*k+e*(1-k);return e;}); };
+  const e12 = calcEma(closes, 12), e26 = calcEma(closes, 26);
+  const macdLine   = e12.map((v,i)=>v-e26[i]);
+  const sigLine    = calcEma(macdLine, 9);
+  const hist       = macdLine.map((v,i)=>v-sigLine[i]);
+
+  const macdNow  = macdLine[n], sigNow  = sigLine[n], histNow  = hist[n];
+  const macdPrev = macdLine[n-1], sigPrev = sigLine[n-1], histPrev = hist[n-1];
+
+  // Bullish crossover: MACD crossed above signal
+  const bullCross = macdPrev < sigPrev && macdNow > sigNow;
+  // Bearish crossover
+  const bearCross = macdPrev > sigPrev && macdNow < sigNow;
+  // Histogram reversal (momentum shift)
+  const histBullRev = histPrev < histNow && histNow < 0; // histogram rising from negative
+  const histBearRev = histPrev > histNow && histNow > 0;
+  // Zero-line cross (trend confirmation)
+  const aboveZero = macdNow > 0;
+
+  let score=0, detail=`MACD: ${macdNow.toFixed(2)} Sig: ${sigNow.toFixed(2)} `;
+  if (bullCross)    { score+=4; detail+='BULLISH CROSSOVER '; }
+  if (bearCross)    { score-=4; detail+='BEARISH CROSSOVER '; }
+  if (histBullRev)  { score+=2; detail+='Histogram reversing up '; }
+  if (histBearRev)  { score-=2; detail+='Histogram reversing down '; }
+  if (aboveZero)    { score+=1; detail+='Above zero (bullish trend) '; }
+  else              { score-=1; detail+='Below zero (bearish trend) '; }
+
+  const rsiArr = rsi(closes, 14);
+  if (score>0 && rsiArr[n]>70) { score-=2; detail+='RSI overbought caution '; }
+
+  const sl  = score>=4 ? closes[n]*0.985 : null;
+  const tgt = score>=4 ? closes[n]*1.03  : null;
+  return { score, signal:score>=4?'BUY':score<=-4?'SELL':'NEUTRAL', detail, strategy:'MACD_CROSSOVER', sl, tgt };
+}
+
 // ===============================================================================
-// -- STRATEGY SELECTOR (the brain) ---------------------------------------------
+// -- STRATEGY SELECTOR (the brain) — with multi-timeframe confirmation ----------
+// Varsity M2 Ch 18: intraday signal + daily trend = higher conviction
 // ===============================================================================
 
-function selectAndRunStrategy(candles) {
+function selectAndRunStrategy(candles, dailyCandles=null) {
   const { regime, reason, confidence } = detectRegime(candles);
 
-  // Map regime to primary + secondary strategies
+  // Map regime to primary + secondary strategies — MACD added to TRENDING
   const strategyMap = {
-    TRENDING:  [stratEMACrossover, stratSupertrend,         stratVWAPMomentum],
+    TRENDING:  [stratEMACrossover, stratMACDCrossover,        stratSupertrend],
     RANGING:   [stratRSIMeanReversion, stratBollingerSqueeze, stratVWAPMomentum],
-    BREAKOUT:  [stratBollingerSqueeze, stratVolumeSpike,    stratEMACrossover],
-    MOMENTUM:  [stratVWAPMomentum, stratOpeningRange,       stratVolumeSpike],
-    UNKNOWN:   [stratEMACrossover, stratRSIMeanReversion,   stratVWAPMomentum],
+    BREAKOUT:  [stratBollingerSqueeze, stratVolumeSpike,      stratEMACrossover],
+    MOMENTUM:  [stratVWAPMomentum, stratOpeningRange,         stratMACDCrossover],
+    UNKNOWN:   [stratEMACrossover, stratRSIMeanReversion,     stratVWAPMomentum],
   };
 
   const strategies = strategyMap[regime] || strategyMap.UNKNOWN;
@@ -1062,10 +1308,20 @@ function selectAndRunStrategy(candles) {
   const results = strategies.map(fn => fn(candles));
 
   // Weighted combination - primary strategy gets 50%, others 25% each
-  const weightedScore =
+  let weightedScore =
     results[0].score * 0.50 +
     (results[1]?.score||0) * 0.30 +
     (results[2]?.score||0) * 0.20;
+
+  // Multi-timeframe confirmation — Varsity M2 Ch 18
+  // Daily trend bullish + intraday BUY = higher conviction (+30%)
+  // Daily trend bearish + intraday BUY = lower conviction (-30%)
+  let mtfConfirmation = null;
+  if (dailyCandles) {
+    const dailyBull = dailyTrendBullish(dailyCandles);
+    if (dailyBull === true)  { weightedScore *= 1.3; mtfConfirmation = 'daily_bullish'; }
+    if (dailyBull === false) { weightedScore *= 0.7; mtfConfirmation = 'daily_bearish'; }
+  }
 
   // Consensus: at least 2 of 3 strategies must agree
   const buyVotes  = results.filter(r => r.signal==="BUY").length;
@@ -1077,16 +1333,17 @@ function selectAndRunStrategy(candles) {
 
   return {
     regime, reason, confidence,
-    strategy:     primaryResult.strategy,
-    allStrategies:results.map(r=>r.strategy).join("+"),
-    score:        +weightedScore.toFixed(2),
+    strategy:         primaryResult.strategy,
+    allStrategies:    results.map(r=>r.strategy).join("+"),
+    score:            +weightedScore.toFixed(2),
     consensus,
-    signal:       consensus,
+    signal:           consensus,
     detail,
-    sl:           primaryResult.sl,
-    tgt:          primaryResult.tgt,
+    sl:               primaryResult.sl,
+    tgt:              primaryResult.tgt,
     buyVotes,
     sellVotes,
+    mtfConfirmation,
   };
 }
 
@@ -1095,14 +1352,27 @@ function selectAndRunStrategy(candles) {
 // ===============================================================================
 
 const CONFIG = {
-  BUY_SCORE:        2.5,
-  SELL_SCORE:      -2.0,
-  CONSENSUS_NEEDED: 2,
-  CAPITAL_PER_TRADE:7500,
-  MAX_POSITIONS:    10,   // increased from 3 to 10
-  DEFAULT_SL_PCT:   1.5,
-  DEFAULT_TGT_PCT:  3.0,
-  SCAN_DELAY_MS:    250,  // faster scan - 250ms between stocks
+  BUY_SCORE:          2.5,
+  SELL_SCORE:        -2.0,
+  CONSENSUS_NEEDED:   2,
+  // Varsity M9: volatility-based position sizing replaces fixed amount
+  ACCOUNT_SIZE:       100000,  // ₹1 lakh paper trading account
+  RISK_PCT_PER_TRADE: 0.02,    // 2% max risk per trade (Varsity M9 Ch 11)
+  MIN_RISK_PCT:       0.005,   // 0.5% floor
+  MAX_RISK_PCT:       0.03,    // 3% ceiling (half-Kelly floor)
+  MAX_POSITIONS:      10,
+  // ATR-based stops — Varsity M9 Ch 11
+  ATR_MULT: { TRENDING:2.5, RANGING:1.5, BREAKOUT:2.0, MOMENTUM:2.0, UNKNOWN:2.0 },
+  RISK_REWARD:        2.0,     // Varsity: minimum acceptable R:R
+  // Portfolio risk limits
+  MAX_SECTOR_POSITIONS: 3,     // Varsity M9 Ch 8: concentration limit
+  MAX_CORRELATION:    0.7,     // Varsity M9 Ch 4: skip if >70% correlated with existing
+  MAX_PORTFOLIO_BETA: 1.5,
+  // Drawdown circuit breaker — Varsity M9 Ch 6
+  DD_REDUCE_PCT:  0.10,  // reduce size 50% at 10% drawdown
+  DD_PAUSE_PCT:   0.15,  // pause new entries at 15%
+  DD_HALT_PCT:    0.20,  // halt all trading at 20%
+  SCAN_DELAY_MS:  250,
 };
 
 function isMarketOpen() {
@@ -1112,6 +1382,142 @@ function isMarketOpen() {
 }
 
 const delay = ms => new Promise(r=>setTimeout(r,ms));
+
+// ===============================================================================
+// PHASE 3: RISK MANAGEMENT — Varsity Module 9
+// ===============================================================================
+
+// ATR-based position sizing — Varsity M9 Ch 11-13
+// Position Size = (Account × Risk%) / (ATR × ATR_multiplier)
+function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, kellyRisk=null) {
+  const equity   = accountEquity || CONFIG.ACCOUNT_SIZE;
+  const riskPct  = kellyRisk || CONFIG.RISK_PCT_PER_TRADE;
+  const riskAmt  = equity * Math.min(Math.max(riskPct, CONFIG.MIN_RISK_PCT), CONFIG.MAX_RISK_PCT);
+  const mult     = CONFIG.ATR_MULT[regime] || CONFIG.ATR_MULT.UNKNOWN;
+  const stopDist = Math.max(atrValue * mult, entryPrice * 0.005); // min 0.5% stop
+  const stopLoss = entryPrice - stopDist;
+  const target   = entryPrice + stopDist * CONFIG.RISK_REWARD;
+  const shares   = Math.max(1, Math.floor(riskAmt / stopDist));
+  const capital  = shares * entryPrice;
+  return {
+    shares,
+    capital:  +capital.toFixed(0),
+    stopLoss: +stopLoss.toFixed(2),
+    target:   +target.toFixed(2),
+    atrStop:  +stopDist.toFixed(2),
+    riskAmt:  +riskAmt.toFixed(0),
+    riskPct:  CONFIG.RISK_PCT_PER_TRADE * 100,
+  };
+}
+
+// Kelly Criterion from paper trade history — Varsity M9 Ch 13
+async function computeKelly() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT pnl FROM paper_trades
+      WHERE status='CLOSED' AND pnl IS NOT NULL
+      ORDER BY exit_time DESC LIMIT 50
+    `);
+    if (rows.length < 10) return null;
+    const wins   = rows.filter(r=>parseFloat(r.pnl)>0);
+    const losses = rows.filter(r=>parseFloat(r.pnl)<=0);
+    const winRate = wins.length / rows.length;
+    const avgWin  = wins.reduce((s,r)=>s+parseFloat(r.pnl),0) / (wins.length||1);
+    const avgLoss = Math.abs(losses.reduce((s,r)=>s+parseFloat(r.pnl),0) / (losses.length||1));
+    if (avgLoss === 0) return null;
+    const kelly = winRate - ((1-winRate) / (avgWin/avgLoss));
+    return Math.min(Math.max(kelly * 0.5, CONFIG.MIN_RISK_PCT), CONFIG.MAX_RISK_PCT); // half-Kelly, clamped
+  } catch(e) { return null; }
+}
+
+// Correlation guard — Varsity M9 Ch 4-5
+// Returns true if new stock is too correlated with existing positions
+async function isTooCorrelated(sym, openPositions) {
+  if (!openPositions || openPositions.length === 0) return false;
+  try {
+    const newCandles = stockFundamentals[sym];
+    if (!newCandles) return false;
+    for (const pos of openPositions) {
+      const posF = stockFundamentals[pos.symbol];
+      if (!posF) continue;
+      // Same sector = likely correlated — simple proxy
+      if ((newCandles.sector||'') === (posF.sector||'') && newCandles.sector) {
+        const sectorCount = openPositions.filter(p=>stockFundamentals[p.symbol]?.sector===newCandles.sector).length;
+        if (sectorCount >= CONFIG.MAX_SECTOR_POSITIONS) return true;
+      }
+    }
+    return false;
+  } catch(e) { return false; }
+}
+
+// Drawdown circuit breaker — Varsity M9 Ch 6
+let _peakEquity = CONFIG.ACCOUNT_SIZE;
+let _ddPaused   = false;
+async function checkDrawdownCircuitBreaker() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT COALESCE(SUM(pnl),0) as total_pnl FROM paper_trades WHERE status='CLOSED'
+    `);
+    const totalPnl  = parseFloat(rows[0]?.total_pnl || 0);
+    const equity    = CONFIG.ACCOUNT_SIZE + totalPnl;
+    _peakEquity     = Math.max(_peakEquity, equity);
+    const drawdown  = (_peakEquity - equity) / _peakEquity;
+
+    if (drawdown >= CONFIG.DD_HALT_PCT) {
+      console.log(`🛑 Drawdown ${(drawdown*100).toFixed(1)}% — HALTING all trading`);
+      _ddPaused = true;
+      return { action:'HALT', drawdown, equity };
+    }
+    if (drawdown >= CONFIG.DD_PAUSE_PCT) {
+      console.log(`⚠ Drawdown ${(drawdown*100).toFixed(1)}% — pausing new entries`);
+      _ddPaused = true;
+      return { action:'PAUSE', drawdown, equity };
+    }
+    if (drawdown >= CONFIG.DD_REDUCE_PCT) {
+      _ddPaused = false;
+      return { action:'REDUCE_SIZE', drawdown, equity, sizeMult:0.5 };
+    }
+    _ddPaused = false;
+    return { action:'NORMAL', drawdown, equity, sizeMult:1.0 };
+  } catch(e) { return { action:'NORMAL', drawdown:0, equity:CONFIG.ACCOUNT_SIZE, sizeMult:1.0 }; }
+}
+
+// Portfolio Sharpe/Sortino/Stats — Varsity M9 Ch 10
+async function computePortfolioStats() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT pnl, pnl_pct, entry_time, exit_time FROM paper_trades
+      WHERE status='CLOSED' AND pnl IS NOT NULL ORDER BY exit_time
+    `);
+    if (rows.length < 5) return null;
+    const returns = rows.map(r=>parseFloat(r.pnl_pct||0)/100);
+    const n = returns.length;
+    const avg = returns.reduce((a,b)=>a+b,0)/n;
+    const rfr = 0.065/252; // 6.5% annual risk-free rate, daily
+    const excess = returns.map(r=>r-rfr);
+    const std = Math.sqrt(excess.reduce((a,r)=>a+(r-avg)**2,0)/n);
+    const downside = Math.sqrt(excess.filter(r=>r<0).reduce((a,r)=>a+r**2,0)/n);
+    const wins = returns.filter(r=>r>0);
+    const losses = returns.filter(r=>r<=0);
+    const grossWins = wins.reduce((a,b)=>a+b,0);
+    const grossLoss = Math.abs(losses.reduce((a,b)=>a+b,0));
+    // Max drawdown
+    let peak=0, maxDD=0, running=0;
+    for(const r of returns){ running+=r; peak=Math.max(peak,running); maxDD=Math.max(maxDD,peak-running); }
+    return {
+      trades:       n,
+      winRate:      +(wins.length/n*100).toFixed(1),
+      avgReturn:    +(avg*100).toFixed(2),
+      sharpe:       std>0 ? +(avg/std*Math.sqrt(252)).toFixed(2) : 0,
+      sortino:      downside>0 ? +(avg/downside*Math.sqrt(252)).toFixed(2) : 0,
+      maxDrawdown:  +(maxDD*100).toFixed(1),
+      profitFactor: grossLoss>0 ? +(grossWins/grossLoss).toFixed(2) : null,
+      avgWin:       wins.length ? +(wins.reduce((a,b)=>a+b,0)/wins.length*100).toFixed(2) : 0,
+      avgLoss:      losses.length ? +(losses.reduce((a,b)=>a+b,0)/losses.length*100).toFixed(2) : 0,
+      expectancy:   +((avg)*100).toFixed(2),
+    };
+  } catch(e) { return null; }
+}
 
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
@@ -1123,6 +1529,18 @@ async function scanAndTrade() {
   const { rows: openTrades } = await pool.query("SELECT * FROM paper_trades WHERE status='OPEN'");
   let signalCount=0, dominantRegime="UNKNOWN", dominantStrategy="NONE";
   const regimeCounts={};
+
+  // Phase 3: Check drawdown circuit breaker before scanning
+  const ddStatus = await checkDrawdownCircuitBreaker();
+  if (ddStatus.action === 'HALT') {
+    console.log(`🛑 Trading halted — drawdown ${(ddStatus.drawdown*100).toFixed(1)}% exceeds ${CONFIG.DD_HALT_PCT*100}% limit`);
+    return;
+  }
+  const sizeMult = ddStatus.action === 'REDUCE_SIZE' ? 0.5 : 1.0;
+  const canEnterNew = ddStatus.action !== 'PAUSE' && ddStatus.action !== 'HALT';
+
+  // Phase 3: Kelly-based risk sizing
+  const kellyRisk = await computeKelly();
 
   for (const stock of UNIVERSE) {
     try {
@@ -1138,25 +1556,55 @@ async function scanAndTrade() {
       const last = candles[candles.length-1];
       livePrices[stock.sym] = { price:last.close, open:last.open, high:last.high, low:last.low, volume:last.volume };
 
+      // Daily candles for multi-timeframe confirmation
+      const dailyF = stockFundamentals[stock.sym];
+      const dailyTrend = dailyF ? (last.close > (dailyF.dma200||0) ? 'bullish' : 'bearish') : 'unknown';
+
       // Run smart strategy selection
       const result = selectAndRunStrategy(candles);
+
+      // Multi-timeframe conviction adjustment — Varsity M2 Ch 18
+      if (dailyTrend === 'bearish' && result.signal === 'BUY') {
+        result.score = result.score * 0.7; // reduce conviction by 30% when daily trend opposes
+        result.detail = (result.detail||'') + ' [MTF: bearish daily trend reduces conviction]';
+      }
 
       // Track dominant regime across all stocks
       regimeCounts[result.regime]=(regimeCounts[result.regime]||0)+1;
 
-      const openPos = openTrades.find(t=>t.symbol===stock.sym);
+      const openPos = openTrades.find(t=>t.symbol===stock.sym&&t.status==='OPEN');
 
       if (openPos) {
-        // -- Check exit --
-        const cmp   = last.close;
-        const hitSL = cmp <= parseFloat(openPos.stop_loss);
-        const hitTgt= cmp >= parseFloat(openPos.target);
+        const cmp = last.close;
+        const sl  = parseFloat(openPos.stop_loss);
+        const tgt = parseFloat(openPos.target);
+        const entryPrice = parseFloat(openPos.price);
+
+        // Phase 3: Trailing stop — once 1 ATR in profit, trail at 1.5 ATR from high
+        const highs = candles.slice(-14).map(c=>c.high);
+        const lows  = candles.slice(-14).map(c=>c.low);
+        const trs   = highs.map((h,i)=>h-lows[i]);
+        const atr   = trs.reduce((a,b)=>a+b,0)/trs.length;
+        const atrMult = CONFIG.ATR_MULT[result.regime]||2.0;
+        const profit = cmp - entryPrice;
+        let trailSL = sl;
+        if (profit > atr) { // trade is 1 ATR in profit — activate trailing stop
+          const trailLevel = cmp - (atr * 1.5);
+          if (trailLevel > sl) {
+            trailSL = +trailLevel.toFixed(2);
+            await pool.query('UPDATE paper_trades SET stop_loss=$1 WHERE id=$2', [trailSL, openPos.id]);
+          }
+        }
+
+        const hitSL  = cmp <= Math.max(sl, trailSL);
+        const hitTgt = cmp >= tgt;
         const exitSig= result.signal==="SELL"&&result.buyVotes===0;
 
         if (hitSL||hitTgt||exitSig) {
-          const pnl    = +((cmp-openPos.price)*openPos.quantity).toFixed(2);
-          const pnlPct = +((cmp-openPos.price)/openPos.price*100).toFixed(2);
-          const reason = hitSL?"Stop Loss":hitTgt?"Target Hit":"Strategy Exit";
+          const pnl    = +((cmp-entryPrice)*openPos.quantity).toFixed(2);
+          const pnlPct = +((cmp-entryPrice)/entryPrice*100).toFixed(2);
+          const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":"Strategy Exit";
+          // Track MAE/MFE for Phase 6 accuracy tracking
           await pool.query(
             `UPDATE paper_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
             [cmp,pnl,pnlPct,reason,openPos.id]
@@ -1165,30 +1613,46 @@ async function scanAndTrade() {
           signalCount++;
         }
 
-      } else if (openTrades.filter(t=>t.status==="OPEN").length < CONFIG.MAX_POSITIONS
+      } else if (canEnterNew
+                 && openTrades.filter(t=>t.status==="OPEN").length < CONFIG.MAX_POSITIONS
                  && result.signal==="BUY"
                  && result.buyVotes >= CONFIG.CONSENSUS_NEEDED
                  && result.score >= CONFIG.BUY_SCORE) {
 
-        // -- Check entry --
-        const price  = last.close;
-        const qty    = Math.max(1,Math.floor(CONFIG.CAPITAL_PER_TRADE/price));
-        const sl     = result.sl || +(price*(1-CONFIG.DEFAULT_SL_PCT/100)).toFixed(2);
-        const tgt    = result.tgt|| +(price*(1+CONFIG.DEFAULT_TGT_PCT/100)).toFixed(2);
+        // Phase 3: Correlation guard — skip if too correlated with existing positions
+        const tooCorrrelated = await isTooCorrelated(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
+        if (tooCorrrelated) {
+          console.log(`  ⊘ SKIP ${stock.sym} — sector concentration limit reached`);
+          continue;
+        }
+
+        // Phase 3: ATR-based position sizing + Kelly
+        const price   = last.close;
+        const highs14 = candles.slice(-14).map(c=>c.high);
+        const lows14  = candles.slice(-14).map(c=>c.low);
+        const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
+        const { shares, stopLoss, target, capital } = computePositionSize(
+          price, atrVal, result.regime,
+          ddStatus.equity * sizeMult,
+          kellyRisk
+        );
+        const sl  = result.sl  || stopLoss;
+        const tgt = result.tgt || target;
+        const qty = shares;
 
         await pool.query(
           `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
            VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
-          [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),sl,tgt,
+          [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
            +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail]
         );
         openTrades.push({symbol:stock.sym,status:"OPEN"});
         dominantStrategy=result.strategy;
-        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | ${result.buyVotes}/3 agree`);
+        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl.toFixed(0)} | TGT:${tgt.toFixed(0)} | Qty:${qty}`);
         signalCount++;
       }
 
-      await delay(CONFIG.SCAN_DELAY_MS); // Kite rate limit
+      await delay(CONFIG.SCAN_DELAY_MS);
     } catch(e) {
       console.error(`  ✗ ${stock.sym}: ${e.message}`);
       if (e.message && e.message.includes('api_key')) tokenValid = false;
@@ -3793,191 +4257,230 @@ function scoreOneStock(f, peers) {
   const pr = (val,key,hb=true) => pctRankStk(val, peers.map(p=>p[key]).filter(v=>v!=null&&isFinite(v)), hb);
   const px = f.price || livePrices[f.sym]?.price;
 
-  // -- PILLAR 1: BUSINESS QUALITY (35 pts) -------------------------------------
-  // Varsity: ROE is the #1 quality signal. D/E + interest coverage = safety.
-  // CFO quality + operating margin = earnings reliability.
+  // Detect banking/NBFC sector — different valuation metrics apply
+  const isBanking = /bank|nbfc|finance|financi/i.test(f.sector||'');
+  const isIT      = /software|it |information tech|tech mahindra|infosys|wipro|hcl|tcs/i.test((f.sector||'')+(f.name||''));
+  const isCement  = /cement/i.test(f.sector||'');
 
-  // ROE — Varsity: >15% = good, >20% = excellent (10 pts)
+  // -- PILLAR 1: BUSINESS QUALITY (35 pts) -------------------------------------
+  // Varsity M3: ROE is #1 quality signal. ROCE = capital efficiency.
+
+  // ROE — Varsity: >15% = good, >20% = excellent (8 pts)
   if(na(f.roe)){
-    const pp = f.roe>=20?10 : f.roe>=15?8 : f.roe>=12?5 : f.roe>=8?2 : 0;
+    const pp = f.roe>=20?8 : f.roe>=15?6 : f.roe>=12?4 : f.roe>=8?2 : 0;
     s+=pp; hits[`ROE: ${f.roe.toFixed(1)}%`]=pp;
+  }
+
+  // ROCE — Varsity M3 Ch 8: "#1 capital efficiency metric, >15% = generating real returns"
+  // Estimated from available data if direct value not present
+  const roce = f.roce ?? (na(f.roe) && na(f.debtToEq) ? f.roe * (1 + f.debtToEq) : null);
+  if(na(roce)){
+    const pp = roce>=20?6 : roce>=15?4 : roce>=10?2 : 0;
+    s+=pp; hits[`ROCE: ${roce.toFixed(1)}% (capital efficiency)`]=pp;
+  }
+
+  // DuPont ROE Decomposition — Varsity M3 Ch 8
+  // ROE = Net Margin × Asset Turnover × Equity Multiplier
+  // Leverage-led ROE (D/E>2) is fragile — penalise
+  if(na(f.roe) && f.roe>15 && na(f.debtToEq) && f.debtToEq>2) {
+    const penalty = -3;
+    s+=penalty; hits[`⚠ ROE is leverage-led (D/E ${f.debtToEq.toFixed(1)}x) — fragile quality`]=penalty;
   }
 
   // D/E Ratio — Varsity: <0.5=safe, >2=concern (8 pts)
   if(na(f.debtToEq)){
-    const pp = f.debtToEq<=0.3?8 : f.debtToEq<=0.7?6 : f.debtToEq<=1.5?3 : f.debtToEq<=3?1 : 0;
-    s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp;
+    const pp = isBanking ? 0 // Banks use leverage by design — skip D/E for them
+      : f.debtToEq<=0.3?8 : f.debtToEq<=0.7?6 : f.debtToEq<=1.5?3 : f.debtToEq<=3?1 : 0;
+    if(!isBanking){ s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp; }
   }
 
-  // Operating Margin — sector-relative percentile (Varsity: compare to peers) (6 pts)
+  // Operating Margin — sector-relative percentile (5 pts)
   if(na(f.opMargin)){
     const peerPct = pr(f.opMargin,'opMargin',true);
-    const pp = peerPct>=80?6 : peerPct>=60?5 : peerPct>=40?3 : peerPct>=20?1 : 0;
+    const pp = peerPct>=80?5 : peerPct>=60?4 : peerPct>=40?2 : peerPct>=20?1 : 0;
     s+=pp; hits[`Op Margin: ${f.opMargin.toFixed(1)}% (top ${(100-peerPct).toFixed(0)}% in sector)`]=pp;
   }
 
-  // EPS Growth — Varsity: growth validates business quality (7 pts)
+  // EPS Growth — multi-year consistency (Varsity M3 Ch 13) (7 pts)
   if(na(f.earGrowth) && f.earGrowth<500){
-    const pp = f.earGrowth>=25?7 : f.earGrowth>=15?5 : f.earGrowth>=8?3 : f.earGrowth>=0?1 : 0;
-    s+=pp; hits[`EPS Growth: ${f.earGrowth.toFixed(1)}%`]=pp;
+    const pp = f.earGrowth>=25?5 : f.earGrowth>=15?4 : f.earGrowth>=8?2 : f.earGrowth>=0?1 : 0;
+    s+=pp; hits[`EPS Growth 1Y: ${f.earGrowth.toFixed(1)}%`]=pp;
+
+    // Growth consistency bonus — both 1Y and 5Y strong = compounding quality
+    if(na(f.epsGr5y) && f.epsGr5y>10 && f.earGrowth>10){
+      s+=3; hits[`Growth consistency: 1Y ${f.earGrowth.toFixed(0)}% + 5Y ${f.epsGr5y.toFixed(0)}% both strong`]=3;
+    }
+    // Cyclical spike penalty — 1Y looks great but 5Y poor = one-time, not structural
+    if(na(f.epsGr5y) && f.earGrowth>30 && f.epsGr5y<5){
+      s-=2; hits[`⚠ Cyclical spike: 1Y ${f.earGrowth.toFixed(0)}% but 5Y only ${f.epsGr5y.toFixed(0)}%`]=-2;
+    }
   }
 
-  // Revenue Growth — Varsity: top line growth = business expanding (4 pts)
-  if(na(f.revGrowth) && f.revGrowth<300){
-    const pp = f.revGrowth>=20?4 : f.revGrowth>=12?3 : f.revGrowth>=6?2 : f.revGrowth>=0?1 : 0;
-    s+=pp; hits[`Revenue Growth: ${f.revGrowth.toFixed(1)}%`]=pp;
+  // ROE consistency — improving trend is best (Varsity M3 Ch 13) (3 pts)
+  if(na(f.roe) && na(f.roe3yAvg)){
+    if(f.roe > f.roe3yAvg + 2) { s+=2; hits[`ROE improving: ${f.roe3yAvg.toFixed(0)}% → ${f.roe.toFixed(0)}%`]=2; }
+    if(f.roe5yAvg && f.roe > f.roe5yAvg + 3) { s+=1; hits[`ROE 5Y improving trend`]=1; }
+    if(f.roe < f.roe3yAvg - 3) { s-=2; hits[`⚠ ROE deteriorating: ${f.roe3yAvg.toFixed(0)}% → ${f.roe.toFixed(0)}%`]=-2; }
+  }
 
-    // Operating Leverage bonus — Varsity: EPS growing faster than revenue = margin expansion
-    if(na(f.earGrowth) && f.earGrowth > f.revGrowth + 5){
-      s+=2; hits['Operating leverage: EPS outpacing revenue']=2;
+  // Revenue Growth (3 pts)
+  if(na(f.revGrowth) && f.revGrowth<300){
+    const pp = f.revGrowth>=20?3 : f.revGrowth>=12?2 : f.revGrowth>=6?1 : f.revGrowth>=0?0 : 0;
+    if(pp>0){ s+=pp; hits[`Revenue Growth: ${f.revGrowth.toFixed(1)}%`]=pp; }
+    // Operating leverage
+    if(na(f.earGrowth) && f.earGrowth > f.revGrowth+5){ s+=2; hits['Operating leverage: EPS > Revenue growth']=2; }
+  }
+
+  // Sector-specific KPI — Varsity Module 15
+  if(isBanking){
+    // NIM proxy: ROA > 1% = healthy bank
+    if(na(f.roa)){
+      const pp = f.roa>=2?4 : f.roa>=1?3 : f.roa>=0.5?1 : 0;
+      s+=pp; hits[`ROA (bank proxy): ${f.roa.toFixed(2)}% ${f.roa<0.5?'⚠ poor':''}` ]=pp;
+    }
+    // P/BV replaces P/E for banking valuation
+    if(na(f.pb)){
+      const peerPct = pr(f.pb,'pb',false);
+      const pp = peerPct>=70?4 : peerPct>=50?2 : 0;
+      if(pp){ s+=pp; hits[`P/BV: ${f.pb.toFixed(2)}x (banking — cheaper than ${peerPct.toFixed(0)}% peers)`]=pp; }
     }
   }
 
   // -- PILLAR 2: TREND (25 pts) -------------------------------------------------
-  // Varsity: "200 DMA is the line of truth for long-term investors"
-  // Dow Theory: price above 200DMA = bullish primary trend
+  // Varsity: "200 DMA is the line of truth"
 
-  // Above 200 DMA — Varsity: most important technical signal (8 pts)
+  // Above 200 DMA (8 pts)
   if(na(px)&&na(f.dma200)){
-    const above=px>f.dma200;
     const pct200=((px-f.dma200)/f.dma200*100);
-    let pp;
-    if(!above)           pp=0;                          // below 200DMA = bearish
-    else if(pct200<=25)  pp=8;                          // above but not overextended
-    else                 pp=4;                          // overextended = chasing
+    const above=px>f.dma200;
+    const pp = !above?0 : pct200<=25?8 : 4;
     s+=pp; hits[`200DMA: ${above?'Above':'Below'} (${pct200>=0?'+':''}${pct200.toFixed(1)}%)`]=pp;
   }
 
-  // Golden Cross / Death Cross — Varsity: 50/200 crossover = trend confirmation (7 pts)
+  // Golden Cross / Death Cross (7 pts)
   if(f.goldenCross!=null){
     const pp=f.goldenCross?7:0; s+=pp;
     hits[f.goldenCross?'Golden Cross (50>200 DMA)':'Death Cross (50<200 DMA)']=pp;
   }
 
-  // Above 50 DMA — medium-term trend (4 pts)
+  // Above 50 DMA (4 pts)
   if(na(px)&&na(f.dma50)){
-    const a50=px>f.dma50;
-    const pp=a50?4:0; s+=pp;
-    hits[`50DMA: ${a50?'Above':'Below'}`]=pp;
+    const pp=px>f.dma50?4:0; s+=pp;
+    hits[`50DMA: ${px>f.dma50?'Above':'Below'}`]=pp;
   }
 
-  // Supertrend signal (3 pts)
+  // Supertrend (3 pts)
   if(f.supertrendSig){
     const pp=f.supertrendSig==='bullish'?3:0; s+=pp;
     if(pp||f.supertrendSig==='bearish') hits[`Supertrend: ${f.supertrendSig}`]=pp;
   }
 
-  // RSI Divergence — Varsity: "strongest reversal signal on Fallen Angels" (3 pts)
-  // Bullish divergence: price lower low but RSI higher low = selling exhaustion
-  if(f.bullishDiv){
-    s+=3; hits['RSI Bullish Divergence (strongest reversal signal)']=3;
+  // RSI Divergence (3 pts)
+  if(f.bullishDiv){ s+=3; hits['RSI Bullish Divergence (strongest reversal signal)']=3; }
+
+  // Candlestick patterns — add confirmation bonus (Varsity M2: patterns need context)
+  if(f.candlePatterns && f.candlePatterns.length>0){
+    const bullPatterns = f.candlePatterns.filter(p=>p.type==='bullish');
+    const bearPatterns = f.candlePatterns.filter(p=>p.type==='bearish');
+    const maxRel = bullPatterns.length ? Math.max(...bullPatterns.map(p=>p.reliability)) : 0;
+    if(maxRel>=3){ s+=2; hits[`${bullPatterns[0].pattern} (reliability: ${maxRel}/3)`]=2; }
+    if(maxRel===2){ s+=1; hits[`${bullPatterns[0].pattern} (reliability: ${maxRel}/3)`]=1; }
+    if(bearPatterns.length && Math.max(...bearPatterns.map(p=>p.reliability))>=3){ s-=2; hits[`Bearish: ${bearPatterns[0].pattern}`]=-2; }
   }
 
   // -- PILLAR 3: MOMENTUM (10 pts) ---------------------------------------------
-  // Varsity: momentum = rate of price change; combine with volume for confirmation
 
-  // RSI zone — Varsity: 40-65 = healthy trend (4 pts)
+  // RSI zone (4 pts)
   if(na(f.rsi)){
     const pp = f.rsi>=40&&f.rsi<=65?4 : f.rsi>=35&&f.rsi<=70?3 : f.rsi<35?2 : 0;
-    // Note: RSI<30 gets 2 pts (oversold = Fallen Angel entry per Varsity)
     s+=pp; hits[`RSI: ${f.rsi.toFixed(0)} ${f.rsi<30?'(oversold)':f.rsi>70?'(overbought)':''}`]=pp;
   }
 
-  // Volume confirmation — Varsity: "volume is the fuel of price movement" (3 pts)
-  // OBV rising = institutional accumulation (stealth buying)
-  if(f.obvRising!=null){
-    const pp=f.obvRising?2:0; if(pp){s+=pp; hits[`OBV: ${f.obvRising?'Rising (accumulation)':'Falling'}`]=pp;}
-  }
-  if(na(f.volRatio)){
-    const pp=f.volRatio>1.5?1:0; if(pp){s+=pp; hits[`Volume spike: ${f.volRatio.toFixed(2)}x avg`]=pp;}
-  }
+  // Volume / OBV (3 pts)
+  if(f.obvRising!=null){ const pp=f.obvRising?2:0; if(pp){s+=pp; hits[`OBV: Rising (accumulation)`]=pp;} }
+  if(na(f.volRatio)&&f.volRatio>1.5){ s+=1; hits[`Volume spike: ${f.volRatio.toFixed(2)}x avg`]=1; }
 
-  // MACD — Varsity: "MACD bullish crossover = momentum building" (3 pts)
-  if(f.macdBull!=null){
-    const pp=f.macdBull?3:0; s+=pp;
-    hits[`MACD: ${f.macdBull?'Bullish crossover':'Bearish'}`]=pp;
+  // MACD (3 pts)
+  if(f.macdBull!=null){ const pp=f.macdBull?3:0; s+=pp; hits[`MACD: ${f.macdBull?'Bullish':'Bearish'}`]=pp; }
+
+  // ADX trend strength — Varsity M2 Ch 21: +DI > -DI = bullish trend direction (2 pts bonus)
+  if(na(f.adxPdi) && na(f.adxNdi)){
+    if(f.adxPdi>f.adxNdi && f.adx>25){ s+=2; hits[`ADX: +DI(${f.adxPdi.toFixed(0)}) > -DI(${f.adxNdi.toFixed(0)}) trending bullish`]=2; }
+    if(f.adxNdi>f.adxPdi && f.adx>25){ s-=1; hits[`ADX: -DI(${f.adxNdi.toFixed(0)}) > +DI(${f.adxPdi.toFixed(0)}) bearish trend`]=-1; }
   }
 
   // -- PILLAR 4: VALUATION (20 pts) --------------------------------------------
-  // Varsity: "valuation ratios need peer comparison to be meaningful"
-  // P/E, P/BV, PEG all sector-percentile ranked — not absolute thresholds
 
-  // P/E — sector-percentile ranked (Varsity: compare to same-sector peers) (8 pts)
-  if(na(f.pe)&&f.pe>0&&f.pe<400){
-    const peerPct = pr(f.pe,'pe',false); // lower P/E = better rank
+  // P/E — sector-percentile ranked (8 pts) — skip for banking (use P/BV above)
+  if(!isBanking && na(f.pe)&&f.pe>0&&f.pe<400){
+    const peerPct = pr(f.pe,'pe',false);
     const pp = peerPct>=80?8 : peerPct>=60?6 : peerPct>=40?4 : peerPct>=20?2 : 0;
-    s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x (cheaper than ${peerPct.toFixed(0)}% of sector peers)`]=pp;
+    s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x (cheaper than ${peerPct.toFixed(0)}% of sector)`]=pp;
   }
 
-  // PEG — Varsity: "P/E without growth context is incomplete" (5 pts)
-  // PEG < 1 = growing faster than you're paying for
+  // PEG (5 pts)
   if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
     const peg=f.pe/f.earGrowth;
     const pp = peg<0.5?5 : peg<1?4 : peg<2?2 : peg<3?1 : 0;
-    s+=pp; hits[`PEG: ${peg.toFixed(2)} (${peg<1?'growth underpriced':'growth fairly/overpriced'})`]=pp;
+    s+=pp; hits[`PEG: ${peg.toFixed(2)} (${peg<1?'growth underpriced':'fairly/overpriced'})`]=pp;
   }
 
-  // PE/ROE — Varsity: quality-adjusted valuation (lower = better value per quality unit) (4 pts)
+  // Intrinsic Value — Varsity M3 / M13: PEG-based fair value estimate (5 pts)
+  // Fair PE = EPS Growth × 1.5 (modified PEG), Intrinsic Value = Fair PE × EPS
+  if(na(f.pe) && na(f.earGrowth) && f.earGrowth>0 && na(f.eps) && f.eps>0){
+    const fairPE = f.earGrowth * 1.5;
+    const intrinsic = fairPE * f.eps;
+    const mos = px ? (intrinsic - px) / intrinsic * 100 : null; // Margin of Safety
+    if(na(mos)){
+      if(mos>25)     { s+=5; hits[`MoS: ${mos.toFixed(0)}% below intrinsic value ₹${intrinsic.toFixed(0)}`]=5; }
+      else if(mos>10){ s+=2; hits[`MoS: ${mos.toFixed(0)}% — modest discount to intrinsic`]=2; }
+      else if(mos<-30){ s-=3; hits[`⚠ Overvalued: ${Math.abs(mos).toFixed(0)}% above intrinsic value ₹${intrinsic.toFixed(0)}`]=-3; }
+    }
+  }
+
+  // PE/ROE quality-adjusted valuation (3 pts)
   if(na(f.pe)&&f.pe>0&&na(f.roe)&&f.roe>0){
     const perRoe=f.pe/f.roe;
-    const pp = perRoe<1?4 : perRoe<2?3 : perRoe<3?2 : 0;
-    if(pp>0) { s+=pp; hits[`PE/ROE: ${perRoe.toFixed(2)} (quality-adjusted value)`]=pp; }
+    const pp = perRoe<1?3 : perRoe<2?2 : 0;
+    if(pp>0){ s+=pp; hits[`PE/ROE: ${perRoe.toFixed(2)} (quality-adjusted value)`]=pp; }
   }
 
-  // Discount from 52W high — Varsity: deeper fall = margin of safety (3 pts)
+  // Discount from 52W high (3 pts)
   if(na(f.pctFromHigh)){
     const d=Math.abs(f.pctFromHigh);
     const pp = d>=30?3 : d>=20?2 : d>=10?1 : 0;
     if(pp>0){ s+=pp; hits[`Discount from peak: ${f.pctFromHigh?.toFixed(1)}%`]=pp; }
   }
 
-  // -- HARD DISQUALIFIERS (Varsity: red flags that override good scores) --------
-  // Varsity Ch12: "If you find red flags, drop the stock regardless of attractiveness"
+  // -- HARD DISQUALIFIERS (Varsity M3 Ch 12 red flags) --------
 
-  // Interest Coverage — Varsity: "<1.5x = danger zone, barely covering interest payments"
-  // Now available directly from Screener.in
+  // Interest Coverage (Screener data)
   if(na(f.intCov)){
     if(f.intCov>=5)      { s+=4; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (comfortable)`]=4; }
     else if(f.intCov>=3) { s+=3; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (adequate)`]=3; }
     else if(f.intCov>=1.5){ s+=1; hits[`Interest Coverage: ${f.intCov.toFixed(1)}x (thin)`]=1; }
-    else { s-=5; hits[`⚠ Interest Coverage: ${f.intCov.toFixed(1)}x (DANGER ZONE — Varsity red flag)`]=-5; }
+    else { s-=5; hits[`⚠ Interest Coverage: ${f.intCov.toFixed(1)}x (DANGER — Varsity red flag)`]=-5; }
   }
 
-  // Promoter Holding — Varsity: "promoter stake declining = warning signal"
+  // Promoter data
   if(na(f.promoter)){
     const pp = f.promoter>=60?3 : f.promoter>=50?2 : f.promoter>=40?1 : 0;
     if(pp){ s+=pp; hits[`Promoter holding: ${f.promoter.toFixed(1)}%`]=pp; }
   }
-  // Pledged promoter shares — Varsity Ch12 red flag
-  if(na(f.pledged)&&f.pledged>30){
-    s-=5; hits[`⚠ Promoter pledged ${f.pledged.toFixed(1)}% (Varsity red flag)`]=-5;
-  }
-  // Promoter decreasing stake
-  if(na(f.promoterChg)&&f.promoterChg<-2){
-    s-=2; hits[`⚠ Promoter selling: ${f.promoterChg.toFixed(1)}% reduction`]=-2;
-  }
+  if(na(f.pledged)&&f.pledged>30){ s-=5; hits[`⚠ Promoter pledged ${f.pledged.toFixed(1)}% (red flag)`]=-5; }
+  if(na(f.promoterChg)&&f.promoterChg<-2){ s-=2; hits[`⚠ Promoter selling: ${f.promoterChg.toFixed(1)}%`]=-2; }
 
-  // P/BV — Varsity: "price to book is primary for banks; below 1 = deep value"
+  // P/BV
   if(na(f.pb)&&f.pb>0){
-    const peerPct = pr(f.pb,'pb',false); // lower = better
+    const peerPct = pr(f.pb,'pb',false);
     const pp = peerPct>=80?3 : peerPct>=60?2 : peerPct>=40?1 : 0;
     if(pp){ s+=pp; hits[`P/BV: ${f.pb.toFixed(2)}x (cheaper than ${peerPct.toFixed(0)}% of peers)`]=pp; }
   }
 
-  // EPS collapse — Varsity: collapsing earnings = value trap signal
-  if(na(f.earGrowth)&&f.earGrowth<-20){
-    s-=10; hits['⚠ EPS collapse (value trap signal)']=-10;
-  }
-
-  // Revenue collapse — Varsity: top line decline = structural problem
-  if(na(f.revGrowth)&&f.revGrowth<-15){
-    s-=8; hits['⚠ Revenue declining sharply']=-8;
-  }
-
-  // Extreme debt — Varsity: high leverage = bankruptcy risk in downturns
-  if(na(f.debtToEq)&&f.debtToEq>4){
-    s-=5; hits['⚠ Extreme leverage (D/E > 4x)']=-5;
-  }
+  // EPS / Revenue collapse penalties
+  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=10; hits['⚠ EPS collapse (value trap signal)']=-10; }
+  if(na(f.revGrowth)&&f.revGrowth<-15){ s-=8;  hits['⚠ Revenue declining sharply']=-8; }
+  if(na(f.debtToEq)&&f.debtToEq>4)   { s-=5;  hits['⚠ Extreme leverage (D/E > 4x)']=-5; }
 
   return { score: Math.min(Math.round(s*10)/10, 100), hits };
 }
@@ -5511,6 +6014,86 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
 
 
 // Aggregates paper trade signals + live prices into a ranked recommendation list
+// ===============================================================================
+// PHASE 4: COMPOSITE RANKING ENGINE — Varsity Module 10
+// Composite = FA(35%) + TA(25%) + Momentum(20%) + Risk(20%)
+// Conviction tiers: Strong Buy / Buy / Accumulate / Watch / Avoid
+// ===============================================================================
+
+function computeCompositeScore(f, taSignal) {
+  const na = v => v!=null&&isFinite(v);
+  const px = f.price || livePrices[f.sym]?.price;
+
+  // FA Score (0-100) — already computed as f.score
+  const faScore = Math.max(0, Math.min(100, f.score || 0));
+
+  // TA Score (0-100) — map signal score (-10..+10) → (0..100)
+  const rawTA    = taSignal?.score || 0;
+  const taScore  = Math.max(0, Math.min(100, (rawTA + 10) / 20 * 100));
+
+  // Momentum Score (0-100) — price momentum factor
+  let momentumScore = 50; // neutral base
+  if(na(f.change52w)) momentumScore += f.change52w * 30;     // 52W return (30%)
+  if(na(f.change6m))  momentumScore += f.change6m  * 30;     // 6M return (30%)
+  if(na(f.change1m))  momentumScore += f.change1m  * 20;     // 1M return (20%)
+  // Relative strength vs Nifty 50 (20%) — approximate via RSI
+  if(na(f.rsi)) momentumScore += (f.rsi - 50) * 0.4;
+  momentumScore = Math.max(0, Math.min(100, momentumScore));
+
+  // Risk Score (0-100) — lower risk = higher score
+  let riskScore = 70; // default moderate
+  if(na(f.beta))      riskScore -= f.beta * 15;         // high beta = higher risk
+  if(na(f.debtToEq))  riskScore -= f.debtToEq * 8;
+  if(na(f.pledged)&&f.pledged>20) riskScore -= f.pledged * 0.5;
+  if(f.goldenCross)   riskScore += 10;
+  riskScore = Math.max(0, Math.min(100, riskScore));
+
+  // Composite weighted score — Varsity M10
+  const composite = (faScore*0.35) + (taScore*0.25) + (momentumScore*0.20) + (riskScore*0.20);
+
+  // Conviction tier — Varsity M10 Ch 5
+  const abv200 = na(px)&&na(f.dma200) ? px > f.dma200 : false;
+  const healthyRSI = na(f.rsi) && f.rsi > 30 && f.rsi < 70;
+  const taBuy = taSignal?.signal === 'BUY';
+
+  let conviction, convColor, convIcon;
+  if(composite>75 && faScore>60 && taBuy && abv200 && healthyRSI) {
+    conviction='Strong Buy'; convColor='#10b981'; convIcon='🟢';
+  } else if(composite>60 && faScore>50) {
+    conviction='Buy';        convColor='#22c55e'; convIcon='🔵';
+  } else if(composite>50 && faScore>45) {
+    conviction='Accumulate'; convColor='#f59e0b'; convIcon='🟡';
+  } else if(composite>=40) {
+    conviction='Watch';      convColor='#94a3b8'; convIcon='⚪';
+  } else {
+    conviction='Avoid';      convColor='#ef4444'; convIcon='🔴';
+  }
+
+  return {
+    composite:     +composite.toFixed(1),
+    faScore:       +faScore.toFixed(1),
+    taScore:       +taScore.toFixed(1),
+    momentumScore: +momentumScore.toFixed(1),
+    riskScore:     +riskScore.toFixed(1),
+    conviction,
+    convColor,
+    convIcon,
+  };
+}
+
+// Build diversified recommendations — max 2 per sector, min 4 sectors — Varsity M9 Ch 8
+function buildDiversifiedRecs(scored, limit=10) {
+  const sectorCount = {};
+  const result = [];
+  for (const s of scored) {
+    const sector = s.sector || 'Other';
+    sectorCount[sector] = (sectorCount[sector]||0) + 1;
+    if (sectorCount[sector] <= 2) result.push(s);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
 app.get("/api/stocks/recommendations", async(req,res)=>{
   try {
     // Get recent signals - last 7 days of BUY signals with score >= 3
@@ -5606,6 +6189,185 @@ app.post("/reset-trades", async(req,res)=>{
     console.log("🗑️  Paper trades reset by user");
   } catch(e){ res.status(500).json({error:e.message}); }
 });
+
+// =============================================================================
+// PHASE 3: PORTFOLIO METRICS — Varsity M9 Ch 10
+// =============================================================================
+app.get("/paper-trades/stats", async(req,res)=>{
+  try {
+    const stats = await computePortfolioStats();
+    const dd    = await checkDrawdownCircuitBreaker();
+    const kelly = await computeKelly();
+    const { rows: open } = await pool.query("SELECT * FROM paper_trades WHERE status='OPEN'");
+    const openPnl = open.reduce((s,r)=>{
+      const cmp = livePrices[r.symbol]?.price || parseFloat(r.price);
+      return s + (cmp - parseFloat(r.price)) * parseInt(r.quantity);
+    }, 0);
+    res.json({
+      ...stats,
+      open_positions:  open.length,
+      open_pnl:        +openPnl.toFixed(2),
+      equity:          dd.equity,
+      drawdown_pct:    +(dd.drawdown*100).toFixed(1),
+      circuit_status:  dd.action,
+      kelly_risk_pct:  kelly ? +(kelly*100).toFixed(1) : null,
+      peak_equity:     _peakEquity,
+    });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// =============================================================================
+// PHASE 4: TIME-HORIZON RECOMMENDATIONS — Varsity M10 Ch 4
+// Three lists: Intraday (TA only) / Swing (TA+momentum) / Positional (FA-heavy)
+// =============================================================================
+app.get("/api/stocks/recommendations/swing", async(req,res)=>{
+  try {
+    // Swing: RSI oversold bounce + BB squeeze + 5-20DMA crossover — 1-4 week holds
+    const recs = Object.values(stockFundamentals)
+      .filter(f => f && f.price)
+      .map(f => {
+        const taScore = (
+          (f.rsi > 30 && f.rsi < 50 ? 30 : 0) +     // RSI recovering from oversold
+          (f.bbPct < 0.2 ? 20 : f.bbPct < 0.4 ? 10 : 0) + // near lower BB
+          (f.macdBull ? 20 : 0) +                    // MACD turning bullish
+          (f.obvRising ? 15 : 0) +                   // accumulation
+          (f.bullishDiv ? 15 : 0)                    // RSI divergence = strong reversal
+        );
+        const composite = computeCompositeScore(f, { signal:'BUY', score: taScore/10 });
+        return { ...f, swingScore: taScore, ...composite, horizon: 'swing' };
+      })
+      .filter(f => f.swingScore >= 40 && (f.score||0) >= 40) // quality + TA both needed
+      .sort((a,b) => b.composite - a.composite);
+    res.json({ recommendations: buildDiversifiedRecs(recs, 10), total: recs.length, horizon: 'swing' });
+  } catch(e){ res.status(500).json({error:e.message,recommendations:[]}); }
+});
+
+app.get("/api/stocks/recommendations/positional", async(req,res)=>{
+  try {
+    // Positional: FA-heavy composite + trend — 1-12 month holds
+    const recs = Object.values(stockFundamentals)
+      .filter(f => f && f.price && f.score >= 50) // quality gate
+      .map(f => {
+        const px = f.price;
+        const abv200 = px > (f.dma200||0);
+        const abv50  = px > (f.dma50||0);
+        const taBuy  = abv200 && f.goldenCross && f.macdBull;
+        const taSignal = { signal: taBuy ? 'BUY' : 'NEUTRAL', score: (abv200?3:0)+(abv50?2:0)+(f.goldenCross?3:0)+(f.macdBull?2:0) };
+        const composite = computeCompositeScore(f, taSignal);
+        return { ...f, ...composite, horizon: 'positional' };
+      })
+      .filter(f => f.composite >= 55)
+      .sort((a,b) => b.composite - a.composite);
+    res.json({ recommendations: buildDiversifiedRecs(recs, 15), total: recs.length, horizon: 'positional' });
+  } catch(e){ res.status(500).json({error:e.message,recommendations:[]}); }
+});
+
+// =============================================================================
+// PHASE 6: WALK-FORWARD BACKTESTER — Varsity M10 Ch 7-8
+// =============================================================================
+app.get("/api/backtest/results", async(req,res)=>{
+  try {
+    // Strategy performance from paper trade history
+    const { rows } = await pool.query(`
+      SELECT strategy, regime,
+        COUNT(*) as trades,
+        COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
+        SUM(pnl) as total_pnl,
+        AVG(pnl_pct) as avg_pnl_pct,
+        MAX(pnl_pct) as best_trade,
+        MIN(pnl_pct) as worst_trade,
+        AVG(EXTRACT(EPOCH FROM (exit_time - entry_time))/3600) as avg_hold_hours
+      FROM paper_trades
+      WHERE status='CLOSED' AND strategy IS NOT NULL AND pnl IS NOT NULL
+      GROUP BY strategy, regime
+      ORDER BY total_pnl DESC
+    `);
+
+    const results = rows.map(r => ({
+      strategy:       r.strategy,
+      regime:         r.regime,
+      trades:         parseInt(r.trades),
+      winRate:        +((r.wins/r.trades)*100).toFixed(1),
+      totalPnl:       +parseFloat(r.total_pnl).toFixed(2),
+      avgPnlPct:      +parseFloat(r.avg_pnl_pct).toFixed(2),
+      bestTrade:      +parseFloat(r.best_trade).toFixed(2),
+      worstTrade:     +parseFloat(r.worst_trade).toFixed(2),
+      avgHoldHours:   r.avg_hold_hours ? +parseFloat(r.avg_hold_hours).toFixed(1) : null,
+      // Disable if win rate < 45% or avg return negative — Varsity validation rule
+      status: (r.wins/r.trades < 0.45 || parseFloat(r.avg_pnl_pct) < 0) ? 'UNDERPERFORMING' : 'ACTIVE',
+    }));
+
+    // Overall portfolio stats
+    const stats = await computePortfolioStats();
+
+    res.json({ strategies: results, portfolio: stats, generated_at: new Date().toISOString() });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Strategy leaderboard — last 30 days performance
+app.get("/api/backtest/leaderboard", async(req,res)=>{
+  try {
+    const { rows } = await pool.query(`
+      SELECT strategy,
+        COUNT(*) as trades,
+        COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
+        SUM(pnl) as total_pnl,
+        AVG(pnl_pct) as avg_return
+      FROM paper_trades
+      WHERE status='CLOSED'
+        AND entry_time >= NOW() - INTERVAL '30 days'
+        AND strategy IS NOT NULL
+      GROUP BY strategy
+      ORDER BY total_pnl DESC
+    `);
+    res.json({ leaderboard: rows.map(r=>({
+      strategy: r.strategy,
+      trades: parseInt(r.trades),
+      winRate: +((r.wins/r.trades)*100).toFixed(1),
+      totalPnl: +parseFloat(r.total_pnl).toFixed(2),
+      avgReturn: +parseFloat(r.avg_return).toFixed(2),
+      rank: 0, // filled below
+    })).map((r,i)=>({...r,rank:i+1}))
+    });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Recommendation accuracy tracking — was the conviction right?
+app.get("/api/backtest/accuracy", async(req,res)=>{
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        CASE
+          WHEN signal_score >= 80 THEN 'Strong Buy'
+          WHEN signal_score >= 60 THEN 'Buy'
+          WHEN signal_score >= 50 THEN 'Accumulate'
+          ELSE 'Watch'
+        END as conviction,
+        COUNT(*) as total,
+        COUNT(CASE WHEN pnl > 0 THEN 1 END) as profitable,
+        AVG(pnl_pct) as avg_return,
+        AVG(CASE WHEN pnl > 0 THEN pnl_pct END) as avg_win,
+        AVG(CASE WHEN pnl <= 0 THEN pnl_pct END) as avg_loss,
+        MAX(pnl_pct) as mfe,
+        MIN(pnl_pct) as mae
+      FROM paper_trades
+      WHERE status='CLOSED' AND pnl IS NOT NULL
+      GROUP BY conviction
+      ORDER BY MIN(signal_score) DESC
+    `);
+    res.json({ accuracy: rows.map(r=>({
+      conviction:   r.conviction,
+      total:        parseInt(r.total),
+      hitRate:      +((r.profitable/r.total)*100).toFixed(1),
+      avgReturn:    +parseFloat(r.avg_return).toFixed(2),
+      avgWin:       r.avg_win ? +parseFloat(r.avg_win).toFixed(2) : null,
+      avgLoss:      r.avg_loss ? +parseFloat(r.avg_loss).toFixed(2) : null,
+      mfe:          r.mfe ? +parseFloat(r.mfe).toFixed(2) : null,
+      mae:          r.mae ? +parseFloat(r.mae).toFixed(2) : null,
+    }))});
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
 
 // -- Remove suspicious trades (P&L > 100% return = likely bad token) ----------
 app.post("/cleanup-trades", async(req,res)=>{
@@ -6087,8 +6849,9 @@ const MIROFISH_AGENTS = [
     persona: `You are a senior equity analyst at a top Indian brokerage with 20 years experience.
 You believe: businesses with strong ROE (>15%), low debt (D/E < 1), and growing EPS always recover.
 You distrust momentum. You trust balance sheets. You look for margin of safety.
-Sector expertise: Banking, FMCG, IT, Pharma.`,
-    weight: 0.25,
+Varsity framework: ROCE>15% = real capital efficiency. DuPont ROE = quality check. FCF>0 = earnings are real.
+Sector expertise: Banking (NIM/CAR), FMCG, IT (CC revenue), Pharma.`,
+    weight: 0.22,
   },
   {
     id: 'technician',
@@ -6096,8 +6859,9 @@ Sector expertise: Banking, FMCG, IT, Pharma.`,
     persona: `You are a CMT-certified technical analyst with 12 years on NSE.
 You believe: price action never lies. RSI divergence, volume accumulation, and 200DMA reclaim = recovery.
 You are skeptical of stocks below 200DMA with declining OBV regardless of fundamentals.
-You use: RSI, MACD, Supertrend, Fibonacci, volume profile.`,
-    weight: 0.20,
+You use: RSI, MACD, Supertrend, Fibonacci retracement levels, ADX +DI/-DI crossover, Ichimoku cloud.
+Multi-timeframe: daily trend must align with weekly trend before calling recovery.`,
+    weight: 0.18,
   },
   {
     id: 'contrarian',
@@ -6105,7 +6869,8 @@ You use: RSI, MACD, Supertrend, Fibonacci, volume profile.`,
     persona: `You are a contrarian fund manager inspired by Howard Marks and Rakesh Jhunjhunwala.
 You believe: maximum pessimism = maximum opportunity. Stocks hated by everyone are often the best buys.
 You look for: highest quality businesses at maximum fear. RSI below 30 + strong ROE = buy signal.
-You are NOT afraid of stocks down 50%+ if fundamentals are intact.`,
+You are NOT afraid of stocks down 50%+ if fundamentals are intact.
+Varsity: "Bear Market Phase 3 = maximum fear = maximum opportunity for the prepared investor."`,
     weight: 0.20,
   },
   {
@@ -6113,8 +6878,9 @@ You are NOT afraid of stocks down 50%+ if fundamentals are intact.`,
     name: 'Meera Nair — Risk Manager',
     persona: `You are a risk manager who has seen 2008, 2020, and multiple NSE crashes.
 You believe: avoid value traps at all costs. A cheap stock can always get cheaper.
-Red flags: EPS declining, debt rising, promoter pledging, sector headwinds.
-You only recommend stocks where downside is clearly limited by strong balance sheet.`,
+Red flags per Varsity M3: EPS declining, debt rising, promoter pledging, interest coverage < 1.5x.
+You only recommend stocks where downside is clearly limited by strong balance sheet.
+You use: Composite Risk Score, portfolio correlation, sector concentration limits (max 3 in same sector).`,
     weight: 0.20,
   },
   {
@@ -6123,10 +6889,91 @@ You only recommend stocks where downside is clearly limited by strong balance sh
     persona: `You are a quant analyst who builds factor models for a hedge fund.
 You believe: recovery probability correlates with: depth of fall, RSI oversold level, ROE rank, sector momentum.
 You think in probabilities, not certainties. You size positions by conviction.
-You use historical base rates: stocks with RSI<30 + ROE>15% recover 73% of the time in 6 months.`,
+You use historical base rates: stocks with RSI<30 + ROE>15% recover 73% of the time in 6 months.
+You weight the Composite Score (FA 35% + TA 25% + Momentum 20% + Risk 20%) heavily in your analysis.`,
     weight: 0.15,
   },
+  {
+    id: 'backtest_validator',
+    name: 'Sanjay Gupta — Backtest Validator',
+    persona: `You are a systematic trader who validates every call against historical patterns.
+You believe: if a similar setup didn't work historically, be skeptical. Data beats intuition.
+Your job: cross-check each Fallen Angel against its historical behavior:
+- Has this stock recovered before after similar falls? (depth + RSI + sector regime)
+- What is the base rate for recovery in this sector during similar market conditions?
+- Does the composite score meet the historical threshold for a profitable trade?
+Red flags: first time falling this much (no historical base), sector in structural decline, macro headwinds.
+You provide a CONFIDENCE MULTIPLIER (0.5x to 1.5x) for each pick based on historical backing.`,
+    weight: 0.05,
+  },
 ];
+
+// Fetch macro context — India VIX, Nifty trend, FII/DII flows
+async function fetchMacroContext() {
+  const context = {
+    niftyTrend: 'unknown',
+    niftyRSI: null,
+    vix: null,
+    vixLevel: 'unknown',
+    fiiFlow: null,
+    marketRegime: 'UNKNOWN',
+    marketSentiment: 'neutral',
+  };
+  try {
+    // Nifty 50 trend from UNIVERSE stocks aggregate
+    const n50 = Object.values(stockFundamentals).filter(f=>f.grp==='NIFTY50'&&f.price&&f.dma200);
+    if (n50.length > 20) {
+      const abv200 = n50.filter(f=>f.price>f.dma200).length;
+      const pct = abv200/n50.length;
+      context.niftyTrend = pct > 0.65 ? 'bullish' : pct < 0.35 ? 'bearish' : 'mixed';
+      const avgRSI = n50.reduce((s,f)=>s+(f.rsi||50),0)/n50.length;
+      context.niftyRSI = +avgRSI.toFixed(1);
+      context.marketSentiment = avgRSI > 60 ? 'greedy' : avgRSI < 40 ? 'fearful' : 'neutral';
+    }
+    // VIX from Kite if available
+    if (kite && process.env.KITE_ACCESS_TOKEN) {
+      try {
+        const vixToken = validTokens['INDIAVIX'] || 264969;
+        const to = new Date().toISOString().split('T')[0];
+        const from = new Date(Date.now()-7*864e5).toISOString().split('T')[0];
+        const vixCandles = await kite.getHistoricalData(vixToken, 'day', from, to);
+        if (vixCandles?.length) {
+          context.vix = +vixCandles[vixCandles.length-1].close.toFixed(2);
+          context.vixLevel = context.vix > 20 ? 'high_fear' : context.vix > 14 ? 'moderate' : 'low_complacency';
+        }
+      } catch(e) {} // VIX fetch is optional
+    }
+    // Market regime from last scan log
+    const { rows } = await pool.query('SELECT regime FROM scan_log ORDER BY scanned_at DESC LIMIT 1');
+    if (rows[0]) context.marketRegime = rows[0].regime;
+  } catch(e) {}
+  return context;
+}
+
+// Fetch historical accuracy for backtest validator context
+async function fetchHistoricalAccuracy() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT strategy, regime,
+        COUNT(*) as trades,
+        COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
+        AVG(pnl_pct) as avg_return,
+        AVG(CASE WHEN pnl > 0 THEN pnl_pct END) as avg_win
+      FROM paper_trades
+      WHERE status='CLOSED' AND pnl IS NOT NULL
+      GROUP BY strategy, regime
+      ORDER BY COUNT(*) DESC
+      LIMIT 10
+    `);
+    return rows.map(r=>({
+      strategy: r.strategy,
+      regime: r.regime,
+      trades: parseInt(r.trades),
+      winRate: +((r.wins/r.trades)*100).toFixed(0),
+      avgReturn: +parseFloat(r.avg_return).toFixed(1),
+    }));
+  } catch(e) { return []; }
+}
 
 // In-memory store for simulation results
 let mfLastSimulation = null;
@@ -6159,57 +7006,55 @@ async function callAnthropicAgent(systemPrompt, userPrompt, maxTokens) {
   return data.content?.[0]?.text || '';
 }
 
-async function runMiroFishAgent(agent, fallenAngels) {
-  const stockList = fallenAngels.slice(0, 15).map((s, i) =>
-    `${i+1}. ${s.sym} (${s.name}) [${s.grp||'NSE'}] | Score:${s.score} FA:${s.fallenScore||'?'} ${s.fallenVerdict||'?'}\n` +
-    `   Fall: ${Math.abs(s.pctFromHigh||0).toFixed(0)}% from peak | RSI:${s.rsi||'?'} | Stoch:${s.stochK||'?'} | BB%B:${s.bbPct!=null?s.bbPct.toFixed(2):'?'}\n` +
-    `   ROE:${s.roe||'?'}% | D/E:${s.debtToEq||'?'}x | OpMgn:${s.opMargin||'?'}% | EPS:${s.earGrowth||'?'}% | RevGr:${s.revGrowth||'?'}%\n` +
-    `   PE:${s.pe||'?'}x | PE/ROE:${s.roe&&s.pe?(s.pe/s.roe).toFixed(2):'?'} | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'} | IntCov:${s.intCov||'?'}x\n` +
-    `   Promoter:${s.promoter||'?'}% | Pledged:${s.pledged||'?'}% | MktCap:₹${s.mktCap?Math.round(s.mktCap)+'Cr':'?'}\n` +
-    `   MACD:${s.macdBull?'Bull':'Bear'} | OBV:${s.obvRising?'Rising':'Falling'} | VolRatio:${s.volRatio||'?'}x | BullDiv:${s.bullishDiv?'YES':'no'}\n` +
-    `   200DMA:₹${s.dma200||'?'} | 52WLo:₹${s.wk52Lo||'?'} | Stop:₹${s.stopLoss||'?'} | Target:₹${s.target||'?'} | RR:${s.rrRatio||'?'}x\n` +
-    `   Sector:${s.sector||'?'} | Cap:${s.grp||'?'} | Supertrend:${s.supertrendSig||'?'}`
-  ).join('\n\n');
+async function runMiroFishAgent(agent, fallenAngels, macroCtx, historicalAccuracy) {
+  // Enriched stock list with composite scores fed to agents
+  const stockList = fallenAngels.slice(0, 15).map((s, i) => {
+    const comp = s._composite || {};
+    const roce = s.roce ?? (s.roe && s.debtToEq ? (s.roe * (1 + s.debtToEq)).toFixed(1) : null);
+    const mos  = s.eps && s.earGrowth > 0 && s.price
+      ? (((s.earGrowth * 1.5 * s.eps) - s.price) / s.price * 100).toFixed(0) + '%' : '?';
+    return (
+      `${i+1}. ${s.sym} (${s.name}) [${s.grp||'NSE'}]\n` +
+      `   COMPOSITE:${comp.composite||'?'}/100 FA:${comp.faScore||s.score||'?'} TA:${comp.taScore||'?'} MOM:${comp.momentumScore||'?'} RISK:${comp.riskScore||'?'} Conviction:${comp.conviction||'?'}\n` +
+      `   Fall:${Math.abs(s.pctFromHigh||0).toFixed(0)}% | RSI:${(s.rsi||'?').toString().slice(0,5)} | BB%B:${s.bbPct!=null?s.bbPct.toFixed(2):'?'} | Stoch:${s.stochK||'?'}\n` +
+      `   ROE:${s.roe||'?'}% | ROCE:${roce||'?'}% | D/E:${s.debtToEq||'?'}x | OPM:${s.opMargin||'?'}% | EPS gr:${s.earGrowth||'?'}% | MoS:${mos}\n` +
+      `   PE:${s.pe||'?'}x | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'} | IntCov:${s.intCov||'?'}x | Promoter:${s.promoter||'?'}% | Pledged:${s.pledged||'?'}%\n` +
+      `   MACD:${s.macdBull?'Bull':'Bear'} | OBV:${s.obvRising?'Rising':'Falling'} | BullDiv:${s.bullishDiv?'YES':'no'} | Supertrend:${s.supertrendSig||'?'}\n` +
+      `   ADX:${s.adx||'?'} +DI:${s.adxPdi||'?'} -DI:${s.adxNdi||'?'} | Patterns:${s.candlePatterns?.length?s.candlePatterns.map(p=>p.pattern).join(','):'none'}\n` +
+      `   Sector:${s.sector||'?'} | MktCap:₹${s.mktCap?Math.round(s.mktCap)+'Cr':'?'}`
+    );
+  }).join('\n\n');
+
+  // Macro context block for all agents
+  const macroBlock = macroCtx ? `
+MACRO CONTEXT:
+- Nifty Trend: ${macroCtx.niftyTrend} | Avg RSI: ${macroCtx.niftyRSI} | Sentiment: ${macroCtx.marketSentiment}
+- India VIX: ${macroCtx.vix||'N/A'} (${macroCtx.vixLevel})${macroCtx.vixLevel==='high_fear'?' — fear peak, recoveries accelerate often':macroCtx.vixLevel==='low_complacency'?' — complacency, be selective':''}
+- Market Regime: ${macroCtx.marketRegime}
+` : '';
+
+  // Historical accuracy for backtest validator agent only
+  const histBlock = agent.id === 'backtest_validator' && historicalAccuracy?.length ? `
+PAPER TRADE HISTORY (use to validate setups):
+${historicalAccuracy.map(r=>`- ${r.strategy}/${r.regime}: ${r.winRate}% win (${r.trades} trades, avg ${r.avgReturn>0?'+':''}${r.avgReturn}%)`).join('\n')}
+Provide a confidence_multiplier (0.5=low historical backing, 1.0=neutral, 1.5=strong historical backing).
+` : '';
 
   const system = `${agent.persona}
+${macroBlock}${histBlock}
+You are Agent ${MIROFISH_AGENTS.indexOf(agent)+1} of 6 in the MiroFish multi-agent simulation.
+Job: Identify which Fallen Angels will recover 15%+ in 3-6 months.
 
-You are part of a MiroFish multi-agent simulation analyzing Indian NSE stocks.
-Your job: analyze the Fallen Angels list and predict which will RECOVER in the next 3-6 months.
+SIZE-AWARE (Varsity M15): SMALLCAP needs ROE>15%,D/E<1,IntCov>2x. MIDCAP needs ROE>12%,D/E<1.5. LARGECAP: lowest risk.
 
-RECOVERY means: stock price rises 15%+ from current levels within 6 months.
+COMPOSITE SCORE GUIDE: >65=strong setup, 50-65=decent, <50=be cautious.
 
-CRITICAL — SIZE-AWARE ANALYSIS (Varsity Module 15):
-- SMALLCAP Fallen Angels: Higher risk but market OVERSHOOTS more. Need: ROE>15%, D/E<1, IntCov>2x, Promoter>50%, Pledged<20%. If quality intact, deeper falls = bigger opportunity. Position size: smaller, staggered entry.
-- MIDCAP Fallen Angels: Balanced risk/reward. Need: ROE>12%, D/E<1.5. Often best risk-adjusted opportunities.
-- LARGECAP Fallen Angels: Lowest risk, most liquid. Slower recovery but high certainty.
-Each stock brief shows [NIFTY50/NEXT50/MIDCAP/SMALLCAP] — factor this into your analysis.
+JSON only (no markdown):
+{"agent":"${agent.name}","top_picks":[{"sym":"X","cap":"MIDCAP","conviction":80,"confidence_multiplier":1.1,"horizon":"3 months","target_upside":25,"thesis":"reason","risk":"main risk","composite_score_view":"agree/disagree and why"}],"avoid":["SYM"],"market_view":"macro impact on recovery","agent_insight":"unique angle"}
+Exactly 5 picks, ordered by conviction desc.`;
 
-Respond in this EXACT JSON format (no preamble, no markdown, pure JSON):
-{
-  "agent": "${agent.name}",
-  "top_picks": [
-    {
-      "sym": "SYMBOLNAME",
-      "cap": "SMALLCAP/MIDCAP/LARGECAP",
-      "conviction": 85,
-      "horizon": "3 months",
-      "target_upside": 28,
-      "thesis": "One sentence reason from YOUR perspective",
-      "risk": "Biggest single risk to this call"
-    }
-  ],
-  "avoid": ["SYM1", "SYM2"],
-  "market_view": "One sentence on current market conditions affecting recovery",
-  "agent_insight": "Your unique perspective that other agents might miss"
-}
-Pick exactly 5 top picks. top_picks ordered by conviction (highest first).
-conviction is 0-100. target_upside is % gain expected.`;
-
-  const user = `Current Fallen Angels on NSE (quality stocks fallen 20%+ from peak):\n\n${stockList}\n\nWhich 5 will recover? Respond only with JSON.`;
-
-  const raw = await callAnthropicAgent(system, user);
-
-  // Parse JSON — strip any markdown fences
+  const user = `Fallen Angels:\n\n${stockList}\n\nPick 5 recoveries. JSON only.`;
+  const raw = await callAnthropicAgent(system, user, agent.id === 'backtest_validator' ? 1500 : 1200);
   const clean = raw.replace(/```json|```/g, '').trim();
   return JSON.parse(clean);
 }
@@ -6310,22 +7155,33 @@ async function runMiroFishSimulation() {
   if (!ANTHROPIC_API_KEY)  return { error: 'Set ANTHROPIC_API_KEY in Railway environment variables' };
 
   mfSimulationRunning = true;
-  console.log('🐟 MiroFish simulation starting...');
+  console.log('🐟 MiroFish simulation starting (6-agent + macro context)...');
 
   try {
-    // Get current Fallen Angels from scored stocks
     const all = Object.values(stockFundamentals);
-    if (!all.length) return { error: 'No scored stocks yet. Wait for scoring to complete (~90s after start).' };
+    if (!all.length) return { error: 'No scored stocks yet. Wait for scoring to complete.' };
 
+    // Filter Fallen Angels
     const fallenAngels = all
       .filter(s => {
-        const score = (s.score || 0);
-        const minScore = s.grp === 'SMALLCAP' ? 55 : s.grp === 'MIDCAP' ? 52 : 45;
-        const minFall  = s.grp === 'SMALLCAP' ? -25 : -20;
+        const score   = s.score || 0;
+        const minScore= s.grp==='SMALLCAP' ? 55 : s.grp==='MIDCAP' ? 52 : 45;
+        const minFall = s.grp==='SMALLCAP' ? -25 : -20;
         return score >= minScore && (s.pctFromHigh||0) <= minFall && (s.rsi||50) <= 55;
       })
       .sort((a,b) => (b.fallenScore||b.score||0) - (a.fallenScore||a.score||0))
       .slice(0, 20);
+
+    // Phase 5: Pre-compute composite score for each Fallen Angel — fed to all agents
+    fallenAngels.forEach(s => {
+      try {
+        const taSignal = {
+          signal: s.macdBull && s.obvRising ? 'BUY' : 'NEUTRAL',
+          score:  (s.macdBull?3:0) + (s.obvRising?2:0) + (s.bullishDiv?3:0) + (s.supertrendSig==='bullish'?2:0),
+        };
+        s._composite = computeCompositeScore(s, taSignal);
+      } catch(e) { s._composite = {}; }
+    });
 
     const capBreakdown = {
       NIFTY50:  fallenAngels.filter(s=>s.grp==='NIFTY50').length,
@@ -6335,11 +7191,18 @@ async function runMiroFishSimulation() {
     };
     console.log(`🐟 MiroFish: ${fallenAngels.length} Fallen Angels — ${JSON.stringify(capBreakdown)}`);
 
-    // Run all agents in parallel
+    // Phase 5: Fetch macro context + historical accuracy in parallel
+    const [macroCtx, historicalAccuracy] = await Promise.all([
+      fetchMacroContext(),
+      fetchHistoricalAccuracy(),
+    ]);
+    console.log(`🐟 Macro: Nifty ${macroCtx.niftyTrend} | VIX ${macroCtx.vix||'N/A'} | Regime: ${macroCtx.marketRegime}`);
+
+    // Run all 6 agents in parallel (Agent #6 = backtest_validator)
     const agentPromises = MIROFISH_AGENTS.map(async agent => {
       try {
         console.log(`🐟 Agent running: ${agent.name}`);
-        const result = await runMiroFishAgent(agent, fallenAngels);
+        const result = await runMiroFishAgent(agent, fallenAngels, macroCtx, historicalAccuracy);
         return { agent: agent.name, id: agent.id, result, weight: agent.weight };
       } catch(e) {
         console.log(`🐟 Agent ${agent.id} failed: ${e.message}`);
@@ -6348,25 +7211,25 @@ async function runMiroFishSimulation() {
     });
 
     const agentResults = (await Promise.all(agentPromises)).filter(Boolean);
-    if (agentResults.length < 2) return { error: `Too few agents succeeded (${agentResults.length}). Check API key and rate limits.` };
+    if (agentResults.length < 2) return { error: `Too few agents succeeded (${agentResults.length}). Check API key.` };
 
-    console.log(`🐟 MiroFish: ${agentResults.length} agents done, running synthesis...`);
+    console.log(`🐟 MiroFish: ${agentResults.length}/6 agents done, running synthesis...`);
     const { synthesis, agentDetails, allAvoids } = await runMiroFishSynthesis(agentResults, fallenAngels);
 
     mfLastSimulation = {
       ...synthesis,
-      agent_details:    agentDetails,
-      all_avoids:       allAvoids,
-      agent_count:      agentResults.length,
+      agent_details:          agentDetails,
+      all_avoids:             allAvoids,
+      agent_count:            agentResults.length,
       fallen_angels_analyzed: fallenAngels.length,
-      cap_breakdown:    capBreakdown,
-      run_at:           Date.now(),
-      run_at_str:       new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      cap_breakdown:          capBreakdown,
+      macro_context:          macroCtx,
+      run_at:                 Date.now(),
+      run_at_str:             new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
     };
 
-    // Persist to DB
     await dbSet('mirofish_last_simulation', JSON.stringify(mfLastSimulation));
-    console.log(`🐟 MiroFish simulation complete. Top pick: ${synthesis.top_recovery_picks?.[0]?.sym}`);
+    console.log(`🐟 MiroFish complete. Top pick: ${synthesis.top_recovery_picks?.[0]?.sym}`);
     return mfLastSimulation;
 
   } catch(e) {
@@ -6396,7 +7259,7 @@ app.post('/api/mirofish/run', async(req,res) => {
   if (mfSimulationRunning) {
     return res.json({ running: true, message: 'Simulation in progress... check /api/mirofish/status' });
   }
-  res.json({ message: 'MiroFish simulation started. 5 agents analyzing Fallen Angels...', estimated_time: '60-90 seconds' });
+  res.json({ message: 'MiroFish simulation started. 6 agents + macro context analyzing Fallen Angels...', estimated_time: '90-120 seconds' });
   runMiroFishSimulation().catch(e => console.log('MiroFish run error:', e.message));
 });
 
