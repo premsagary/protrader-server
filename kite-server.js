@@ -212,6 +212,10 @@ async function initDB() {
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS earnings_yield DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_fcf DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_sales DECIMAL(10,2)`).catch(()=>{});
+    // Shareholding columns (from getstockdetails mode)
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS fii_holding DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dii_holding DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS num_shareholders DECIMAL(18,0)`).catch(()=>{});
     console.log("✅ DB ready (screener_fundamentals included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
@@ -2888,6 +2892,8 @@ async function loadScreenerFundamentals() {
       industry: row.industry,
       roce: row.roce, earnings_yield: row.earnings_yield,
       price_to_fcf: row.price_to_fcf, price_to_sales: row.price_to_sales,
+      fii_holding: row.fii_holding, dii_holding: row.dii_holding,
+      num_shareholders: row.num_shareholders,
     }));
     console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
     return rows.length;
@@ -3645,11 +3651,65 @@ async function refreshAllFundamentals() {
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
+
+        // ── Computed fallbacks for fields that data sources didn't return ──
+        const sf = stockFundamentals[stock.sym];
+        const _px = sf.price;
+        const _pat = sf.patAnnual;
+        const _eps = sf.eps;
+        const _sales = sf.salesAnnual;
+
+        // mktCap: price * shares, where shares ≈ patAnnual / eps (in Cr)
+        if (sf.mktCap == null && _px && _pat && _eps && _eps > 0) {
+          sf.mktCap = +(_px * _pat / _eps).toFixed(0);
+        }
+
+        // priceToSales: mktCap / salesAnnual
+        if (sf.priceToSales == null && sf.mktCap > 0 && _sales > 0) {
+          sf.priceToSales = +(sf.mktCap / _sales).toFixed(2);
+        }
+
+        // priceToFCF: mktCap / fcf
+        if (sf.priceToFCF == null && sf.mktCap > 0 && sf.fcf > 0) {
+          sf.priceToFCF = +(sf.mktCap / sf.fcf).toFixed(1);
+        }
+
+        // evEbitda: (mktCap + debt) / EBITDA, where EBITDA ≈ sales * opMargin / 100
+        if (sf.evEbitda == null && sf.mktCap > 0 && _sales > 0 && sf.opMargin > 0) {
+          const ebitda = _sales * sf.opMargin / 100;
+          const ev = sf.mktCap + (sf.debt || 0);
+          if (ebitda > 0) sf.evEbitda = +(ev / ebitda).toFixed(1);
+        }
+
+        // divYield: dividendPayout% * eps / price (approx)
+        if (sf.divYield == null && _px > 0 && _eps > 0 && ext?.divYield > 0) {
+          // ext.divYield from screener might be payout %, convert to yield
+          sf.divYield = +(ext.divYield * _eps / _px).toFixed(2);
+        }
+
+        // currentRatio: try from Yahoo via ext, already mapped above
+        // No additional fallback available
+
       } catch(e) { fail++; }
     }));
     // Small pause between batches to respect Kite rate limits
     if (i + BATCH < stocks.length) await new Promise(r=>setTimeout(r,200));
   }
+
+  // ── Post-loop: compute industryPE as median PE per sector ──
+  const sectorPEs = {};
+  Object.values(stockFundamentals).forEach(f => {
+    if (f.pe > 0 && f.sector) {
+      if (!sectorPEs[f.sector]) sectorPEs[f.sector] = [];
+      sectorPEs[f.sector].push(f.pe);
+    }
+  });
+  Object.values(stockFundamentals).forEach(f => {
+    if (f.industryPE == null && f.sector && sectorPEs[f.sector]?.length >= 3) {
+      const sorted = [...sectorPEs[f.sector]].sort((a,b) => a - b);
+      f.industryPE = +sorted[Math.floor(sorted.length / 2)].toFixed(1);
+    }
+  });
 
   stockFundLastFetch = Date.now();
   stockFundLoading   = false;
@@ -3951,9 +4011,11 @@ async function fetchFromYahoo(sym) {
       roe, de, pe, fwdPE, peg, revGr, epsGr,
       opMgn, grossMgn, profMgn, roa,
       currentRatio, quickRatio,
-      beta, mktCap, divYield, bookValue, pb, evEbitda,
+      beta,
+      mktCap: mktCap ? Math.round(mktCap / 10000000) : null, // INR → Cr
+      divYield, bookValue, pb, evEbitda,
       instHeld, insiderHeld, change52w,
-      fcf, revenueTTM,
+      fcf: fcf ? Math.round(fcf / 10000000) : null, // INR → Cr
       source: 'Yahoo Finance',
       fetchedAt: Date.now(),
     },
@@ -5185,7 +5247,8 @@ async function upsertScreenerData(data) {
        eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
        ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
        pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
-       roce,earnings_yield,price_to_fcf,price_to_sales,imported_at)
+       roce,earnings_yield,price_to_fcf,price_to_sales,
+       fii_holding,dii_holding,num_shareholders,imported_at)
     VALUES
       ($1,$2,$3,$4,$5,$6,
        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -5194,7 +5257,8 @@ async function upsertScreenerData(data) {
        $28,$29,$30,$31,$32,$33,$34,
        $35,$36,$37,$38,$39,$40,
        $41,$42,$43,$44,
-       $45,$46,$47,$48,NOW())
+       $45,$46,$47,$48,
+       $49,$50,$51,NOW())
     ON CONFLICT (sym) DO UPDATE SET
       name=EXCLUDED.name, industry=EXCLUDED.industry,
       roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -5215,6 +5279,9 @@ async function upsertScreenerData(data) {
       pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
       roce=EXCLUDED.roce, earnings_yield=EXCLUDED.earnings_yield,
       price_to_fcf=EXCLUDED.price_to_fcf, price_to_sales=EXCLUDED.price_to_sales,
+      fii_holding=COALESCE(EXCLUDED.fii_holding, screener_fundamentals.fii_holding),
+      dii_holding=COALESCE(EXCLUDED.dii_holding, screener_fundamentals.dii_holding),
+      num_shareholders=COALESCE(EXCLUDED.num_shareholders, screener_fundamentals.num_shareholders),
       imported_at=NOW()
   `, [
     data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -5227,6 +5294,7 @@ async function upsertScreenerData(data) {
     data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
     data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
     data.roce, data.earnings_yield, data.price_to_fcf, data.price_to_sales,
+    data.fii_holding||null, data.dii_holding||null, data.num_shareholders||null,
   ]);
   patchScreenerIntoFUND(data.sym, data);
 }
@@ -5569,7 +5637,7 @@ function parseScreenerDetails(sym, raw) {
   const fcf = (cfFromOps != null && capex != null) ? cfFromOps + capex : null;
 
   // Dividend from P&L for yield calc
-  const dividend = latestAnnual(annual, 'Dividend Payout %');
+  const dividendPayout = latestAnnual(annual, 'Dividend Payout %');
 
   // Industry from raw metadata
   const industry = raw.industry || raw.sector || null;
@@ -5582,8 +5650,24 @@ function parseScreenerDetails(sym, raw) {
   const pb = (livePrice && bookValuePerShare > 0) ? pn((livePrice / bookValuePerShare).toFixed(2)) : null;
   const peg = (pe && profitGr3y && profitGr3y > 0) ? pn((pe / profitGr3y).toFixed(2)) : null;
   const earningsYield = pe > 0 ? pn((100 / pe).toFixed(2)) : null;
-  const priceToSales = (livePrice && sales > 0 && equity > 0) ? pn((livePrice * equity / 10 / sales).toFixed(2)) : null;
-  const priceToFcf = (livePrice && fcf > 0 && equity > 0) ? pn((livePrice * equity / 10 / fcf).toFixed(2)) : null;
+
+  // Compute mktCap: price * shares, where shares ≈ netProfit / eps (in Cr)
+  const computedMktCap = (livePrice && netProfit && eps && eps > 0) ? pn((livePrice * netProfit / eps).toFixed(0)) : null;
+
+  const priceToSales = computedMktCap > 0 && sales > 0 ? pn((computedMktCap / sales).toFixed(2)) : null;
+  const priceToFcf = computedMktCap > 0 && fcf > 0 ? pn((computedMktCap / fcf).toFixed(1)) : null;
+
+  // EV/EBITDA: EV = mktCap + debt, EBITDA ≈ Operating Profit (sales * OPM%)
+  const operatingProfit = (sales && opm) ? sales * opm / 100 : null;
+  const computedEvEbitda = (computedMktCap && operatingProfit > 0)
+    ? pn(((computedMktCap + (borrowings||0)) / operatingProfit).toFixed(1)) : null;
+
+  // Dividend Yield: dividendPayout% * EPS / price * 100 (approximate)
+  const computedDivYield = (dividendPayout > 0 && eps > 0 && livePrice > 0)
+    ? pn((dividendPayout * eps / livePrice).toFixed(2)) : null;
+
+  // Industry PE from raw metadata if available
+  const computedIndustryPE = raw.industry_pe || raw.industryPE || null;
 
   return {
     sym, name: raw.company_name || sym,
@@ -5594,14 +5678,14 @@ function parseScreenerDetails(sym, raw) {
     opm, roa, pb, peg,
     int_cov: intCov, promoter_holding: promoter,
     pledged_pct: pledgedPct, promoter_chg: promoterChg,
-    mkt_cap: null, current_price: currentPrice,
+    mkt_cap: computedMktCap, current_price: currentPrice,
     eps, debt: borrowings, current_ratio: computedCurrentRatio,
-    div_yield: dividend, sales_gr_1y: salesGr1y, sales_gr_5y: salesGr5y,
+    div_yield: computedDivYield, sales_gr_1y: salesGr1y, sales_gr_5y: salesGr5y,
     eps_gr_1y: profitGr1y, eps_gr_5y: profitGr5y,
     roe_3y_avg: roe3y, roe_5y_avg: roe5y,
     ret_1y: ret1y, ret_3y: ret3y, ret_5y: ret5y,
     ret_6m: null, ret_3m: null,
-    ev_ebitda: null, industry_pe: null,
+    ev_ebitda: computedEvEbitda, industry_pe: pn(computedIndustryPE),
     pat_qtr: patQtr, sales_qtr: salesQtr,
     pat_annual: netProfit, sales_annual: sales,
     pat_qtr_yoy: patQtrYoy, sales_qtr_yoy: salesQtrYoy,
