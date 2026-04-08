@@ -3310,18 +3310,31 @@ let FUND = {
 
 // -- Fetch MAX daily candles from Kite (full history) --------------------------
 async function fetchKiteDaily(sym) {
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return null;
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) { return null; }
   const token = validTokens[sym] || INSTRUMENTS[sym];
-  if (!token) return null;
+  if (!token) { return null; }
   try {
     const to   = new Date();
-    const from = new Date(Date.now() - 20*366*24*60*60*1000); // 20 years back
+    const from = new Date(Date.now() - 5*365*24*60*60*1000); // 5 years back (safe range)
+    const toStr = to.toISOString().split('T')[0];
+    const fromStr = from.toISOString().split('T')[0];
     const candles = await Promise.race([
-      kite.getHistoricalData(token,'day',from.toISOString().split('T')[0],to.toISOString().split('T')[0]),
+      kite.getHistoricalData(token,'day',fromStr,toStr),
       new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),15000))
     ]);
+    if (sym === 'RELIANCE' || sym === 'TCS' || sym === 'HDFCBANK') {
+      console.log(`📈 fetchKiteDaily(${sym}): token=${token}, range=${fromStr}→${toStr}, got ${candles?.length||0} candles`);
+    }
     return (candles && candles.length >= 50) ? candles : null;
-  } catch(e) { return null; }
+  } catch(e) {
+    // Log first few failures to diagnose
+    if (!fetchKiteDaily._logCount) fetchKiteDaily._logCount = 0;
+    if (fetchKiteDaily._logCount < 5) {
+      console.error(`❌ fetchKiteDaily(${sym}) FAILED: ${e.message}`);
+      fetchKiteDaily._logCount++;
+    }
+    return null;
+  }
 }
 
 // -- Compute technicals from daily candles ------------------------------------
@@ -5567,17 +5580,26 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     // ALL DATA IN PARALLEL — fetch MAX available candles from Kite
     const [rDay,rWeek,rMonth,r1h,rNews] = await Promise.allSettled([
       (async()=>{ if(!kite||!token)return null;
-        // Daily candles — Kite gives up to ~20 years
-        const t=new Date(),f=new Date(Date.now()-20*366*864e5);
-        return kite.getHistoricalData(token,'day',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
+        // Daily candles — 5 years back (safe Kite range)
+        const t=new Date(),f=new Date(Date.now()-5*365*864e5);
+        try {
+          const result = await kite.getHistoricalData(token,'day',f.toISOString().split('T')[0],t.toISOString().split('T')[0]);
+          console.log(`📈 analyze(${sym}) daily: ${result?.length||0} candles`);
+          return result;
+        } catch(e) {
+          console.error(`❌ analyze(${sym}) daily FAILED: ${e.message}`);
+          throw e;
+        }
       })(),
       (async()=>{ if(!kite||!token)return null;
-        // Weekly candles — full available history
-        return kite.getHistoricalData(token,'week','2000-01-01',new Date().toISOString().split('T')[0]);
+        // Weekly candles — 10 years back
+        const f=new Date(Date.now()-10*365*864e5);
+        return kite.getHistoricalData(token,'week',f.toISOString().split('T')[0],new Date().toISOString().split('T')[0]);
       })(),
       (async()=>{ if(!kite||!token)return null;
-        // Monthly candles — full available history back to 1994
-        return kite.getHistoricalData(token,'month','1994-01-01',new Date().toISOString().split('T')[0]);
+        // Monthly candles — 15 years back
+        const f=new Date(Date.now()-15*365*864e5);
+        return kite.getHistoricalData(token,'month',f.toISOString().split('T')[0],new Date().toISOString().split('T')[0]);
       })(),
       (async()=>{ if(!kite||!token)return null;
         // 60min candles — last 6 months for intraday patterns
