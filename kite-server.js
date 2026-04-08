@@ -203,6 +203,11 @@ async function initDB() {
         imported_at           TIMESTAMP DEFAULT NOW()
       )
     `);
+    // Add new columns for Apify bonus fields (safe — IF NOT EXISTS)
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS earnings_yield DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_fcf DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_sales DECIMAL(10,2)`).catch(()=>{});
     console.log("✅ DB ready (screener_fundamentals included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
@@ -2790,6 +2795,11 @@ function patchScreenerIntoFUND(sym, d) {
     patQtrYoy:    d.pat_qtr_yoy,
     salesQtrYoy:  d.sales_qtr_yoy,
     industry:     d.industry,
+    // Bonus fields (ROCE, earnings yield, price/FCF, price/sales)
+    roce:         d.roce        ?? null,
+    earningsYield:d.earnings_yield ?? null,
+    priceToFCF:   d.price_to_fcf ?? null,
+    priceToSales: d.price_to_sales ?? null,
     source:       'Screener.in',
     fetchedAt:    Date.now(),
   };
@@ -2818,6 +2828,8 @@ async function loadScreenerFundamentals() {
       pat_annual: row.pat_annual, sales_annual: row.sales_annual,
       pat_qtr_yoy: row.pat_qtr_yoy, sales_qtr_yoy: row.sales_qtr_yoy,
       industry: row.industry,
+      roce: row.roce, earnings_yield: row.earnings_yield,
+      price_to_fcf: row.price_to_fcf, price_to_sales: row.price_to_sales,
     }));
     console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
     return rows.length;
@@ -4995,7 +5007,8 @@ async function upsertScreenerData(data) {
        eps,debt,current_ratio,div_yield,sales_gr_1y,sales_gr_5y,
        eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
        ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
-       pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,imported_at)
+       pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
+       roce,earnings_yield,price_to_fcf,price_to_sales,imported_at)
     VALUES
       ($1,$2,$3,$4,$5,$6,
        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -5003,7 +5016,8 @@ async function upsertScreenerData(data) {
        $22,$23,$24,$25,$26,$27,
        $28,$29,$30,$31,$32,$33,$34,
        $35,$36,$37,$38,$39,$40,
-       $41,$42,$43,$44,NOW())
+       $41,$42,$43,$44,
+       $45,$46,$47,$48,NOW())
     ON CONFLICT (sym) DO UPDATE SET
       name=EXCLUDED.name, industry=EXCLUDED.industry,
       roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -5022,6 +5036,8 @@ async function upsertScreenerData(data) {
       pat_qtr=EXCLUDED.pat_qtr, sales_qtr=EXCLUDED.sales_qtr,
       pat_annual=EXCLUDED.pat_annual, sales_annual=EXCLUDED.sales_annual,
       pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
+      roce=EXCLUDED.roce, earnings_yield=EXCLUDED.earnings_yield,
+      price_to_fcf=EXCLUDED.price_to_fcf, price_to_sales=EXCLUDED.price_to_sales,
       imported_at=NOW()
   `, [
     data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -5033,6 +5049,7 @@ async function upsertScreenerData(data) {
     data.ret_1y, data.ret_3y, data.ret_5y, data.ret_6m, data.ret_3m,
     data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
     data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
+    data.roce, data.earnings_yield, data.price_to_fcf, data.price_to_sales,
   ]);
   patchScreenerIntoFUND(data.sym, data);
 }
@@ -5103,51 +5120,114 @@ async function fetchAllScreenerBulk(token) {
       const g  = (...keys) => { for (const k of keys) { if (item[k]!=null && item[k]!=='') return pn(item[k]); } return null; };
       const gs = (...keys) => { for (const k of keys) { if (item[k]!=null) return ps(item[k]); } return ''; };
 
-      const sym = gs('nseCode','NSE Code','nse_code','symbol','Symbol');
-      if (!sym) { errors++; continue; }
+      // Sym extraction: Apify runQuery doesn't return NSE code directly.
+      // Extract from Name by matching against UNIVERSE, or use the NSE Code field if present.
+      let sym = gs('nseCode','NSE Code','nse_code','symbol','Symbol');
+      if (!sym) {
+        // runQuery mode: actor returns "Name" but no code. Match against UNIVERSE.
+        const itemName = gs('companyName','name','Name');
+        if (itemName) {
+          const match = UNIVERSE.find(u => u.n && u.n.toLowerCase().startsWith(itemName.toLowerCase().slice(0,15)));
+          if (match) sym = match.sym;
+        }
+        if (!sym) { errors++; continue; }
+      }
 
+      // =====================================================================
+      // FIELD MAPPINGS — verified against actual Apify actor output (2026-04)
+      // The actor returns abbreviated Screener.in column names like:
+      //   "P/E", "Mar Cap", "Debt / Eq", "CMP", "Int Coverage", etc.
+      // Each g() call tries: [camelCase, Full Name, Apify abbreviation]
+      // =====================================================================
       const data = {
         sym, name: gs('companyName','name','Name'),
         nse_code: sym,
         industry: gs('industry','Industry','sector'),
+        // Apify returns "ROE" ✅ (already matched)
         roe:              g('roe','ROE','returnOnEquity'),
-        de:               g('debtToEquity','D/E','de'),
-        pe:               g('pe','PE','priceToEarning'),
-        rev_gr_3y:        g('salesGrowth3y','salesGrowth3Years','Sales growth 3Years'),
-        eps_gr_3y:        g('profitGrowth3y','profitGrowth3Years','Profit growth 3Years'),
+        // Apify returns "Debt / Eq" (was missing "Debt / Eq")
+        de:               g('debtToEquity','D/E','de','Debt / Eq'),
+        // Apify returns "P/E" (was missing "P/E")
+        pe:               g('pe','PE','priceToEarning','P/E'),
+        // Apify returns "Sales Var 3Yrs"
+        rev_gr_3y:        g('salesGrowth3y','salesGrowth3Years','Sales growth 3Years','Sales Var 3Yrs'),
+        // Apify returns "Profit Var 3Yrs"
+        eps_gr_3y:        g('profitGrowth3y','profitGrowth3Years','Profit growth 3Years','Profit Var 3Yrs'),
+        // Apify returns "OPM" ✅ (already matched)
         opm:              g('opm','OPM','operatingProfitMargin'),
-        roa:              g('roa','ROA','returnOnAssets'),
-        pb:               g('pb','PB','priceToBook'),
+        // Apify returns "ROA 12M"
+        roa:              g('roa','ROA','returnOnAssets','ROA 12M'),
+        // Apify returns "CMP / BV"
+        pb:               g('pb','PB','priceToBook','CMP / BV'),
+        // Apify returns "PEG" ✅ (already matched)
         peg:              g('peg','PEG','pegRatio'),
-        int_cov:          g('interestCoverage','Interest Coverage Ratio'),
-        promoter_holding: g('promoterHolding','Promoter holding'),
-        pledged_pct:      g('pledgedPercentage','Pledged percentage'),
-        promoter_chg:     g('promoterHoldingChange','Change in promoter holding'),
-        mkt_cap:          g('marketCap','Market Capitalization'),
-        current_price:    g('currentPrice','Current Price','price'),
-        eps:              g('eps','EPS'),
+        // Apify returns "Int Coverage"
+        int_cov:          g('interestCoverage','Interest Coverage Ratio','Int Coverage'),
+        // Apify returns "Prom Hold"
+        promoter_holding: g('promoterHolding','Promoter holding','Prom Hold'),
+        // Apify returns "Pledged"
+        pledged_pct:      g('pledgedPercentage','Pledged percentage','Pledged'),
+        // Apify returns "Change in Prom Hold"
+        promoter_chg:     g('promoterHoldingChange','Change in promoter holding','Change in Prom Hold'),
+        // Apify returns "Mar Cap"
+        mkt_cap:          g('marketCap','Market Capitalization','Mar Cap'),
+        // Apify returns "CMP"
+        current_price:    g('currentPrice','Current Price','price','CMP'),
+        // Apify returns "EPS 12M"
+        eps:              g('eps','EPS','EPS 12M'),
+        // Apify returns "Debt" ✅ (already matched)
         debt:             g('debt','Debt'),
+        // Apify returns "Current ratio" ✅ (already matched)
         current_ratio:    g('currentRatio','Current ratio'),
-        div_yield:        g('dividendYield','Dividend yield'),
+        // Apify returns "Div Yld"
+        div_yield:        g('dividendYield','Dividend yield','Div Yld'),
+        // Apify returns "Sales growth" ✅ (already matched)
         sales_gr_1y:      g('salesGrowth','Sales growth'),
-        sales_gr_5y:      g('salesGrowth5y','Sales growth 5Years'),
+        // Apify returns "Sales Var 5Yrs"
+        sales_gr_5y:      g('salesGrowth5y','Sales growth 5Years','Sales Var 5Yrs'),
+        // Apify returns "Profit growth" ✅ (already matched)
         eps_gr_1y:        g('profitGrowth','Profit growth'),
-        eps_gr_5y:        g('profitGrowth5y','Profit growth 5Years'),
-        roe_3y_avg:       g('avgRoe3y','Average return on equity 3Years'),
-        roe_5y_avg:       g('avgRoe5y','Average return on equity 5Years'),
-        ret_1y:           g('return1y','Return over 1year'),
-        ret_3y:           g('return3y','Return over 3years'),
-        ret_5y:           g('return5y','Return over 5years'),
-        ret_6m:           g('return6m','Return over 6months'),
-        ret_3m:           g('return3m','Return over 3months'),
-        ev_ebitda:        g('evEbitda','EVEBITDA'),
-        industry_pe:      g('industryPE','Industry PE'),
-        pat_qtr:          g('netProfitLatestQuarter','Net Profit latest quarter'),
-        sales_qtr:        g('salesLatestQuarter','Sales latest quarter'),
-        pat_annual:       g('profitAfterTax','Profit after tax'),
+        // Apify returns "Profit Var 5Yrs"
+        eps_gr_5y:        g('profitGrowth5y','Profit growth 5Years','Profit Var 5Yrs'),
+        // Apify returns "ROE 3Yr"
+        roe_3y_avg:       g('avgRoe3y','Average return on equity 3Years','ROE 3Yr'),
+        // Apify returns "ROE 5Yr"
+        roe_5y_avg:       g('avgRoe5y','Average return on equity 5Years','ROE 5Yr'),
+        // Apify returns "1Yr return"
+        ret_1y:           g('return1y','Return over 1year','1Yr return'),
+        // Apify returns "3Yrs return"
+        ret_3y:           g('return3y','Return over 3years','3Yrs return'),
+        // Apify returns "5Yrs return"
+        ret_5y:           g('return5y','Return over 5years','5Yrs return'),
+        // Apify returns "6mth return"
+        ret_6m:           g('return6m','Return over 6months','6mth return'),
+        // Apify returns "3mth return"
+        ret_3m:           g('return3m','Return over 3months','3mth return'),
+        // Apify returns "EV / EBITDA"
+        ev_ebitda:        g('evEbitda','EVEBITDA','EV / EBITDA'),
+        // Apify returns "Ind PE"
+        industry_pe:      g('industryPE','Industry PE','Ind PE'),
+        // Apify returns "NP Qtr"
+        pat_qtr:          g('netProfitLatestQuarter','Net Profit latest quarter','NP Qtr'),
+        // Apify returns "Sales Qtr"
+        sales_qtr:        g('salesLatestQuarter','Sales latest quarter','Sales Qtr'),
+        // Apify returns "PAT 12M"
+        pat_annual:       g('profitAfterTax','Profit after tax','PAT 12M'),
+        // Apify returns "Sales" ✅ (already matched)
         sales_annual:     g('sales','Sales'),
-        pat_qtr_yoy:      g('yoyQuarterlyProfitGrowth','YOY Quarterly profit growth'),
-        sales_qtr_yoy:    g('yoyQuarterlySalesGrowth','YOY Quarterly sales growth'),
+        // Apify returns "Qtr Profit Var"
+        pat_qtr_yoy:      g('yoyQuarterlyProfitGrowth','YOY Quarterly profit growth','Qtr Profit Var'),
+        // Apify returns "Qtr Sales Var"
+        sales_qtr_yoy:    g('yoyQuarterlySalesGrowth','YOY Quarterly sales growth','Qtr Sales Var'),
+        // === BONUS FIELDS — available from Apify but previously uncaptured ===
+        // Apify returns "ROCE" — Varsity M3 Ch 8: "#1 capital efficiency metric"
+        roce:             g('roce','ROCE','returnOnCapitalEmployed'),
+        // Apify returns "Earnings Yield"
+        earnings_yield:   g('earningsYield','Earnings Yield'),
+        // Apify returns "CMP / FCF" — Price to Free Cash Flow
+        price_to_fcf:     g('priceToFCF','CMP / FCF'),
+        // Apify returns "CMP / Sales" — Price to Sales
+        price_to_sales:   g('priceToSales','CMP / Sales'),
       };
       if (!data.peg && data.pe && data.eps_gr_3y && data.eps_gr_3y > 0) data.peg = +(data.pe/data.eps_gr_3y).toFixed(2);
 
