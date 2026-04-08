@@ -1797,6 +1797,38 @@ async function refreshInstruments() {
 
 app.get("/api/instruments", (req,res) => res.json(validTokens));
 
+// -- DEBUG: Test candle fetch for a single stock, returns error details -----------
+app.get("/api/debug/candles/:sym", async (req, res) => {
+  const sym = req.params.sym.toUpperCase();
+  const token = validTokens[sym] || INSTRUMENTS[sym];
+  const result = { sym, token, kiteReady: !!kite, hasAccessToken: !!process.env.KITE_ACCESS_TOKEN };
+  if (!kite || !token) return res.json({ ...result, error: 'kite or token missing' });
+  const to = new Date();
+  const from5y = new Date(Date.now() - 5*365*864e5);
+  const from1y = new Date(Date.now() - 365*864e5);
+  const from60d = new Date(Date.now() - 60*864e5);
+  // Try multiple date ranges and intervals
+  const tests = [
+    { label: 'day_5y', interval: 'day', from: from5y },
+    { label: 'day_1y', interval: 'day', from: from1y },
+    { label: 'day_60d', interval: 'day', from: from60d },
+    { label: '60min_60d', interval: '60minute', from: from60d },
+  ];
+  for (const t of tests) {
+    try {
+      const candles = await kite.getHistoricalData(
+        token, t.interval,
+        t.from.toISOString().split('T')[0],
+        to.toISOString().split('T')[0]
+      );
+      result[t.label] = { ok: true, count: candles?.length || 0, sample: candles?.[0] };
+    } catch (e) {
+      result[t.label] = { ok: false, error: e.message, status: e.status, code: e.error_type };
+    }
+  }
+  res.json(result);
+});
+
 // ===============================================================================
 // -- MUTUAL FUND DATA ENGINE ----------------------------------------------------
 // Sources: mfdata.in (ratios, AUM, expense) + mf.captnemo.in (Kuvera metadata)
