@@ -2854,6 +2854,10 @@ function patchScreenerIntoFUND(sym, d) {
     earningsYield:d.earnings_yield ?? null,
     priceToFCF:   d.price_to_fcf ?? null,
     priceToSales: d.price_to_sales ?? null,
+    // Shareholding extras
+    fiiHolding:   d.fii_holding ?? null,
+    diiHolding:   d.dii_holding ?? null,
+    numShareholders: d.num_shareholders ?? null,
     source:       'Screener.in',
     fetchedAt:    Date.now(),
   };
@@ -3594,7 +3598,7 @@ async function refreshAllFundamentals() {
           peg:      ext?.peg ?? (f&&f[2]&&f[4]&&f[4]>0 ? +(f[2]/f[4]).toFixed(2) : null),
           // Extended from Screener.in
           roa:          ext?.roa          ?? null,
-          pb:           ext?.pb           ?? null,
+          pb:           ext?.pb           ?? (ext?.bookValue > 0 && (tech.price||livePrices[stock.sym]?.price) ? +((tech.price||livePrices[stock.sym]?.price)/ext.bookValue).toFixed(2) : null),
           intCov:       ext?.intCov       ?? null,
           promoter:     ext?.promoter     ?? null,
           pledged:      ext?.pledged      ?? null,
@@ -3619,7 +3623,7 @@ async function refreshAllFundamentals() {
           industryPE:   ext?.industryPE   ?? null,
           earningsYield:ext?.earningsYield ?? ((f&&f[2]&&f[2]>0) ? +(100/f[2]).toFixed(2) : null),
           priceToFCF:   ext?.priceToFCF   ?? null,
-          priceToSales: ext?.priceToSales ?? null,
+          priceToSales: ext?.priceToSales ?? (ext?.mktCap > 0 && ext?.salesAnnual > 0 ? +((ext.mktCap / 10000000) / ext.salesAnnual).toFixed(2) : null),
           roce:         ext?.roce         ?? null,
           patQtr:       ext?.patQtr       ?? null,
           salesQtr:     ext?.salesQtr     ?? null,
@@ -3635,6 +3639,9 @@ async function refreshAllFundamentals() {
           fcf:          ext?.fcf          ?? null,
           instHeld:     ext?.instHeld     ?? null,
           bookValue:    ext?.bookValue    ?? null,
+          fiiHolding:   ext?.fiiHolding   ?? null,
+          diiHolding:   ext?.diiHolding   ?? null,
+          numShareholders: ext?.numShareholders ?? null,
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
@@ -5071,6 +5078,9 @@ app.get('/api/stocks/score', async(req,res)=>{
         fcf:         f.fcf!=null?+f.fcf:null,
         instHeld:    f.instHeld!=null?+f.instHeld.toFixed(1):null,
         bookValue:   f.bookValue!=null?+f.bookValue.toFixed(2):null,
+        fiiHolding:  f.fiiHolding!=null?+f.fiiHolding.toFixed(1):null,
+        diiHolding:  f.diiHolding!=null?+f.diiHolding.toFixed(1):null,
+        numShareholders: f.numShareholders!=null?+f.numShareholders:null,
         industryPE:  f.industryPE!=null?+f.industryPE.toFixed(1):null,
         dataSource:  f.dataSource||'Hardcoded',
         // Technical - full set
@@ -5505,6 +5515,11 @@ function parseScreenerDetails(sym, raw) {
     if (pKeys.length >= 2) promoterChg = pn((pn(promRow[pKeys[pKeys.length-1]]) - pn(promRow[pKeys[pKeys.length-2]])).toFixed(2));
   }
 
+  // FII, DII, and number of shareholders from shareholding data
+  const fiiHolding = latestSH(sh, 'FII') ?? latestSH(sh, 'Foreign');
+  const diiHolding = latestSH(sh, 'DII') ?? latestSH(sh, 'Domestic');
+  const numShareholders = latestSH(sh, 'No. of Shareholders') ?? latestSH(sh, 'Shareholders');
+
   // Quarterly data for recent quarter growth
   const qtrs = raw.quarters || [];
   const salesQtr = latestAnnual(qtrs, 'Sales');
@@ -5591,6 +5606,7 @@ function parseScreenerDetails(sym, raw) {
     pat_annual: netProfit, sales_annual: sales,
     pat_qtr_yoy: patQtrYoy, sales_qtr_yoy: salesQtrYoy,
     roce, earnings_yield: earningsYield, price_to_fcf: priceToFcf, price_to_sales: priceToSales,
+    fii_holding: fiiHolding, dii_holding: diiHolding, num_shareholders: numShareholders,
   };
 }
 
@@ -5621,7 +5637,22 @@ async function fetchOneScreenerStock(sym, apifyToken) {
   const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${apifyToken}&limit=5`, { signal: AbortSignal.timeout(15000) });
   const items = await dataResp.json();
   if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
-  return parseScreenerDetails(sym, items[0]);
+  const raw = items[0];
+  const parsed = parseScreenerDetails(sym, raw);
+  // Store raw response for rich history fields (quarters, P&L, BS, CF, ratios, shareholding)
+  try {
+    const rich = {
+      quarters: raw.quarters || [],
+      profit_and_loss: raw.profit_and_loss || {},
+      balance_sheet: raw.balance_sheet || [],
+      cash_flow: raw.cash_flow || [],
+      ratios: raw.ratios || [],
+      shareholding: raw.shareholding || {},
+      company_name: raw.company_name,
+    };
+    await dbSet(`screener_rich_${sym}`, JSON.stringify(rich));
+  } catch(e) { /* non-critical */ }
+  return parsed;
 }
 
 // ── Batch fetch all stocks via getstockdetails (parallel batches of 3) ──
