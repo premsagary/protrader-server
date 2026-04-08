@@ -4822,12 +4822,11 @@ app.get('/api/stocks/score', async(req,res)=>{
 
     if (empty && !stockFundLoading) {
       refreshAllFundamentals();
-      return res.json({stocks:[],loading:true,loadingMsg:'Fetching Kite daily candles for 252 stocks... (~90s)'});
-    }
-    if (empty && stockFundLoading) {
-      return res.json({stocks:[],loading:true,loadingMsg:'Loading Kite candles... please wait'});
     }
     if (stale && !stockFundLoading) refreshAllFundamentals();
+
+    // Return whatever partial data we have (even if still loading)
+    // This lets the UI render progressively instead of blocking
 
     const all = Object.values(stockFundamentals);
 
