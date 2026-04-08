@@ -5262,14 +5262,202 @@ async function fetchAllScreenerBulk(token) {
   }
 }
 
+// ── getstockdetails mode: parse rich Screener.in page data into flat fundamentals ──
+function parseScreenerDetails(sym, raw) {
+  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
+  // Helper: get latest annual value from P&L / Balance Sheet array
+  const latestAnnual = (arr, metric) => {
+    const row = (arr||[]).find(r => r.Metric === metric);
+    if (!row) return null;
+    // Keys are like "Mar 2025", "Mar 2024", "TTM" — get the last numeric year key
+    const keys = Object.keys(row).filter(k => k !== 'Metric').sort();
+    const ttm = row['TTM']; if (ttm != null) return pn(ttm);
+    return keys.length ? pn(row[keys[keys.length-1]]) : null;
+  };
+  // Helper: get growth rate from compounded growth arrays
+  const growthRate = (arr, label) => {
+    const item = (arr||[]).find(o => Object.keys(o)[0]?.includes(label));
+    return item ? pn(Object.values(item)[0]) : null;
+  };
+  // Helper: get latest shareholding value
+  const latestSH = (arr, label) => {
+    const row = (arr||[]).find(r => (r['']||'').includes(label));
+    if (!row) return null;
+    const keys = Object.keys(row).filter(k => k !== '').sort();
+    return keys.length ? pn(row[keys[keys.length-1]]) : null;
+  };
+
+  const pnl = raw.profit_and_loss || {};
+  const annual = pnl.annual_data || [];
+  const bs = raw.balance_sheet || [];
+  const ratios = raw.ratios || [];
+  const sh = raw.shareholding?.quarterly || [];
+
+  // P&L derived
+  const sales = latestAnnual(annual, 'Sales');
+  const netProfit = latestAnnual(annual, 'Net Profit');
+  const opm = latestAnnual(annual, 'OPM %');
+  const eps = latestAnnual(annual, 'EPS in Rs');
+  const interest = latestAnnual(annual, 'Interest');
+  const pbt = latestAnnual(annual, 'Profit before tax');
+  const depreciation = latestAnnual(annual, 'Depreciation');
+
+  // Balance sheet derived
+  const equity = latestAnnual(bs, 'Equity Capital');
+  const reserves = latestAnnual(bs, 'Reserves');
+  const borrowings = latestAnnual(bs, 'Borrowings');
+  const totalAssets = latestAnnual(bs, 'Total Assets');
+  const netWorth = (equity||0) + (reserves||0);
+
+  // Computed ratios
+  const roe = netWorth > 0 && netProfit != null ? pn((netProfit / netWorth * 100).toFixed(1)) : null;
+  const de = netWorth > 0 && borrowings != null ? pn((borrowings / netWorth).toFixed(2)) : null;
+  const roa = totalAssets > 0 && netProfit != null ? pn((netProfit / totalAssets * 100).toFixed(1)) : null;
+  const intCov = interest > 0 && pbt != null ? pn(((pbt + interest) / interest).toFixed(1)) : null;
+  const currentRatio = null; // not easily available from this format
+
+  // Growth rates from P&L summary
+  const salesGr3y = growthRate(pnl['Compounded Sales Growth'], '3 Year');
+  const profitGr3y = growthRate(pnl['Compounded Profit Growth'], '3 Year');
+  const salesGr5y = growthRate(pnl['Compounded Sales Growth'], '5 Year');
+  const profitGr5y = growthRate(pnl['Compounded Profit Growth'], '5 Year');
+  const salesGr1y = growthRate(pnl['Compounded Sales Growth'], 'TTM');
+  const profitGr1y = growthRate(pnl['Compounded Profit Growth'], 'TTM');
+  const ret1y = growthRate(pnl['Stock Price CAGR'], '1 Year');
+  const ret3y = growthRate(pnl['Stock Price CAGR'], '3 Year');
+  const ret5y = growthRate(pnl['Stock Price CAGR'], '5 Year');
+  const roe3y = growthRate(pnl['Return on Equity'], '3 Year');
+  const roe5y = growthRate(pnl['Return on Equity'], '5 Year');
+  const roeLast = growthRate(pnl['Return on Equity'], 'Last Year');
+
+  // ROCE from ratios
+  const roceRow = (ratios||[]).find(r => r.Metric === 'ROCE %');
+  let roce = null;
+  if (roceRow) {
+    const rKeys = Object.keys(roceRow).filter(k => k !== 'Metric').sort();
+    if (rKeys.length) roce = pn(roceRow[rKeys[rKeys.length-1]]);
+  }
+
+  // Shareholding
+  const promoter = latestSH(sh, 'Promoters');
+  // Promoter change: latest - previous quarter
+  let promoterChg = null;
+  const promRow = (sh||[]).find(r => (r['']||'').includes('Promoters'));
+  if (promRow) {
+    const pKeys = Object.keys(promRow).filter(k => k !== '').sort();
+    if (pKeys.length >= 2) promoterChg = pn((pn(promRow[pKeys[pKeys.length-1]]) - pn(promRow[pKeys[pKeys.length-2]])).toFixed(2));
+  }
+
+  // Quarterly data for recent quarter growth
+  const qtrs = raw.quarters || [];
+  const salesQtr = latestAnnual(qtrs, 'Sales');
+  const patQtr = latestAnnual(qtrs, 'Net Profit');
+
+  return {
+    sym, name: raw.company_name || sym,
+    nse_code: sym,
+    industry: null, // getstockdetails doesn't return industry directly
+    roe: roeLast ?? roe, de, pe: null, // PE needs current price / EPS
+    rev_gr_3y: salesGr3y, eps_gr_3y: profitGr3y,
+    opm, roa, pb: null, peg: null,
+    int_cov: intCov, promoter_holding: promoter,
+    pledged_pct: null, promoter_chg: promoterChg,
+    mkt_cap: null, current_price: null,
+    eps, debt: borrowings, current_ratio: currentRatio,
+    div_yield: null, sales_gr_1y: salesGr1y, sales_gr_5y: salesGr5y,
+    eps_gr_1y: profitGr1y, eps_gr_5y: profitGr5y,
+    roe_3y_avg: roe3y, roe_5y_avg: roe5y,
+    ret_1y: ret1y, ret_3y: ret3y, ret_5y: ret5y,
+    ret_6m: null, ret_3m: null,
+    ev_ebitda: null, industry_pe: null,
+    pat_qtr: patQtr, sales_qtr: salesQtr,
+    pat_annual: netProfit, sales_annual: sales,
+    pat_qtr_yoy: null, sales_qtr_yoy: null,
+    roce, earnings_yield: null, price_to_fcf: null, price_to_sales: null,
+  };
+}
+
+// ── Fetch single stock via getstockdetails mode ──
+async function fetchOneScreenerStock(sym, apifyToken) {
+  const BASE  = 'https://api.apify.com/v2';
+  const ACTOR = 'shashwattrivedi~screener-in';
+  const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${apifyToken}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'getstockdetails', url: `https://www.screener.in/company/${sym}/consolidated/` }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!startResp.ok) throw new Error(`Start failed: ${startResp.status}`);
+  const runInfo = await startResp.json();
+  const runId = runInfo.data?.id, datasetId = runInfo.data?.defaultDatasetId;
+  if (!runId) throw new Error('No run ID');
+
+  // Poll until done (max 3 min)
+  let status = 'RUNNING', attempts = 0;
+  while ((status === 'RUNNING' || status === 'READY') && attempts < 36) {
+    await new Promise(r => setTimeout(r, 5000));
+    attempts++;
+    const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${apifyToken}`, { signal: AbortSignal.timeout(10000) });
+    if (poll.ok) status = (await poll.json()).data?.status || 'RUNNING';
+  }
+  if (status !== 'SUCCEEDED') throw new Error(`Run ended: ${status}`);
+
+  const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${apifyToken}&limit=5`, { signal: AbortSignal.timeout(15000) });
+  const items = await dataResp.json();
+  if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
+  return parseScreenerDetails(sym, items[0]);
+}
+
+// ── Batch fetch all stocks via getstockdetails (parallel batches of 3) ──
+async function fetchAllScreenerByStock(apifyToken) {
+  if (screenerRunning) return { error: 'Already running' };
+  screenerRunning = true;
+  const stocks = UNIVERSE.filter(s => !s.sym.includes('USDT')).map(s => s.sym);
+  screenerProgress = { done: 0, total: stocks.length, errors: 0, startedAt: Date.now() };
+  console.log(`📊 Screener getstockdetails: fetching ${stocks.length} stocks in batches of 3...`);
+
+  let imported = 0, errors = 0;
+  const BATCH = 3; // Apify concurrent run limit
+
+  for (let i = 0; i < stocks.length; i += BATCH) {
+    const batch = stocks.slice(i, i + BATCH);
+    const results = await Promise.allSettled(batch.map(async sym => {
+      try {
+        const data = await fetchOneScreenerStock(sym, apifyToken);
+        await upsertScreenerData(data);
+        patchScreenerIntoFUND(sym, data);
+        return { sym, ok: true };
+      } catch(e) {
+        return { sym, ok: false, error: e.message };
+      }
+    }));
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.ok) { imported++; }
+      else { errors++; }
+    }
+    screenerProgress.done = imported;
+    screenerProgress.errors = errors;
+
+    if ((i/BATCH) % 10 === 0) {
+      console.log(`📊 Screener progress: ${imported}/${stocks.length} OK, ${errors} errors (batch ${Math.floor(i/BATCH)+1})`);
+    }
+    // Small pause between batches
+    if (i + BATCH < stocks.length) await new Promise(r => setTimeout(r, 2000));
+  }
+
+  screenerRunning = false;
+  console.log(`✅ Screener getstockdetails: ${imported} imported, ${errors} errors`);
+  if (imported > 10) refreshAllFundamentals();
+  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: stocks.length, mode: 'getstockdetails' }));
+  return { imported, errors, total: stocks.length };
+}
+
 async function fetchAllScreenerData() {
   if (screenerRunning) return { error: 'Already running' };
   const token = process.env.APIFY_TOKEN;
   if (!token) return { error: 'APIFY_TOKEN not set' };
-  if (!process.env.SCREENER_USERNAME || !process.env.SCREENER_PASSWORD) {
-    return { error: 'SCREENER_USERNAME and SCREENER_PASSWORD required in Railway env vars' };
-  }
-  return fetchAllScreenerBulk(token);
+  // Use getstockdetails mode (per-stock) — more reliable than runQuery
+  return fetchAllScreenerByStock(token);
 }
 
 // Admin: server logs endpoint
@@ -5334,12 +5522,18 @@ app.get('/api/screener/test/:sym', async (req, res) => {
   }
 });
 
-// Manual trigger
+// Manual trigger — ?mode=bulk for runQuery, default is getstockdetails
 app.post('/api/screener/fetch', async (req, res) => {
   if (!process.env.APIFY_TOKEN) return res.status(400).json({ error: 'Set APIFY_TOKEN in Railway env vars' });
   if (screenerRunning) return res.json({ message: 'Already running', progress: screenerProgress });
-  res.json({ message: 'Screener fetch started in background', total: UNIVERSE.filter(s=>['NIFTY50','NEXT50','MIDCAP','SMALLCAP'].includes(s.grp)).length });
-  fetchAllScreenerData().catch(e => console.error('Screener fetch error:', e.message));
+  const mode = req.query.mode || 'getstockdetails';
+  const total = UNIVERSE.filter(s=>!s.sym.includes('USDT')).length;
+  res.json({ message: `Screener fetch started (${mode})`, total, mode });
+  if (mode === 'bulk') {
+    fetchAllScreenerBulk(process.env.APIFY_TOKEN).catch(e => console.error('Screener bulk error:', e.message));
+  } else {
+    fetchAllScreenerByStock(process.env.APIFY_TOKEN).catch(e => console.error('Screener fetch error:', e.message));
+  }
 });
 
 // Progress check
@@ -6087,10 +6281,10 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       verdict,verdictColor,verdictIcon,action,verdictTimeframe:timeframe,
       analysis,buyPlan,
       dataAvailable:{
-        kite1y:c1y.length>0,kite3y:c3y.length>0,kite10w:c10w.length>0,
-        kiteMax:cMax.length>0,maxCandles:cMax.length,
+        kiteDaily:cDay.length>0,kiteWeekly:cWeek.length>0,kiteMonthly:cMonth.length>0,
+        maxCandles:cDay.length||cWeek.length||cMonth.length,
         kite1h:c1h.length>0,news:news.length>0,fundamentals:!!fund,
-        candlesUsed:techCandles.length,
+        candlesUsed:candles.length,
       },
     });
   } catch(e){
