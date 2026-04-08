@@ -3730,6 +3730,43 @@ let fundAutoLoading = false;
 let fundAutoLastRun = null;
 let fundFetchStats  = { success:0, failed:0, total:0, lastRun:null };
 
+// Yahoo Finance crumb/cookie cache — shared across all requests
+let yahooCrumb = null;
+let yahooCookies = null;
+let yahooCrumbFetched = 0;
+
+async function refreshYahooCrumb() {
+  const CRUMB_TTL = 3600000; // 1 hour
+  if (yahooCrumb && yahooCookies && (Date.now() - yahooCrumbFetched) < CRUMB_TTL) return;
+  try {
+    // Step 1: Get cookies from Yahoo
+    const cookieResp = await fetch('https://fc.yahoo.com/', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+    });
+    const setCookie = cookieResp.headers.get('set-cookie') || '';
+    yahooCookies = setCookie.split(',').map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
+    if (!yahooCookies) throw new Error('No cookies from Yahoo');
+
+    // Step 2: Get crumb using cookies
+    const crumbResp = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
+        'Cookie': yahooCookies,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!crumbResp.ok) throw new Error(`Crumb fetch failed: ${crumbResp.status}`);
+    yahooCrumb = await crumbResp.text();
+    yahooCrumbFetched = Date.now();
+    console.log('📊 Yahoo Finance crumb refreshed');
+  } catch(e) {
+    console.error('Yahoo crumb error:', e.message);
+    yahooCrumb = null; yahooCookies = null;
+  }
+}
+
 async function fetchFromYahoo(sym) {
   // Yahoo Finance v10 - returns comprehensive fundamentals
   // NSE stocks use .NS suffix (BSE use .BO)
@@ -3739,6 +3776,10 @@ async function fetchFromYahoo(sym) {
   };
   const yahooSym = nseSymMap[sym] || `${sym}.NS`;
 
+  // Refresh crumb if needed
+  await refreshYahooCrumb();
+  if (!yahooCrumb || !yahooCookies) return null;
+
   const modules = [
     'financialData',          // ROE, margins, revenue growth, EPS growth
     'defaultKeyStatistics',   // P/E, PEG, beta, 52w change
@@ -3747,18 +3788,23 @@ async function fetchFromYahoo(sym) {
     'balanceSheetHistory',    // debt for D/E calc
   ].join(',');
 
-  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${yahooSym}?modules=${modules}`;
+  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${yahooSym}?modules=${modules}&crumb=${encodeURIComponent(yahooCrumb)}`;
 
   const resp = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
       'Accept': 'application/json',
       'Accept-Language': 'en-US,en;q=0.9',
+      'Cookie': yahooCookies,
     },
     signal: AbortSignal.timeout(12000),
   });
 
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    // If unauthorized, invalidate crumb so next request refreshes
+    if (resp.status === 401 || resp.status === 403) { yahooCrumb = null; yahooCookies = null; }
+    return null;
+  }
   const data = await resp.json();
   const result = data?.quoteSummary?.result?.[0];
   if (!result) return null;
