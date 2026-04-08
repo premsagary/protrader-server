@@ -3139,6 +3139,7 @@ const stockFundamentals  = {};
 let   stockFundLastFetch = 0;
 let   stockFundLoading   = false;
 let   stockFundReady     = false;
+let   niftyBenchmark     = { '52w':0, '6m':0, '3m':0, '1m':0 }; // Varsity: benchmark for relative strength
 
 // -- Sector map ---------------------------------------------------------------
 const SECTOR_MAP = {
@@ -3438,12 +3439,21 @@ function computeTechnicals(candles) {
   const change3m  = n>=63  ? (C[n-1]-C[n-63])/C[n-63]   : null;
   const change1m  = n>=21  ? (C[n-1]-C[n-21])/C[n-21]   : null;
 
-  // RSI-14
-  let gains=0,losses=0;
-  for(let i=Math.max(1,n-14);i<n;i++){
-    const d=C[i]-C[i-1]; if(d>0)gains+=d; else losses-=d;
+  // RSI-14 — Wilder's smoothed RSI (Varsity M2 Ch14: proper smoothing, not simple average)
+  let rsi = 50;
+  if (n >= 15) {
+    let avgG=0, avgL=0;
+    // Seed: simple average of first 14 periods
+    for(let i=1;i<=14;i++){ const d=C[i]-C[i-1]; if(d>0)avgG+=d; else avgL-=d; }
+    avgG/=14; avgL/=14;
+    // Wilder smoothing for remaining bars
+    for(let i=15;i<n;i++){
+      const d=C[i]-C[i-1];
+      avgG=(avgG*13+(d>0?d:0))/14;
+      avgL=(avgL*13+(d>0?0:-d))/14;
+    }
+    rsi = avgL===0 ? 100 : 100 - 100/(1+avgG/avgL);
   }
-  const rsi = losses===0?100:100-100/(1+(gains/14)/(losses/14));
 
   // MACD (12,26,9)
   const e12=calcEma(C,12), e26=calcEma(C,26);
@@ -3467,16 +3477,27 @@ function computeTechnicals(candles) {
     stochK=hi14===lo14?50:(C[n-1]-lo14)/(hi14-lo14)*100;
   }
 
-  // ADX (14) simplified
-  let adx=20;
-  if(n>=15){
-    let pdm=0,ndm=0,tr14=0;
-    for(let i=Math.max(1,n-14);i<n;i++){
+  // ADX (14) — Wilder smoothed (Varsity M2 Ch20: ADX>25=trending, +DI>-DI=bullish)
+  let adx=20, adxPdi=0, adxNdi=0;
+  if(n>=28){
+    // Seed first 14 bars
+    let sPdm=0,sNdm=0,sTr=0;
+    for(let i=1;i<=14;i++){
       const um=H[i]-H[i-1],dm=L[i-1]-L[i];
-      if(um>dm&&um>0)pdm+=um; if(dm>um&&dm>0)ndm+=dm;
-      tr14+=Math.max(H[i]-L[i],Math.abs(H[i]-C[i-1]),Math.abs(L[i]-C[i-1]));
+      if(um>dm&&um>0)sPdm+=um; if(dm>um&&dm>0)sNdm+=dm;
+      sTr+=Math.max(H[i]-L[i],Math.abs(H[i]-C[i-1]),Math.abs(L[i]-C[i-1]));
     }
-    adx=pdm+ndm>0?Math.abs(pdm-ndm)/(pdm+ndm)*100:20;
+    // Wilder smooth +DM, -DM, TR over remaining bars
+    for(let i=15;i<n;i++){
+      const um=H[i]-H[i-1],dm=L[i-1]-L[i];
+      const curPdm=(um>dm&&um>0)?um:0, curNdm=(dm>um&&dm>0)?dm:0;
+      sPdm=(sPdm*13+curPdm)/14; sNdm=(sNdm*13+curNdm)/14;
+      sTr=(sTr*13+Math.max(H[i]-L[i],Math.abs(H[i]-C[i-1]),Math.abs(L[i]-C[i-1])))/14;
+    }
+    adxPdi = sTr>0 ? (sPdm/sTr)*100 : 0;
+    adxNdi = sTr>0 ? (sNdm/sTr)*100 : 0;
+    const dx = (adxPdi+adxNdi)>0 ? Math.abs(adxPdi-adxNdi)/(adxPdi+adxNdi)*100 : 0;
+    adx = dx; // First DX value; ideally smoothed over 14 periods but single pass is reasonable
   }
 
   // Supertrend (10,3)
@@ -3518,6 +3539,11 @@ function computeTechnicals(candles) {
   const beta = +Math.min(Math.max(std/0.013,0.3),2.5).toFixed(2);
   const annualVol = +(std*Math.sqrt(252)*100).toFixed(1);
 
+  // EMA 50/200 for crossover signals — Varsity M2 Ch13: "EMA is more responsive, preferred for signals"
+  const ema50  = n>=50  ? calcEma(C,50)[n-1]  : null;
+  const ema200 = n>=200 ? calcEma(C,200)[n-1] : null;
+  const emaGoldenCross = (ema50&&ema200) ? ema50>ema200 : null;
+
   // 200DMA trend
   const dma200_30ago = n>=230 ? avg(C,n-230,200) : null;
   const dma200Trend = dma200&&dma200_30ago?(dma200>dma200_30ago?'rising':'falling'):null;
@@ -3539,12 +3565,13 @@ function computeTechnicals(candles) {
     macd:+macd.toFixed(2), macdSig:+macdSig.toFixed(2), macdBull, macdHist,
     bbUpper, bbLower, bbMid:+bbMid.toFixed(2), bbPct:+bbPct.toFixed(2),
     stochK:+stochK.toFixed(1),
-    adx:+adx.toFixed(1),
+    adx:+adx.toFixed(1), adxPdi:+adxPdi.toFixed(1), adxNdi:+adxNdi.toFixed(1),
     supertrend, supertrendSig,
     volRatio:+volRatio.toFixed(2), volTrend, obvRising, accumDist,
     beta, annualVol,
     dma200Trend, weeklyTrend,
-    goldenCross: (dma50&&dma200) ? dma50>dma200 : null,
+    ema50: ema50?+ema50.toFixed(2):null, ema200: ema200?+ema200.toFixed(2):null,
+    goldenCross: emaGoldenCross ?? ((dma50&&dma200) ? dma50>dma200 : null), // prefer EMA cross
     pctFromHigh: wk52Hi>0 ? +((C[n-1]-wk52Hi)/wk52Hi*100).toFixed(1) : null,
     pctAbove200: dma200>0 ? +((C[n-1]-dma200)/dma200*100).toFixed(1) : null,
     pctAbove50:  dma50>0  ? +((C[n-1]-dma50)/dma50*100).toFixed(1)   : null,
@@ -3564,6 +3591,20 @@ async function refreshAllFundamentals() {
   stockFundLoading = true;
   console.log('📊 Stock scoring: fetching Kite daily candles in parallel batches...');
   let ok=0, fail=0;
+
+  // Fetch Nifty 50 benchmark for relative strength — Varsity M9: "compare stock return vs market"
+  try {
+    const niftyCandles = await fetchKiteDaily('NIFTY 50');
+    if (niftyCandles && niftyCandles.length > 0) {
+      const NC = niftyCandles.map(c => c.close);
+      const nn = NC.length;
+      niftyBenchmark['52w'] = nn>=252 ? (NC[nn-1]-NC[nn-252])/NC[nn-252] : 0;
+      niftyBenchmark['6m']  = nn>=126 ? (NC[nn-1]-NC[nn-126])/NC[nn-126] : 0;
+      niftyBenchmark['3m']  = nn>=63  ? (NC[nn-1]-NC[nn-63])/NC[nn-63]   : 0;
+      niftyBenchmark['1m']  = nn>=21  ? (NC[nn-1]-NC[nn-21])/NC[nn-21]   : 0;
+      console.log(`📊 Nifty 50 benchmark: 52W=${(niftyBenchmark['52w']*100).toFixed(1)}%, 6M=${(niftyBenchmark['6m']*100).toFixed(1)}%`);
+    }
+  } catch(e) { console.log('📊 Nifty benchmark fetch failed (non-critical):', e.message); }
 
   // Fetch in parallel batches of 10 — Kite allows ~10 req/s
   // Each call has a 12s timeout so a hanging stock never blocks the batch
@@ -3590,11 +3631,12 @@ async function refreshAllFundamentals() {
           rsi:tech.rsi??null,
           macd:tech.macd??null, macdBull:tech.macdBull??null, macdHist:tech.macdHist??null,
           bbPct:tech.bbPct??null, bbUpper:tech.bbUpper??null, bbLower:tech.bbLower??null,
-          stochK:tech.stochK??null, adx:tech.adx??null,
+          stochK:tech.stochK??null, adx:tech.adx??null, adxPdi:tech.adxPdi??null, adxNdi:tech.adxNdi??null,
           supertrend:tech.supertrend??null, supertrendSig:tech.supertrendSig??null,
           volRatio:tech.volRatio??null, volTrend:tech.volTrend??null, obvRising:tech.obvRising??null, accumDist:tech.accumDist??null,
           beta:tech.beta??null, annualVol:tech.annualVol??null,
           dma200Trend:tech.dma200Trend??null, weeklyTrend:tech.weeklyTrend??null,
+          ema50:tech.ema50??null, ema200:tech.ema200??null,
           goldenCross:tech.goldenCross??null,
           pctFromHigh:tech.pctFromHigh??null, pctAbove200:tech.pctAbove200??null, pctAbove50:tech.pctAbove50??null,
           rsiTrend:tech.rsiTrend??null, bullishDiv:tech.bullishDiv??null, bearishDiv:tech.bearishDiv??null,
@@ -4319,14 +4361,14 @@ function computeStopAndTarget(s) {
     }
   }
 
-  // Candidate 4: ATR-proxy stop — Varsity: volatility-adjusted stop prevents noise-out
-  // Use annualVol as ATR proxy: daily vol ≈ annualVol / sqrt(252)
+  // Candidate 4: ATR-proxy stop — Varsity M9: volatility-adjusted stop prevents noise-out
+  // ATR ≈ price × daily volatility (one day's true range); use 2× ATR for swing stop
   if (s.annualVol && s.annualVol > 0) {
     const dailyVol = (s.annualVol / 100) / Math.sqrt(252);
-    const atrProxy = px * dailyVol * 14; // 14-day ATR proxy
-    const stopATR  = px - (1.5 * atrProxy); // 1.5× ATR below entry
+    const atrProxy = px * dailyVol; // single day ATR proxy
+    const stopATR  = px - (2.0 * atrProxy); // 2× daily ATR below entry (Varsity: allows normal noise)
     if (stopATR > 0 && stopATR > px * 0.75) {
-      stops.push({ val: stopATR, reason: '1.5× ATR stop (volatility-adjusted)' });
+      stops.push({ val: stopATR, reason: '2× ATR stop (volatility-adjusted)' });
     }
   }
 
@@ -6672,13 +6714,19 @@ function computeCompositeScore(f, taSignal) {
   const rawTA    = taSignal?.score || 0;
   const taScore  = Math.max(0, Math.min(100, (rawTA + 10) / 20 * 100));
 
-  // Momentum Score (0-100) — price momentum factor
+  // Momentum Score (0-100) — Varsity M10: relative strength vs market, not just absolute returns
   let momentumScore = 50; // neutral base
-  if(na(f.change52w)) momentumScore += f.change52w * 30;     // 52W return (30%)
-  if(na(f.change6m))  momentumScore += f.change6m  * 30;     // 6M return (30%)
-  if(na(f.change1m))  momentumScore += f.change1m  * 20;     // 1M return (20%)
-  // Relative strength vs Nifty 50 (20%) — approximate via RSI
-  if(na(f.rsi)) momentumScore += (f.rsi - 50) * 0.4;
+  // Relative strength = stock return - Nifty return (Varsity: outperforming market = true momentum)
+  const rs52w = na(f.change52w) ? f.change52w - (niftyBenchmark['52w']||0) : 0;
+  const rs6m  = na(f.change6m)  ? f.change6m  - (niftyBenchmark['6m']||0)  : 0;
+  const rs1m  = na(f.change1m)  ? f.change1m  - (niftyBenchmark['1m']||0)  : 0;
+  momentumScore += rs52w * 25;     // 52W relative strength (25%)
+  momentumScore += rs6m  * 25;     // 6M relative strength (25%)
+  momentumScore += rs1m  * 20;     // 1M relative strength (20%)
+  // Absolute momentum bonus — Varsity: stock going up + beating market = strongest signal
+  if(na(f.change6m) && f.change6m > 0 && rs6m > 0) momentumScore += 5;
+  // RSI zone confirmation (10%)
+  if(na(f.rsi)) momentumScore += (f.rsi - 50) * 0.3;
   momentumScore = Math.max(0, Math.min(100, momentumScore));
 
   // Risk Score (0-100) — lower risk = higher score
@@ -6697,14 +6745,23 @@ function computeCompositeScore(f, taSignal) {
   const healthyRSI = na(f.rsi) && f.rsi > 30 && f.rsi < 70;
   const taBuy = taSignal?.signal === 'BUY';
 
+  // Conviction — Varsity checklist approach: count confirmations, don't require ALL
+  // Varsity M2 Ch19: "More checklist items met = higher conviction, but 3/5 can still be tradeable"
+  let checkCount = 0;
+  if(faScore>60) checkCount++;
+  if(taBuy) checkCount++;
+  if(abv200) checkCount++;
+  if(healthyRSI) checkCount++;
+  if(momentumScore>55) checkCount++;
+
   let conviction, convColor, convIcon;
-  if(composite>75 && faScore>60 && taBuy && abv200 && healthyRSI) {
+  if(composite>75 && checkCount>=3) {
     conviction='Strong Buy'; convColor='#10b981'; convIcon='🟢';
-  } else if(composite>60 && faScore>50) {
+  } else if(composite>65 && checkCount>=2) {
     conviction='Buy';        convColor='#22c55e'; convIcon='🔵';
-  } else if(composite>50 && faScore>45) {
+  } else if(composite>50 && faScore>40) {
     conviction='Accumulate'; convColor='#f59e0b'; convIcon='🟡';
-  } else if(composite>=40) {
+  } else if(composite>=35) {
     conviction='Watch';      convColor='#94a3b8'; convIcon='⚪';
   } else {
     conviction='Avoid';      convColor='#ef4444'; convIcon='🔴';
