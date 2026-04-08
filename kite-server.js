@@ -5310,6 +5310,340 @@ app.get('/api/stocks/score', async(req,res)=>{
 });
 
 // =============================================================================
+// PORTFOLIO SUGGESTION ENGINE — Varsity M9 (Risk Mgmt) + M3 (FA) + M2 (TA)
+// Replaces AI Portfolio. Uses LIVE data, scores, conviction, R:R to build
+// a diversified portfolio from the user's investment amount.
+// Auto-refreshes every hour with buy/sell/hold signals.
+// =============================================================================
+
+// In-memory portfolio suggestions cache (per-session, keyed by amount)
+const portfolioSuggestions = {};
+
+// Helper: build portfolio suggestion from scored stock data
+function buildPortfolioSuggestion(amount) {
+  const all = Object.values(stockFundamentals);
+  if (!all.length) return { error: 'Stock data not loaded yet. Please wait for scoring to complete.' };
+
+  // Group by sector for peer ranking
+  const bySector = {};
+  all.forEach(f => { const s = f.sector || 'Other'; bySector[s] = bySector[s] || []; bySector[s].push(f); });
+
+  // Score all stocks with composite scores
+  const scored = all.map(f => {
+    const peers = bySector[f.sector || 'Other'] || all;
+    const { score, hits } = scoreOneStock(f, peers);
+    const px = f.price || livePrices[f.sym]?.price;
+    if (!px || px <= 0) return null;
+
+    // Get TA signal for composite score
+    const taSignal = {
+      signal: f.macdBull && f.rsi > 30 && f.rsi < 70 && (f.goldenCross || f.pctAbove200 > 0) ? 'BUY'
+            : f.rsi > 75 || (f.bearishDiv) ? 'SELL' : 'HOLD',
+      score: (f.macdBull ? 3 : -2) + (f.obvRising ? 2 : 0) + (f.goldenCross ? 3 : -1)
+           + (f.rsi < 35 ? 2 : f.rsi > 70 ? -3 : 0) + (f.adx > 25 ? 1 : 0)
+    };
+
+    const composite = computeCompositeScore(f, taSignal);
+    const stopData = computeStopAndTarget({ ...f, price: px });
+
+    // Fallen Angel check
+    const isSmall = f.grp === 'SMALLCAP';
+    const isMid = f.grp === 'MIDCAP';
+    const isFa = score >= (isSmall ? 55 : isMid ? 52 : 50)
+      && (f.pctFromHigh || 0) <= (isSmall ? -25 : -20)
+      && (f.rsi || 50) <= 52;
+    const faData = isFa ? scoreFallenAngel(f) : {};
+
+    return {
+      sym: f.sym, name: f.name, grp: f.grp, sector: f.sector,
+      price: px, score, faScore: score, ...composite, ...faData, isFallenAngel: isFa,
+      stopLoss: stopData?.stopLoss, target: stopData?.target,
+      rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
+      riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
+      stopReason: stopData?.stopReason, targetReason: stopData?.targetReason,
+      // Key metrics for display
+      roe: f.roe, debtToEq: f.debtToEq, pe: f.pe, rsi: f.rsi,
+      macdBull: f.macdBull, goldenCross: f.goldenCross, obvRising: f.obvRising,
+      pctFromHigh: f.pctFromHigh, pctAbove200: f.pctAbove200,
+      dma200: f.dma200, dma50: f.dma50, beta: f.beta, annualVol: f.annualVol,
+      change1m: f.change1m, change3m: f.change3m, change6m: f.change6m,
+      opMargin: f.opMargin, earGrowth: f.earGrowth, revGrowth: f.revGrowth,
+      promoter: f.promoter, pledged: f.pledged, mktCap: f.mktCap,
+      volRatio: f.volRatio, adx: f.adx, bullishDiv: f.bullishDiv,
+    };
+  }).filter(Boolean);
+
+  // --- SELECTION CRITERIA (Varsity M9: diversified, quality-first) ---
+  // Only consider stocks with conviction Buy or Strong Buy
+  const eligible = scored.filter(s =>
+    (s.conviction === 'Strong Buy' || s.conviction === 'Buy' || s.conviction === 'Accumulate')
+    && s.composite >= 50
+    && s.goodRR !== false // R:R must be acceptable or unknown
+  );
+
+  // Sort by composite score descending
+  eligible.sort((a, b) => b.composite - a.composite);
+
+  // --- DIVERSIFICATION (Varsity M9 Ch5: max 2 per sector, min 4 sectors) ---
+  const selected = [];
+  const sectorCnt = {};
+  const MAX_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000))); // 5-15 stocks based on amount
+
+  for (const s of eligible) {
+    const sec = s.sector || 'Other';
+    sectorCnt[sec] = (sectorCnt[sec] || 0) + 1;
+    if (sectorCnt[sec] <= 2) {
+      selected.push(s);
+      if (selected.length >= MAX_STOCKS) break;
+    }
+  }
+
+  // If not enough, relax sector constraint
+  if (selected.length < 5) {
+    for (const s of eligible) {
+      if (!selected.find(x => x.sym === s.sym)) {
+        selected.push(s);
+        if (selected.length >= MAX_STOCKS) break;
+      }
+    }
+  }
+
+  if (!selected.length) return { error: 'No stocks meet the quality criteria right now. Market may be overheated.' };
+
+  // --- ALLOCATION (Varsity M9: weight by conviction + Kelly-inspired sizing) ---
+  // Higher composite = more weight; Strong Buy gets 1.5x weight
+  const rawWeights = selected.map(s => {
+    let w = s.composite;
+    if (s.conviction === 'Strong Buy') w *= 1.5;
+    else if (s.conviction === 'Buy') w *= 1.2;
+    // Reduce weight for high-beta stocks (Varsity M9: risk-adjusted sizing)
+    if (s.beta && s.beta > 1.3) w *= 0.8;
+    if (s.beta && s.beta > 1.6) w *= 0.7;
+    // Bonus weight for fallen angels with good R:R
+    if (s.isFallenAngel && s.goodRR) w *= 1.2;
+    // Reduce weight for high-volatility stocks
+    if (s.annualVol && s.annualVol > 40) w *= 0.85;
+    return w;
+  });
+
+  const totalW = rawWeights.reduce((a, b) => a + b, 0);
+  const MIN_ALLOC = 0.03; // min 3% per stock
+  const MAX_ALLOC = 0.20; // max 20% per stock (Varsity: never >20% in single stock)
+
+  const allocations = rawWeights.map(w => {
+    let pct = w / totalW;
+    pct = Math.max(MIN_ALLOC, Math.min(MAX_ALLOC, pct));
+    return pct;
+  });
+
+  // Normalize to sum to 1.0
+  const allocSum = allocations.reduce((a, b) => a + b, 0);
+  allocations.forEach((_, i) => { allocations[i] /= allocSum; });
+
+  // Build final portfolio
+  const portfolio = selected.map((s, i) => {
+    const allocPct = +(allocations[i] * 100).toFixed(1);
+    const allocAmt = Math.round(amount * allocations[i]);
+    const shares = Math.max(1, Math.floor(allocAmt / s.price));
+    const investedAmt = +(shares * s.price).toFixed(0);
+
+    // Generate action signal
+    let action = 'BUY';
+    let actionColor = '#22c55e';
+    let reason = `${s.conviction} — composite ${s.composite}`;
+    if (s.isFallenAngel) {
+      reason = `Fallen Angel (${s.fallenVerdict || 'dip buy'}) — ${reason}`;
+    }
+
+    return {
+      sym: s.sym, name: s.name, grp: s.grp, sector: s.sector,
+      price: s.price, shares, allocPct, allocAmt: investedAmt,
+      action, actionColor, reason,
+      conviction: s.conviction, convColor: s.convColor,
+      composite: s.composite, faScore: s.faScore,
+      isFallenAngel: s.isFallenAngel,
+      fallenVerdict: s.fallenVerdict || null,
+      stopLoss: s.stopLoss, target: s.target,
+      rrRatio: s.rrRatio, riskPct: s.riskPct, rewardPct: s.rewardPct,
+      stopReason: s.stopReason, targetReason: s.targetReason,
+      // Key metrics
+      roe: s.roe, debtToEq: s.debtToEq, pe: s.pe, rsi: s.rsi,
+      macdBull: s.macdBull, goldenCross: s.goldenCross,
+      pctFromHigh: s.pctFromHigh, pctAbove200: s.pctAbove200,
+      beta: s.beta, opMargin: s.opMargin, earGrowth: s.earGrowth,
+      // For live updates
+      entryPrice: s.price,
+      entryTime: Date.now(),
+    };
+  });
+
+  // Portfolio-level stats
+  const totalInvested = portfolio.reduce((a, s) => a + s.allocAmt, 0);
+  const avgComposite = +(portfolio.reduce((a, s) => a + s.composite, 0) / portfolio.length).toFixed(1);
+  const sectorBreakdown = {};
+  portfolio.forEach(s => { sectorBreakdown[s.sector] = (sectorBreakdown[s.sector] || 0) + s.allocPct; });
+  const numSectors = Object.keys(sectorBreakdown).length;
+
+  // Weighted portfolio beta
+  const wBeta = portfolio.reduce((a, s) => a + (s.beta || 1) * (s.allocPct / 100), 0);
+
+  return {
+    portfolio,
+    summary: {
+      totalAmount: amount,
+      totalInvested,
+      cashRemaining: amount - totalInvested,
+      numStocks: portfolio.length,
+      numSectors,
+      avgComposite,
+      portfolioBeta: +wBeta.toFixed(2),
+      sectorBreakdown,
+      generatedAt: Date.now(),
+      dataAge: stockFundLastFetch ? Date.now() - stockFundLastFetch : null,
+    }
+  };
+}
+
+// Helper: refresh portfolio with live data and generate signals
+function refreshPortfolioSignals(suggestion) {
+  if (!suggestion || !suggestion.portfolio) return suggestion;
+
+  const updated = suggestion.portfolio.map(s => {
+    const lp = livePrices[s.sym]?.price;
+    const currentPrice = lp || s.price;
+    const pnl = currentPrice - s.entryPrice;
+    const pnlPct = +((pnl / s.entryPrice) * 100).toFixed(2);
+    const currentValue = +(s.shares * currentPrice).toFixed(0);
+
+    // Get latest fundamentals
+    const f = stockFundamentals[s.sym];
+    const currentRSI = f?.rsi;
+    const currentMACD = f?.macdBull;
+    const currentOBV = f?.obvRising;
+    const abv200 = f?.pctAbove200;
+
+    // --- SIGNAL LOGIC (Varsity M2/M9) ---
+    let action = 'HOLD';
+    let actionColor = '#f59e0b';
+    let signalReasons = [];
+
+    // SELL signals
+    if (s.target && currentPrice >= s.target) {
+      action = 'SELL (Target Hit)'; actionColor = '#ef4444';
+      signalReasons.push(`Target ₹${s.target} reached`);
+    } else if (s.stopLoss && currentPrice <= s.stopLoss) {
+      action = 'SELL (Stop Loss)'; actionColor = '#ef4444';
+      signalReasons.push(`Stop loss ₹${s.stopLoss} breached`);
+    } else if (currentRSI && currentRSI > 78) {
+      action = 'SELL (Overbought)'; actionColor = '#ef4444';
+      signalReasons.push(`RSI ${currentRSI} — extreme overbought`);
+    } else if (f?.bearishDiv) {
+      action = 'SELL (Divergence)'; actionColor = '#ef4444';
+      signalReasons.push('Bearish RSI divergence detected');
+    } else if (pnlPct < -12) {
+      action = 'REVIEW (Deep Loss)'; actionColor = '#f97316';
+      signalReasons.push(`Down ${pnlPct}% — review thesis`);
+    }
+    // ADD MORE signals
+    else if (currentRSI && currentRSI < 30 && pnlPct < -5 && s.composite >= 55) {
+      action = 'ADD MORE'; actionColor = '#22d3ee';
+      signalReasons.push(`RSI ${currentRSI} oversold + quality intact — average down`);
+    } else if (f?.bullishDiv && pnlPct < 0) {
+      action = 'ADD MORE'; actionColor = '#22d3ee';
+      signalReasons.push('Bullish divergence on dip — accumulate');
+    }
+    // HOLD with positive signals
+    else if (pnlPct > 0 && currentMACD && currentOBV) {
+      action = 'HOLD (Strong)'; actionColor = '#22c55e';
+      signalReasons.push('Profitable + MACD bullish + OBV rising');
+    }
+    // Default HOLD
+    else {
+      signalReasons.push(pnlPct >= 0 ? 'In profit — hold position' : 'Thesis intact — hold');
+    }
+
+    return {
+      ...s,
+      currentPrice,
+      pnl: +pnl.toFixed(2),
+      pnlPct,
+      currentValue,
+      action,
+      actionColor,
+      signalReasons,
+      liveRSI: currentRSI,
+      liveMACD: currentMACD,
+      lastUpdated: Date.now(),
+    };
+  });
+
+  const totalValue = updated.reduce((a, s) => a + s.currentValue, 0);
+  const totalInvested = updated.reduce((a, s) => a + s.allocAmt, 0);
+  const totalPnl = totalValue - totalInvested;
+  const totalPnlPct = +((totalPnl / totalInvested) * 100).toFixed(2);
+
+  return {
+    portfolio: updated,
+    summary: {
+      ...suggestion.summary,
+      currentValue: totalValue,
+      totalPnl,
+      totalPnlPct,
+      lastRefreshed: Date.now(),
+      marketOpen: isMarketOpen(),
+    }
+  };
+}
+
+// POST /api/portfolio/suggest — generate a new portfolio suggestion
+app.post('/api/portfolio/suggest', (req, res) => {
+  try {
+    const amount = parseFloat(req.body.amount);
+    if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
+    if (amount > 100000000) return res.status(400).json({ error: 'Maximum ₹10 Cr' });
+
+    const result = buildPortfolioSuggestion(amount);
+    if (result.error) return res.status(503).json(result);
+
+    // Cache for live updates
+    const key = Math.round(amount);
+    portfolioSuggestions[key] = result;
+
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portfolio/suggest/refresh?amount=X — live refresh with signals
+app.get('/api/portfolio/suggest/refresh', (req, res) => {
+  try {
+    const amount = parseFloat(req.query.amount);
+    const key = Math.round(amount);
+    const cached = portfolioSuggestions[key];
+    if (!cached) return res.status(404).json({ error: 'Generate a portfolio first' });
+
+    const refreshed = refreshPortfolioSignals(cached);
+    portfolioSuggestions[key] = refreshed; // update cache
+    res.json(refreshed);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portfolio/suggest/regenerate — force regenerate with latest data
+app.post('/api/portfolio/suggest/regenerate', (req, res) => {
+  try {
+    const amount = parseFloat(req.body.amount);
+    if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
+
+    // Force fresh data
+    const result = buildPortfolioSuggestion(amount);
+    if (result.error) return res.status(503).json(result);
+
+    const key = Math.round(amount);
+    portfolioSuggestions[key] = result;
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================================================
 // DAILY SCHEDULES — all DB tables updated, memory reloaded after each run
 // =============================================================================
 
