@@ -5328,40 +5328,70 @@ function buildPortfolioSuggestion(amount) {
   const bySector = {};
   all.forEach(f => { const s = f.sector || 'Other'; bySector[s] = bySector[s] || []; bySector[s].push(f); });
 
-  // Score all stocks with composite scores
+  // Score all stocks — use the SAME logic as /api/stocks/score endpoint
   const scored = all.map(f => {
     const peers = bySector[f.sector || 'Other'] || all;
     const { score, hits } = scoreOneStock(f, peers);
     const px = f.price || livePrices[f.sym]?.price;
     if (!px || px <= 0) return null;
 
-    // Get TA signal for composite score
-    const taSignal = {
-      signal: f.macdBull && f.rsi > 30 && f.rsi < 70 && (f.goldenCross || f.pctAbove200 > 0) ? 'BUY'
-            : f.rsi > 75 || (f.bearishDiv) ? 'SELL' : 'HOLD',
-      score: (f.macdBull ? 3 : -2) + (f.obvRising ? 2 : 0) + (f.goldenCross ? 3 : -1)
-           + (f.rsi < 35 ? 2 : f.rsi > 70 ? -3 : 0) + (f.adx > 25 ? 1 : 0)
-    };
-
-    const composite = computeCompositeScore(f, taSignal);
     const stopData = computeStopAndTarget({ ...f, price: px });
 
-    // Fallen Angel check
+    // Fallen Angel check (same as score endpoint)
     const isSmall = f.grp === 'SMALLCAP';
     const isMid = f.grp === 'MIDCAP';
     const isFa = score >= (isSmall ? 55 : isMid ? 52 : 50)
       && (f.pctFromHigh || 0) <= (isSmall ? -25 : -20)
-      && (f.rsi || 50) <= 52;
+      && (f.rsi || 50) <= 52
+      && (f.debtToEq == null || f.debtToEq <= (isSmall ? 1.0 : isMid ? 1.5 : 2.0))
+      && (f.earGrowth == null || f.earGrowth > (isSmall ? -15 : isMid ? -20 : -25));
     const faData = isFa ? scoreFallenAngel(f) : {};
+
+    // --- QUALITY FLAGS (Varsity M3 Ch12: checklist approach) ---
+    const qualityChecks = [];
+    let qualityScore = 0;
+    // FA score is the primary quality metric
+    if (score >= 60) { qualityScore += 3; qualityChecks.push('Strong FA score ' + score); }
+    else if (score >= 45) { qualityScore += 2; qualityChecks.push('Good FA score ' + score); }
+    else if (score >= 30) { qualityScore += 1; qualityChecks.push('Fair FA score ' + score); }
+    // Profitability
+    if (f.roe != null && f.roe >= 12) { qualityScore++; qualityChecks.push('ROE ' + f.roe.toFixed(1) + '%'); }
+    // Debt safety
+    if (f.debtToEq != null && f.debtToEq <= 1.5) { qualityScore++; qualityChecks.push('D/E ' + f.debtToEq.toFixed(2)); }
+    else if (f.debtToEq == null) { qualityScore += 0.5; } // no data = don't penalize
+    // Growth
+    if (f.earGrowth != null && f.earGrowth > 0) { qualityScore++; qualityChecks.push('EPS growth +' + f.earGrowth.toFixed(0) + '%'); }
+    // Technical health
+    if (f.rsi != null && f.rsi > 25 && f.rsi < 75) { qualityScore++; qualityChecks.push('RSI ' + f.rsi.toFixed(0)); }
+    if (f.macdBull) { qualityScore++; qualityChecks.push('MACD bullish'); }
+    if (f.goldenCross) { qualityScore++; qualityChecks.push('Golden cross'); }
+    if (f.obvRising) { qualityScore++; qualityChecks.push('OBV rising'); }
+    // Above key MAs
+    if (f.pctAbove200 != null && f.pctAbove200 > 0) { qualityScore++; qualityChecks.push('Above 200DMA'); }
+    // Promoter confidence
+    if (f.promoter != null && f.promoter >= 50) { qualityScore += 0.5; }
+    // Not overbought
+    if (f.rsi != null && f.rsi > 75) { qualityScore -= 2; qualityChecks.push('⚠ RSI overbought'); }
+    // Not in freefall
+    if (f.earGrowth != null && f.earGrowth < -20) { qualityScore -= 2; qualityChecks.push('⚠ EPS collapsing'); }
+
+    // Conviction based on quality score (out of ~12 max)
+    let conviction, convColor;
+    if (qualityScore >= 8) { conviction = 'Strong Buy'; convColor = '#10b981'; }
+    else if (qualityScore >= 6) { conviction = 'Buy'; convColor = '#22c55e'; }
+    else if (qualityScore >= 4.5) { conviction = 'Accumulate'; convColor = '#f59e0b'; }
+    else if (qualityScore >= 3) { conviction = 'Watch'; convColor = '#94a3b8'; }
+    else { conviction = 'Avoid'; convColor = '#ef4444'; }
 
     return {
       sym: f.sym, name: f.name, grp: f.grp, sector: f.sector,
-      price: px, score, faScore: score, ...composite, ...faData, isFallenAngel: isFa,
+      price: px, score, faScore: score, composite: +(qualityScore * 10).toFixed(1),
+      ...faData, isFallenAngel: isFa,
+      conviction, convColor, qualityScore, qualityChecks,
       stopLoss: stopData?.stopLoss, target: stopData?.target,
       rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
       riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
       stopReason: stopData?.stopReason, targetReason: stopData?.targetReason,
-      // Key metrics for display
       roe: f.roe, debtToEq: f.debtToEq, pe: f.pe, rsi: f.rsi,
       macdBull: f.macdBull, goldenCross: f.goldenCross, obvRising: f.obvRising,
       pctFromHigh: f.pctFromHigh, pctAbove200: f.pctAbove200,
@@ -5373,22 +5403,40 @@ function buildPortfolioSuggestion(amount) {
     };
   }).filter(Boolean);
 
-  // --- SELECTION CRITERIA (Varsity M9: diversified, quality-first) ---
-  // Only consider stocks with conviction Buy or Strong Buy
-  const eligible = scored.filter(s =>
-    (s.conviction === 'Strong Buy' || s.conviction === 'Buy' || s.conviction === 'Accumulate')
-    && s.composite >= 50
-    && s.goodRR !== false // R:R must be acceptable or unknown
-  );
+  // Sort by quality score descending
+  scored.sort((a, b) => b.qualityScore - a.qualityScore);
 
-  // Sort by composite score descending
-  eligible.sort((a, b) => b.composite - a.composite);
+  // Log for debugging
+  const convDist = {};
+  scored.forEach(s => { convDist[s.conviction] = (convDist[s.conviction]||0)+1; });
+  console.log(`📊 Portfolio: ${scored.length} stocks scored. Conviction: ${JSON.stringify(convDist)}. Top: ${scored[0]?.sym}=${scored[0]?.qualityScore}`);
+
+  // --- PROGRESSIVE SELECTION (Varsity M9: always find best available stocks) ---
+  // Try strict criteria first, progressively relax if not enough stocks
+  const MAX_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000)));
+  const CRITERIA = [
+    { label: 'Strong Buy + Buy', filter: s => s.conviction === 'Strong Buy' || s.conviction === 'Buy' },
+    { label: 'Accumulate+', filter: s => s.qualityScore >= 4.5 },
+    { label: 'Quality >= 3.5', filter: s => s.qualityScore >= 3.5 },
+    { label: 'FA Score >= 30', filter: s => s.score >= 30 },
+    { label: 'Top stocks by score', filter: s => s.score >= 20 },
+  ];
+
+  let eligible = [];
+  let usedCriteria = '';
+  for (const c of CRITERIA) {
+    eligible = scored.filter(c.filter);
+    if (eligible.length >= 5) { usedCriteria = c.label; break; }
+  }
+  // Ultimate fallback: top N by FA score
+  if (eligible.length < 5) {
+    eligible = scored.slice(0, MAX_STOCKS * 2);
+    usedCriteria = 'Top stocks by ranking';
+  }
 
   // --- DIVERSIFICATION (Varsity M9 Ch5: max 2 per sector, min 4 sectors) ---
   const selected = [];
   const sectorCnt = {};
-  const MAX_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000))); // 5-15 stocks based on amount
-
   for (const s of eligible) {
     const sec = s.sector || 'Other';
     sectorCnt[sec] = (sectorCnt[sec] || 0) + 1;
@@ -5397,8 +5445,7 @@ function buildPortfolioSuggestion(amount) {
       if (selected.length >= MAX_STOCKS) break;
     }
   }
-
-  // If not enough, relax sector constraint
+  // If not enough with diversification, relax sector constraint
   if (selected.length < 5) {
     for (const s of eligible) {
       if (!selected.find(x => x.sym === s.sym)) {
@@ -5408,7 +5455,7 @@ function buildPortfolioSuggestion(amount) {
     }
   }
 
-  if (!selected.length) return { error: 'No stocks meet the quality criteria right now. Market may be overheated.' };
+  if (!selected.length) return { error: 'Stock data is still loading. Please try again in a minute.' };
 
   // --- ALLOCATION (Varsity M9: weight by conviction + Kelly-inspired sizing) ---
   // Higher composite = more weight; Strong Buy gets 1.5x weight
