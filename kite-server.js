@@ -1797,6 +1797,17 @@ async function refreshInstruments() {
 
 app.get("/api/instruments", (req,res) => res.json(validTokens));
 
+// -- DEBUG: Check FUND_EXT contents for a stock --
+app.get("/api/debug/fund-ext/:sym", (req, res) => {
+  const sym = req.params.sym.toUpperCase();
+  res.json({
+    sym,
+    fund: FUND[sym] || null,
+    fund_ext: global.FUND_EXT?.[sym] || null,
+    scored_keys: stockFundamentals[sym] ? Object.keys(stockFundamentals[sym]).filter(k => stockFundamentals[sym][k] != null) : [],
+  });
+});
+
 // -- DEBUG: Test candle fetch for a single stock, returns error details -----------
 app.get("/api/debug/candles/:sym", async (req, res) => {
   const sym = req.params.sym.toUpperCase();
