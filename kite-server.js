@@ -4023,15 +4023,21 @@ async function autoFetchFundamentals(syms) {
         // Store core array for backward compat
         FUND[sym] = result.core;
 
-        // Store extended data separately in DB
+        // Store merged extended data in DB (preserves screener fields)
         await dbSet(`fund_${sym}`, JSON.stringify({
           core: result.core,
-          ext:  result.ext,
+          ext:  global.FUND_EXT[sym],  // save the merged version
         }));
 
-        // Also store extended in memory for deep analyzer
+        // Merge extended into memory — Yahoo fills gaps, doesn't replace screener data
         if (!global.FUND_EXT) global.FUND_EXT = {};
-        global.FUND_EXT[sym] = result.ext;
+        const existing = global.FUND_EXT[sym] || {};
+        // Yahoo values fill nulls in existing data (screener takes priority)
+        const merged = { ...existing };
+        for (const [k, v] of Object.entries(result.ext)) {
+          if (v != null && (merged[k] == null || k === 'fetchedAt')) merged[k] = v;
+        }
+        global.FUND_EXT[sym] = merged;
 
         fundFetchStats.success++;
         console.log(`  ${sym}: PE=${result.core[2]} ROE=${result.core[0]} D/E=${result.core[1]} RevGr=${result.core[3]}% EpsGr=${result.core[4]}% OpMgn=${result.core[5]}%`);
