@@ -3562,21 +3562,21 @@ async function refreshAllFundamentals() {
         stockFundamentals[stock.sym] = {
           sym:stock.sym, name:stock.n, grp:stock.grp,
           sector: SECTOR_MAP[stock.sym] || ext?.industry || 'Other',
-          price:tech.price||livePrices[stock.sym]?.price||null,
-          dma20:tech.dma20||null, dma50:tech.dma50||null, dma100:tech.dma100||null, dma200:tech.dma200||null,
-          wk52Hi:tech.wk52Hi||null, wk52Lo:tech.wk52Lo||null,
+          price:tech.price??livePrices[stock.sym]?.price??null,
+          dma20:tech.dma20??null, dma50:tech.dma50??null, dma100:tech.dma100??null, dma200:tech.dma200??null,
+          wk52Hi:tech.wk52Hi??null, wk52Lo:tech.wk52Lo??null,
           change52w:tech.change52w??null, change6m:tech.change6m??null, change3m:tech.change3m??null, change1m:tech.change1m??null,
-          rsi:tech.rsi||null,
-          macd:tech.macd||null, macdBull:tech.macdBull||null, macdHist:tech.macdHist||null,
-          bbPct:tech.bbPct||null, bbUpper:tech.bbUpper||null, bbLower:tech.bbLower||null,
-          stochK:tech.stochK||null, adx:tech.adx||null,
-          supertrend:tech.supertrend||null, supertrendSig:tech.supertrendSig||null,
-          volRatio:tech.volRatio||null, volTrend:tech.volTrend||null, obvRising:tech.obvRising||null, accumDist:tech.accumDist||null,
-          beta:tech.beta||null, annualVol:tech.annualVol||null,
-          dma200Trend:tech.dma200Trend||null, weeklyTrend:tech.weeklyTrend||null,
-          goldenCross:tech.goldenCross||null,
+          rsi:tech.rsi??null,
+          macd:tech.macd??null, macdBull:tech.macdBull??null, macdHist:tech.macdHist??null,
+          bbPct:tech.bbPct??null, bbUpper:tech.bbUpper??null, bbLower:tech.bbLower??null,
+          stochK:tech.stochK??null, adx:tech.adx??null,
+          supertrend:tech.supertrend??null, supertrendSig:tech.supertrendSig??null,
+          volRatio:tech.volRatio??null, volTrend:tech.volTrend??null, obvRising:tech.obvRising??null, accumDist:tech.accumDist??null,
+          beta:tech.beta??null, annualVol:tech.annualVol??null,
+          dma200Trend:tech.dma200Trend??null, weeklyTrend:tech.weeklyTrend??null,
+          goldenCross:tech.goldenCross??null,
           pctFromHigh:tech.pctFromHigh??null, pctAbove200:tech.pctAbove200??null, pctAbove50:tech.pctAbove50??null,
-          rsiTrend:tech.rsiTrend||null, bullishDiv:tech.bullishDiv||null, bearishDiv:tech.bearishDiv||null,
+          rsiTrend:tech.rsiTrend??null, bullishDiv:tech.bullishDiv??null, bearishDiv:tech.bearishDiv??null,
           // Core fundamentals — screener overrides hardcoded FUND
           roe:      f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
           revGrowth:f?f[3]:null, earGrowth:f?f[4]:null, opMargin:f?f[5]:null,
@@ -3601,7 +3601,26 @@ async function refreshAllFundamentals() {
           ret1y:        ext?.ret1y        ?? null,
           ret3y:        ext?.ret3y        ?? null,
           ret5y:        ext?.ret5y        ?? null,
+          ret6m:        ext?.ret6m        ?? (tech.change6m != null ? +(tech.change6m*100).toFixed(1) : null),
+          ret3m:        ext?.ret3m        ?? (tech.change3m != null ? +(tech.change3m*100).toFixed(1) : null),
+          evEbitda:     ext?.evEbitda     ?? null,
           industryPE:   ext?.industryPE   ?? null,
+          earningsYield:ext?.earningsYield?? null,
+          priceToFCF:   ext?.priceToFCF   ?? null,
+          priceToSales: ext?.priceToSales ?? null,
+          roce:         ext?.roce         ?? null,
+          patQtr:       ext?.patQtr       ?? null,
+          salesQtr:     ext?.salesQtr     ?? null,
+          patQtrYoy:    ext?.patQtrYoy    ?? null,
+          salesQtrYoy:  ext?.salesQtrYoy  ?? null,
+          // Yahoo Finance exclusive fields
+          fwdPE:        ext?.fwdPE        ?? null,
+          grossMgn:     ext?.grossMgn     ?? null,
+          profMgn:      ext?.profMgn      ?? null,
+          quickRatio:   ext?.quickRatio   ?? null,
+          fcf:          ext?.fcf          ?? null,
+          instHeld:     ext?.instHeld     ?? null,
+          bookValue:    ext?.bookValue    ?? null,
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
@@ -5398,18 +5417,78 @@ function parseScreenerDetails(sym, raw) {
   const salesQtr = latestAnnual(qtrs, 'Sales');
   const patQtr = latestAnnual(qtrs, 'Net Profit');
 
+  // Quarterly YoY growth — compare latest quarter vs same quarter last year
+  let patQtrYoy = null, salesQtrYoy = null;
+  if (qtrs.length) {
+    const salesRow = (qtrs||[]).find(r => r.Metric === 'Sales');
+    const patRow = (qtrs||[]).find(r => r.Metric === 'Net Profit');
+    if (salesRow) {
+      const qKeys = Object.keys(salesRow).filter(k => k !== 'Metric').sort();
+      if (qKeys.length >= 5) { // need at least 5 quarters for YoY
+        const latest = pn(salesRow[qKeys[qKeys.length-1]]);
+        const yearAgo = pn(salesRow[qKeys[qKeys.length-5]]);
+        if (latest != null && yearAgo != null && yearAgo > 0) salesQtrYoy = pn(((latest - yearAgo) / yearAgo * 100).toFixed(1));
+      }
+    }
+    if (patRow) {
+      const qKeys = Object.keys(patRow).filter(k => k !== 'Metric').sort();
+      if (qKeys.length >= 5) {
+        const latest = pn(patRow[qKeys[qKeys.length-1]]);
+        const yearAgo = pn(patRow[qKeys[qKeys.length-5]]);
+        if (latest != null && yearAgo != null && yearAgo > 0) patQtrYoy = pn(((latest - yearAgo) / yearAgo * 100).toFixed(1));
+      }
+    }
+  }
+
+  // Current ratio from balance sheet: Current Assets / Current Liabilities
+  let computedCurrentRatio = null;
+  const currentAssets = latestAnnual(bs, 'Other Assets'); // proxy for current assets
+  const currentLiabilities = latestAnnual(bs, 'Other Liabilities'); // proxy for current liabilities
+  if (currentAssets > 0 && currentLiabilities > 0) computedCurrentRatio = pn((currentAssets / currentLiabilities).toFixed(2));
+
+  // Pledged percentage from shareholding
+  const pledgedRow = (sh||[]).find(r => (r['']||'').toLowerCase().includes('pledg'));
+  let pledgedPct = null;
+  if (pledgedRow) {
+    const pKeys = Object.keys(pledgedRow).filter(k => k !== '').sort();
+    if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
+  }
+
+  // Cash flow data for FCF
+  const cf = raw.cash_flow || [];
+  const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity');
+  const capex = latestAnnual(cf, 'Fixed Assets Purchased');  // usually negative
+  const fcf = (cfFromOps != null && capex != null) ? cfFromOps + capex : null;
+
+  // Dividend from P&L for yield calc
+  const dividend = latestAnnual(annual, 'Dividend Payout %');
+
+  // Industry from raw metadata
+  const industry = raw.industry || raw.sector || null;
+
+  // Use live price for derived ratios
+  const livePrice = livePrices[sym]?.price || null;
+  const currentPrice = livePrice;
+  const pe = (livePrice && eps && eps > 0) ? pn((livePrice / eps).toFixed(1)) : null;
+  const bookValuePerShare = (netWorth > 0 && equity > 0) ? netWorth / equity * 10 : null; // approx
+  const pb = (livePrice && bookValuePerShare > 0) ? pn((livePrice / bookValuePerShare).toFixed(2)) : null;
+  const peg = (pe && profitGr3y && profitGr3y > 0) ? pn((pe / profitGr3y).toFixed(2)) : null;
+  const earningsYield = pe > 0 ? pn((100 / pe).toFixed(2)) : null;
+  const priceToSales = (livePrice && sales > 0 && equity > 0) ? pn((livePrice * equity / 10 / sales).toFixed(2)) : null;
+  const priceToFcf = (livePrice && fcf > 0 && equity > 0) ? pn((livePrice * equity / 10 / fcf).toFixed(2)) : null;
+
   return {
     sym, name: raw.company_name || sym,
     nse_code: sym,
-    industry: null, // getstockdetails doesn't return industry directly
-    roe: roeLast ?? roe, de, pe: null, // PE needs current price / EPS
+    industry,
+    roe: roeLast ?? roe, de, pe,
     rev_gr_3y: salesGr3y, eps_gr_3y: profitGr3y,
-    opm, roa, pb: null, peg: null,
+    opm, roa, pb, peg,
     int_cov: intCov, promoter_holding: promoter,
-    pledged_pct: null, promoter_chg: promoterChg,
-    mkt_cap: null, current_price: null,
-    eps, debt: borrowings, current_ratio: currentRatio,
-    div_yield: null, sales_gr_1y: salesGr1y, sales_gr_5y: salesGr5y,
+    pledged_pct: pledgedPct, promoter_chg: promoterChg,
+    mkt_cap: null, current_price: currentPrice,
+    eps, debt: borrowings, current_ratio: computedCurrentRatio,
+    div_yield: dividend, sales_gr_1y: salesGr1y, sales_gr_5y: salesGr5y,
     eps_gr_1y: profitGr1y, eps_gr_5y: profitGr5y,
     roe_3y_avg: roe3y, roe_5y_avg: roe5y,
     ret_1y: ret1y, ret_3y: ret3y, ret_5y: ret5y,
@@ -5417,8 +5496,8 @@ function parseScreenerDetails(sym, raw) {
     ev_ebitda: null, industry_pe: null,
     pat_qtr: patQtr, sales_qtr: salesQtr,
     pat_annual: netProfit, sales_annual: sales,
-    pat_qtr_yoy: null, sales_qtr_yoy: null,
-    roce, earnings_yield: null, price_to_fcf: null, price_to_sales: null,
+    pat_qtr_yoy: patQtrYoy, sales_qtr_yoy: salesQtrYoy,
+    roce, earnings_yield: earningsYield, price_to_fcf: priceToFcf, price_to_sales: priceToSales,
   };
 }
 
