@@ -3498,28 +3498,29 @@ async function refreshAllFundamentals() {
     await Promise.all(batch.map(async stock => {
       try {
         const candles = await fetchKiteDaily(stock.sym);
-        if (!candles) { fail++; return; }
-        const tech = computeTechnicals(candles);
+        const tech = candles ? computeTechnicals(candles) : {};
+        if (!candles) fail++; else ok++;
         const f    = FUND[stock.sym] || null;
         const ext = global.FUND_EXT?.[stock.sym];
+        // Always create entry — show fundamentals even without candle data
         stockFundamentals[stock.sym] = {
           sym:stock.sym, name:stock.n, grp:stock.grp,
           sector: SECTOR_MAP[stock.sym] || ext?.industry || 'Other',
-          price:tech.price,
-          dma20:tech.dma20, dma50:tech.dma50, dma100:tech.dma100, dma200:tech.dma200,
-          wk52Hi:tech.wk52Hi, wk52Lo:tech.wk52Lo,
-          change52w:tech.change52w, change6m:tech.change6m, change3m:tech.change3m, change1m:tech.change1m,
-          rsi:tech.rsi,
-          macd:tech.macd, macdBull:tech.macdBull, macdHist:tech.macdHist,
-          bbPct:tech.bbPct, bbUpper:tech.bbUpper, bbLower:tech.bbLower,
-          stochK:tech.stochK, adx:tech.adx,
-          supertrend:tech.supertrend, supertrendSig:tech.supertrendSig,
-          volRatio:tech.volRatio, volTrend:tech.volTrend, obvRising:tech.obvRising, accumDist:tech.accumDist,
-          beta:tech.beta, annualVol:tech.annualVol,
-          dma200Trend:tech.dma200Trend, weeklyTrend:tech.weeklyTrend,
-          goldenCross:tech.goldenCross,
-          pctFromHigh:tech.pctFromHigh, pctAbove200:tech.pctAbove200, pctAbove50:tech.pctAbove50,
-          rsiTrend:tech.rsiTrend, bullishDiv:tech.bullishDiv, bearishDiv:tech.bearishDiv,
+          price:tech.price||livePrices[stock.sym]?.price||null,
+          dma20:tech.dma20||null, dma50:tech.dma50||null, dma100:tech.dma100||null, dma200:tech.dma200||null,
+          wk52Hi:tech.wk52Hi||null, wk52Lo:tech.wk52Lo||null,
+          change52w:tech.change52w??null, change6m:tech.change6m??null, change3m:tech.change3m??null, change1m:tech.change1m??null,
+          rsi:tech.rsi||null,
+          macd:tech.macd||null, macdBull:tech.macdBull||null, macdHist:tech.macdHist||null,
+          bbPct:tech.bbPct||null, bbUpper:tech.bbUpper||null, bbLower:tech.bbLower||null,
+          stochK:tech.stochK||null, adx:tech.adx||null,
+          supertrend:tech.supertrend||null, supertrendSig:tech.supertrendSig||null,
+          volRatio:tech.volRatio||null, volTrend:tech.volTrend||null, obvRising:tech.obvRising||null, accumDist:tech.accumDist||null,
+          beta:tech.beta||null, annualVol:tech.annualVol||null,
+          dma200Trend:tech.dma200Trend||null, weeklyTrend:tech.weeklyTrend||null,
+          goldenCross:tech.goldenCross||null,
+          pctFromHigh:tech.pctFromHigh??null, pctAbove200:tech.pctAbove200??null, pctAbove50:tech.pctAbove50??null,
+          rsiTrend:tech.rsiTrend||null, bullishDiv:tech.bullishDiv||null, bearishDiv:tech.bearishDiv||null,
           // Core fundamentals — screener overrides hardcoded FUND
           roe:      f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
           revGrowth:f?f[3]:null, earGrowth:f?f[4]:null, opMargin:f?f[5]:null,
@@ -3548,7 +3549,6 @@ async function refreshAllFundamentals() {
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
-        ok++;
       } catch(e) { fail++; }
     }));
     // Small pause between batches to respect Kite rate limits
