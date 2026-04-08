@@ -36,7 +36,11 @@ const cors      = require("cors");
 const http      = require("http");
 const WebSocket = require("ws");
 const cron      = require("node-cron");
-const { Pool }  = require("pg");
+const { Pool, types: pgTypes }  = require("pg");
+
+// PostgreSQL 'numeric' type (OID 1700) is returned as strings by default.
+// Convert to JS floats so .toFixed() and arithmetic work everywhere.
+pgTypes.setTypeParser(1700, val => parseFloat(val));
 
 const app    = express();
 const server = http.createServer(app);
@@ -2739,8 +2743,15 @@ async function importScreenerCSV(csvText) {
 }
 
 // Patch one stock from screener data into FUND + FUND_EXT memory (live update)
+// Helper: safely convert DB values (may be strings from PG numeric) to JS numbers
+const _num = v => v == null ? null : (typeof v === 'number' ? v : (isNaN(+v) ? null : +v));
 function patchScreenerIntoFUND(sym, d) {
   if (!global.FUND_EXT) global.FUND_EXT = {};
+  // Ensure all numeric fields are actual JS numbers (PG numeric returns strings)
+  for (const k of Object.keys(d)) {
+    if (k === 'sym' || k === 'name' || k === 'nse_code' || k === 'bse_code' || k === 'industry' || k === 'industry_group' || k === 'imported_at') continue;
+    if (d[k] != null) d[k] = _num(d[k]);
+  }
 
   // Update FUND core array — [ROE, D/E, PE, RevGr, EpsGr, OpMargin]
   // Use screener as primary source (real data), override hardcoded stale values
