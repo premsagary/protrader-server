@@ -3109,35 +3109,50 @@ function renderStockRecPage(){
     ],
   };
 
-  var activeCols = TAB_COLS[stockRecTab] || TAB_COLS.overview;
+  // ── Build flat column list from ALL groups (no tabs, one wide scrollable table) ──
+  var GROUPS = [
+    { id:'quality',   label:'⭐ Quality',    color:'#f59e0b', cols: TAB_COLS.quality },
+    { id:'value',     label:'💰 Value',      color:'var(--green)', cols: TAB_COLS.value },
+    { id:'momentum',  label:'🚀 Momentum',   color:'var(--blue)', cols: TAB_COLS.momentum },
+    { id:'growth',    label:'📈 Growth',      color:'#8b5cf6', cols: TAB_COLS.growth },
+    { id:'technical', label:'🔧 Technical',   color:'var(--red)', cols: TAB_COLS.technical },
+    { id:'financials',label:'🏦 Financials',  color:'var(--text)', cols: TAB_COLS.financials },
+    { id:'ownership', label:'👥 Ownership',   color:'var(--blue)', cols: TAB_COLS.ownership },
+    { id:'signals',   label:'⚡ Signals',     color:'#f59e0b', cols: TAB_COLS.signals },
+  ];
 
-  // ── Tab bar ──
-  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">';
-  TAB_DEFS.forEach(function(t){
-    var isActive = stockRecTab === t.id;
-    var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button onclick="stockRecTab=\''+t.id+'\';renderStockRec()" style="padding:5px 12px;border-radius:8px;border:1px solid '
-      +(isActive?'#f59e0b':'var(--border)')+';background:'+(isActive?'rgba(245,158,11,0.15)':'var(--bg2)')
-      +';color:'+(isActive?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'400')
-      +';transition:all .15s;white-space:nowrap">'
-      +t.icon+' '+t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
-  });
-  html += '</div>';
+  var allCols = [];
+  GROUPS.forEach(function(g){ g.cols.forEach(function(c){ allCols.push(c); }); });
 
   // ── Table ──
-  html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px;-webkit-overflow-scrolling:touch">'
+    +'<table style="border-collapse:collapse;font-size:11px;white-space:nowrap">';
 
-  // ── Header row ──
-  html += '<thead><tr style="background:var(--bg2)">'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>'
-    +'<th style="text-align:left;padding:5px 8px;color:var(--text3);position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px">Stock</th>'
-    +'<th style="text-align:center;padding:5px 8px;color:var(--text3)">Grp</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3)">Score</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3);border-right:2px solid var(--border3)">Price</th>';
-  activeCols.forEach(function(col){
-    html += '<th style="text-align:right;padding:5px 8px;color:'+col.hc+';white-space:nowrap'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
-      +col.l+'</th>';
+  // ── Row 1: Group headings ──
+  html += '<thead><tr style="background:var(--bg3)">'
+    +'<th colspan="5" style="text-align:left;padding:6px 10px;color:var(--text3);font-size:10px;letter-spacing:.8px;font-weight:700;border-bottom:1px solid var(--border);border-right:2px solid var(--border3);position:sticky;left:0;background:var(--bg3);z-index:10">IDENTITY</th>';
+  GROUPS.forEach(function(g){
+    html += '<th colspan="'+g.cols.length+'" style="text-align:center;padding:6px 10px;color:'+g.color+';font-size:10px;letter-spacing:.8px;font-weight:700;border-bottom:1px solid var(--border);border-right:2px solid var(--border3)">'
+      +g.label+'</th>';
+  });
+  html += '</tr>';
+
+  // ── Row 2: Sub-column headers ──
+  html += '<tr style="background:var(--bg2)">'
+    +'<th style="text-align:right;padding:4px 6px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:10;min-width:30px">#</th>'
+    +'<th style="text-align:left;padding:4px 6px;color:var(--text3);position:sticky;left:30px;background:var(--bg2);z-index:10;min-width:120px">Stock</th>'
+    +'<th style="text-align:center;padding:4px 6px;color:var(--text3)">Grp</th>'
+    +'<th style="text-align:right;padding:4px 6px;color:var(--text3)">Score</th>'
+    +'<th style="text-align:right;padding:4px 6px;color:var(--text3);border-right:2px solid var(--border3)">Price</th>';
+
+  var gIdx = 0;
+  GROUPS.forEach(function(g){
+    g.cols.forEach(function(col, ci){
+      var isLast = ci === g.cols.length - 1;
+      html += '<th style="text-align:right;padding:4px 6px;color:'+g.color+';font-size:10px;white-space:nowrap'
+        +(isLast?';border-right:2px solid var(--border3)':'')+'">'
+        +col.l+'</th>';
+    });
   });
   html += '</tr></thead>';
 
@@ -3153,18 +3168,21 @@ function renderStockRecPage(){
     var scoreCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
 
     html += '<tr data-ri="'+idx+'" style="'+rowBorder+'border-bottom:1px solid var(--border2);background:'+bg+'">'
-      +'<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(s.rank)+'</td>'
-      +'<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3;border-right:0">'
-        +'<div style="font-weight:600">'+s.sym+'</div>'
-        +'<div style="font-size:10px;color:var(--text3)">'+s.sector+'</div>'
+      +'<td style="padding:4px 6px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(s.rank)+'</td>'
+      +'<td style="padding:4px 6px;position:sticky;left:30px;background:'+bg+';z-index:3">'
+        +'<div style="font-weight:600;font-size:11px">'+s.sym+'</div>'
+        +'<div style="font-size:9px;color:var(--text3)">'+s.sector+'</div>'
       +'</td>'
-      +'<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
-      +'<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+scoreCol+'">'+s.score+'</td>'
-      +'<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
+      +'<td style="padding:4px 6px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></td>'
+      +'<td style="padding:4px 6px;text-align:right;font-weight:700;color:'+scoreCol+'">'+s.score+'</td>'
+      +'<td style="padding:4px 6px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
 
-    activeCols.forEach(function(col){
-      html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
-        +col.r(s)+'</td>';
+    GROUPS.forEach(function(g){
+      g.cols.forEach(function(col, ci){
+        var isLast = ci === g.cols.length - 1;
+        html += '<td style="padding:4px 6px;text-align:right'+(isLast?';border-right:2px solid var(--border3)':'')+'">'
+          +col.r(s)+'</td>';
+      });
     });
     html += '</tr>';
   });
