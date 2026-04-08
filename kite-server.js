@@ -2295,6 +2295,62 @@ function scoreMFTickertape(f) {
     if (rollMin < -3) { score -= 1; hits[`⚠ Rolling 3Y went deeply negative (${rollMin.toFixed(1)}%) in at least one period`] = -1; }
   }
 
+  // -- PILLAR L: TRACKING ERROR + CLOSET INDEXER DETECTION (4 pts) ----------------
+  // Varsity Ch16/Ch29: "For index funds, tracking error IS the metric. For active funds,
+  // high alpha + high tracking error = active management; low alpha + low tracking error = closet indexer"
+  const te = get('tracking_error');
+  if (te != null && te > 0) {
+    // Active fund with high expense but acting like index fund = closet indexer
+    const isActive = exp && exp > 0.5; // expense >0.5% = active fund
+    const alpha3y = vc3 ? vc3 - 1.0 : null; // vs_cat_3y >1 = positive alpha
+    if (isActive && alpha3y != null) {
+      if (te < 3 && alpha3y < 0.05) {
+        // Low TE + near-zero alpha = closet indexer paying active fees
+        score -= 3;
+        hits[`⚠ Closet indexer: TE ${te.toFixed(1)}% + alpha ${(alpha3y*100).toFixed(1)}% — paying active fees for index returns`] = -3;
+      } else if (te > 4 && alpha3y > 0.1) {
+        // High TE + positive alpha = genuine active management (reward)
+        score += 3;
+        hits[`Active manager: TE ${te.toFixed(1)}% + alpha ${(alpha3y*100).toFixed(1)}% — genuine stock-picking skill`] = 3;
+      } else if (te > 3 && alpha3y > 0) {
+        score += 1;
+        hits[`Active management: TE ${te.toFixed(1)}% with positive alpha`] = 1;
+      }
+    }
+    // For all funds: penalize very high tracking error (>8%) = erratic management
+    if (te > 8) { score -= 2; hits[`⚠ Erratic: TE ${te.toFixed(1)}% — very high deviation from benchmark`] = -2; }
+  }
+
+  // -- DRAWDOWN RECOVERY CHECK (Varsity Ch11 Ch14: "fund that falls 50% needs 100% to recover") --
+  // If max drawdown is deep AND fund is still far from ATH, recovery ability is poor
+  if (mdd != null && ath != null) {
+    const deepDraw = mdd < -30; // fell >30%
+    const stillFar = ath < -15; // still >15% below ATH
+    if (deepDraw && stillFar) {
+      score -= 2;
+      hits[`⚠ Poor recovery: fell ${mdd.toFixed(0)}%, still ${ath.toFixed(0)}% below ATH`] = -2;
+    } else if (mdd < -25 && ath > -5) {
+      // Deep drawdown BUT recovered near ATH = resilient
+      score += 2;
+      hits[`Resilient: fell ${Math.abs(mdd).toFixed(0)}% but recovered to ${ath.toFixed(0)}% from ATH`] = 2;
+    }
+  }
+
+  // -- 1Y RETURNS MOMENTUM CHECK (Varsity Ch18: recent momentum matters for entry timing) --
+  const r1y = get('ret_1y');
+  if (r1y != null) {
+    // Severe recent underperformance vs category = something may have changed
+    if (vc1 != null && vc1 < 0.8 && r1y < 0) {
+      score -= 2;
+      hits[`⚠ Recent trouble: 1Y return ${r1y.toFixed(1)}%, ${((1-vc1)*100).toFixed(0)}% below category median`] = -2;
+    }
+    // Strong recent momentum after long-term consistency = entry signal
+    if (vc1 != null && vc1 > 1.15 && vc3 != null && vc3 > 1.05) {
+      score += 1;
+      hits[`Momentum: 1Y ${r1y.toFixed(1)}% outperforming category + 3Y consistent`] = 1;
+    }
+  }
+
   // -- STYLE DRIFT PENALTIES (Varsity sector analysis) --------------------------
   // Varsity: "A fund's mandate defines its risk profile. Drift = hidden risk investors didn't sign up for"
   if (subcat.includes('Small')) {
