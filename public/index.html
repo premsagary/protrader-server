@@ -2911,10 +2911,20 @@ function renderStockRecPage(){
     html += '</div></div>';
   }
 
-  // ── Flex layout: table (left) + Top Picks sidebar (right) ──
+  // ── Flex layout: Top Picks sidebar (left) + table (right) ──
   html += '<div style="display:flex;gap:16px;align-items:flex-start">';
 
-  // ── Left: stock table (grows to fill) ──
+  // ── Left sidebar: Top Picks ──
+  if(top3.length){
+    html += '<div style="width:300px;flex-shrink:0;position:sticky;top:10px">';
+    html += '<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#f59e0b">🏆 Top Picks - '
+      +(stockRecFilter==='ALL'?'Overall':stockRecFilter)+'</div>';
+    var medals=['🥇','🥈','🥉'];
+    top3.forEach(function(s,i){ html += buildStockCard(s, medals[i]); html += '<div style="height:12px"></div>'; });
+    html += '</div>';
+  }
+
+  // ── Right: stock table (grows to fill) ──
   html += '<div style="flex:1;min-width:0">';
 
   var SHOW_INITIAL = 20;
@@ -3179,16 +3189,6 @@ function renderStockRecPage(){
 
   html += '</div>'; // end left (table) column
 
-  // ── Right sidebar: Top Picks ──
-  if(top3.length){
-    html += '<div style="width:300px;flex-shrink:0;position:sticky;top:10px">';
-    html += '<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#f59e0b">🏆 Top Picks - '
-      +(stockRecFilter==='ALL'?'Overall':stockRecFilter)+'</div>';
-    var medals=['🥇','🥈','🥉'];
-    top3.forEach(function(s,i){ html += buildStockCard(s, medals[i]); html += '<div style="height:12px"></div>'; });
-    html += '</div>';
-  }
-
   html += '</div>'; // end flex row
 
   html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg2);margin-top:16px">';
@@ -3301,6 +3301,14 @@ function buildStockCard(s, medal){
     }
     h+='</div>';
   }
+
+  // -- SHOW MORE toggle (wraps Fundamentals + Technicals + extras) --
+  var smId='sm-'+s.sym;
+  h+='<div style="text-align:center;margin-bottom:6px">';
+  h+='<button onclick="var d=document.getElementById(\''+smId+'\');var b=this;if(d.style.display===\'none\'){d.style.display=\'block\';b.textContent=\'▲ Show less\';}else{d.style.display=\'none\';b.textContent=\'▼ Show more\';}" '
+   +'style="background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.25);border-radius:5px;padding:3px 14px;font-size:10px;font-weight:700;cursor:pointer;width:100%">▼ Show more</button>';
+  h+='</div>';
+  h+='<div id="'+smId+'" style="display:none">';
 
   // -- FUNDAMENTALS SECTION ----------------------------------------
   h+='<div style="font-size:10px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Fundamentals</div>';
@@ -3434,6 +3442,8 @@ function buildStockCard(s, medal){
     h+='<div style="font-size:10px;color:var(--text3);line-height:1.5;min-height:20px" id="txt-'+faCardId+'">Click Predict to get MiroFish recovery analysis</div>';
     h+='</div>';
   }
+
+  h+='</div>'; // end show-more collapsible div
 
   h+='</div>';
   return h;
