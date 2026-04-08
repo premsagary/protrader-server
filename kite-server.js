@@ -3663,6 +3663,14 @@ async function refreshAllFundamentals() {
         if (sf.mktCap == null && _px && _pat && _eps && _eps > 0) {
           sf.mktCap = +(_px * _pat / _eps).toFixed(0);
         }
+        // mktCap fallback: price * salesAnnual / priceToSales (if priceToSales from ext)
+        if (sf.mktCap == null && _px && _sales > 0 && ext?.priceToSales > 0) {
+          sf.mktCap = +(_sales * ext.priceToSales).toFixed(0);
+        }
+        // mktCap fallback 2: from PE * patAnnual (if PE available)
+        if (sf.mktCap == null && sf.pe > 0 && _pat && _pat > 0) {
+          sf.mktCap = +(sf.pe * _pat).toFixed(0);
+        }
 
         // priceToSales: mktCap / salesAnnual
         if (sf.priceToSales == null && sf.mktCap > 0 && _sales > 0) {
@@ -3704,10 +3712,18 @@ async function refreshAllFundamentals() {
       sectorPEs[f.sector].push(f.pe);
     }
   });
+  // Compute all-stock median as fallback for small sectors
+  const allPEs = Object.values(sectorPEs).flat().sort((a,b) => a - b);
+  const allMedianPE = allPEs.length ? +allPEs[Math.floor(allPEs.length / 2)].toFixed(1) : null;
   Object.values(stockFundamentals).forEach(f => {
-    if (f.industryPE == null && f.sector && sectorPEs[f.sector]?.length >= 3) {
-      const sorted = [...sectorPEs[f.sector]].sort((a,b) => a - b);
-      f.industryPE = +sorted[Math.floor(sorted.length / 2)].toFixed(1);
+    if (f.industryPE == null && f.sector) {
+      const pes = sectorPEs[f.sector];
+      if (pes && pes.length >= 2) {
+        const sorted = [...pes].sort((a,b) => a - b);
+        f.industryPE = +sorted[Math.floor(sorted.length / 2)].toFixed(1);
+      } else if (allMedianPE) {
+        f.industryPE = allMedianPE; // fallback to market median
+      }
     }
   });
 
