@@ -5091,20 +5091,10 @@ function scoreOneStock(f, peers) {
   }
 
   // D/E Ratio — Varsity: <0.5=safe, >2=concern (8 pts)
-  // AI consensus: D/E > 1.5 in cyclical sectors (metals, commodities) = ALWAYS DISAGREE
-  const isCyclical = /metal|mining|steel|alumin|copper|oil|gas|commodit/i.test((f.sector||'')+(f.name||''));
   if(na(f.debtToEq)){
-    let pp = isBanking ? 0
+    const pp = isBanking ? 0 // Banks use leverage by design — skip D/E for them
       : f.debtToEq<=0.3?8 : f.debtToEq<=0.7?6 : f.debtToEq<=1.5?3 : f.debtToEq<=3?1 : 0;
-    // Extra penalty for high debt in cyclical sectors — AI unanimous reject
-    if(!isBanking && isCyclical && f.debtToEq > 1.5){
-      pp = -6; hits[`⚠ D/E ${f.debtToEq.toFixed(2)}x in cyclical sector — AI unanimous reject`]=-6;
-    } else if(!isBanking && f.debtToEq > 2.0){
-      pp = -3; hits[`⚠ D/E ${f.debtToEq.toFixed(2)}x high leverage`]=-3;
-    } else if(!isBanking){
-      s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp;
-    }
-    if(pp < 0 && !isBanking) s+=pp;
+    if(!isBanking){ s+=pp; hits[`D/E: ${f.debtToEq.toFixed(2)}x`]=pp; }
   }
 
   // Operating Margin — sector-relative percentile (5 pts)
@@ -5162,12 +5152,12 @@ function scoreOneStock(f, peers) {
   // -- PILLAR 2: TREND (25 pts) -------------------------------------------------
   // Varsity: "200 DMA is the line of truth"
 
-  // Above 200 DMA (8 pts) — AI consensus: below 200DMA = "structural weakness", consistent DISAGREE
+  // Above 200 DMA (8 pts)
   if(na(px)&&na(f.dma200)){
     const pct200=((px-f.dma200)/f.dma200*100);
     const above=px>f.dma200;
-    const pp = !above ? (pct200 < -5 ? -6 : -3) : pct200<=25?8 : 4;
-    s+=pp; hits[`200DMA: ${above?'Above':'Below'} (${pct200>=0?'+':''}${pct200.toFixed(1)}%)${!above?' — AI flag: structural weakness':''}`]=pp;
+    const pp = !above?0 : pct200<=25?8 : 4;
+    s+=pp; hits[`200DMA: ${above?'Above':'Below'} (${pct200>=0?'+':''}${pct200.toFixed(1)}%)`]=pp;
   }
 
   // Golden Cross / Death Cross (7 pts)
@@ -5182,15 +5172,14 @@ function scoreOneStock(f, peers) {
     hits[`50DMA: ${px>f.dma50?'Above':'Below'}`]=pp;
   }
 
-  // Supertrend (3 pts) — AI consensus: bearish supertrend = strong DISAGREE signal
+  // Supertrend (3 pts)
   if(f.supertrendSig){
-    const pp=f.supertrendSig==='bullish'?3:-4; s+=pp;
-    hits[`Supertrend: ${f.supertrendSig}${f.supertrendSig==='bearish'?' — AI flag: trend against entry':''}`]=pp;
+    const pp=f.supertrendSig==='bullish'?3:0; s+=pp;
+    if(pp||f.supertrendSig==='bearish') hits[`Supertrend: ${f.supertrendSig}`]=pp;
   }
 
-  // RSI Divergence — AI consensus: bearish divergence = strong warning, models flip verdict on it
+  // RSI Divergence (3 pts)
   if(f.bullishDiv){ s+=3; hits['RSI Bullish Divergence (strongest reversal signal)']=3; }
-  if(f.bearDiv || f.bearishDiv){ s-=5; hits['⚠ RSI Bearish Divergence — AI flag: momentum fading despite price rise']=-5; }
 
   // Candlestick patterns — add confirmation bonus (Varsity M2: patterns need context)
   if(f.candlePatterns && f.candlePatterns.length>0){
@@ -5217,13 +5206,11 @@ function scoreOneStock(f, peers) {
   // MACD (3 pts)
   if(f.macdBull!=null){ const pp=f.macdBull?3:0; s+=pp; hits[`MACD: ${f.macdBull?'Bullish':'Bearish'}`]=pp; }
 
-  // ADX trend strength — Varsity M2 Ch 21: +DI > -DI = bullish trend direction
-  // AI consensus: ADX < 15 = "no trend exists", frequent DISAGREE/MODIFY
+  // ADX trend strength — Varsity M2 Ch 21: +DI > -DI = bullish trend direction (2 pts bonus)
   if(na(f.adxPdi) && na(f.adxNdi)){
     if(f.adxPdi>f.adxNdi && f.adx>25){ s+=2; hits[`ADX: +DI(${f.adxPdi.toFixed(0)}) > -DI(${f.adxNdi.toFixed(0)}) trending bullish`]=2; }
     if(f.adxNdi>f.adxPdi && f.adx>25){ s-=1; hits[`ADX: -DI(${f.adxNdi.toFixed(0)}) > +DI(${f.adxPdi.toFixed(0)}) bearish trend`]=-1; }
   }
-  if(na(f.adx) && f.adx < 15){ s-=3; hits[`⚠ ADX ${f.adx.toFixed(1)} — no trend (AI flag: breakout trades prone to failure)`]=-3; }
 
   // -- PILLAR 4: VALUATION (20 pts) --------------------------------------------
 
@@ -5232,16 +5219,13 @@ function scoreOneStock(f, peers) {
     const peerPct = pr(f.pe,'pe',false);
     const pp = peerPct>=80?8 : peerPct>=60?6 : peerPct>=40?4 : peerPct>=20?2 : 0;
     s+=pp; hits[`P/E: ${f.pe.toFixed(1)}x (cheaper than ${peerPct.toFixed(0)}% of sector)`]=pp;
-    // Absolute PE penalty — AI consensus: PE > 60 = extreme overvaluation regardless of sector
-    if(f.pe > 80)      { s-=8; hits[`⚠ PE ${f.pe.toFixed(0)}x EXTREME — AI unanimous reject (no margin of safety)`]=-8; }
-    else if(f.pe > 60) { s-=4; hits[`⚠ PE ${f.pe.toFixed(0)}x very expensive — AI frequent reject`]=-4; }
   }
 
-  // PEG (5 pts) — AI consensus: PEG > 3 = "no margin of safety", consistent DISAGREE
+  // PEG (5 pts)
   if(na(f.pe)&&na(f.earGrowth)&&f.earGrowth>0){
     const peg=f.pe/f.earGrowth;
-    const pp = peg<0.5?5 : peg<1?4 : peg<2?2 : peg<3?1 : peg>5?-8 : peg>3?-5 : 0;
-    s+=pp; hits[`PEG: ${peg.toFixed(2)} (${peg<1?'growth underpriced':peg>5?'EXTREME — AI unanimous reject':peg>3?'expensive — AI reject':'fairly priced'})`]=pp;
+    const pp = peg<0.5?5 : peg<1?4 : peg<2?2 : peg<3?1 : 0;
+    s+=pp; hits[`PEG: ${peg.toFixed(2)} (${peg<1?'growth underpriced':'fairly/overpriced'})`]=pp;
   }
 
   // Intrinsic Value — Varsity M3 / M13: PEG-based fair value estimate (5 pts)
@@ -5296,12 +5280,8 @@ function scoreOneStock(f, peers) {
     if(pp){ s+=pp; hits[`P/BV: ${f.pb.toFixed(2)}x (cheaper than ${peerPct.toFixed(0)}% of peers)`]=pp; }
   }
 
-  // EPS / Revenue collapse penalties — AI consensus: any negative EPS = consistent concern
-  if(na(f.earGrowth)){
-    if(f.earGrowth<-20)     { s-=10; hits['⚠ EPS collapse (value trap signal)']=-10; }
-    else if(f.earGrowth<-5) { s-=5;  hits[`⚠ EPS declining ${f.earGrowth.toFixed(1)}% — AI flag: earnings weakness`]=-5; }
-    else if(f.earGrowth<0)  { s-=2;  hits[`⚠ EPS slightly negative ${f.earGrowth.toFixed(1)}%`]=-2; }
-  }
+  // EPS / Revenue collapse penalties
+  if(na(f.earGrowth)&&f.earGrowth<-20){ s-=10; hits['⚠ EPS collapse (value trap signal)']=-10; }
   if(na(f.revGrowth)&&f.revGrowth<-15){ s-=8;  hits['⚠ Revenue declining sharply']=-8; }
   if(na(f.debtToEq)&&f.debtToEq>4)   { s-=5;  hits['⚠ Extreme leverage (D/E > 4x)']=-5; }
 
@@ -5961,8 +5941,8 @@ function scoreStockForPortfolio(f) {
 
   // === PILLAR 3: TECHNICAL SCORE (0-100) (Varsity M2) ===
   let taScore = 50;
-  // Price vs 200 DMA — trend direction (M2 Ch14) — AI: below 200DMA = structural weakness
-  if (na(f.pctAbove200)) { taScore += f.pctAbove200 > 0 ? 12 : (f.pctAbove200 < -5 ? -18 : -12); }
+  // Price vs 200 DMA — trend direction (M2 Ch14)
+  if (na(f.pctAbove200)) { taScore += f.pctAbove200 > 0 ? 12 : -12; }
   // Golden cross (M2 Ch14: EMA50 > EMA200)
   if (f.goldenCross === true) taScore += 10;
   else if (f.goldenCross === false) taScore -= 5;
@@ -5976,23 +5956,18 @@ function scoreStockForPortfolio(f) {
   // MACD (M2 Ch5: signal line crossover)
   if (f.macdBull === true) taScore += 8;
   else if (f.macdBull === false) taScore -= 5;
-  // ADX trend strength (M2 Ch10: >25 = trending) — AI: ADX < 15 = "no trend"
+  // ADX trend strength (M2 Ch10: >25 = trending)
   if (na(f.adx) && f.adx > 25 && na(f.adxPdi) && na(f.adxNdi)) {
     if (f.adxPdi > f.adxNdi) taScore += 8; // bullish trend
     else taScore -= 5; // bearish trend
   }
-  if (na(f.adx) && f.adx < 15) taScore -= 8; // AI flag: no trend exists
   // OBV confirmation (M2 Ch13: volume supports price)
   if (f.obvRising === true) taScore += 6;
-  // Supertrend (M2) — AI: bearish supertrend = consistent DISAGREE
+  // Supertrend (M2)
   if (f.supertrendSig === 'BUY') taScore += 5;
-  else if (f.supertrendSig === 'SELL') taScore -= 10;
+  else if (f.supertrendSig === 'SELL') taScore -= 5;
   // Volume ratio (unusual volume = institutional interest)
   if (na(f.volRatio) && f.volRatio > 1.5) taScore += 4;
-  // AI flag: RSI > 60 near 52w high = overbought risk
-  if (na(f.rsi) && f.rsi > 60 && na(f.pctFromHigh) && Math.abs(f.pctFromHigh) < 10) taScore -= 5;
-  // AI flag: bearish RSI divergence
-  if (f.bearDiv || f.bearishDiv) taScore -= 10;
   taScore = Math.max(0, Math.min(100, taScore));
 
   // === PILLAR 4: MOMENTUM SCORE (0-100) (Varsity M9 Ch6: relative strength vs Nifty) ===
@@ -6021,14 +5996,13 @@ function scoreStockForPortfolio(f) {
     else if (f.beta > 1.5) riskScore -= 15;
     else if (f.beta > 1.2) riskScore -= 8;
   }
-  // Debt/Equity (M3 Ch10) — AI: D/E > 1.5 in cyclicals = unanimous reject
-  const isCycRisk = /metal|mining|steel|alumin|copper|oil|gas|commodit/i.test((f.sector||'')+(f.name||''));
+  // Debt/Equity (M3 Ch10)
   if (na(f.debtToEq)) {
     if (f.debtToEq < 0.3) riskScore += 12;
     else if (f.debtToEq < 0.7) riskScore += 8;
     else if (f.debtToEq < 1.0) riskScore += 3;
-    else if (f.debtToEq > 2.0) riskScore -= (isCycRisk ? 25 : 15);
-    else if (f.debtToEq > 1.5) riskScore -= (isCycRisk ? 18 : 8);
+    else if (f.debtToEq > 2.0) riskScore -= 15;
+    else if (f.debtToEq > 1.5) riskScore -= 8;
   }
   // Volatility
   if (na(f.annualVol)) {
@@ -6120,7 +6094,7 @@ function scoreStockForPortfolio(f) {
 }
 
 // ── BUILD MODEL PORTFOLIO (the "ideal" portfolio at this moment) ──
-async function buildPortfolioSuggestion(amount) {
+function buildPortfolioSuggestion(amount) {
   const all = Object.values(stockFundamentals);
   if (!all.length) return { error: 'Stock data not loaded yet. Please wait for scoring to complete.' };
 
@@ -6230,67 +6204,6 @@ async function buildPortfolioSuggestion(amount) {
       : 'Could not build portfolio. ' + scored.length + ' stocks scored but diversification filter left 0. Retrying...' };
   }
 
-  // --- AI CONSENSUS FEEDBACK LOOP ---
-  // Use persisted AI reviews from DB to adjust scores and demote weak-consensus stocks
-  // This closes the loop: Score → Portfolio → AI Review → DB → Score adjustment
-  try {
-    const aiRows = await pool.query(
-      `SELECT sym, model_id, verdict FROM ai_stock_reviews WHERE reviewed_at > NOW() - INTERVAL '7 days'`
-    );
-    if (aiRows.rows.length > 0) {
-      // Group by stock
-      const aiByStock = {};
-      aiRows.rows.forEach(r => {
-        if (!aiByStock[r.sym]) aiByStock[r.sym] = { agree: 0, disagree: 0, modify: 0, total: 0 };
-        const bucket = aiByStock[r.sym];
-        bucket.total++;
-        if (r.verdict === 'AGREE') bucket.agree++;
-        else if (r.verdict === 'DISAGREE') bucket.disagree++;
-        else bucket.modify++;
-      });
-
-      let demoted = 0;
-      for (const s of selected) {
-        const ai = aiByStock[s.sym];
-        if (!ai || ai.total < 3) continue; // need at least 3 model reviews
-
-        const disagreeRatio = ai.disagree / ai.total;
-        const agreeRatio = ai.agree / ai.total;
-
-        // Majority DISAGREE (>50%): penalize composite -10, downgrade conviction
-        if (disagreeRatio > 0.5) {
-          s.composite = +(s.composite - 10).toFixed(1);
-          s.aiPenalty = -10;
-          s.aiFlag = `AI REJECT: ${ai.disagree}/${ai.total} models disagree`;
-          if (s.conviction === 'Strong Buy') { s.conviction = 'Buy'; s.convColor = '#22c55e'; }
-          else if (s.conviction === 'Buy') { s.conviction = 'Accumulate'; s.convColor = '#f59e0b'; }
-          else if (s.conviction === 'Accumulate') { s.conviction = 'Watch'; s.convColor = '#94a3b8'; }
-          demoted++;
-        }
-        // Weak consensus — more disagree+modify than agree: small penalty
-        else if (ai.disagree + ai.modify > ai.agree && disagreeRatio > 0.3) {
-          s.composite = +(s.composite - 5).toFixed(1);
-          s.aiPenalty = -5;
-          s.aiFlag = `AI CAUTION: ${ai.disagree}D/${ai.modify}M vs ${ai.agree}A`;
-          if (s.conviction === 'Strong Buy') { s.conviction = 'Buy'; s.convColor = '#22c55e'; }
-          demoted++;
-        }
-        // Strong consensus (>70% agree): bonus
-        else if (agreeRatio >= 0.7) {
-          s.composite = +(s.composite + 3).toFixed(1);
-          s.aiBonus = 3;
-          s.aiFlag = `AI STRONG: ${ai.agree}/${ai.total} models agree`;
-        }
-      }
-
-      // Re-sort by adjusted composite
-      selected.sort((a, b) => b.composite - a.composite);
-      if (demoted > 0) console.log(`🤖 AI feedback: demoted ${demoted} stocks based on DB reviews`);
-    }
-  } catch(e) {
-    console.log(`🤖 AI feedback skipped: ${e.message}`);
-  }
-
   // --- CASH ALLOCATION based on regime ---
   const cashPct = (marketRegimeData.cashSuggestion || 10) / 100;
   const investableAmount = Math.round(amount * (1 - cashPct));
@@ -6366,7 +6279,6 @@ async function buildPortfolioSuggestion(amount) {
       earningsYield: s.earningsYield, divYield: s.divYield,
       entryPrice: s.price, entryTime: Date.now(),
       signalReasons: [], isBench: false,
-      aiFlag: s.aiFlag || null, aiPenalty: s.aiPenalty || 0, aiBonus: s.aiBonus || 0,
     };
   });
 
@@ -6393,7 +6305,6 @@ async function buildPortfolioSuggestion(amount) {
       earningsYield: s.earningsYield, divYield: s.divYield,
       entryPrice: s.price, entryTime: Date.now(),
       signalReasons: [], isBench: true,
-      aiFlag: s.aiFlag || null, aiPenalty: s.aiPenalty || 0, aiBonus: s.aiBonus || 0,
     };
   });
 
@@ -6669,12 +6580,12 @@ async function savePortfolioSnapshot() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // POST /api/portfolio/suggest — generate model portfolio
-app.post('/api/portfolio/suggest', async (req, res) => {
+app.post('/api/portfolio/suggest', (req, res) => {
   try {
     const amount = parseFloat(req.body.amount);
     if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
     if (amount > 100000000) return res.status(400).json({ error: 'Maximum ₹10 Cr' });
-    const result = await buildPortfolioSuggestion(amount);
+    const result = buildPortfolioSuggestion(amount);
     if (result.error) return res.status(503).json(result);
     portfolioSuggestions[Math.round(amount)] = result;
     res.json(result);
@@ -6682,14 +6593,14 @@ app.post('/api/portfolio/suggest', async (req, res) => {
 });
 
 // GET /api/portfolio/suggest/refresh — live refresh with exit signals (auto-generates if needed)
-app.get('/api/portfolio/suggest/refresh', async (req, res) => {
+app.get('/api/portfolio/suggest/refresh', (req, res) => {
   try {
     const amount = parseFloat(req.query.amount) || 100000;
     const key = Math.round(amount);
     let cached = portfolioSuggestions[key];
     // Auto-generate if no cached portfolio exists
     if (!cached) {
-      const result = await buildPortfolioSuggestion(amount);
+      const result = buildPortfolioSuggestion(amount);
       if (result.error) return res.status(503).json(result);
       portfolioSuggestions[key] = result;
       cached = result;
@@ -6701,7 +6612,7 @@ app.get('/api/portfolio/suggest/refresh', async (req, res) => {
 });
 
 // GET /api/portfolio/model — always returns current model portfolio (auto-generates with default ₹1L)
-app.get('/api/portfolio/model', async (req, res) => {
+app.get('/api/portfolio/model', (req, res) => {
   try {
     const amount = parseFloat(req.query.amount) || 100000;
     const key = Math.round(amount);
@@ -6709,7 +6620,7 @@ app.get('/api/portfolio/model', async (req, res) => {
     // Auto-generate if stale (>1 hour) or missing
     const isStale = cached && cached.summary?.generatedAt && (Date.now() - cached.summary.generatedAt > 3600000);
     if (!cached || isStale) {
-      const result = await buildPortfolioSuggestion(amount);
+      const result = buildPortfolioSuggestion(amount);
       if (result.error) {
         // If generation fails but we have stale data, return stale with warning
         if (cached) { return res.json({ ...cached, warning: 'Using cached data: ' + result.error }); }
@@ -6726,11 +6637,11 @@ app.get('/api/portfolio/model', async (req, res) => {
 });
 
 // POST /api/portfolio/suggest/regenerate — force regenerate
-app.post('/api/portfolio/suggest/regenerate', async (req, res) => {
+app.post('/api/portfolio/suggest/regenerate', (req, res) => {
   try {
     const amount = parseFloat(req.body.amount);
     if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
-    const result = await buildPortfolioSuggestion(amount);
+    const result = buildPortfolioSuggestion(amount);
     if (result.error) return res.status(503).json(result);
     portfolioSuggestions[Math.round(amount)] = result;
     res.json(result);
@@ -6966,7 +6877,7 @@ async function generatePortfolioSignals() {
 
     // Rebuild model if stale or missing
     if (!modelPortfolio || !modelPortfolio.portfolio || (Date.now() - (modelPortfolio.generatedAt||0) > 3600000)) {
-      const result = await buildPortfolioSuggestion(100000);
+      const result = buildPortfolioSuggestion(100000);
       if (!result.error) modelPortfolio = { portfolio: result.portfolio, amount: 100000, generatedAt: Date.now() };
     }
     if (!modelPortfolio || !modelPortfolio.portfolio) return;
