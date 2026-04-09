@@ -7346,7 +7346,7 @@ cron.schedule('*/30 9-15 * * 1-5', async () => {
 }, { timezone: 'Asia/Kolkata' });
 
 // 3:00PM IST — Multi-model AI consensus review (once daily, Mon-Fri)
-// Calls 6 LLMs in parallel: Gemini Flash, GPT-4.1-nano, DeepSeek V3, Claude Haiku, Gemini Pro, GPT-4.1
+// Calls 5 LLMs in parallel: Groq Llama, GPT-4.1-nano, DeepSeek V3, Claude Haiku, Mistral Small
 cron.schedule('0 15 * * 1-5', async () => {
   console.log('🤖 3:00PM: Daily multi-model AI consensus review...');
   await generatePortfolioSignals();
@@ -8854,7 +8854,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
 });
 
 // ── Single-Stock AI Review endpoint ──────────────────────────────────────────
-// Calls all 7 AI models with the stock's complete data for individual analysis
+// Calls all 5 AI models with the stock's complete data for individual analysis
 // On-demand: frontend calls this when user clicks "Run AI Review" in analyzer
 app.get('/api/stocks/analyze/:sym/ai', async (req, res) => {
   const sym = req.params.sym.toUpperCase().trim();
@@ -9878,7 +9878,7 @@ start();
 
 // =============================================================================
 // AI SIGNAL VALIDATOR — Multi-Model Varsity-Trained Portfolio Review Engine
-// Calls 6 LLMs in parallel for consensus validation against Zerodha Varsity
+// Calls 5 LLMs in parallel for consensus validation against Zerodha Varsity
 // Runs once daily at 3:00PM IST + manual /api/ai/validate endpoint
 // =============================================================================
 
