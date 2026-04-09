@@ -9897,15 +9897,16 @@ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 // ── OpenRouter: single API for all models ──────────────────────────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 
-// Analyst models (ALL FREE via OpenRouter, run in parallel) — raw opinions
+// Analyst models (ultra-cheap via OpenRouter, run in parallel) — raw opinions
+// Mix of dirt-cheap paid models (no rate limits) + free fallbacks
 const AI_ANALYST_MODELS = [
-  { id: 'gemma-31b', name: 'Gemma 4 31B', model: 'google/gemma-4-31b-it:free' },
-  { id: 'nemotron-120b', name: 'Nemotron 3 Super 120B', model: 'nvidia/nemotron-3-super-120b-a12b:free' },
-  { id: 'gemma-26b', name: 'Gemma 4 26B', model: 'google/gemma-4-26b-a4b-it:free' },
-  { id: 'minimax', name: 'MiniMax M2.5', model: 'minimax/minimax-m2.5:free' },
+  { id: 'deepseek', name: 'DeepSeek V3', model: 'deepseek/deepseek-chat-v3-0324' },           // ~$0.27/M in — reliable, smart
+  { id: 'gpt-nano', name: 'GPT-4.1-nano', model: 'openai/gpt-4.1-nano' },                     // ~$0.10/M in — fast, cheap
+  { id: 'gemma-31b', name: 'Gemma 4 31B', model: 'google/gemma-4-31b-it:free' },               // FREE — good quality
+  { id: 'nemotron-120b', name: 'Nemotron 3 Super 120B', model: 'nvidia/nemotron-3-super-120b-a12b:free' }, // FREE — large MoE
 ];
-// Judge model (paid, consolidates analyst opinions into final review)
-const AI_JUDGE_MODEL = { id: 'judge', name: 'Claude Haiku (Judge)', model: 'anthropic/claude-haiku-4-5-20251001' };
+// Judge model (consolidates analyst opinions into final review)
+const AI_JUDGE_MODEL = { id: 'judge', name: 'Claude Haiku (Judge)', model: 'anthropic/claude-haiku-4.5' };
 
 // Combined list for backward compat (status tracking, UI pills)
 const AI_MODELS = [...AI_ANALYST_MODELS, AI_JUDGE_MODEL];
