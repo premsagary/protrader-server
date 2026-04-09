@@ -3733,7 +3733,13 @@ var _psAIReviewsDB  = null; // Persisted AI reviews from PostgreSQL (survives re
 // Toggle AI review row visibility
 function psToggleAIRow(sym){
   var row=document.getElementById('ai-row-'+sym);
-  if(row) row.style.display=row.style.display==='none'?'table-row':'none';
+  var arrow=document.getElementById('ai-arrow-'+sym);
+  var toggle=document.getElementById('ai-toggle-'+sym);
+  if(row){
+    var isHidden=row.style.display==='none';
+    row.style.display=isHidden?'table-row':'none';
+    if(arrow) arrow.textContent=isHidden?'▼':'▶';
+  }
 }
 
 // Load AI reviews from DB (persisted — works after refresh/restart)
@@ -3944,7 +3950,7 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
     if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
-    // AI consensus badge (multi-model) — format: ❌3/⚠️1/✅3/7
+    // AI consensus badge (multi-model)
     var _aiStockReview=null;
     if(_psAIValidation&&_psAIValidation.signal_reviews){
       _aiStockReview=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
@@ -3953,18 +3959,28 @@ function psRenderModelResults(data){
     if(!_aiStockReview&&_psAIReviewsDB&&_psAIReviewsDB[stk.sym]){
       _aiStockReview=_psAIReviewsDB[stk.sym];
     }
+    var _aiAgree=0,_aiDisagree=0,_aiModify=0,_aiTotal=0;
     if(_aiStockReview){
       var aiR=_aiStockReview;
       var pm=aiR.per_model||aiR.models||{};
       var pmKeys=Object.keys(pm);
-      var agreeCount=0,disagreeCount=0,modifyCount=0,totalCount=pmKeys.length;
-      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')agreeCount++;else if(v==='DISAGREE')disagreeCount++;else if(v==='MODIFY')modifyCount++;});
-      var majorityVerdict=agreeCount>=disagreeCount?'AGREE':'DISAGREE';
+      _aiTotal=pmKeys.length;
+      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')_aiAgree++;else if(v==='DISAGREE')_aiDisagree++;else if(v==='MODIFY')_aiModify++;});
+      var majorityVerdict=_aiAgree>=_aiDisagree?'AGREE':'DISAGREE';
       var cBg=majorityVerdict==='AGREE'?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)';
-      var badgeLabel='❌'+disagreeCount+(modifyCount>0?'/⚠️'+modifyCount:'')+'/✅'+agreeCount+'/'+totalCount;
-      h+=' <span onclick="psToggleAIRow(\''+stk.sym+'\')" title="Click to see AI model details" style="background:'+cBg+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;cursor:pointer;white-space:nowrap">'+badgeLabel+'</span>';
+      // Compact colored pills: ✅3 ⚠️1 ❌3 of 7
+      var badgeParts=[];
+      if(_aiAgree>0) badgeParts.push('<span style="color:#22c55e">✅'+_aiAgree+'</span>');
+      if(_aiModify>0) badgeParts.push('<span style="color:#f59e0b">⚠️'+_aiModify+'</span>');
+      if(_aiDisagree>0) badgeParts.push('<span style="color:#ef4444">❌'+_aiDisagree+'</span>');
+      var badgeLabel=badgeParts.join(' ')+' <span style="color:var(--text4);font-weight:600">of '+_aiTotal+'</span>';
+      h+=' <span style="background:'+cBg+';border-radius:4px;padding:1px 6px;font-size:8px;font-weight:800;white-space:nowrap;letter-spacing:0.3px">'+badgeLabel+'</span>';
     }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
+    // "Show More" link below stock name — only if AI review exists
+    if(_aiStockReview){
+      h+='<div onclick="psToggleAIRow(\''+stk.sym+'\')" id="ai-toggle-'+stk.sym+'" style="font-size:8px;color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-'+stk.sym+'">▶</span> Show AI Reviews ('+_aiTotal+' models)</div>';
+    }
     if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
     h+='<td style="padding:5px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
