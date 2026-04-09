@@ -9972,32 +9972,36 @@ async function callWithJudge(systemPrompt, userPrompt) {
     AI_ANALYST_MODELS.map(m => callAIModel(m, systemPrompt, userPrompt))
   );
 
-  // Step 2: Build judge prompt with analyst opinions
+  // Step 2: Build judge prompt with ALL analyst opinions (Haiku has 200K context)
   const analystSummaries = analystResults.map(r => {
     if (r.error || r.skipped) return `[${r.name}]: FAILED — ${r.error || 'skipped'}`;
-    return `[${r.name}]:\n${JSON.stringify(r.result, null, 0).slice(0, 8000)}`;
+    return `[${r.name}]:\n${JSON.stringify(r.result, null, 0)}`;
   }).join('\n\n');
 
   const judgeSystemPrompt = `You are a senior portfolio judge. You have received raw analysis from ${AI_ANALYST_MODELS.length} AI analyst models analyzing Indian stocks using Zerodha Varsity principles.
 
 Your job: synthesize their opinions into ONE consolidated, high-quality JSON response. You must:
 1. Where analysts AGREE, state the consensus with high confidence
-2. Where they DISAGREE, reason through it and pick the best-supported view
-3. Flag any analyst claims that seem wrong or unsupported
-4. Add any insights the analysts missed
+2. Where they DISAGREE, reason through it using the ACTUAL stock data provided and pick the best-supported view
+3. Flag any analyst claims that seem wrong or unsupported by the data
+4. Add any insights the analysts missed — you have the full raw data
 5. Output the SAME JSON format as the analysts but with better reasoning
 
 The original system instructions for context:
-${systemPrompt.slice(0, 3000)}`;
+${systemPrompt}`;
 
-  const judgeUserPrompt = `Here is the original stock data the analysts reviewed:
-${userPrompt.slice(0, 12000)}
+  const judgeUserPrompt = `Here is the FULL original stock data the analysts reviewed (use these numbers to verify analyst claims):
+${userPrompt}
 
 Here are the ${AI_ANALYST_MODELS.length} analyst opinions:
 
 ${analystSummaries}
 
-Now synthesize these into ONE consolidated JSON response. Use the same JSON format. For each stock's verdict, note which analysts agreed/disagreed in your reasoning. Be specific and actionable.`;
+Now synthesize these into ONE consolidated JSON response. Use the same JSON format. For each stock's verdict:
+- Cross-check analyst claims against the ACTUAL data above
+- Note which analysts agreed/disagreed in your reasoning
+- Be specific with numbers (cite RSI, PE, MACD values etc)
+- Be actionable (specific stop-loss, target, position size suggestions)`;
 
   // Step 3: Call judge model
   const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt);
@@ -10766,25 +10770,25 @@ Respond ONLY in the JSON format specified in your system prompt.`;
     }));
     const analystResults = await Promise.all(analystPromises);
 
-    // Step 2: Build judge prompt with analyst opinions
+    // Step 2: Build judge prompt with ALL analyst opinions (Haiku has 200K context)
     aiStep(`Sending analyst opinions to judge (${AI_JUDGE_MODEL.name})...`);
     const analystSummaries = analystResults.map(r => {
       if (r.error || r.skipped) return `[${r.name}]: FAILED — ${r.error || 'skipped'}`;
-      return `[${r.name}]:\n${JSON.stringify(r.result, null, 0).slice(0, 12000)}`;
+      return `[${r.name}]:\n${JSON.stringify(r.result, null, 0)}`;
     }).join('\n\n');
 
     const judgeSystemPrompt = `You are a senior portfolio judge. You received raw analysis from ${AI_ANALYST_MODELS.length} AI analyst models analyzing Indian stocks using Zerodha Varsity principles.
 
 Your job: synthesize their opinions into ONE consolidated JSON response in the EXACT format specified below. You must:
 1. Where analysts AGREE, state the consensus with high confidence
-2. Where they DISAGREE, reason through it and pick the best-supported view
-3. Flag any analyst claims that seem wrong or unsupported
-4. Add insights the analysts missed
+2. Where they DISAGREE, reason through it using the ACTUAL stock data and pick the best-supported view
+3. Flag any analyst claims that seem wrong or unsupported by the data
+4. Add insights the analysts missed — you have the full raw data
 5. Output the SAME JSON format as specified in the system prompt
 
-${VARSITY_KNOWLEDGE_PROMPT.slice(0, 6000)}`;
+${VARSITY_KNOWLEDGE_PROMPT}`;
 
-    const judgeUserPrompt = `Original stock data:\n${userPrompt.slice(0, 15000)}\n\nAnalyst opinions:\n${analystSummaries}\n\nSynthesize into ONE consolidated JSON. For each stock's verdict, note which analysts agreed/disagreed. Be specific.`;
+    const judgeUserPrompt = `Here is the FULL original stock data (use these numbers to verify analyst claims):\n${userPrompt}\n\nAnalyst opinions:\n${analystSummaries}\n\nSynthesize into ONE consolidated JSON. For each stock: cross-check claims against actual data, note which analysts agreed/disagreed, cite specific numbers (RSI, PE, MACD etc), give actionable recommendations.`;
 
     const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt);
     if (judgeResult.error) {
