@@ -6366,6 +6366,7 @@ async function buildPortfolioSuggestion(amount) {
       earningsYield: s.earningsYield, divYield: s.divYield,
       entryPrice: s.price, entryTime: Date.now(),
       signalReasons: [], isBench: false,
+      aiFlag: s.aiFlag || null, aiPenalty: s.aiPenalty || 0, aiBonus: s.aiBonus || 0,
     };
   });
 
@@ -6392,6 +6393,7 @@ async function buildPortfolioSuggestion(amount) {
       earningsYield: s.earningsYield, divYield: s.divYield,
       entryPrice: s.price, entryTime: Date.now(),
       signalReasons: [], isBench: true,
+      aiFlag: s.aiFlag || null, aiPenalty: s.aiPenalty || 0, aiBonus: s.aiBonus || 0,
     };
   });
 
