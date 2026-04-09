@@ -2015,6 +2015,8 @@ app.post('/api/auth/login', async (req, res) => {
     await pool.query('UPDATE users SET last_login=NOW() WHERE id=$1', [user.id]);
 
     console.log(`🔑 Login: ${user.username} (${user.role})`);
+    // Set cookie so direct browser URL access works too
+    res.cookie('session_token', token, { httpOnly: true, maxAge: 7*24*60*60*1000, sameSite: 'lax', path: '/' });
     res.json({ token, username: user.username, role: user.role });
   } catch (e) {
     console.error('Login error:', e.message);
@@ -2024,8 +2026,10 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Logout endpoint
 app.post('/api/auth/logout', async (req, res) => {
-  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  const token = (req.headers.authorization || '').replace('Bearer ', '')
+    || (req.headers.cookie || '').split(';').map(c=>c.trim()).find(c=>c.startsWith('session_token='))?.split('=')[1] || '';
   if (token) await pool.query('DELETE FROM sessions WHERE token=$1', [token]).catch(() => {});
+  res.clearCookie('session_token', { path: '/' });
   res.json({ ok: true });
 });
 
@@ -2044,7 +2048,10 @@ app.get('/api/auth/me', async (req, res) => {
 function authMiddleware(req, res, next) {
   // Allow auth routes through
   if (req.path.startsWith('/api/auth/')) return next();
-  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  // Check Bearer header, then cookie, then query param — so direct browser access works
+  const token = (req.headers.authorization || '').replace('Bearer ', '')
+    || (req.headers.cookie || '').split(';').map(c=>c.trim()).find(c=>c.startsWith('session_token='))?.split('=')[1]
+    || req.query.token || '';
   if (!token) return res.status(401).json({ error: 'Authentication required' });
   pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
     .then(result => {
