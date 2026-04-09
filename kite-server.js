@@ -6120,7 +6120,7 @@ function scoreStockForPortfolio(f) {
 }
 
 // ── BUILD MODEL PORTFOLIO (the "ideal" portfolio at this moment) ──
-function buildPortfolioSuggestion(amount) {
+async function buildPortfolioSuggestion(amount) {
   const all = Object.values(stockFundamentals);
   if (!all.length) return { error: 'Stock data not loaded yet. Please wait for scoring to complete.' };
 
@@ -6228,6 +6228,67 @@ function buildPortfolioSuggestion(amount) {
     return { error: scored.length === 0
       ? 'Stock data is still loading (' + all.length + ' stocks, ' + withPrice + ' with price). Please wait and retry.'
       : 'Could not build portfolio. ' + scored.length + ' stocks scored but diversification filter left 0. Retrying...' };
+  }
+
+  // --- AI CONSENSUS FEEDBACK LOOP ---
+  // Use persisted AI reviews from DB to adjust scores and demote weak-consensus stocks
+  // This closes the loop: Score → Portfolio → AI Review → DB → Score adjustment
+  try {
+    const aiRows = await pool.query(
+      `SELECT sym, model_id, verdict FROM ai_stock_reviews WHERE reviewed_at > NOW() - INTERVAL '7 days'`
+    );
+    if (aiRows.rows.length > 0) {
+      // Group by stock
+      const aiByStock = {};
+      aiRows.rows.forEach(r => {
+        if (!aiByStock[r.sym]) aiByStock[r.sym] = { agree: 0, disagree: 0, modify: 0, total: 0 };
+        const bucket = aiByStock[r.sym];
+        bucket.total++;
+        if (r.verdict === 'AGREE') bucket.agree++;
+        else if (r.verdict === 'DISAGREE') bucket.disagree++;
+        else bucket.modify++;
+      });
+
+      let demoted = 0;
+      for (const s of selected) {
+        const ai = aiByStock[s.sym];
+        if (!ai || ai.total < 3) continue; // need at least 3 model reviews
+
+        const disagreeRatio = ai.disagree / ai.total;
+        const agreeRatio = ai.agree / ai.total;
+
+        // Majority DISAGREE (>50%): penalize composite -10, downgrade conviction
+        if (disagreeRatio > 0.5) {
+          s.composite = +(s.composite - 10).toFixed(1);
+          s.aiPenalty = -10;
+          s.aiFlag = `AI REJECT: ${ai.disagree}/${ai.total} models disagree`;
+          if (s.conviction === 'Strong Buy') { s.conviction = 'Buy'; s.convColor = '#22c55e'; }
+          else if (s.conviction === 'Buy') { s.conviction = 'Accumulate'; s.convColor = '#f59e0b'; }
+          else if (s.conviction === 'Accumulate') { s.conviction = 'Watch'; s.convColor = '#94a3b8'; }
+          demoted++;
+        }
+        // Weak consensus — more disagree+modify than agree: small penalty
+        else if (ai.disagree + ai.modify > ai.agree && disagreeRatio > 0.3) {
+          s.composite = +(s.composite - 5).toFixed(1);
+          s.aiPenalty = -5;
+          s.aiFlag = `AI CAUTION: ${ai.disagree}D/${ai.modify}M vs ${ai.agree}A`;
+          if (s.conviction === 'Strong Buy') { s.conviction = 'Buy'; s.convColor = '#22c55e'; }
+          demoted++;
+        }
+        // Strong consensus (>70% agree): bonus
+        else if (agreeRatio >= 0.7) {
+          s.composite = +(s.composite + 3).toFixed(1);
+          s.aiBonus = 3;
+          s.aiFlag = `AI STRONG: ${ai.agree}/${ai.total} models agree`;
+        }
+      }
+
+      // Re-sort by adjusted composite
+      selected.sort((a, b) => b.composite - a.composite);
+      if (demoted > 0) console.log(`🤖 AI feedback: demoted ${demoted} stocks based on DB reviews`);
+    }
+  } catch(e) {
+    console.log(`🤖 AI feedback skipped: ${e.message}`);
   }
 
   // --- CASH ALLOCATION based on regime ---
@@ -6606,12 +6667,12 @@ async function savePortfolioSnapshot() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // POST /api/portfolio/suggest — generate model portfolio
-app.post('/api/portfolio/suggest', (req, res) => {
+app.post('/api/portfolio/suggest', async (req, res) => {
   try {
     const amount = parseFloat(req.body.amount);
     if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
     if (amount > 100000000) return res.status(400).json({ error: 'Maximum ₹10 Cr' });
-    const result = buildPortfolioSuggestion(amount);
+    const result = await buildPortfolioSuggestion(amount);
     if (result.error) return res.status(503).json(result);
     portfolioSuggestions[Math.round(amount)] = result;
     res.json(result);
@@ -6619,14 +6680,14 @@ app.post('/api/portfolio/suggest', (req, res) => {
 });
 
 // GET /api/portfolio/suggest/refresh — live refresh with exit signals (auto-generates if needed)
-app.get('/api/portfolio/suggest/refresh', (req, res) => {
+app.get('/api/portfolio/suggest/refresh', async (req, res) => {
   try {
     const amount = parseFloat(req.query.amount) || 100000;
     const key = Math.round(amount);
     let cached = portfolioSuggestions[key];
     // Auto-generate if no cached portfolio exists
     if (!cached) {
-      const result = buildPortfolioSuggestion(amount);
+      const result = await buildPortfolioSuggestion(amount);
       if (result.error) return res.status(503).json(result);
       portfolioSuggestions[key] = result;
       cached = result;
@@ -6638,7 +6699,7 @@ app.get('/api/portfolio/suggest/refresh', (req, res) => {
 });
 
 // GET /api/portfolio/model — always returns current model portfolio (auto-generates with default ₹1L)
-app.get('/api/portfolio/model', (req, res) => {
+app.get('/api/portfolio/model', async (req, res) => {
   try {
     const amount = parseFloat(req.query.amount) || 100000;
     const key = Math.round(amount);
@@ -6646,7 +6707,7 @@ app.get('/api/portfolio/model', (req, res) => {
     // Auto-generate if stale (>1 hour) or missing
     const isStale = cached && cached.summary?.generatedAt && (Date.now() - cached.summary.generatedAt > 3600000);
     if (!cached || isStale) {
-      const result = buildPortfolioSuggestion(amount);
+      const result = await buildPortfolioSuggestion(amount);
       if (result.error) {
         // If generation fails but we have stale data, return stale with warning
         if (cached) { return res.json({ ...cached, warning: 'Using cached data: ' + result.error }); }
@@ -6663,11 +6724,11 @@ app.get('/api/portfolio/model', (req, res) => {
 });
 
 // POST /api/portfolio/suggest/regenerate — force regenerate
-app.post('/api/portfolio/suggest/regenerate', (req, res) => {
+app.post('/api/portfolio/suggest/regenerate', async (req, res) => {
   try {
     const amount = parseFloat(req.body.amount);
     if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
-    const result = buildPortfolioSuggestion(amount);
+    const result = await buildPortfolioSuggestion(amount);
     if (result.error) return res.status(503).json(result);
     portfolioSuggestions[Math.round(amount)] = result;
     res.json(result);
@@ -6903,7 +6964,7 @@ async function generatePortfolioSignals() {
 
     // Rebuild model if stale or missing
     if (!modelPortfolio || !modelPortfolio.portfolio || (Date.now() - (modelPortfolio.generatedAt||0) > 3600000)) {
-      const result = buildPortfolioSuggestion(100000);
+      const result = await buildPortfolioSuggestion(100000);
       if (!result.error) modelPortfolio = { portfolio: result.portfolio, amount: 100000, generatedAt: Date.now() };
     }
     if (!modelPortfolio || !modelPortfolio.portfolio) return;
