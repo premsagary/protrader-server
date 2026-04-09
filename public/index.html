@@ -3737,15 +3737,19 @@ function _fillFACard(cardId, sym, d) {
 // =============================================================================
 // -----------------------------------------------------------------------------
 // =============================================================================
-// PORTFOLIO SUGGESTION — STATE
+// PORTFOLIO MANAGER — STATE
 // =============================================================================
-var _psData       = null;   // current portfolio suggestion data
+var _psData       = null;   // current model portfolio data
 var _psAmount     = 100000; // default ₹1L
-var _psRefreshInt = null;   // hourly refresh interval
+var _psRefreshInt = null;   // auto-refresh interval
 var _psLoading    = false;
+var _psTab        = 'model';  // model | holdings | signals | performance
+var _psPositions  = null;   // user's actual positions from DB
+var _psSignals    = null;   // signal history
+var _psPerf       = null;   // performance data
 
 // =============================================================================
-// PORTFOLIO SUGGESTION — RENDER + LOGIC
+// PORTFOLIO MANAGER — RENDER + LOGIC
 // =============================================================================
 function psFmt(n){
   if(n==null||isNaN(n))return '—';
@@ -3757,155 +3761,369 @@ function psFmt(n){
 function renderPortfolioSuggestion(){
   var cont=document.getElementById('main-content');
   if(!cont)return;
-  var h='<div style="padding:16px;max-width:1200px;margin:0 auto">';
+  var h='<div style="padding:16px;max-width:1300px;margin:0 auto">';
+
   // Header
-  h+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">';
-  h+='<div style="font-weight:800;font-size:20px;color:#22d3ee">💼 Portfolio Suggestion</div>';
-  h+='<div style="font-size:11px;color:var(--text3);margin-left:auto">Varsity-powered · Live data · Auto-refresh every hour</div>';
+  h+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">';
+  h+='<div style="font-weight:800;font-size:20px;color:#22d3ee">💼 Portfolio Manager</div>';
+  h+='<div style="font-size:11px;color:var(--text3);margin-left:auto">Varsity-powered fund manager · Live signals · Auto-refresh</div>';
   h+='</div>';
 
+  // Sub-tabs
+  var tabs=[{id:'model',l:'📊 Model Portfolio'},{id:'holdings',l:'📋 My Holdings'},{id:'signals',l:'🔔 Signals'},{id:'performance',l:'📈 Performance'}];
+  h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+  tabs.forEach(function(t){
+    var act=_psTab===t.id;
+    h+='<button onclick="_psTab=\''+t.id+'\';renderPortfolioSuggestion()" style="background:'+(act?'rgba(34,211,238,.2)':'var(--bg3)')+';color:'+(act?'#22d3ee':'var(--text3)')+';border:1px solid '+(act?'rgba(34,211,238,.4)':'var(--border2)')+';border-radius:6px;padding:6px 14px;font-size:11px;font-weight:'+(act?'800':'600')+';cursor:pointer">'+t.l+'</button>';
+  });
+  h+='</div>';
+
+  // Tab content
+  h+='<div id="ps-tab-content">';
+  if(_psTab==='model') h+=psRenderModelTab();
+  else if(_psTab==='holdings') h+=psRenderHoldingsTab();
+  else if(_psTab==='signals') h+=psRenderSignalsTab();
+  else if(_psTab==='performance') h+=psRenderPerformanceTab();
+  h+='</div>';
+
+  h+='</div>';
+  cont.innerHTML=h;
+
+  // Auto-load data for holdings/signals tabs
+  if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
+  if(_psTab==='signals'&&!_psSignals) psLoadSignals();
+  if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
+}
+
+// ── MODEL PORTFOLIO TAB ──
+function psRenderModelTab(){
+  var h='';
   // Input section
-  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">';
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">';
   h+='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
   h+='<div style="font-size:13px;font-weight:600;color:var(--text)">Investment Amount:</div>';
   h+='<div style="display:flex;align-items:center;gap:6px">';
   h+='<span style="font-size:14px;color:var(--text2)">₹</span>';
   h+='<input type="number" id="ps-amount" value="'+_psAmount+'" min="5000" max="100000000" ';
-  h+='style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:8px 12px;';
-  h+='color:var(--text);font-size:14px;font-weight:700;width:160px;text-align:right" ';
+  h+='style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px;font-weight:700;width:160px;text-align:right" ';
   h+='oninput="_psAmount=parseFloat(this.value)||100000">';
   h+='</div>';
-
-  // Quick amount buttons
-  var amounts=[{l:'₹25K',v:25000},{l:'₹50K',v:50000},{l:'₹1L',v:100000},{l:'₹2.5L',v:250000},{l:'₹5L',v:500000},{l:'₹10L',v:1000000},{l:'₹25L',v:2500000}];
+  var amounts=[{l:'₹50K',v:50000},{l:'₹1L',v:100000},{l:'₹2.5L',v:250000},{l:'₹5L',v:500000},{l:'₹10L',v:1000000},{l:'₹25L',v:2500000}];
   amounts.forEach(function(a){
-    h+='<button onclick="document.getElementById(\'ps-amount\').value='+a.v+';_psAmount='+a.v+'" ';
-    h+='style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:5px;';
-    h+='padding:5px 10px;font-size:10px;cursor:pointer;font-weight:600">'+a.l+'</button>';
+    h+='<button onclick="document.getElementById(\'ps-amount\').value='+a.v+';_psAmount='+a.v+'" style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:5px;padding:5px 10px;font-size:10px;cursor:pointer;font-weight:600">'+a.l+'</button>';
   });
-
-  h+='<button onclick="psGenerate()" id="ps-gen-btn" ';
-  h+='style="background:linear-gradient(135deg,#22d3ee,#0ea5e9);color:#000;border:none;border-radius:8px;';
-  h+='padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
+  h+='<button onclick="psGenerate()" id="ps-gen-btn" style="background:linear-gradient(135deg,#22d3ee,#0ea5e9);color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
+  h+='</div>';
+  h+='<div style="font-size:10px;color:var(--text4);margin-top:8px">5-factor model: FA 30% + TA 25% + Valuation 15% + Momentum 15% + Risk 15%. Market regime-aware cash allocation. Sector diversification.</div>';
   h+='</div>';
 
-  // Info line
-  h+='<div style="font-size:10px;color:var(--text4);margin-top:8px">Uses composite scores (FA 35% + TA 25% + Momentum 20% + Risk 20%), ';
-  h+='conviction ratings, R:R analysis, sector diversification (max 2 per sector), and Varsity risk management rules.</div>';
-  h+='</div>';
-
-  // Results container
+  // Results
   h+='<div id="ps-results">';
-  if(_psData && _psData.portfolio){
-    h+=psRenderResults(_psData);
-  } else {
-    h+='<div style="text-align:center;padding:60px 20px;color:var(--text3)">';
-    h+='<div style="font-size:40px;margin-bottom:12px">💼</div>';
-    h+='<div style="font-size:14px;font-weight:600;margin-bottom:6px">Enter your investment amount and click Generate</div>';
-    h+='<div style="font-size:11px;color:var(--text4)">ProTrader will analyze 500+ stocks using live data, Varsity scoring,<br>and build a diversified portfolio with buy/sell signals updated every hour.</div>';
+  if(_psData && _psData.portfolio) h+=psRenderModelResults(_psData);
+  else {
+    h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
+    h+='<div style="font-size:36px;margin-bottom:10px">💼</div>';
+    h+='<div style="font-size:14px;font-weight:600">Enter investment amount and Generate</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Analyzes 500+ stocks with live Varsity-aligned scoring</div>';
     h+='</div>';
   }
   h+='</div>';
-  h+='</div>';
-  cont.innerHTML=h;
+  return h;
 }
 
-function psRenderResults(data){
-  var p=data.portfolio, s=data.summary;
+function psRenderModelResults(data){
+  var p=data.portfolio,s=data.summary;
   var h='';
 
-  // Summary cards
-  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">';
-  function sc(l,v,c,sub){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center">'
-    +'<div style="font-size:10px;color:var(--text3);margin-bottom:3px">'+l+'</div>'
-    +'<div style="font-size:16px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div>'
-    +(sub?'<div style="font-size:10px;color:var(--text4);margin-top:2px">'+sub+'</div>':'')+'</div>'; }
-  h+=sc('Invested', psFmt(s.totalInvested), '#22d3ee');
-  h+=sc('Stocks', s.numStocks, 'var(--text)', s.numSectors+' sectors');
-  h+=sc('Avg Score', s.avgComposite+'/100', s.avgComposite>=65?'#22c55e':s.avgComposite>=50?'#f59e0b':'#ef4444');
-  h+=sc('Portfolio β', s.portfolioBeta, s.portfolioBeta<1?'#22c55e':s.portfolioBeta<1.3?'#f59e0b':'#ef4444', s.portfolioBeta<1?'Low risk':'Moderate');
-  if(s.totalPnl!=null){
-    var pnlCol=s.totalPnl>=0?'#22c55e':'#ef4444';
-    h+=sc('P&L', (s.totalPnl>=0?'+':'')+psFmt(s.totalPnl), pnlCol, (s.totalPnlPct>=0?'+':'')+s.totalPnlPct+'%');
-    h+=sc('Current Value', psFmt(s.currentValue), pnlCol);
+  // Regime banner
+  if(s.regime){
+    var rc=s.regime==='BULL'?'#22c55e':s.regime==='BEAR'?'#ef4444':'#f59e0b';
+    h+='<div style="background:'+rc+'12;border:1px solid '+rc+'30;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+    h+='<span style="font-weight:800;color:'+rc+';font-size:12px">🏛 '+s.regime+' MARKET</span>';
+    if(s.regimeData){
+      h+='<span style="font-size:10px;color:var(--text3)">Breadth: '+s.regimeData.breadth+'% above 200DMA</span>';
+      h+='<span style="font-size:10px;color:var(--text3)">Cash: '+s.cashPct+'%</span>';
+      h+='<span style="font-size:10px;color:var(--text3)">Confidence: '+s.regimeData.confidence+'%</span>';
+    }
+    h+='</div>';
   }
-  if(s.cashRemaining>0) h+=sc('Cash Left', psFmt(s.cashRemaining), 'var(--text3)', 'unallocated');
+
+  // Summary cards
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+  function sc(l,v,c,sub){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div>'
+    +(sub?'<div style="font-size:9px;color:var(--text4);margin-top:1px">'+sub+'</div>':'')+'</div>';}
+  h+=sc('Invested',psFmt(s.totalInvested),'#22d3ee');
+  h+=sc('Stocks',s.numStocks,'var(--text)',s.numSectors+' sectors');
+  h+=sc('Avg Score',s.avgComposite+'/100',s.avgComposite>=60?'#22c55e':s.avgComposite>=45?'#f59e0b':'#ef4444');
+  h+=sc('Beta',s.portfolioBeta,s.portfolioBeta<1?'#22c55e':s.portfolioBeta<1.3?'#f59e0b':'#ef4444');
+  if(s.totalPnl!=null){
+    var pc=s.totalPnl>=0?'#22c55e':'#ef4444';
+    h+=sc('P&L',(s.totalPnl>=0?'+':'')+psFmt(s.totalPnl),pc,s.totalPnlPct+'%');
+    h+=sc('Value',psFmt(s.currentValue),pc);
+  }
+  if(s.cashRemaining>0) h+=sc('Cash',psFmt(s.cashRemaining),'var(--text3)',s.cashPct+'% buffer');
   h+='</div>';
 
-  // Refresh bar
-  var lastRef = s.lastRefreshed ? new Date(s.lastRefreshed).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}) : 'not yet';
-  h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">';
-  h+='<button onclick="psRefresh()" style="background:rgba(34,211,238,.12);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh Now</button>';
-  h+='<button onclick="psRegenerate()" style="background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">♻ Regenerate Portfolio</button>';
-  h+='<span style="font-size:10px;color:var(--text4);margin-left:auto" id="ps-last-ref">Last refresh: '+lastRef+'</span>';
-  h+='<span style="font-size:10px;color:'+(s.marketOpen?'#22c55e':'#ef4444')+'">● Market '+(s.marketOpen?'Open':'Closed')+'</span>';
+  // Action bar
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+  h+='<button onclick="psRefresh()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
+  h+='<button onclick="psRegenerate()" style="background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">♻ Regenerate</button>';
+  h+='<span style="font-size:10px;color:var(--text4);margin-left:auto" id="ps-last-ref">'+
+    (s.lastRefreshed?'Refreshed '+new Date(s.lastRefreshed).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}):'Generated '+new Date(s.generatedAt).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}))+'</span>';
+  h+='<span style="font-size:10px;color:'+(s.marketOpen?'#22c55e':'#ef4444')+'">● '+(s.marketOpen?'Open':'Closed')+'</span>';
   h+='</div>';
 
   // Stock table
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  ['#','Stock','Sector','Price','Shares','Alloc','Alloc%','Conviction','Score','Action','SL','Target','R:R','P&L'].forEach(function(hdr){
-    h+='<th style="padding:8px 6px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
+  ['#','Stock','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Action','SL','Target','R:R','Track'].forEach(function(hdr){
+    h+='<th style="padding:7px 5px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
 
   p.forEach(function(stk,i){
-    var pnlCol = (stk.pnlPct||0)>=0?'#22c55e':'#ef4444';
-    var rowBg = i%2===0?'var(--bg2)':'var(--bg)';
-    h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2)">';
-    h+='<td style="padding:6px;color:var(--text3)">'+(i+1)+'</td>';
-    // Stock name
-    h+='<td style="padding:6px"><div style="font-weight:700;color:var(--text)">'+stk.sym+'</div>';
-    h+='<div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
-    if(stk.isFallenAngel) h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:700">Fallen Angel</span>';
+    var pnlCol=(stk.pnlPct||0)>=0?'#22c55e':'#ef4444';
+    h+='<tr style="background:'+(i%2===0?'var(--bg2)':'var(--bg)')+';border-bottom:1px solid var(--border2)">';
+    h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
+    h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px">'+stk.sym+'</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
+    if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
-    h+='<td style="padding:6px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
-    h+='<td style="padding:6px;font-weight:600">₹'+(stk.currentPrice||stk.price).toFixed(0)+'</td>';
-    h+='<td style="padding:6px;font-weight:600">'+stk.shares+'</td>';
-    h+='<td style="padding:6px">'+psFmt(stk.allocAmt)+'</td>';
-    h+='<td style="padding:6px;font-weight:600">'+stk.allocPct+'%</td>';
-    // Conviction badge
-    h+='<td style="padding:6px"><span style="background:'+stk.convColor+'20;color:'+stk.convColor+';border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;white-space:nowrap">'+stk.conviction+'</span></td>';
-    h+='<td style="padding:6px;font-weight:700;color:'+(stk.composite>=65?'#22c55e':stk.composite>=50?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
+    h+='<td style="padding:5px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
+    h+='<td style="padding:5px;font-weight:600">₹'+(stk.currentPrice||stk.price).toFixed(0)+'</td>';
+    h+='<td style="padding:5px;font-weight:600">'+stk.shares+'</td>';
+    h+='<td style="padding:5px;font-size:10px">'+psFmt(stk.allocAmt)+' <span style="color:var(--text4)">('+stk.allocPct+'%)</span></td>';
+    h+='<td style="padding:5px"><span style="background:'+stk.convColor+'20;color:'+stk.convColor+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700;white-space:nowrap">'+stk.conviction+'</span></td>';
+    h+='<td style="padding:5px;font-weight:700;color:'+(stk.composite>=60?'#22c55e':stk.composite>=45?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
+    h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+stk.faScore+'</td>';
+    h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+(stk.taScore||'—')+'</td>';
     // Action signal
-    h+='<td style="padding:6px"><span style="background:'+stk.actionColor+'20;color:'+stk.actionColor+';border-radius:4px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+stk.action+'</span>';
-    if(stk.signalReasons&&stk.signalReasons.length) h+='<div style="font-size:9px;color:var(--text4);margin-top:2px">'+stk.signalReasons[0]+'</div>';
+    h+='<td style="padding:5px"><span style="background:'+(stk.actionColor||'#22c55e')+'20;color:'+(stk.actionColor||'#22c55e')+';border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+(stk.action||'BUY')+'</span>';
+    if(stk.signalReasons&&stk.signalReasons.length)h+='<div style="font-size:8px;color:var(--text4);margin-top:1px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+stk.signalReasons[0]+'</div>';
     h+='</td>';
-    h+='<td style="padding:6px;color:var(--red);font-size:10px">'+(stk.stopLoss?'₹'+stk.stopLoss:'—')+'</td>';
-    h+='<td style="padding:6px;color:var(--green);font-size:10px">'+(stk.target?'₹'+stk.target:'—')+'</td>';
-    h+='<td style="padding:6px;font-weight:700;color:'+(stk.rrRatio>=2?'#22c55e':'#f59e0b')+'">'+(stk.rrRatio?stk.rrRatio+'x':'—')+'</td>';
-    // P&L
-    if(stk.pnlPct!=null){
-      h+='<td style="padding:6px;font-weight:700;color:'+pnlCol+'">'+(stk.pnlPct>=0?'+':'')+stk.pnlPct+'%</td>';
-    } else {
-      h+='<td style="padding:6px;color:var(--text4)">—</td>';
-    }
+    h+='<td style="padding:5px;color:#ef4444;font-size:10px">'+(stk.stopLoss?'₹'+stk.stopLoss:'—')+'</td>';
+    h+='<td style="padding:5px;color:#22c55e;font-size:10px">'+(stk.target?'₹'+stk.target:'—')+'</td>';
+    h+='<td style="padding:5px;font-weight:700;color:'+(stk.rrRatio>=2?'#22c55e':'#f59e0b')+'">'+(stk.rrRatio?stk.rrRatio+'x':'—')+'</td>';
+    // Track button — mark as bought
+    h+='<td style="padding:5px"><button onclick="psBuyStock(\''+stk.sym+'\','+stk.shares+','+(stk.currentPrice||stk.price).toFixed(2)+','+(stk.stopLoss||0)+','+(stk.target||0)+',\''+stk.conviction+'\')" style="background:rgba(34,211,238,.15);color:#22d3ee;border:1px solid rgba(34,211,238,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button></td>';
     h+='</tr>';
   });
   h+='</tbody></table></div>';
 
+  // New opportunities (if refreshed)
+  if(data.newOpportunities&&data.newOpportunities.length){
+    h+='<div style="margin-top:14px;background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:10px;padding:12px">';
+    h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:6px">🆕 New Opportunities (not in your portfolio)</div>';
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    data.newOpportunities.forEach(function(o){
+      h+='<div style="background:var(--bg3);border-radius:6px;padding:6px 10px;font-size:10px">';
+      h+='<span style="font-weight:700;color:var(--text)">'+o.sym+'</span> ';
+      h+='<span style="color:'+o.convColor+';font-weight:600">'+o.conviction+'</span> ';
+      h+='<span style="color:var(--text3)">Score '+o.composite+'</span></div>';
+    });
+    h+='</div></div>';
+  }
+
   // Sector breakdown
   if(s.sectorBreakdown){
-    h+='<div style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">';
-    h+='<div style="font-size:11px;font-weight:700;margin-bottom:8px;color:var(--text2)">Sector Allocation</div>';
-    h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    h+='<div style="margin-top:12px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px">';
+    h+='<div style="font-size:11px;font-weight:700;margin-bottom:6px;color:var(--text2)">Sector Allocation</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
     Object.keys(s.sectorBreakdown).sort(function(a,b){return s.sectorBreakdown[b]-s.sectorBreakdown[a];}).forEach(function(sec){
       var pct=s.sectorBreakdown[sec];
-      h+='<div style="background:var(--bg3);border-radius:6px;padding:4px 10px;font-size:10px">';
+      h+='<div style="background:var(--bg3);border-radius:5px;padding:3px 8px;font-size:10px">';
       h+='<span style="color:var(--text3)">'+sec+'</span> <span style="font-weight:700;color:var(--text)">'+pct.toFixed(1)+'%</span></div>';
     });
     h+='</div></div>';
   }
 
-  // Disclaimer
-  h+='<div style="margin-top:12px;font-size:9px;color:var(--text4);text-align:center;padding:8px">';
-  h+='⚠ This is NOT investment advice. Portfolio suggestions are based on quantitative scoring and Varsity principles. ';
-  h+='Always do your own research before investing. Past performance does not guarantee future results.</div>';
-
+  h+='<div style="margin-top:10px;font-size:9px;color:var(--text4);text-align:center">⚠ Not investment advice. Based on quantitative Varsity scoring. Always DYOR.</div>';
   return h;
 }
 
+// ── HOLDINGS TAB (User's actual portfolio from DB) ──
+function psRenderHoldingsTab(){
+  var h='';
+  if(!_psPositions){
+    h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading holdings...</div>';
+    return h;
+  }
+  var pos=_psPositions.positions||[];
+  var sm=_psPositions.summary||{};
+
+  if(!pos.length){
+    h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
+    h+='<div style="font-size:36px;margin-bottom:10px">📋</div>';
+    h+='<div style="font-size:14px;font-weight:600">No holdings yet</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Generate a model portfolio and click "I Bought" on stocks you purchased</div>';
+    h+='</div>';
+    return h;
+  }
+
+  // Urgent alerts
+  if(sm.urgentSignals>0){
+    h+='<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
+    h+='<span style="font-weight:800;color:#ef4444;font-size:12px">⚠ '+sm.urgentSignals+' urgent signal'+(sm.urgentSignals>1?'s':'')+'</span>';
+    h+=' <span style="font-size:10px;color:var(--text3)">— review positions below</span></div>';
+  }
+
+  // Summary cards
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+  function sc(l,v,c,sub){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div>'
+    +(sub?'<div style="font-size:9px;color:var(--text4);margin-top:1px">'+sub+'</div>':'')+'</div>';}
+  h+=sc('Invested',psFmt(sm.totalInvested),'#22d3ee');
+  h+=sc('Current Value',psFmt(sm.currentValue),sm.totalPnl>=0?'#22c55e':'#ef4444');
+  var pnlC=sm.totalPnl>=0?'#22c55e':'#ef4444';
+  h+=sc('P&L',(sm.totalPnl>=0?'+':'')+psFmt(sm.totalPnl),pnlC,sm.totalPnlPct+'%');
+  h+=sc('Positions',sm.numPositions,'var(--text)');
+  h+=sc('Beta',sm.portfolioBeta,sm.portfolioBeta<1?'#22c55e':sm.portfolioBeta<1.3?'#f59e0b':'#ef4444');
+  if(sm.regime){var rc2=sm.regime==='BULL'?'#22c55e':sm.regime==='BEAR'?'#ef4444':'#f59e0b'; h+=sc('Regime',sm.regime,rc2);}
+  h+='</div>';
+
+  // Refresh button
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px">';
+  h+='<button onclick="psLoadPositions()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
+  h+='</div>';
+
+  // Holdings table
+  h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
+  h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
+  ['Stock','Qty','Avg Price','Current','Invested','Value','P&L','P&L%','Signal','Trail SL','Actions'].forEach(function(hdr){
+    h+='<th style="padding:7px 5px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
+  });
+  h+='</tr></thead><tbody>';
+
+  pos.forEach(function(p,i){
+    var pnlC2=(p.unrealised_pct||0)>=0?'#22c55e':'#ef4444';
+    var urgBg=p.urgency==='URGENT'?'rgba(239,68,68,.08)':p.urgency==='HIGH'?'rgba(245,158,11,.06)':(i%2===0?'var(--bg2)':'var(--bg)');
+    h+='<tr style="background:'+urgBg+';border-bottom:1px solid var(--border2)">';
+    h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text)">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.name||'')+'</div></td>';
+    h+='<td style="padding:5px;font-weight:600">'+p.qty+'</td>';
+    h+='<td style="padding:5px">₹'+(+p.avg_price).toFixed(0)+'</td>';
+    h+='<td style="padding:5px;font-weight:600">₹'+(+p.currentPrice).toFixed(0)+'</td>';
+    h+='<td style="padding:5px">'+psFmt(p.invested_amt)+'</td>';
+    h+='<td style="padding:5px;font-weight:600;color:'+pnlC2+'">'+psFmt(p.currentValue)+'</td>';
+    h+='<td style="padding:5px;font-weight:700;color:'+pnlC2+'">'+(p.unrealised_pnl>=0?'+':'')+psFmt(p.unrealised_pnl)+'</td>';
+    h+='<td style="padding:5px;font-weight:700;color:'+pnlC2+'">'+(p.unrealised_pct>=0?'+':'')+p.unrealised_pct+'%</td>';
+    // Signal
+    h+='<td style="padding:5px"><span style="background:'+(p.actionColor||'#f59e0b')+'20;color:'+(p.actionColor||'#f59e0b')+';border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+(p.action||'HOLD')+'</span>';
+    if(p.signalReasons&&p.signalReasons.length)h+='<div style="font-size:8px;color:var(--text4);margin-top:1px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+p.signalReasons[0]+'</div>';
+    h+='</td>';
+    h+='<td style="padding:5px;color:#ef4444;font-size:10px">'+(p.trailing_stop?'₹'+(+p.trailing_stop).toFixed(0):'—')+'</td>';
+    // Action buttons
+    h+='<td style="padding:5px;white-space:nowrap">';
+    h+='<button onclick="psSellPosition('+p.id+',\''+p.sym+'\','+(+p.currentPrice).toFixed(2)+')" style="background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.25);border-radius:3px;padding:2px 6px;font-size:9px;font-weight:700;cursor:pointer;margin-right:3px">Sell</button>';
+    h+='<button onclick="psAddPosition('+p.id+',\''+p.sym+'\','+(+p.currentPrice).toFixed(2)+')" style="background:rgba(34,211,238,.12);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:3px;padding:2px 6px;font-size:9px;font-weight:700;cursor:pointer">Add</button>';
+    h+='</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+
+  // Sector breakdown
+  if(sm.sectorBreakdown){
+    h+='<div style="margin-top:12px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px">';
+    h+='<div style="font-size:11px;font-weight:700;margin-bottom:6px;color:var(--text2)">Sector Allocation</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    Object.keys(sm.sectorBreakdown).sort(function(a,b){return sm.sectorBreakdown[b]-sm.sectorBreakdown[a];}).forEach(function(sec){
+      h+='<div style="background:var(--bg3);border-radius:5px;padding:3px 8px;font-size:10px">';
+      h+='<span style="color:var(--text3)">'+sec+'</span> <span style="font-weight:700;color:var(--text)">'+sm.sectorBreakdown[sec].toFixed(1)+'%</span></div>';
+    });
+    h+='</div></div>';
+  }
+  return h;
+}
+
+// ── SIGNALS TAB ──
+function psRenderSignalsTab(){
+  var h='';
+  if(!_psSignals){
+    h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading signals...</div>';
+    return h;
+  }
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+  h+='<button onclick="psLoadSignals()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
+  h+='</div>';
+
+  if(!_psSignals.length){
+    h+='<div style="text-align:center;padding:40px;color:var(--text3)">No signals yet. Start tracking positions to see signal history.</div>';
+    return h;
+  }
+
+  _psSignals.forEach(function(sig){
+    var tc=sig.signal_type==='BUY'?'#22c55e':sig.signal_type==='SELL'?'#ef4444':sig.signal_type==='ADD'?'#22d3ee':'#f59e0b';
+    var icon=sig.signal_type==='BUY'?'📈':sig.signal_type==='SELL'?'📉':sig.signal_type==='ADD'?'➕':'🔔';
+    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px">';
+    h+='<span style="font-size:16px">'+icon+'</span>';
+    h+='<div style="flex:1">';
+    h+='<div><span style="font-weight:700;color:var(--text)">'+sig.sym+'</span> <span style="background:'+tc+'20;color:'+tc+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700">'+sig.signal_type+'</span>';
+    if(sig.acted)h+=' <span style="color:#22c55e;font-size:9px">✓ Acted</span>';
+    h+='</div>';
+    h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
+    h+='</div>';
+    h+='<div style="text-align:right;min-width:80px">';
+    if(sig.price_at)h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
+    h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+'</div>';
+    h+='</div>';
+    h+='</div>';
+  });
+  return h;
+}
+
+// ── PERFORMANCE TAB ──
+function psRenderPerformanceTab(){
+  var h='';
+  if(!_psPerf){
+    h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading performance...</div>';
+    return h;
+  }
+  var st=_psPerf.stats||{};
+
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+  function sc(l,v,c){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div></div>';}
+  h+=sc('Total Trades',st.totalTrades,'var(--text)');
+  h+=sc('Win Rate',st.winRate+'%',st.winRate>=50?'#22c55e':'#ef4444');
+  h+=sc('Wins / Losses',st.wins+' / '+st.losses,st.wins>st.losses?'#22c55e':'#ef4444');
+  h+=sc('Total P&L',(st.totalRealised>=0?'+':'')+psFmt(st.totalRealised),st.totalRealised>=0?'#22c55e':'#ef4444');
+  h+=sc('Avg Win',psFmt(st.avgWin),'#22c55e');
+  h+=sc('Avg Loss',psFmt(st.avgLoss),'#ef4444');
+  h+='</div>';
+
+  // Closed trades
+  var ct=_psPerf.closedTrades||[];
+  if(ct.length){
+    h+='<div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">Closed Trades</div>';
+    h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
+    h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+    h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
+    ['Stock','Buy Date','Sell Date','P&L','P&L%'].forEach(function(hdr){
+      h+='<th style="padding:7px 6px;text-align:left;font-size:10px;color:var(--text3);font-weight:700">'+hdr+'</th>';
+    });
+    h+='</tr></thead><tbody>';
+    ct.forEach(function(t,i){
+      var c2=(t.realised_pnl||0)>=0?'#22c55e':'#ef4444';
+      h+='<tr style="background:'+(i%2===0?'var(--bg2)':'var(--bg)')+'">';
+      h+='<td style="padding:5px;font-weight:700;color:var(--text)">'+t.sym+'</td>';
+      h+='<td style="padding:5px;font-size:10px;color:var(--text3)">'+(t.buy_date?new Date(t.buy_date).toLocaleDateString('en-IN'):'—')+'</td>';
+      h+='<td style="padding:5px;font-size:10px;color:var(--text3)">'+(t.sell_date?new Date(t.sell_date).toLocaleDateString('en-IN'):'—')+'</td>';
+      h+='<td style="padding:5px;font-weight:700;color:'+c2+'">'+(t.realised_pnl>=0?'+':'')+'₹'+(+t.realised_pnl).toFixed(0)+'</td>';
+      h+='<td style="padding:5px;font-weight:700;color:'+c2+'">'+(t.realised_pct>=0?'+':'')+(+t.realised_pct).toFixed(1)+'%</td>';
+      h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+  } else {
+    h+='<div style="text-align:center;padding:30px;color:var(--text3);font-size:12px">No closed trades yet. Sell positions to see performance history.</div>';
+  }
+  return h;
+}
+
+// ── API CALLS ──
 async function psGenerate(){
   if(_psLoading)return;
   _psLoading=true;
@@ -3918,11 +4136,9 @@ async function psGenerate(){
     var d=await r.json();
     if(d.error){alert(d.error);return;}
     _psData=d;
-    // Start hourly auto-refresh
     psStartAutoRefresh();
-    // Render
     var rc=document.getElementById('ps-results');
-    if(rc) rc.innerHTML=psRenderResults(d);
+    if(rc) rc.innerHTML=psRenderModelResults(d);
   }catch(e){alert('Error: '+e.message);}
   finally{_psLoading=false;if(btn){btn.textContent='Generate Portfolio';btn.style.opacity='1';}}
 }
@@ -3934,10 +4150,9 @@ async function psRefresh(){
     var d=await r.json();
     if(d.error)return;
     _psData=d;
-    var rc=document.getElementById('ps-results');
-    if(rc) rc.innerHTML=psRenderResults(d);
+    if(_psTab==='model'){var rc=document.getElementById('ps-results');if(rc)rc.innerHTML=psRenderModelResults(d);}
     var ts=document.getElementById('ps-last-ref');
-    if(ts) ts.textContent='Last refresh: '+new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'});
+    if(ts)ts.textContent='Refreshed '+new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'});
   }catch(e){console.log('Refresh error:',e.message);}
 }
 
@@ -3945,37 +4160,98 @@ async function psRegenerate(){
   if(_psLoading)return;
   _psLoading=true;
   try{
-    var amt=_psAmount;
-    var r=await fetch('/api/portfolio/suggest/regenerate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amt})});
+    var r=await fetch('/api/portfolio/suggest/regenerate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:_psAmount})});
     var d=await r.json();
     if(d.error){alert(d.error);return;}
     _psData=d;
     psStartAutoRefresh();
-    var rc=document.getElementById('ps-results');
-    if(rc) rc.innerHTML=psRenderResults(d);
+    if(_psTab==='model'){var rc=document.getElementById('ps-results');if(rc)rc.innerHTML=psRenderModelResults(d);}
   }catch(e){alert('Error: '+e.message);}
   finally{_psLoading=false;}
 }
 
+async function psLoadPositions(){
+  try{
+    var r=await fetch('/api/portfolio/positions');
+    _psPositions=await r.json();
+    if(_psTab==='holdings'){var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderHoldingsTab();}
+  }catch(e){console.log('Load positions error:',e.message);}
+}
+
+async function psLoadSignals(){
+  try{
+    var r=await fetch('/api/portfolio/signals?limit=50');
+    _psSignals=await r.json();
+    if(_psTab==='signals'){var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderSignalsTab();}
+  }catch(e){console.log('Load signals error:',e.message);}
+}
+
+async function psLoadPerformance(){
+  try{
+    var r=await fetch('/api/portfolio/performance');
+    _psPerf=await r.json();
+    if(_psTab==='performance'){var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderPerformanceTab();}
+  }catch(e){console.log('Load performance error:',e.message);}
+}
+
+// ── USER ACTIONS ──
+async function psBuyStock(sym,qty,price,sl,tgt,conv){
+  var actualQty=prompt('How many shares of '+sym+' did you buy? (suggested: '+qty+')',''+qty);
+  if(!actualQty)return;
+  var actualPrice=prompt('At what price? (current: ₹'+price+')',''+price);
+  if(!actualPrice)return;
+  try{
+    var r=await fetch('/api/portfolio/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sym:sym,qty:parseInt(actualQty),price:parseFloat(actualPrice),stopLoss:sl||null,target:tgt||null,conviction:conv,reason:'Model portfolio suggestion'})});
+    var d=await r.json();
+    if(d.error){alert(d.error);return;}
+    alert('✅ '+sym+' tracked! Check My Holdings tab.');
+    _psPositions=null; // force reload
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function psSellPosition(id,sym,price){
+  var actualPrice=prompt('Sell '+sym+' at what price? (current: ₹'+price+')',''+price);
+  if(!actualPrice)return;
+  var reason=prompt('Reason for selling? (optional)','');
+  try{
+    var r=await fetch('/api/portfolio/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,price:parseFloat(actualPrice),reason:reason||null})});
+    var d=await r.json();
+    if(d.error){alert(d.error);return;}
+    alert('✅ Sold! P&L: '+(d.pnl>=0?'+':'')+'₹'+d.pnl.toFixed(0)+' ('+d.pnlPct+'%)');
+    psLoadPositions();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function psAddPosition(id,sym,price){
+  var qty=prompt('How many more shares of '+sym+' to add?','');
+  if(!qty)return;
+  var actualPrice=prompt('At what price?',''+price);
+  if(!actualPrice)return;
+  try{
+    var r=await fetch('/api/portfolio/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,qty:parseInt(qty),price:parseFloat(actualPrice)})});
+    var d=await r.json();
+    if(d.error){alert(d.error);return;}
+    alert('✅ Added! New avg: ₹'+d.newAvg.toFixed(0)+', Total qty: '+d.newQty);
+    psLoadPositions();
+  }catch(e){alert('Error: '+e.message);}
+}
+
 function psStartAutoRefresh(){
   if(_psRefreshInt) clearInterval(_psRefreshInt);
-  // Refresh every 60 seconds during market hours, every 5 minutes otherwise
   _psRefreshInt=setInterval(function(){
     if(!_psData)return;
     psRefresh();
-  }, 60000); // 1 minute for live feel
-  // Also do a full re-score every hour
+    // Also refresh holdings if on that tab
+    if(_psTab==='holdings') psLoadPositions();
+  }, 60000);
+  // Full regeneration every hour
   setInterval(function(){
     if(!_psData)return;
     psRegenerate();
-  }, 3600000); // 1 hour
+  }, 3600000);
 }
 
-// =============================================================================
-// (old AI Portfolio code removed)
-
-// (renderAIPortfolio removed — replaced by renderPortfolioSuggestion above)
-// Stub to prevent errors if old code references it
+// Stub for backward compatibility
 async function renderAIPortfolio() { renderPortfolioSuggestion(); }
 
 // =============================================================================
