@@ -10059,6 +10059,50 @@ async function start() {
     }
   } catch(e) {}
 
+  // STEP 4c: Merge FUND_EXT (Screener data) into stockFundamentals
+  // This ensures screener fields (FII, DII, #holders, currentRatio, divYield, QoQ, pledged, etc.)
+  // are present even when stockFundamentals was restored from a stale scored cache
+  if (global.FUND_EXT && Object.keys(global.FUND_EXT).length > 0) {
+    let merged = 0;
+    for (const [sym, ext] of Object.entries(global.FUND_EXT)) {
+      if (!stockFundamentals[sym]) continue;
+      const sf = stockFundamentals[sym];
+      // Map FUND_EXT field names to stockFundamentals field names
+      const mapping = {
+        currentRatio: ext.currentRatio, quickRatio: ext.quickRatio,
+        divYield: ext.divYield, pledged: ext.pledged,
+        fiiHolding: ext.fiiHolding, diiHolding: ext.diiHolding,
+        numShareholders: ext.numShareholders,
+        patQtrYoy: ext.patQtrYoy, salesQtrYoy: ext.salesQtrYoy,
+        patQtr: ext.patQtr, salesQtr: ext.salesQtr,
+        patAnnual: ext.patAnnual, salesAnnual: ext.salesAnnual,
+        priceToFCF: ext.priceToFCF, priceToSales: ext.priceToSales,
+        earningsYield: ext.earningsYield, roce: ext.roce,
+        promoter: ext.promoter, promoterChg: ext.promoterChg,
+        intCov: ext.intCov, mktCap: ext.mktCap,
+        roa: ext.roa, pb: ext.pb, peg: ext.peg,
+        evEbitda: ext.evEbitda, industryPE: ext.industryPE,
+        roe: ext.roe != null ? ext.roe : sf.roe,
+        debtToEq: ext.de != null ? ext.de : sf.debtToEq,
+        pe: ext.pe != null ? ext.pe : sf.pe,
+        revGrowth: ext.revGr != null ? ext.revGr : sf.revGrowth,
+        earGrowth: ext.epsGr != null ? ext.epsGr : sf.earGrowth,
+        opMargin: ext.opMgn != null ? ext.opMgn : sf.opMargin,
+        eps: ext.eps, debt: ext.debt,
+        salesGr1y: ext.salesGr1y, salesGr5y: ext.salesGr5y,
+        epsGr1y: ext.epsGr1y, epsGr5y: ext.epsGr5y,
+        roe3yAvg: ext.roe3yAvg, roe5yAvg: ext.roe5yAvg,
+        ret1y: ext.ret1y, ret3y: ext.ret3y, ret5y: ext.ret5y,
+      };
+      let changed = false;
+      for (const [k, v] of Object.entries(mapping)) {
+        if (v != null && sf[k] == null) { sf[k] = v; changed = true; }
+      }
+      if (changed) merged++;
+    }
+    if (merged > 0) console.log(`📊 Merged Screener data into ${merged} stockFundamentals entries (FII, DII, #holders, QoQ, etc.)`);
+  }
+
   // STEP 5: Auto-fetch Screener fundamentals if missing or stale (>24h old)
   if (process.env.APIFY_TOKEN) {
     let screenerStale = screenerCount === 0;
