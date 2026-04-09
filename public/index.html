@@ -4309,6 +4309,18 @@ async function psRunAIValidation(mode){
     _psAIValidation=await r.json();
     clearInterval(pollTimer);
 
+    // Final poll to catch any steps that arrived after last interval
+    try{
+      var sr2=await fetch('/api/ai/status?since='+pollSince);
+      var st2=await sr2.json();
+      if(st2.steps&&st2.steps.length){
+        st2.steps.forEach(function(s){
+          var t=s.type==='ok'?'ok':s.type==='err'?'err':s.type==='warn'?'warn':'info';
+          aiLog(s.msg,t);
+        });
+      }
+    }catch(e2){}
+
     if(_psAIValidation.error){
       aiLog('Error: '+_psAIValidation.error,'err');
     } else {

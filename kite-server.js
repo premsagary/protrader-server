@@ -9450,7 +9450,7 @@ const AI_MODELS = [
   { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash' },
   { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
   { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
-  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-3-5-haiku-20241022' },
+  { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
   { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro' },
   { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1' },
 ];
