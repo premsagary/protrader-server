@@ -9460,53 +9460,167 @@ async function validateSignalsWithAI(mode = 'auto') {
     // 3) Get risk metrics
     const risk = computePortfolioRisk(positions);
 
-    // 4) Build portfolio snapshot for the AI
+    // 4) Build RICH portfolio snapshot for the AI — send ALL available data per stock
     const positionData = positions.map(p => {
       const f = stockFundamentals[p.sym] || {};
-      const px = livePrices[p.sym]?.price || f.price || p.avg_price;
+      const ext = global.FUND_EXT?.[p.sym] || {};
+      const px = livePrices[p.sym]?.price || f.price || ext.price || p.avg_price;
       const pnl = px && p.avg_price ? (((px - p.avg_price) / p.avg_price) * 100).toFixed(1) : '?';
-      return `${p.sym}: Qty=${p.qty} Entry=₹${p.avg_price} CMP=₹${px||'?'} P&L=${pnl}% ` +
-        `Score=${f._compositeScore||f.composite||'?'} RSI=${f.rsi||'?'} MACD=${f.macdBull?'Bull':'Bear'} ` +
-        `ROE=${f.roe||'?'}% D/E=${f.debtToEq||'?'} OPM=${f.opMargin||'?'}% PE=${f.pe||'?'} ` +
-        `52wH=${f.high52w||'?'} 52wL=${f.low52w||'?'} Sector=${f.sector||p.sector||'?'} ` +
-        `200DMA=${f.dma200||'?'} Vol=${f.annualVol?f.annualVol.toFixed(0)+'%':'?'} ` +
-        `OBV=${f.obvRising?'Rising':'Falling'} Promoter=${f.promoter||'?'}%`;
+      const holdDays = p.bought_at ? Math.floor((Date.now() - new Date(p.bought_at).getTime()) / 86400000) : '?';
+      const pctFrom52H = f.high52w && px ? (((px - f.high52w) / f.high52w) * 100).toFixed(1) : '?';
+
+      // ── FUNDAMENTALS (Module 3, 13, 15) ──
+      const fa = [
+        `ROE=${f.roe||'?'}%`, `ROCE=${f.roce||'?'}%`, `D/E=${f.debtToEq||'?'}`,
+        `PE=${f.pe||'?'}`, `PB=${f.pb||'?'}`, `EPS=${f.eps||'?'}`,
+        `EarGrowth=${f.earGrowth||'?'}%`, `RevGrowth=${f.revGrowth||'?'}%`,
+        `OPM=${f.opMargin||'?'}%`, `NPM=${f.npm||f.netMargin||'?'}%`,
+        `IntCov=${f.intCov||'?'}x`, `FCF=${f.fcf||'?'}Cr`,
+        `Promoter=${f.promoter||'?'}%`, `Pledged=${f.pledged||'?'}%`,
+        `MktCap=${f.mktCap?Math.round(f.mktCap)+'Cr':'?'}`,
+        `DivYield=${f.divYield||'?'}%`,
+        `PEG=${f.pe&&f.earGrowth>0?(f.pe/f.earGrowth).toFixed(2):'?'}`,
+        `EV/EBITDA=${f.evEbitda||'?'}`, `P/Sales=${f.priceToSales||'?'}`,
+        `P/FCF=${f.priceToFCF||'?'}`,
+      ].join(' ');
+
+      // ── TECHNICALS (Module 2, 10) ──
+      const ta = [
+        `RSI=${f.rsi!=null?f.rsi.toFixed?f.rsi.toFixed(1):f.rsi:'?'}`,
+        `MACD=${f.macdBull?'Bullish':'Bearish'}`, `MACD_Hist=${f.macdHist||'?'}`,
+        `BB%B=${f.bbPct!=null?f.bbPct.toFixed?f.bbPct.toFixed(2):f.bbPct:'?'}`,
+        `StochK=${f.stochK||'?'}`, `StochD=${f.stochD||'?'}`,
+        `ADX=${f.adx||'?'}`, `+DI=${f.adxPdi||'?'}`, `-DI=${f.adxNdi||'?'}`,
+        `Supertrend=${f.supertrendSig||'?'}`,
+        `OBV=${f.obvRising?'Rising':'Falling'}`,
+        `BullDiv=${f.bullishDiv?'YES':'no'}`, `BearDiv=${f.bearishDiv?'YES':'no'}`,
+        `GoldenCross=${f.goldenCross?'YES':'no'}`,
+        `VolRatio=${f.volRatio?f.volRatio.toFixed?f.volRatio.toFixed(1):f.volRatio:'?'}`,
+        `Patterns=${f.candlePatterns?.length?f.candlePatterns.map(p=>p.pattern).join(','):'none'}`,
+      ].join(' ');
+
+      // ── PRICE & MOVING AVERAGES ──
+      const price = [
+        `CMP=₹${px||'?'}`, `Entry=₹${p.avg_price}`, `P&L=${pnl}%`,
+        `52wH=₹${f.high52w||'?'}`, `52wL=₹${f.low52w||'?'}`, `%From52wH=${pctFrom52H}%`,
+        `DMA20=${f.dma20||'?'}`, `DMA50=${f.dma50||'?'}`, `DMA100=${f.dma100||'?'}`, `DMA200=${f.dma200||'?'}`,
+        `%Above200DMA=${f.pctAbove200||'?'}%`,
+        `Change1m=${f.change1m||'?'}%`, `Change3m=${f.change3m||'?'}%`,
+      ].join(' ');
+
+      // ── RISK (Module 9) ──
+      const risk = [
+        `AnnualVol=${f.annualVol?f.annualVol.toFixed(0)+'%':'?'}`,
+        `Beta=${f.beta||'?'}`,
+        `HoldDays=${holdDays}`,
+        `STCG=${holdDays!=='?'&&holdDays<365?'YES (15% tax)':'No'}`,
+      ].join(' ');
+
+      // ── SECTOR-SPECIFIC (Module 15) ──
+      const sector = f.sector || p.sector || '?';
+      let sectorSpecific = '';
+      const sLow = (sector||'').toLowerCase();
+      if (sLow.includes('bank') || sLow.includes('financ') || sLow.includes('nbfc')) {
+        sectorSpecific = `NIM=${f.nim||'?'} NPA=${f.npa||f.gnpa||'?'} CAR=${f.car||'?'} CASA=${f.casa||'?'}`;
+      } else if (sLow.includes('it') || sLow.includes('tech') || sLow.includes('software')) {
+        sectorSpecific = `CCRevGrowth=${f.ccRevGrowth||f.revGrowth||'?'}% Attrition=${f.attrition||'?'}%`;
+      } else if (sLow.includes('pharma') || sLow.includes('health')) {
+        sectorSpecific = `ANDA=${f.andaFilings||'?'} FDAStatus=${f.fdaStatus||'?'}`;
+      } else if (sLow.includes('auto')) {
+        sectorSpecific = `MonthlySales=${f.monthlySales||'?'} EVRisk=${f.evTransition||'?'}`;
+      }
+
+      // ── COMPOSITE SCORE BREAKDOWN ──
+      const scores = [
+        `Composite=${f._compositeScore||f.composite||'?'}/100`,
+        `FA=${f._faScore||'?'}`, `TA=${f._taScore||'?'}`,
+        `Mom=${f._momScore||'?'}`, `Risk=${f._riskScore||'?'}`,
+        `Val=${f._valScore||'?'}`, `Conviction=${f._conviction||'?'}`,
+      ].join(' ');
+
+      return `━━ ${p.sym} (${f.name||p.sym}) [${sector}] Qty=${p.qty} ━━\n` +
+        `  PRICE: ${price}\n` +
+        `  SCORES: ${scores}\n` +
+        `  FUNDAMENTALS: ${fa}\n` +
+        `  TECHNICALS: ${ta}\n` +
+        `  RISK: ${risk}\n` +
+        (sectorSpecific ? `  SECTOR-SPECIFIC: ${sectorSpecific}\n` : '');
     }).join('\n');
 
     const signalData = signals.map(s => {
       return `[${s.signal_type}] ${s.sym} — ${s.urgency||'NORMAL'} — ${s.reason||''} (price: ₹${s.price_at||'?'})`;
     }).join('\n');
 
+    // ── RISK METRICS (Module 9) ──
     const riskSummary = risk.totalValue ?
-      `Portfolio: ₹${risk.totalValue} | Vol: ${risk.portfolioVol}% | Beta: ${risk.portfolioBeta} | ` +
-      `VaR-1d: ₹${risk.var95_1d} | VaR-1w: ₹${risk.var95_1w} | Stocks: ${risk.numPositions} | ` +
-      `Concentration(HHI): ${risk.hhi} | MaxSector: ${risk.maxSector}(${risk.maxSectorPct}%) | ` +
-      `Risk: ${risk.riskRating}` : 'Risk data unavailable';
+      `Portfolio Value: ₹${risk.totalValue} | Annual Volatility: ${risk.portfolioVol}% | Beta: ${risk.portfolioBeta}\n` +
+      `VaR (95%, 1-day): ₹${risk.var95_1d} | VaR (95%, 1-week): ₹${risk.var95_1w}\n` +
+      `Positions: ${risk.numPositions} | Effective Stocks (1/HHI): ${risk.effectiveStocks} | HHI: ${risk.hhi}\n` +
+      `Max Sector: ${risk.maxSector} (${risk.maxSectorPct}%) | Risk Rating: ${risk.riskRating}\n` +
+      `Sector Breakdown: ${JSON.stringify(risk.sectorPcts || {})}` : 'Risk data unavailable';
 
-    // 5) Model portfolio top stocks for context
+    // ── MODEL PORTFOLIO (what AI recommends vs what user holds) ──
     const modelStocks = modelPortfolio?.portfolio ?
-      modelPortfolio.portfolio.slice(0, 10).map(m =>
-        `${m.sym}: Score=${m.composite} Alloc=${m.allocPct}% Conviction=${m.conviction||'?'}`
-      ).join('\n') : 'Model portfolio not available';
+      modelPortfolio.portfolio.slice(0, 15).map(m => {
+        const mf = stockFundamentals[m.sym] || {};
+        return `${m.sym}: Score=${m.composite} Alloc=${m.allocPct}% Conv=${m.conviction||'?'} ` +
+          `Sector=${mf.sector||'?'} PE=${mf.pe||'?'} ROE=${mf.roe||'?'}% RSI=${mf.rsi!=null?mf.rsi.toFixed?mf.rsi.toFixed(0):mf.rsi:'?'}`;
+      }).join('\n') : 'Model portfolio not available';
+
+    // ── SIGNAL DATA (enriched) ──
+    const signalDataRich = signals.map(s => {
+      const sf = stockFundamentals[s.sym] || {};
+      return `[${s.signal_type}] ${s.sym} — Urgency:${s.urgency||'NORMAL'}\n` +
+        `  Reason: ${s.reason||'?'}\n` +
+        `  Price@Signal: ₹${s.price_at||'?'} | StopLoss: ₹${s.stop_at||'?'} | Target: ₹${s.target_at||'?'}\n` +
+        `  Current: RSI=${sf.rsi!=null?sf.rsi.toFixed?sf.rsi.toFixed(1):sf.rsi:'?'} MACD=${sf.macdBull?'Bull':'Bear'} OBV=${sf.obvRising?'Up':'Down'} Score=${sf._compositeScore||sf.composite||'?'}`;
+    }).join('\n');
+
+    // ── TRAILING STOP DATA ──
+    const trailingStopData = Object.keys(_posHighWaterMark || {}).length ?
+      Object.entries(_posHighWaterMark).map(([sym, hwm]) => `${sym}: HighWater=₹${hwm}`).join(', ') : 'No trailing stops active';
 
     const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
-REGIME DATA: ${JSON.stringify(marketRegimeData || {})}
+REGIME DATA: Nifty50Trend=${marketRegimeData?.niftyTrend||'?'} AvgRSI=${marketRegimeData?.niftyRSI||'?'} VIX=${marketRegimeData?.vix||'?'} Sentiment=${marketRegimeData?.marketSentiment||'?'} AdvDecline=${marketRegimeData?.advDeclineRatio||'?'}
+REGIME PENDING: ${_regimePending ? _regimePending + ' (confirming since ' + new Date(_regimePendingSince).toISOString() + ')' : 'None'}
 
+════════════════════════════════════════
 PORTFOLIO POSITIONS (${positions.length} stocks):
+════════════════════════════════════════
 ${positionData}
 
-RISK METRICS:
+════════════════════════════════════════
+RISK METRICS (Module 9):
+════════════════════════════════════════
 ${riskSummary}
 
-ACTIVE SIGNALS (last 24h):
-${signalData || 'No signals generated'}
+════════════════════════════════════════
+TRAILING STOPS:
+════════════════════════════════════════
+${trailingStopData}
 
-MODEL PORTFOLIO (top 10):
+════════════════════════════════════════
+ACTIVE SIGNALS (last 24h):
+════════════════════════════════════════
+${signalDataRich || 'No signals generated'}
+
+════════════════════════════════════════
+MODEL PORTFOLIO (top 15 — what AI recommends):
+════════════════════════════════════════
 ${modelStocks}
 
-Validate ALL active signals against Varsity principles. Also check if any positions SHOULD have signals but don't.
-${mode === 'deep' ? 'This is a DEEP review — be thorough and check multi-timeframe alignment, sector correlations, and macro impact.' : ''}
-Focus on: signal accuracy, missed risks, false alarms, position sizing issues, and portfolio-level concerns.`;
+════════════════════════════════════════
+TASK:
+════════════════════════════════════════
+Validate ALL active signals against Varsity principles. For each stock:
+1. Cross-check EVERY indicator — don't just look at one. Check RSI+MACD+Volume+OBV alignment.
+2. Verify fundamentals match the signal (ROE, D/E, EPS growth, promoter holding trends).
+3. Check if price is near key levels (200DMA, 52-week high/low, Fibonacci levels).
+4. Apply sector-specific rules from Module 15.
+5. Check tax implications from Module 7 (STCG if held <365 days).
+6. Flag any stock that SHOULD have a signal but doesn't.
+${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- Macro impact (regime, VIX level, FII/DII flows)\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
+Respond ONLY in the JSON format specified in your system prompt.`;
 
     // Use Haiku for auto (cheap, fast) and Sonnet for manual deep reviews
     const model = mode === 'deep' ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20241022';
