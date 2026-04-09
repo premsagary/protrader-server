@@ -85,6 +85,32 @@ async function initDB() {
       )
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_trades (
+        id            SERIAL PRIMARY KEY,
+        symbol        VARCHAR(20)   NOT NULL,
+        name          VARCHAR(100),
+        type          VARCHAR(4)    NOT NULL,
+        price         DECIMAL(18,8) NOT NULL,
+        quantity      DECIMAL(18,8) NOT NULL,
+        capital       DECIMAL(12,2),
+        entry_time    TIMESTAMP     DEFAULT NOW(),
+        exit_time     TIMESTAMP,
+        exit_price    DECIMAL(18,8),
+        pnl           DECIMAL(10,2),
+        pnl_pct       DECIMAL(8,2),
+        stop_loss     DECIMAL(18,8),
+        target        DECIMAL(18,8),
+        signal_score  INTEGER,
+        strategy      VARCHAR(50),
+        regime        VARCHAR(20),
+        indicators    TEXT,
+        exit_reason   VARCHAR(50),
+        status        VARCHAR(10)   DEFAULT 'OPEN',
+        order_id      VARCHAR(30),
+        exit_order_id VARCHAR(30)
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS crypto_trades (
         id            SERIAL PRIMARY KEY,
         symbol        VARCHAR(20)   NOT NULL,
@@ -1499,6 +1525,10 @@ function selectAndRunStrategy(candles, dailyCandles=null) {
 // -- PAPER TRADING ENGINE ------------------------------------------------------
 // ===============================================================================
 
+// ── LIVE vs PAPER trading toggle (set LIVE_TRADING=true in Railway env vars) ──
+const LIVE_TRADING = (process.env.LIVE_TRADING || '').toLowerCase() === 'true';
+console.log(`🔀 Trading mode: ${LIVE_TRADING ? '🔴 LIVE (real orders via Kite)' : '📝 PAPER (simulated only)'}`);
+
 const CONFIG = {
   BUY_SCORE:          2.5,
   SELL_SCORE:        -2.0,
@@ -1752,12 +1782,36 @@ async function scanAndTrade() {
           const pnl    = +((cmp-entryPrice)*openPos.quantity).toFixed(2);
           const pnlPct = +((cmp-entryPrice)/entryPrice*100).toFixed(2);
           const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":"Strategy Exit";
-          // Track MAE/MFE for Phase 6 accuracy tracking
+          // Close paper trade
           await pool.query(
             `UPDATE paper_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
             [cmp,pnl,pnlPct,reason,openPos.id]
           );
-          console.log(`  ▼ EXIT ${stock.sym} @ ₹${cmp} | ${reason} | ${pnl>=0?"+":""}₹${pnl} | ${result.regime}`);
+
+          // Place REAL sell order on Kite if live trading enabled
+          if (LIVE_TRADING && kite) {
+            try {
+              const order = await kite.placeOrder('regular', {
+                exchange: 'NSE',
+                tradingsymbol: stock.sym,
+                transaction_type: 'SELL',
+                quantity: openPos.quantity,
+                product: 'CNC',
+                order_type: 'MARKET',
+                validity: 'DAY',
+              });
+              const orderId = order.order_id || order.orderId || '';
+              await pool.query(
+                `UPDATE live_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4,exit_order_id=$5 WHERE symbol=$6 AND status='OPEN'`,
+                [cmp,pnl,pnlPct,reason,orderId,stock.sym]
+              );
+              console.log(`  🔴 LIVE SELL ${stock.sym} @ ₹${cmp} | Order ID: ${orderId} | ${reason}`);
+            } catch(liveErr) {
+              console.error(`  ✗ LIVE SELL FAILED ${stock.sym}: ${liveErr.message}`);
+            }
+          }
+
+          console.log(`  ▼ EXIT ${stock.sym} @ ₹${cmp} | ${reason} | ${pnl>=0?"+":""}₹${pnl} | ${result.regime} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
           signalCount++;
         }
 
@@ -1788,15 +1842,43 @@ async function scanAndTrade() {
         const tgt = result.tgt || target;
         const qty = shares;
 
+        // Always log paper trade
         await pool.query(
           `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
            VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
           [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
            +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail]
         );
+
+        // Place REAL order on Kite if live trading enabled
+        if (LIVE_TRADING && kite) {
+          try {
+            const order = await kite.placeOrder('regular', {
+              exchange: 'NSE',
+              tradingsymbol: stock.sym,
+              transaction_type: 'BUY',
+              quantity: qty,
+              product: 'CNC',
+              order_type: 'LIMIT',
+              price: price,
+              validity: 'DAY',
+            });
+            const orderId = order.order_id || order.orderId || '';
+            await pool.query(
+              `INSERT INTO live_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,order_id)
+               VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12)`,
+              [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
+               +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
+            );
+            console.log(`  🔴 LIVE BUY ${stock.sym} @ ₹${price} | Order ID: ${orderId}`);
+          } catch(liveErr) {
+            console.error(`  ✗ LIVE BUY FAILED ${stock.sym}: ${liveErr.message}`);
+          }
+        }
+
         openTrades.push({symbol:stock.sym,status:"OPEN"});
         dominantStrategy=result.strategy;
-        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl.toFixed(0)} | TGT:${tgt.toFixed(0)} | Qty:${qty}`);
+        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl.toFixed(0)} | TGT:${tgt.toFixed(0)} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
         signalCount++;
       }
 
@@ -3450,6 +3532,58 @@ app.get("/paper-trades/daily", async(req,res)=>{
              SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins,
              COALESCE(SUM(pnl),0) as pnl
       FROM paper_trades WHERE status='CLOSED'
+      GROUP BY DATE(entry_time) ORDER BY date DESC LIMIT 30`);
+    res.json(rows);
+  } catch(e){res.status(500).json({error:e.message});}
+});
+
+// ── Trading mode endpoint ──
+app.get("/api/trading-mode", (req,res) => {
+  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER' });
+});
+
+// ── Live trades endpoints (mirror paper-trades structure) ──
+app.get("/live-trades", async(req,res)=>{
+  try{const{rows}=await pool.query("SELECT * FROM live_trades ORDER BY entry_time DESC LIMIT 500");res.json(rows);}catch(e){res.status(500).json({error:e.message});}
+});
+app.get("/live-trades/open", async(req,res)=>{
+  try{const{rows}=await pool.query("SELECT * FROM live_trades WHERE status='OPEN' ORDER BY entry_time DESC");res.json(rows);}catch(e){res.status(500).json({error:e.message});}
+});
+app.get("/live-trades/stats", async(req,res)=>{
+  try {
+    const{rows}=await pool.query(`
+      SELECT
+        COUNT(*)                                                              AS total_trades,
+        COUNT(CASE WHEN status='CLOSED' AND pnl>0  THEN 1 END)              AS wins,
+        COUNT(CASE WHEN status='CLOSED' AND pnl<=0 THEN 1 END)              AS losses,
+        COUNT(CASE WHEN status='OPEN'              THEN 1 END)              AS open_trades,
+        COALESCE(SUM(CASE WHEN status='CLOSED' THEN pnl END),0)             AS total_pnl,
+        COALESCE(AVG(CASE WHEN status='CLOSED' AND pnl>0  THEN pnl END),0)  AS avg_win,
+        COALESCE(AVG(CASE WHEN status='CLOSED' AND pnl<=0 THEN pnl END),0)  AS avg_loss,
+        COALESCE(MAX(CASE WHEN status='CLOSED' THEN pnl END),0)             AS best_trade,
+        COALESCE(MIN(CASE WHEN status='CLOSED' THEN pnl END),0)             AS worst_trade
+      FROM live_trades`);
+    const{rows:strats}=await pool.query(`
+      SELECT strategy, COUNT(*) as trades,
+             SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins,
+             COALESCE(SUM(pnl),0) as pnl
+      FROM live_trades WHERE status='CLOSED'
+      GROUP BY strategy ORDER BY pnl DESC`);
+    const{rows:regimes}=await pool.query(`
+      SELECT regime, COUNT(*) as trades,
+             COALESCE(SUM(pnl),0) as pnl
+      FROM live_trades WHERE status='CLOSED'
+      GROUP BY regime ORDER BY pnl DESC`);
+    res.json({...rows[0], strategies:strats, regimes});
+  } catch(e){res.status(500).json({error:e.message});}
+});
+app.get("/live-trades/daily", async(req,res)=>{
+  try {
+    const{rows}=await pool.query(`
+      SELECT DATE(entry_time) as date, COUNT(*) as trades,
+             SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins,
+             COALESCE(SUM(pnl),0) as pnl
+      FROM live_trades WHERE status='CLOSED'
       GROUP BY DATE(entry_time) ORDER BY date DESC LIMIT 30`);
     res.json(rows);
   } catch(e){res.status(500).json({error:e.message});}

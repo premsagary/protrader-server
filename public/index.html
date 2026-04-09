@@ -363,6 +363,7 @@ const S = {
   stocksTab: "overview",
   cryptoTab: "overview",
   prices:{}, nseTrades:[], nseStats:{}, daily:[], scanLog:[],
+  liveTrades:[], liveStats:{}, liveDaily:[], tradingMode:'PAPER',
   health:{}, holdings:[], margin:null,
   nseFilter:"All", nseSearch:"",
   cryptoTrades:[], cryptoStats:{}, cryptoPrices:{},
@@ -401,6 +402,16 @@ async function fetchAll(){
     if(rs[5].status==="fulfilled"&&rs[5].value.ok){const d=await rs[5].value.json();if(Array.isArray(d))S.scanLog=d;}
     if(rs[6].status==="fulfilled"&&rs[6].value.ok){const d=await rs[6].value.json();if(Array.isArray(d))S.holdings=d;}
     if(rs[7].status==="fulfilled"&&rs[7].value.ok) S.margin = await rs[7].value.json();
+  } catch(e){}
+  // Live trades + trading mode
+  try {
+    const lr = await Promise.allSettled([
+      fetch("/live-trades"),fetch("/live-trades/stats"),fetch("/live-trades/daily"),fetch("/api/trading-mode"),
+    ]);
+    if(lr[0].status==="fulfilled"&&lr[0].value.ok){const d=await lr[0].value.json();if(Array.isArray(d))S.liveTrades=d;}
+    if(lr[1].status==="fulfilled"&&lr[1].value.ok) S.liveStats = await lr[1].value.json();
+    if(lr[2].status==="fulfilled"&&lr[2].value.ok){const d=await lr[2].value.json();if(Array.isArray(d))S.liveDaily=d;}
+    if(lr[3].status==="fulfilled"&&lr[3].value.ok){const d=await lr[3].value.json();S.tradingMode=d.mode||'PAPER';}
   } catch(e){}
   // Crypto - optional
   try {
@@ -540,13 +551,18 @@ function renderTopBar(){
   const el=document.getElementById("topbar-stats");
   if(!el) return;
   if(S.mode==="stocks"){
+    var ls=S.liveStats||{}, livePnL=+(ls.total_pnl||0), liveOpen=(S.liveTrades||[]).filter(t=>t.status==="OPEN").length;
+    var modeTag=S.tradingMode==='LIVE'?'<span style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700">LIVE</span>':'<span style="background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700">PAPER</span>';
     el.innerHTML=[
+      '<div class="hstat">'+modeTag+'</div>',
+      S.liveTrades.length>0?stat("Live P&L",(livePnL>=0?"+":"")+INR(livePnL.toFixed(0)),clr(livePnL)):"",
+      S.liveTrades.length>0?stat("Live Open",liveOpen,""):"",
       stat("Paper P&L",(nsePnL>=0?"+":"")+INR(nsePnL.toFixed(0)),clr(nsePnL)),
       stat("Open",nseOpen,""),
       stat("Win Rate",nwr+"%",nwr>=55?"var(--green)":"var(--red)"),
-      stat("Cash",cash!=null?INR(cash.toFixed(0)):"-",""),
+      cash!=null?stat("Cash",INR(cash.toFixed(0)),""):"",
       sl?stat("Last Scan",new Date(sl.scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})+" · "+(sl.regime||""),""):"",
-    ].join("");
+    ].filter(Boolean).join("");
   } else if(S.mode==="stockrec"){
     el.innerHTML=[
       stat("Universe",(window._universeCount||252)+" stocks","var(--text2)"),
@@ -602,6 +618,34 @@ function renderTopBar(){
 // STOCKS TABS
 // =======================================================
 
+// Helper: section header for Real vs Paper
+function sectionHeader(title, isLive, count) {
+  var bg = isLive ? 'linear-gradient(90deg,#ef444420,transparent)' : 'linear-gradient(90deg,#3b82f620,transparent)';
+  var dot = isLive ? '🔴' : '📝';
+  var border = isLive ? '#ef4444' : '#3b82f6';
+  return '<div style="margin:16px 0 8px;padding:8px 12px;background:'+bg+';border-left:3px solid '+border+';border-radius:0 8px 8px 0;display:flex;align-items:center;gap:8px">'
+    +'<span style="font-size:13px">'+dot+'</span>'
+    +'<span style="font-size:13px;font-weight:700;color:var(--text)">'+title+'</span>'
+    +'<span style="font-size:11px;color:var(--text3);margin-left:auto">'+count+'</span>'
+    +'</div>';
+}
+
+// Helper: render a trade row card (reused for live + paper)
+function tradeCard(t, prices) {
+  var cmp=prices[t.symbol]?.price??t.price;
+  var lp=(cmp-t.price)*t.quantity;
+  return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">'
+    +'<div style="width:32px;height:32px;border-radius:7px;background:'+(t.status==="OPEN"?"var(--amber-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)")+';display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">'+(t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓")+'</div>'
+    +'<div style="flex:1;min-width:0">'
+    +'<div style="font-weight:500">'+t.symbol+' <span style="font-size:11px;color:var(--text2);font-weight:400">×'+t.quantity+' · '+(t.strategy||"")+'</span></div>'
+    +'<div style="font-size:11px;color:var(--text2)">'+fmtT(t.entry_time)+(t.exit_reason?" · "+t.exit_reason:"")+(t.order_id?' · <span style="color:var(--text4)">Order: '+t.order_id+'</span>':"")+'</div>'
+    +'</div>'
+    +'<div style="text-align:right">'+(t.status==="OPEN"
+      ?'<div style="font-weight:500;color:'+clr(lp)+'">'+(lp>=0?"+":"")+INR(lp.toFixed(0))+'</div><div style="font-size:10px;color:var(--text3)">live</div>'
+      :'<div style="font-weight:500;color:'+clr(t.pnl)+'">'+(+(t.pnl||0)>=0?"+":"")+INR(t.pnl)+'</div><div style="font-size:11px;color:'+clr(t.pnl_pct)+'">'+pc(t.pnl_pct)+'</div>')
+    +'</div></div>';
+}
+
 function renderStocksOverview(){
   const ns=S.nseStats||{};
   const open=S.nseTrades.filter(t=>t.status==="OPEN");
@@ -642,102 +686,151 @@ function renderStocksOverview(){
     S.equityChart=new Chart(ctx,{type:"line",data:{labels:eLabels,datasets:[{label:"Cumulative P&L",data:eData,borderColor:pnl>=0?"#22c55e":"#ef4444",backgroundColor:pnl>=0?"#22c55e18":"#ef444418",fill:true,tension:.3,pointRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}});
   }
 
-  const recent=S.nseTrades.slice(0,8);
-  document.getElementById("recent-list").innerHTML=recent.length===0
-    ?`<div class="empty">No trades yet - bot scans every 3 min during 9:15-15:30 IST</div>`
-    :recent.map(t=>{
-      const cmp=S.prices[t.symbol]?.price??t.price;
-      const lp=(cmp-t.price)*t.quantity;
-      return`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
-        <div style="width:32px;height:32px;border-radius:7px;background:${t.status==="OPEN"?"var(--amber-bg)":+(t.pnl||0)>=0?"var(--green-bg)":"var(--red-bg)"};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">${t.status==="OPEN"?"⏳":+(t.pnl||0)>=0?"↑":"↓"}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:500">${t.symbol} <span style="font-size:11px;color:var(--text2);font-weight:400">×${t.quantity} · ${t.strategy||""}</span></div>
-          <div style="font-size:11px;color:var(--text2)">${fmtT(t.entry_time)}${t.exit_reason?" · "+t.exit_reason:""}</div>
-        </div>
-        <div style="text-align:right">${t.status==="OPEN"
-          ?`<div style="font-weight:500;color:${clr(lp)}">${lp>=0?"+":""}${INR(lp.toFixed(0))}</div><div style="font-size:10px;color:var(--text3)">live</div>`
-          :`<div style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</div><div style="font-size:11px;color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</div>`}
-        </div>
-      </div>`;}).join("")+
-    (S.nseTrades.length>8?`<button class="btn" onclick="setTab('trades')" style="margin-top:10px;font-size:12px">View all ${S.nseTrades.length} trades -></button>`:"");
+  var rl=document.getElementById("recent-list");
+  var h='';
+  // Live trades section
+  if(S.liveTrades.length>0){
+    var liveRecent=S.liveTrades.slice(0,5);
+    h+=sectionHeader('Real Trades (Kite)',true,S.liveTrades.length+' total');
+    h+=liveRecent.map(function(t){return tradeCard(t,S.prices);}).join('');
+  }
+  // Paper trades section
+  h+=sectionHeader('Paper Trades (Simulated)',false,S.nseTrades.length+' total');
+  var recent=S.nseTrades.slice(0,8);
+  h+=recent.length===0
+    ?'<div class="empty">No trades yet - bot scans every 3 min during 9:15-15:30 IST</div>'
+    :recent.map(function(t){return tradeCard(t,S.prices);}).join('');
+  if(S.nseTrades.length>8) h+='<button class="btn" onclick="setTab(\'trades\')" style="margin-top:10px;font-size:12px">View all '+S.nseTrades.length+' trades -></button>';
+  rl.innerHTML=h;
+}
+
+function _positionCard(pos){
+  const cmp=S.prices[pos.symbol]?.price??pos.price;
+  const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
+  const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
+  const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
+  return`<div class="pos-card ${pnl>=0?"up":"down"}">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;flex-wrap:wrap">
+      ${pill("▲ BUY","g")}
+      <div>
+        <div style="font-weight:500;font-size:15px">${pos.symbol} <span style="font-size:12px;color:var(--text2);font-weight:400">× ${pos.quantity}</span></div>
+        <div style="font-size:11px;color:var(--text2)">${pos.name||""} · ${pos.strategy||""} · ${pos.regime||""} · ${fmtT(pos.entry_time)}</div>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div style="font-weight:600;font-size:20px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div>
+        <div style="font-size:12px;color:${clr(pct)}">${pc(pct)}</div>
+      </div>
+    </div>
+    <div class="pos-mini-grid">
+      ${[["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Score",pos.signal_score||"-"]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}
+    </div>
+    <div class="prog-bar"><div class="prog-fill ${pnl>=0?'positive':'negative'}" style="width:${prog}%"></div></div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL ${INR(pos.stop_loss)}</span><span>progress to target</span><span>TGT ${INR(pos.target)}</span></div>
+    ${pos.indicators?`<div style="margin-top:7px;font-size:10px;color:var(--text3);background:var(--bg2);border-radius:5px;padding:5px 9px;overflow-wrap:break-word">${pos.indicators}</div>`:""}
+    ${pos.order_id?`<div style="margin-top:4px;font-size:10px;color:var(--text3)">Order ID: ${pos.order_id}</div>`:""}
+  </div>`;
+}
+
+function _closedTable(closed){
+  return`<div class="tw"><table><thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Return</th><th>Reason</th><th>Result</th></tr></thead><tbody>
+    ${closed.map(t=>`<tr><td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td><td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"-"}</td><td style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</td><td style="color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</td><td style="font-size:11px;color:var(--text2)">${t.exit_reason||"-"}</td><td>${+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td></tr>`).join("")}
+  </tbody></table></div>`;
 }
 
 function renderStocksPositions(){
-  const open=S.nseTrades.filter(t=>t.status==="OPEN");
-  const closed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  const paperOpen=S.nseTrades.filter(t=>t.status==="OPEN");
+  const paperClosed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  const liveOpen=(S.liveTrades||[]).filter(t=>t.status==="OPEN");
+  const liveClosed=(S.liveTrades||[]).filter(t=>t.status==="CLOSED");
   document.getElementById("main-content").innerHTML=`<div id="pos-list"></div>`;
   const el=document.getElementById("pos-list");
-  if(!open.length){el.innerHTML=`<div class="empty">No open positions right now</div>`;}
-  else {
-    el.innerHTML=open.map(pos=>{
-      const cmp=S.prices[pos.symbol]?.price??pos.price;
-      const pnl=+((cmp-pos.price)*pos.quantity).toFixed(2);
-      const pct=+((cmp-pos.price)/pos.price*100).toFixed(2);
-      const prog=Math.max(0,Math.min(100,((cmp-pos.stop_loss)/(pos.target-pos.stop_loss))*100));
-      return`<div class="pos-card ${pnl>=0?"up":"down"}">
-        <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;flex-wrap:wrap">
-          ${pill("▲ BUY","g")}
-          <div>
-            <div style="font-weight:500;font-size:15px">${pos.symbol} <span style="font-size:12px;color:var(--text2);font-weight:400">× ${pos.quantity}</span></div>
-            <div style="font-size:11px;color:var(--text2)">${pos.name||""} · ${pos.strategy||""} · ${pos.regime||""} · ${fmtT(pos.entry_time)}</div>
-          </div>
-          <div style="margin-left:auto;text-align:right">
-            <div style="font-weight:600;font-size:20px;color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</div>
-            <div style="font-size:12px;color:${clr(pct)}">${pc(pct)}</div>
-          </div>
-        </div>
-        <div class="pos-mini-grid">
-          ${[["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Score",pos.signal_score||"-"]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}
-        </div>
-        <div class="prog-bar"><div class="prog-fill ${pnl>=0?'positive':'negative'}" style="width:${prog}%"></div></div>
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL ${INR(pos.stop_loss)}</span><span>progress to target</span><span>TGT ${INR(pos.target)}</span></div>
-        ${pos.indicators?`<div style="margin-top:7px;font-size:10px;color:var(--text3);background:var(--bg2);border-radius:5px;padding:5px 9px;overflow-wrap:break-word">${pos.indicators}</div>`:""}
-      </div>`;}).join("");
+  var h='';
+
+  /* ── Live Positions ── */
+  if(S.tradingMode==='LIVE'||liveOpen.length||liveClosed.length){
+    h+=sectionHeader('Live Positions',true,liveOpen.length+' open · '+liveClosed.length+' closed');
+    if(!liveOpen.length) h+='<div class="empty" style="margin:4px 0 12px">No live open positions</div>';
+    else h+=liveOpen.map(pos=>_positionCard(pos)).join('');
+    if(liveClosed.length>0){
+      h+='<div style="margin-top:12px;margin-bottom:6px;font-size:12px;color:var(--text2);font-weight:500">Live Closed ('+liveClosed.length+')</div>';
+      h+=_closedTable(liveClosed);
+    }
   }
-  if(closed.length>0){
-    el.innerHTML+=`<div style="margin-top:16px;margin-bottom:8px;font-size:12px;color:var(--text2);font-weight:500">Closed today (${closed.length})</div>`;
-    el.innerHTML+=`<div class="tw"><table><thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Return</th><th>Reason</th><th>Result</th></tr></thead><tbody>
-      ${closed.map(t=>`<tr><td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td><td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"-"}</td><td style="font-weight:500;color:${clr(t.pnl)}">${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}</td><td style="color:${clr(t.pnl_pct)}">${pc(t.pnl_pct)}</td><td style="font-size:11px;color:var(--text2)">${t.exit_reason||"-"}</td><td>${+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td></tr>`).join("")}
-    </tbody></table></div>`;
+
+  /* ── Paper Positions ── */
+  h+=sectionHeader('Paper Positions',false,paperOpen.length+' open · '+paperClosed.length+' closed');
+  if(!paperOpen.length) h+='<div class="empty" style="margin:4px 0 12px">No paper open positions</div>';
+  else h+=paperOpen.map(pos=>_positionCard(pos)).join('');
+  if(paperClosed.length>0){
+    h+='<div style="margin-top:12px;margin-bottom:6px;font-size:12px;color:var(--text2);font-weight:500">Paper Closed ('+paperClosed.length+')</div>';
+    h+=_closedTable(paperClosed);
   }
+
+  el.innerHTML=h;
+}
+
+function _tradesTableRows(trades){
+  return trades.map(t=>`<tr>
+    <td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td>
+    <td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"-"}</td>
+    <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
+    <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.exit_time)}</td>
+    <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"-":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
+    <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"-":pc(t.pnl_pct)}</td>
+    <td style="font-size:11px">${t.strategy||"-"}</td><td style="font-size:11px">${t.regime||"-"}</td>
+    <td style="font-size:11px;color:var(--text2)">${t.exit_reason||"-"}</td>
+    <td>${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
+  </tr>`).join("");
+}
+
+function _tradesStatsFooter(stats){
+  if(!stats) return '';
+  const pnl=+(stats.total_pnl||0), nw=+(stats.wins||0), nl=+(stats.losses||0);
+  const wr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
+  const closed=nw+nl;
+  if(!closed) return '';
+  return`<div style="padding:6px 0;font-size:12px;color:var(--text2);display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"><span>Closed: <b>${closed}</b></span><span>Net P&L: <b style="color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</b></span><span>Win rate: <b>${wr}%</b></span><span>Best: <b style="color:var(--green)">+${INR((+(stats.best_trade||0)).toFixed(0))}</b></span><span>Worst: <b style="color:var(--red)">${INR((+(stats.worst_trade||0)).toFixed(0))}</b></span></div>`;
+}
+
+function _tradesTable(trades, emptyMsg){
+  const thRow='<thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry time</th><th>Exit time</th><th>P&L</th><th>Return</th><th>Strategy</th><th>Regime</th><th>Exit reason</th><th>Result</th></tr></thead>';
+  return`<div class="tw"><table>${thRow}<tbody>${trades.length===0?`<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--text2)">${emptyMsg}</td></tr>`:_tradesTableRows(trades)}</tbody></table></div>`;
 }
 
 function renderStocksTrades(){
   const ns=S.nseStats||{};
-  const pnl=+(ns.total_pnl||0), nw=+(ns.wins||0), nl=+(ns.losses||0);
-  const wr=nw+nl>0?Math.round(nw/(nw+nl)*100):0;
-  const closed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  const ls=S.liveStats||{};
+  const paperClosed=S.nseTrades.filter(t=>t.status==="CLOSED");
+  const liveTrades=S.liveTrades||[];
+  const liveClosed=liveTrades.filter(t=>t.status==="CLOSED");
+  const allClosed=liveClosed.concat(paperClosed);
 
   document.getElementById("main-content").innerHTML=`
     <div class="chart-wrap" style="height:140px;margin-bottom:14px"><canvas id="pnl-chart"></canvas></div>
-    <div class="tw"><table>
-      <thead><tr><th>Stock</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Entry time</th><th>Exit time</th><th>P&L</th><th>Return</th><th>Strategy</th><th>Regime</th><th>Exit reason</th><th>Result</th></tr></thead>
-      <tbody id="trades-body"></tbody>
-    </table></div>
-    <div id="trades-footer" style="padding:8px 0;font-size:12px;color:var(--text2);display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:4px"></div>`;
+    <div id="trades-sections"></div>`;
 
   if(S.pnlChart){S.pnlChart.destroy();S.pnlChart=null;}
-  if(closed.length>0){
-    const data=closed.slice(0,30).reverse().map(t=>+(t.pnl||0));
+  if(allClosed.length>0){
+    const data=allClosed.slice(0,30).reverse().map(t=>+(t.pnl||0));
     const ctx=document.getElementById("pnl-chart").getContext("2d");
-    S.pnlChart=new Chart(ctx,{type:"bar",data:{labels:closed.slice(0,30).reverse().map(t=>t.symbol),datasets:[{data,backgroundColor:data.map(v=>v>=0?"#22c55e":"#ef4444"),borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}});
+    S.pnlChart=new Chart(ctx,{type:"bar",data:{labels:allClosed.slice(0,30).reverse().map(t=>t.symbol),datasets:[{data,backgroundColor:data.map(v=>v>=0?"#22c55e":"#ef4444"),borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},color:"#9ca3af"}},y:{ticks:{callback:v=>`₹${v}`,font:{size:10},color:"#9ca3af"}}}}});
   }
 
-  document.getElementById("trades-body").innerHTML=S.nseTrades.length===0
-    ?`<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">No trades yet - bot trades 9:15-15:30 IST</td></tr>`
-    :S.nseTrades.map(t=>`<tr>
-      <td style="font-weight:500">${t.symbol}</td><td>${t.quantity}</td>
-      <td>${INR(t.price)}</td><td>${t.exit_price?INR(t.exit_price):"-"}</td>
-      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.entry_time)}</td>
-      <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtT(t.exit_time)}</td>
-      <td style="font-weight:500;color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl)}">${t.status==="OPEN"?"-":`${+(t.pnl||0)>=0?"+":""}${INR(t.pnl)}`}</td>
-      <td style="color:${t.status==="OPEN"?"var(--text2)":clr(t.pnl_pct)}">${t.status==="OPEN"?"-":pc(t.pnl_pct)}</td>
-      <td style="font-size:11px">${t.strategy||"-"}</td><td style="font-size:11px">${t.regime||"-"}</td>
-      <td style="font-size:11px;color:var(--text2)">${t.exit_reason||"-"}</td>
-      <td>${t.status==="OPEN"?pill("Open","a"):+(t.pnl||0)>=0?pill("Win","g"):pill("Loss","r")}</td>
-    </tr>`).join("");
+  var h='';
 
-  document.getElementById("trades-footer").innerHTML=closed.length?`<span>Closed: <b>${closed.length}</b></span><span>Net P&L: <b style="color:${clr(pnl)}">${pnl>=0?"+":""}${INR(pnl.toFixed(0))}</b></span><span>Win rate: <b>${wr}%</b></span><span>Best: <b style="color:var(--green)">+${INR((+(ns.best_trade||0)).toFixed(0))}</b></span><span>Worst: <b style="color:var(--red)">${INR((+(ns.worst_trade||0)).toFixed(0))}</b></span>`:"";
+  /* ── Live Trades Section ── */
+  if(S.tradingMode==='LIVE'||liveTrades.length>0){
+    h+=sectionHeader('Live Trades',true,liveTrades.length+' trades · '+liveClosed.length+' closed');
+    h+=_tradesTable(liveTrades,'No live trades yet');
+    h+=_tradesStatsFooter(ls);
+  }
+
+  /* ── Paper Trades Section ── */
+  h+=sectionHeader('Paper Trades',false,S.nseTrades.length+' trades · '+paperClosed.length+' closed');
+  h+=_tradesTable(S.nseTrades,'No paper trades yet - bot trades 9:15-15:30 IST');
+  h+=_tradesStatsFooter(ns);
+
+  document.getElementById("trades-sections").innerHTML=h;
 }
 
 function renderStocksMarket(){
