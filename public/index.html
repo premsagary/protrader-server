@@ -259,7 +259,8 @@ select option{background:var(--bg3)}
     <button class="mode-tab" onclick="setMode('psuggest')" id="mode-psuggest" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#22d3ee;border-color:#22d3ee40">💼 Portfolio</button>
     <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
   </div>
-  <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats">
+  <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
+  <div style="display:flex;gap:8px;align-items:center;margin-left:12px;flex-shrink:0">
     <span id="user-badge" style="font-size:11px;color:var(--text3)"></span>
     <button id="logout-btn" onclick="doLogout()" style="font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;font-weight:600;display:none" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='transparent'">Logout</button>
   </div>
