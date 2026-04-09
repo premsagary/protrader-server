@@ -3746,6 +3746,7 @@ var _psLoading    = false;
 var _psTab        = 'model';  // model | holdings | signals | performance
 var _psPositions  = null;   // user's actual positions from DB
 var _psSignals    = null;   // signal history
+var _psSignalFilter = 'all'; // all | action | buy | sell | alerts
 var _psPerf       = null;   // performance data
 
 // =============================================================================
@@ -4053,15 +4054,39 @@ function psSignalMeta(type){
   return m[type]||{c:'#f59e0b',i:'🔔'};
 }
 
+function psSetSignalFilter(f){_psSignalFilter=f;var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderSignalsTab();}
+
+function psRenderSignalCard(sig){
+  var meta=psSignalMeta(sig.signal_type);
+  var urgBorder=sig.urgency==='URGENT'?'border-left:3px solid #ef4444;':sig.urgency==='HIGH'?'border-left:3px solid #f97316;':'';
+  var h='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px;'+urgBorder+'">';
+  h+='<span style="font-size:16px">'+meta.i+'</span>';
+  h+='<div style="flex:1">';
+  h+='<div><span style="font-weight:700;color:var(--text)">'+sig.sym+'</span> <span style="background:'+meta.c+'20;color:'+meta.c+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700">'+sig.signal_type+'</span>';
+  if(sig.urgency==='URGENT')h+=' <span style="color:#ef4444;font-size:9px;font-weight:800;background:rgba(239,68,68,.12);padding:1px 5px;border-radius:3px">🔴 URGENT</span>';
+  else if(sig.urgency==='HIGH')h+=' <span style="color:#f97316;font-size:9px;font-weight:700;background:rgba(249,115,22,.12);padding:1px 5px;border-radius:3px">🟠 HIGH</span>';
+  if(sig.acted)h+=' <span style="color:#22c55e;font-size:9px">✓ Acted</span>';
+  h+='</div>';
+  h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
+  h+='</div>';
+  h+='<div style="text-align:right;min-width:80px">';
+  if(sig.price_at&&sig.signal_type!=='SECTOR_WARN'&&sig.signal_type!=='DRAWDOWN')h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
+  h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+' '+new Date(sig.created_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})+'</div>';
+  h+='</div></div>';
+  return h;
+}
+
 function psRenderSignalsTab(){
   var h='';
   if(!_psSignals){
     h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading signals...</div>';
     return h;
   }
-  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+
+  // ── ACTION BUTTONS ──
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px">';
   h+='<button onclick="psLoadSignals()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
-  h+='<button onclick="psGenerateSignals()" style="background:rgba(168,85,247,.1);color:#a855f7;border:1px solid rgba(168,85,247,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">⚡ Generate Signals Now</button>';
+  h+='<button onclick="psGenerateSignals()" style="background:rgba(168,85,247,.1);color:#a855f7;border:1px solid rgba(168,85,247,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">⚡ Generate Signals</button>';
   h+='</div>';
 
   if(!_psSignals.length){
@@ -4069,25 +4094,93 @@ function psRenderSignalsTab(){
     return h;
   }
 
+  // ── CATEGORIZE SIGNALS ──
+  var buySignals=[], sellSignals=[], actionSignals=[], alertSignals=[];
   _psSignals.forEach(function(sig){
-    var meta=psSignalMeta(sig.signal_type);
-    var urgBorder=sig.urgency==='URGENT'?'border-left:3px solid #ef4444;':sig.urgency==='HIGH'?'border-left:3px solid #f97316;':'';
-    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px;'+urgBorder+'">';
-    h+='<span style="font-size:16px">'+meta.i+'</span>';
-    h+='<div style="flex:1">';
-    h+='<div><span style="font-weight:700;color:var(--text)">'+sig.sym+'</span> <span style="background:'+meta.c+'20;color:'+meta.c+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700">'+sig.signal_type+'</span>';
-    if(sig.urgency==='URGENT')h+=' <span style="color:#ef4444;font-size:9px;font-weight:800">URGENT</span>';
-    else if(sig.urgency==='HIGH')h+=' <span style="color:#f97316;font-size:9px;font-weight:700">HIGH</span>';
-    if(sig.acted)h+=' <span style="color:#22c55e;font-size:9px">✓ Acted</span>';
-    h+='</div>';
-    h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
-    h+='</div>';
-    h+='<div style="text-align:right;min-width:80px">';
-    if(sig.price_at&&sig.signal_type!=='SECTOR_WARN'&&sig.signal_type!=='DRAWDOWN')h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
-    h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+' '+new Date(sig.created_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})+'</div>';
-    h+='</div>';
-    h+='</div>';
+    var t=sig.signal_type;
+    if(t==='BUY'||t==='FRESH_BUY'||t==='ADD') buySignals.push(sig);
+    else if(t==='SELL'||t==='EXIT'||t==='REDUCE') sellSignals.push(sig);
+    else if(t==='SWITCH') actionSignals.push(sig);
+    else alertSignals.push(sig); // SECTOR_WARN, DRAWDOWN, etc.
   });
+
+  // Urgent items across all categories
+  var urgentItems=_psSignals.filter(function(s){return s.urgency==='URGENT'||s.urgency==='HIGH';});
+
+  // ── FILTER PILLS ──
+  var filters=[
+    {key:'all',     label:'All',           count:_psSignals.length, color:'#22d3ee'},
+    {key:'action',  label:'⚡ Needs Action', count:urgentItems.length, color:'#ef4444'},
+    {key:'buy',     label:'📈 Buy',         count:buySignals.length,  color:'#22c55e'},
+    {key:'sell',    label:'📉 Sell / Exit',  count:sellSignals.length, color:'#ef4444'},
+    {key:'switch',  label:'🔄 Switch',      count:actionSignals.length, color:'#a855f7'},
+    {key:'alerts',  label:'⚠ Alerts',       count:alertSignals.length, color:'#f97316'},
+  ];
+  h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+  filters.forEach(function(f){
+    var active=_psSignalFilter===f.key;
+    var bg=active?f.color+'25':'var(--bg2)';
+    var border=active?f.color:'var(--border)';
+    h+='<button onclick="psSetSignalFilter(\''+f.key+'\')" style="background:'+bg+';color:'+(active?f.color:'var(--text3)')+';border:1px solid '+border+';border-radius:20px;padding:4px 12px;font-size:11px;font-weight:'+(active?'700':'500')+';cursor:pointer;display:flex;align-items:center;gap:4px">';
+    h+=f.label;
+    if(f.count>0)h+=' <span style="background:'+(active?f.color:'var(--border)')+';color:'+(active?'#fff':'var(--text3)')+';border-radius:10px;padding:0 6px;font-size:10px;font-weight:700;min-width:18px;text-align:center">'+f.count+'</span>';
+    h+='</button>';
+  });
+  h+='</div>';
+
+  // ── RENDER BASED ON FILTER ──
+  var flt=_psSignalFilter;
+
+  if(flt==='all'){
+    // Show urgent section first, then grouped sections
+    if(urgentItems.length){
+      h+='<div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:10px;padding:10px;margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:800;color:#ef4444;margin-bottom:8px;display:flex;align-items:center;gap:6px">🚨 Needs Your Attention ('+urgentItems.length+')</div>';
+      urgentItems.forEach(function(sig){ h+=psRenderSignalCard(sig); });
+      h+='</div>';
+    }
+    // Recent buy signals
+    if(buySignals.length){
+      h+='<div style="margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:700;color:#22c55e;margin-bottom:6px;display:flex;align-items:center;gap:6px">📈 Buy Signals ('+buySignals.length+')</div>';
+      buySignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
+      if(buySignals.length>10)h+='<div style="text-align:center;font-size:10px;color:var(--text4);padding:4px">+'+(buySignals.length-10)+' more — use filter to see all</div>';
+      h+='</div>';
+    }
+    // Sell/Exit signals
+    if(sellSignals.length){
+      h+='<div style="margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:700;color:#ef4444;margin-bottom:6px;display:flex;align-items:center;gap:6px">📉 Sell / Exit Signals ('+sellSignals.length+')</div>';
+      sellSignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
+      if(sellSignals.length>10)h+='<div style="text-align:center;font-size:10px;color:var(--text4);padding:4px">+'+(sellSignals.length-10)+' more</div>';
+      h+='</div>';
+    }
+    // Switch signals
+    if(actionSignals.length){
+      h+='<div style="margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:700;color:#a855f7;margin-bottom:6px;display:flex;align-items:center;gap:6px">🔄 Switch Signals ('+actionSignals.length+')</div>';
+      actionSignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
+      h+='</div>';
+    }
+    // Alerts
+    if(alertSignals.length){
+      h+='<div style="margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:700;color:#f97316;margin-bottom:6px;display:flex;align-items:center;gap:6px">⚠ Portfolio Alerts ('+alertSignals.length+')</div>';
+      alertSignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
+      h+='</div>';
+    }
+  } else {
+    var list=flt==='action'?urgentItems:flt==='buy'?buySignals:flt==='sell'?sellSignals:flt==='switch'?actionSignals:alertSignals;
+    var titles={action:'🚨 Needs Your Attention',buy:'📈 Buy Signals',sell:'📉 Sell / Exit Signals',switch:'🔄 Switch Signals',alerts:'⚠ Portfolio Alerts'};
+    var colors={action:'#ef4444',buy:'#22c55e',sell:'#ef4444',switch:'#a855f7',alerts:'#f97316'};
+    h+='<div style="font-size:12px;font-weight:700;color:'+(colors[flt]||'var(--text)')+';margin-bottom:8px">'+(titles[flt]||'Signals')+' ('+list.length+')</div>';
+    if(!list.length){
+      h+='<div style="text-align:center;padding:30px;color:var(--text3)">No signals in this category</div>';
+    } else {
+      list.forEach(function(sig){ h+=psRenderSignalCard(sig); });
+    }
+  }
+
   return h;
 }
 
