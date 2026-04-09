@@ -9444,14 +9444,16 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 
 // ── AI MODEL DEFINITIONS ──
 const AI_MODELS = [
-  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash' },
+  { id: 'groq-llama', name: 'Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
   { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
   { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
   { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro' },
+  { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
   { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1' },
 ];
 
@@ -9462,12 +9464,13 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
     let raw = '';
     let tokens = { input: 0, output: 0 };
 
+    // ── Provider: Anthropic (requires max_tokens) ──
     if (modelDef.provider === 'anthropic') {
       if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 32768, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 65536, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9475,12 +9478,13 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       raw = data.content?.[0]?.text || '';
       tokens = { input: data.usage?.input_tokens || 0, output: data.usage?.output_tokens || 0 };
 
+    // ── Provider: OpenAI ──
     } else if (modelDef.provider === 'openai') {
       if (!OPENAI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, max_completion_tokens: 16384, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9488,12 +9492,13 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       raw = data.choices?.[0]?.message?.content || '';
       tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
 
+    // ── Provider: DeepSeek (OpenAI-compatible) ──
     } else if (modelDef.provider === 'deepseek') {
       if (!DEEPSEEK_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 16384, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9501,6 +9506,35 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       raw = data.choices?.[0]?.message?.content || '';
       tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
 
+    // ── Provider: Groq (OpenAI-compatible, runs Llama) ──
+    } else if (modelDef.provider === 'groq') {
+      if (!GROQ_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Mistral (OpenAI-compatible) ──
+    } else if (modelDef.provider === 'mistral') {
+      if (!MISTRAL_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MISTRAL_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Google Gemini (kept as fallback if key exists) ──
     } else if (modelDef.provider === 'google') {
       if (!GOOGLE_AI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelDef.model}:generateContent?key=${GOOGLE_AI_API_KEY}`, {
