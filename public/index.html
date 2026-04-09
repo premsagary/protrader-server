@@ -3965,17 +3965,17 @@ function psRenderModelResults(data){
       var pm=aiR.per_model||aiR.models||{};
       var pmKeys=Object.keys(pm);
       _aiTotal=pmKeys.length;
-      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')_aiAgree++;else if(v==='DISAGREE')_aiDisagree++;else if(v==='MODIFY')_aiModify++;});
-      var majorityVerdict=_aiAgree>=_aiDisagree?'AGREE':'DISAGREE';
-      var cBg=majorityVerdict==='AGREE'?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)';
+      var _aiAgreeNames=[],_aiModifyNames=[],_aiDisagreeNames=[];
+      var _mn={'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','claude-sonnet':'Sonnet','gemini-pro':'Gemini','mistral':'Mistral'};
+      pmKeys.forEach(function(mid){var v=pm[mid].verdict;var sn=_mn[mid]||mid;if(v==='AGREE'){_aiAgree++;_aiAgreeNames.push(sn);}else if(v==='DISAGREE'){_aiDisagree++;_aiDisagreeNames.push(sn);}else if(v==='MODIFY'){_aiModify++;_aiModifyNames.push(sn);}});
     }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
-    // AI verdict summary — stacked vertically below stock name
+    // AI verdict summary — stacked vertically below stock name with model names
     if(_aiStockReview){
-      h+='<div style="margin-top:2px;font-size:8px;font-weight:700;line-height:1.5">';
-      if(_aiAgree>0) h+='<div style="color:#22c55e">✅'+_aiAgree+' Agreed</div>';
-      if(_aiModify>0) h+='<div style="color:#f59e0b">⚠️'+_aiModify+' Caution</div>';
-      if(_aiDisagree>0) h+='<div style="color:#ef4444">❌'+_aiDisagree+' Disagree</div>';
+      h+='<div style="margin-top:2px;font-size:8px;font-weight:700;line-height:1.6">';
+      if(_aiAgree>0) h+='<div style="color:#22c55e">✅'+_aiAgree+' Agreed <span style="font-weight:500;opacity:0.8">('+_aiAgreeNames.join(', ')+')</span></div>';
+      if(_aiModify>0) h+='<div style="color:#f59e0b">⚠️'+_aiModify+' Caution <span style="font-weight:500;opacity:0.8">('+_aiModifyNames.join(', ')+')</span></div>';
+      if(_aiDisagree>0) h+='<div style="color:#ef4444">❌'+_aiDisagree+' Disagree <span style="font-weight:500;opacity:0.8">('+_aiDisagreeNames.join(', ')+')</span></div>';
       h+='<div onclick="psToggleAIRow(\''+stk.sym+'\')" id="ai-toggle-'+stk.sym+'" style="color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-'+stk.sym+'">▶</span> Show AI Reviews ('+_aiTotal+' models)</div>';
       h+='</div>';
     }
