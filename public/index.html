@@ -423,9 +423,28 @@ const CRYPTO_TABS = [
   {id:"news",       label:"◈ News (RSS)"},
 ];
 
+var _hashUpdating = false;
+function _updateHash(){
+  var h = S.mode;
+  if(S.mode==='stocks') h += '/' + S.stocksTab;
+  else if(S.mode==='crypto') h += '/' + S.cryptoTab;
+  if(location.hash !== '#'+h){
+    _hashUpdating = true;
+    history.replaceState(null, '', '#'+h);
+    _hashUpdating = false;
+  }
+}
+function _readHash(){
+  var h = (location.hash||'').replace('#','');
+  if(!h) return null;
+  var parts = h.split('/');
+  return { mode: parts[0], tab: parts[1] || null };
+}
+
 function setMode(mode){
   S.mode=mode;
   window._currentMode = mode;
+  _updateHash();
   try{ document.getElementById("mode-stocks").className   ="mode-tab stocks"  +(mode==="stocks"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
@@ -465,6 +484,7 @@ function setMode(mode){
 function setTab(tab){
   if(S.mode==="stocks") S.stocksTab = tab;
   else S.cryptoTab = tab;
+  _updateHash();
   renderSubTabs();
   render();
 }
@@ -5246,13 +5266,39 @@ async function adminRunAll() {
 async function loadMiroFishLookup() { /* deprecated */ }
 
 function _init() {
-  // Start with MF Recommendation - loads instantly from in-memory cache
-  try { setMode("mf"); } catch(e){ console.error('setMode error:', e); }
+  // Restore tab from URL hash, or default to MF Recommendation
+  var saved = _readHash();
+  var validModes = ['mf','stockrec','stocks','crypto','psuggest','admin'];
+  var validStockTabs = ['overview','positions','signals','trades','market','chart','news'];
+  var validCryptoTabs = ['overview','positions','signals','trades','market','chart','news'];
+
+  if(saved && validModes.indexOf(saved.mode) >= 0){
+    // Set subtab first if applicable
+    if(saved.mode === 'stocks' && saved.tab && validStockTabs.indexOf(saved.tab) >= 0) S.stocksTab = saved.tab;
+    if(saved.mode === 'crypto' && saved.tab && validCryptoTabs.indexOf(saved.tab) >= 0) S.cryptoTab = saved.tab;
+    try { setMode(saved.mode); } catch(e){ console.error('setMode error:', e); }
+  } else {
+    try { setMode("mf"); } catch(e){ console.error('setMode error:', e); }
+  }
   try { fetchAll(); } catch(e){}
   try { fetchCryptoPrices(); } catch(e){}
   setInterval(function(){ try{ fetchAll(); }catch(e){} }, 15000);
   setInterval(function(){ try{ fetchCryptoPrices(); }catch(e){} }, 30000);
 }
+
+// Handle browser back/forward buttons
+window.addEventListener('hashchange', function(){
+  if(_hashUpdating) return;
+  var h = _readHash();
+  if(!h) return;
+  var validModes = ['mf','stockrec','stocks','crypto','psuggest','admin'];
+  if(validModes.indexOf(h.mode) < 0) return;
+  if(h.mode === S.mode && !h.tab) return;
+  if(h.mode === 'stocks' && h.tab) S.stocksTab = h.tab;
+  if(h.mode === 'crypto' && h.tab) S.cryptoTab = h.tab;
+  if(h.mode !== S.mode) setMode(h.mode);
+  else if(h.tab) { renderSubTabs(); render(); }
+});
 
 _init();
 
