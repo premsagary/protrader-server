@@ -9889,14 +9889,12 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 
-// ── AI MODEL DEFINITIONS (direct API calls to each provider) ──
+// ── AI MODEL DEFINITIONS (5 cheap models — ~$2/month at 1x/day) ──
 const AI_MODELS = [
   { id: 'groq-llama', name: 'Groq Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
   { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
   { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
   { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  { id: 'claude-sonnet', name: 'Claude Sonnet 4', provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
-  { id: 'gemini-pro', name: 'Gemini 3.1 Pro', provider: 'google', model: 'gemini-3.1-pro-preview' },
   { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
 ];
 
