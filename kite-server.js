@@ -9447,12 +9447,12 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 
 // ── AI MODEL DEFINITIONS ──
 const AI_MODELS = [
-  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash', maxTokens: 2000 },
-  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano', maxTokens: 2000 },
-  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat', maxTokens: 2000 },
-  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-haiku-4-5-20241022', maxTokens: 2000 },
-  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro-preview-05-06', maxTokens: 2000 },
-  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1', maxTokens: 2000 },
+  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash', maxTokens: 8000 },
+  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano', maxTokens: 8000 },
+  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8000 },
+  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-3-5-haiku-20241022', maxTokens: 8000 },
+  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro', maxTokens: 8000 },
+  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1', maxTokens: 8000 },
 ];
 
 // ── Call a single AI model ──
@@ -9467,7 +9467,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
         body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9479,7 +9479,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
         body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9491,7 +9491,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
         body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9507,18 +9507,34 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
           contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: { maxOutputTokens: modelDef.maxTokens, temperature: 0.3 },
         }),
-        signal: AbortSignal.timeout(90000),
+        signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     }
 
-    // Parse JSON from response
+    // Parse JSON from response — handle truncated JSON from token limits
     const clean = raw.replace(/```json|```/g, '').trim();
     let result;
     try { result = JSON.parse(clean); }
-    catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; }
+    catch {
+      // Try to salvage truncated JSON by closing brackets
+      let salvaged = clean;
+      // Count open/close braces and brackets
+      const openBraces = (salvaged.match(/\{/g) || []).length;
+      const closeBraces = (salvaged.match(/\}/g) || []).length;
+      const openBrackets = (salvaged.match(/\[/g) || []).length;
+      const closeBrackets = (salvaged.match(/\]/g) || []).length;
+      // Remove trailing partial entries (after last complete object)
+      const lastComplete = salvaged.lastIndexOf('}');
+      if (lastComplete > 0) salvaged = salvaged.slice(0, lastComplete + 1);
+      // Close remaining open brackets/braces
+      for (let i = 0; i < openBrackets - closeBrackets; i++) salvaged += ']';
+      for (let i = 0; i < openBraces - closeBraces; i++) salvaged += '}';
+      try { result = JSON.parse(salvaged); console.log(`  🔧 ${modelDef.name}: salvaged truncated JSON`); }
+      catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; console.error(`  ⚠ ${modelDef.name}: JSON parse failed. Raw start: ${raw.slice(0, 200)}`); }
+    }
 
     return { id: modelDef.id, name: modelDef.name, result, took_ms: Date.now() - start };
 
