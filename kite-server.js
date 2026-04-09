@@ -4311,6 +4311,224 @@ async function fetchFromNSE(sym) {
   }
 }
 
+// =============================================================================
+// MARKET DATA FETCHERS — VIX, FII/DII, Delivery%, OI/PCR, Macro (for AI)
+// =============================================================================
+
+let _marketDataCache = {
+  vix: null, fiiDii: null, crude: null, usdInr: null,
+  deliveryData: {}, optionData: {}, fetchedAt: 0
+};
+
+// Get NSE session cookies (reusable)
+async function getNSESession() {
+  const resp = await fetch('https://www.nseindia.com/', {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'text/html' },
+    signal: AbortSignal.timeout(8000),
+  });
+  return resp.headers.get('set-cookie') || '';
+}
+
+// NSE API helper with session cookies
+async function fetchNSEApi(path, cookies) {
+  const resp = await fetch(`https://www.nseindia.com/api/${path}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json', 'Referer': 'https://www.nseindia.com/', 'Cookie': cookies,
+    },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!resp.ok) throw new Error(`NSE ${resp.status}`);
+  return resp.json();
+}
+
+// Fetch all market-level + stock-level data needed by AI (called before AI validation)
+async function fetchAIMarketData(stockSymbols) {
+  console.log('📊 Fetching market data for AI validation...');
+  const start = Date.now();
+
+  try {
+    const cookies = await getNSESession();
+    await new Promise(r => setTimeout(r, 300)); // rate limit respect
+
+    // ── 1) India VIX ──
+    try {
+      const vixData = await fetchNSEApi('allIndices', cookies);
+      const vixIdx = vixData?.data?.find(i => i.indexSymbol === 'INDIA VIX' || i.index === 'INDIA VIX');
+      if (vixIdx) {
+        _marketDataCache.vix = {
+          value: vixIdx.last || vixIdx.previousClose,
+          change: vixIdx.percentChange,
+          high: vixIdx.dayHigh, low: vixIdx.dayLow,
+        };
+        console.log(`  ✅ VIX: ${_marketDataCache.vix.value}`);
+      }
+    } catch (e) { console.log(`  ❌ VIX: ${e.message}`); }
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // ── 2) FII/DII Activity (daily buy/sell in ₹Cr) ──
+    try {
+      const fiiData = await fetchNSEApi('fiidiiActivity', cookies);
+      if (fiiData) {
+        _marketDataCache.fiiDii = {
+          fii_buy: fiiData.fpiData?.buyValue || fiiData[0]?.buyValue,
+          fii_sell: fiiData.fpiData?.sellValue || fiiData[0]?.sellValue,
+          fii_net: fiiData.fpiData?.netValue || fiiData[0]?.netValue,
+          dii_buy: fiiData.diiData?.buyValue || fiiData[1]?.buyValue,
+          dii_sell: fiiData.diiData?.sellValue || fiiData[1]?.sellValue,
+          dii_net: fiiData.diiData?.netValue || fiiData[1]?.netValue,
+        };
+        console.log(`  ✅ FII/DII: FII net=${_marketDataCache.fiiDii.fii_net}, DII net=${_marketDataCache.fiiDii.dii_net}`);
+      }
+    } catch (e) { console.log(`  ❌ FII/DII: ${e.message}`); }
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // ── 3) Delivery % + OI for each stock (batch with rate limiting) ──
+    const fnoStocks = new Set(); // Track which stocks are in F&O
+    for (let i = 0; i < stockSymbols.length; i++) {
+      const sym = stockSymbols[i];
+      if (i > 0) await new Promise(r => setTimeout(r, 400)); // rate limit
+
+      // Quote with delivery data
+      try {
+        const quoteData = await fetchNSEApi(`quote-equity?symbol=${encodeURIComponent(sym)}`, cookies);
+        const trade = quoteData?.priceInfo || {};
+        const secInfo = quoteData?.securityInfo || {};
+        const preOpen = quoteData?.preOpenMarket || {};
+
+        _marketDataCache.deliveryData[sym] = {
+          deliveryQty: trade.deliveryQuantity || secInfo.deliveredQuantity,
+          tradedQty: trade.totalTradedVolume || secInfo.tradedQuantity,
+          deliveryPct: secInfo.deliveryToTradedQuantity || (trade.deliveryQuantity && trade.totalTradedVolume ? ((trade.deliveryQuantity / trade.totalTradedVolume) * 100).toFixed(1) : null),
+          lastPrice: trade.lastPrice || trade.close,
+          prevClose: trade.previousClose,
+          isFnO: secInfo.surveillance?.isFNO === 'true' || false,
+        };
+
+        if (secInfo.surveillance?.isFNO === 'true') fnoStocks.add(sym);
+      } catch (e) { /* skip this stock */ }
+    }
+    console.log(`  ✅ Delivery data: ${Object.keys(_marketDataCache.deliveryData).length}/${stockSymbols.length} stocks`);
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // ── 4) Option Chain for F&O stocks (OI, PCR, Max Pain, IV) ──
+    const fnoList = [...fnoStocks].slice(0, 10); // limit to 10 to respect rate limits
+    for (let i = 0; i < fnoList.length; i++) {
+      const sym = fnoList[i];
+      if (i > 0) await new Promise(r => setTimeout(r, 600));
+
+      try {
+        const optData = await fetchNSEApi(`option-chain-equities?symbol=${encodeURIComponent(sym)}`, cookies);
+        if (optData?.filtered) {
+          const ce = optData.filtered.CE || {};
+          const pe = optData.filtered.PE || {};
+          const totalCEOI = ce.totOI || 0;
+          const totalPEOI = pe.totOI || 0;
+          const pcr = totalCEOI > 0 ? (totalPEOI / totalCEOI).toFixed(2) : '?';
+
+          // Max Pain calculation: strike where OI (CE+PE) is maximum
+          let maxPainStrike = null, maxOI = 0;
+          if (optData.records?.data) {
+            const strikeOI = {};
+            optData.records.data.forEach(row => {
+              const s = row.strikePrice;
+              if (!strikeOI[s]) strikeOI[s] = 0;
+              strikeOI[s] += (row.CE?.openInterest || 0) + (row.PE?.openInterest || 0);
+            });
+            Object.entries(strikeOI).forEach(([s, oi]) => { if (oi > maxOI) { maxOI = oi; maxPainStrike = +s; } });
+          }
+
+          // IV from ATM strike
+          let atmIV = null;
+          const spot = optData.records?.underlyingValue;
+          if (spot && optData.records?.data) {
+            let closestDiff = Infinity;
+            optData.records.data.forEach(row => {
+              const diff = Math.abs(row.strikePrice - spot);
+              if (diff < closestDiff) {
+                closestDiff = diff;
+                atmIV = row.CE?.impliedVolatility || row.PE?.impliedVolatility;
+              }
+            });
+          }
+
+          _marketDataCache.optionData[sym] = {
+            totalCEOI, totalPEOI, pcr: +pcr,
+            ceTotalVol: ce.totVol || 0, peTotalVol: pe.totVol || 0,
+            maxPain: maxPainStrike,
+            atmIV: atmIV ? +atmIV.toFixed(1) : null,
+            spot,
+          };
+        }
+      } catch (e) { /* skip this stock's options */ }
+    }
+    console.log(`  ✅ Option data: ${Object.keys(_marketDataCache.optionData).length} F&O stocks`);
+
+    // ── 5) Crude Oil + USD/INR (from Kite instruments or Yahoo) ──
+    try {
+      // Try Kite live prices first (if subscribed)
+      const crudePrice = livePrices['CRUDEOIL']?.price || livePrices['CRUDE']?.price;
+      const usdInr = livePrices['USDINR']?.price;
+      _marketDataCache.crude = crudePrice || null;
+      _marketDataCache.usdInr = usdInr || null;
+
+      // Fallback: try Yahoo Finance for crude + USD/INR
+      if (!crudePrice || !usdInr) {
+        try {
+          const yResp = await fetch('https://query1.finance.yahoo.com/v7/finance/quote?symbols=CL=F,INR=X', {
+            headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000),
+          });
+          if (yResp.ok) {
+            const yData = await yResp.json();
+            const quotes = yData?.quoteResponse?.result || [];
+            quotes.forEach(q => {
+              if (q.symbol === 'CL=F') _marketDataCache.crude = q.regularMarketPrice;
+              if (q.symbol === 'INR=X') _marketDataCache.usdInr = q.regularMarketPrice ? (1 / q.regularMarketPrice) : null;
+            });
+          }
+        } catch (e) { /* skip */ }
+      }
+      if (_marketDataCache.crude) console.log(`  ✅ Crude: $${_marketDataCache.crude}`);
+      if (_marketDataCache.usdInr) console.log(`  ✅ USD/INR: ₹${_marketDataCache.usdInr}`);
+    } catch (e) { console.log(`  ❌ Macro: ${e.message}`); }
+
+    _marketDataCache.fetchedAt = Date.now();
+    console.log(`📊 Market data fetch complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+
+  } catch (e) {
+    console.error('📊 Market data fetch error:', e.message);
+  }
+
+  return _marketDataCache;
+}
+
+// Build peer comparison for a stock (from existing stockFundamentals)
+function buildPeerComparison(sym) {
+  const f = stockFundamentals[sym];
+  if (!f || !f.sector) return null;
+  const sector = f.sector.toLowerCase();
+  const peers = Object.entries(stockFundamentals)
+    .filter(([s, d]) => s !== sym && d.sector && d.sector.toLowerCase() === sector)
+    .slice(0, 5)
+    .map(([s, d]) => ({
+      sym: s, pe: d.pe || '?', roe: d.roe || '?', roce: d.roce || '?',
+      debtToEq: d.debtToEq || '?', opMargin: d.opMargin || '?',
+      mktCap: d.mktCap ? Math.round(d.mktCap) + 'Cr' : '?',
+    }));
+  if (!peers.length) return null;
+
+  // Sector averages
+  const vals = peers.filter(p => p.pe !== '?').map(p => +p.pe);
+  const sectorPE = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '?';
+  const roeVals = peers.filter(p => p.roe !== '?').map(p => +p.roe);
+  const sectorROE = roeVals.length ? (roeVals.reduce((a, b) => a + b, 0) / roeVals.length).toFixed(1) : '?';
+
+  return { peers, sectorAvgPE: sectorPE, sectorAvgROE: sectorROE };
+}
+
 async function autoFetchFundamentals(syms) {
   if (!syms || syms.length === 0) return 0;
   console.log(`Scraping real fundamentals for ${syms.length} stocks...`);
@@ -9623,6 +9841,13 @@ async function validateSignalsWithAI(mode = 'auto') {
     // 3) Get risk metrics
     const risk = computePortfolioRisk(positions);
 
+    // 3b) Fetch market data from NSE (VIX, FII/DII, delivery%, OI/PCR, crude, USD/INR)
+    const allStockSyms = [...new Set([
+      ...positions.map(p => p.sym),
+      ...(modelPortfolio?.portfolio?.slice(0, 15)?.map(m => m.sym) || []),
+    ])];
+    await fetchAIMarketData(allStockSyms).catch(e => console.error('Market data fetch error:', e.message));
+
     // 4) Build RICH portfolio snapshot for the AI — send ALL available data per stock
     const positionData = positions.map(p => {
       const f = stockFundamentals[p.sym] || {};
@@ -9701,12 +9926,55 @@ async function validateSignalsWithAI(mode = 'auto') {
         `Val=${f._valScore||'?'}`, `Conviction=${f._conviction||'?'}`,
       ].join(' ');
 
+      // ── DELIVERY % (Module 2: volume confirms price) ──
+      const delData = _marketDataCache.deliveryData[p.sym];
+      const delivery = delData ? `Delivery%=${delData.deliveryPct||'?'}% TradedQty=${delData.tradedQty||'?'} DeliveryQty=${delData.deliveryQty||'?'}` : 'Delivery=N/A';
+
+      // ── OPTIONS/OI DATA (Module 4, 5) ──
+      const optData = _marketDataCache.optionData[p.sym];
+      const options = optData ?
+        `PCR=${optData.pcr} CE_OI=${optData.totalCEOI} PE_OI=${optData.totalPEOI} MaxPain=₹${optData.maxPain||'?'} ATM_IV=${optData.atmIV||'?'}%` :
+        'Options=Not_in_FnO_or_N/A';
+
+      // ── OWNERSHIP (Module 3: promoter, FII, DII) ──
+      const ownership = [
+        `Promoter=${f.promoter||'?'}%`, `PromoterChg=${f.promoterChg||'?'}%`,
+        `Pledged=${f.pledged||'?'}%`, `FII=${f.fiiHolding||'?'}%`, `DII=${f.diiHolding||'?'}%`,
+        `Inst=${f.instHeld||'?'}%`,
+      ].join(' ');
+
+      // ── PEER COMPARISON (Module 13, 15) ──
+      const peerData = buildPeerComparison(p.sym);
+      const peerStr = peerData ?
+        `SectorAvgPE=${peerData.sectorAvgPE} SectorAvgROE=${peerData.sectorAvgROE} Peers=[${peerData.peers.map(p2=>`${p2.sym}:PE=${p2.pe},ROE=${p2.roe}`).join(' ')}]` :
+        'Peers=N/A';
+
+      // ── GROWTH HISTORY (Module 3: multi-year trends) ──
+      const growth = [
+        `SalesGr1y=${f.salesGr1y||'?'}%`, `SalesGr5y=${f.salesGr5y||'?'}%`,
+        `EPSGr1y=${f.epsGr1y||'?'}%`, `EPSGr5y=${f.epsGr5y||'?'}%`,
+        `ROE3yAvg=${f.roe3yAvg||'?'}%`, `ROE5yAvg=${f.roe5yAvg||'?'}%`,
+      ].join(' ');
+
+      // ── BALANCE SHEET QUALITY (Module 3, 13) ──
+      const balanceSheet = [
+        `CurrentRatio=${f.currentRatio||'?'}`, `QuickRatio=${f.quickRatio||'?'}`,
+        `BookValue=₹${f.bookValue||'?'}`, `Debt=₹${f.debt||'?'}Cr`,
+        `ROA=${f.roa||'?'}%`, `GrossMargin=${f.grossMgn||'?'}%`,
+      ].join(' ');
+
       return `━━ ${p.sym} (${f.name||p.sym}) [${sector}] Qty=${p.qty} ━━\n` +
         `  PRICE: ${price}\n` +
         `  SCORES: ${scores}\n` +
         `  FUNDAMENTALS: ${fa}\n` +
+        `  GROWTH: ${growth}\n` +
+        `  BALANCE_SHEET: ${balanceSheet}\n` +
+        `  OWNERSHIP: ${ownership}\n` +
         `  TECHNICALS: ${ta}\n` +
+        `  DELIVERY: ${delivery}\n` +
+        `  OPTIONS_OI: ${options}\n` +
         `  RISK: ${risk}\n` +
+        `  PEERS: ${peerStr}\n` +
         (sectorSpecific ? `  SECTOR-SPECIFIC: ${sectorSpecific}\n` : '');
     }).join('\n');
 
@@ -9722,12 +9990,28 @@ async function validateSignalsWithAI(mode = 'auto') {
       `Max Sector: ${risk.maxSector} (${risk.maxSectorPct}%) | Risk Rating: ${risk.riskRating}\n` +
       `Sector Breakdown: ${JSON.stringify(risk.sectorPcts || {})}` : 'Risk data unavailable';
 
-    // ── MODEL PORTFOLIO (what AI recommends vs what user holds) ──
+    // ── MODEL PORTFOLIO — FULL DATA for each recommended stock ──
+    const posSyms = new Set(positions.map(p => p.sym));
     const modelStocks = modelPortfolio?.portfolio ?
       modelPortfolio.portfolio.slice(0, 15).map(m => {
         const mf = stockFundamentals[m.sym] || {};
-        return `${m.sym}: Score=${m.composite} Alloc=${m.allocPct}% Conv=${m.conviction||'?'} ` +
-          `Sector=${mf.sector||'?'} PE=${mf.pe||'?'} ROE=${mf.roe||'?'}% RSI=${mf.rsi!=null?mf.rsi.toFixed?mf.rsi.toFixed(0):mf.rsi:'?'}`;
+        const ext = global.FUND_EXT?.[m.sym] || {};
+        const px = livePrices[m.sym]?.price || mf.price || ext.price || 0;
+        const inPortfolio = posSyms.has(m.sym);
+        const delData = _marketDataCache.deliveryData[m.sym];
+        const optData = _marketDataCache.optionData[m.sym];
+        const peerData = buildPeerComparison(m.sym);
+
+        return `━━ ${m.sym} (${mf.name||m.sym}) [${mf.sector||'?'}] ${inPortfolio?'[IN PORTFOLIO]':'[NOT HELD]'} ━━\n` +
+          `  MODEL: Score=${m.composite} Alloc=${m.allocPct}% Conv=${m.conviction||'?'} Shares=${m.shares||'?'}\n` +
+          `  PRICE: CMP=₹${px} 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}%\n` +
+          `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}% PEG=${mf.pe&&mf.earGrowth>0?(mf.pe/mf.earGrowth).toFixed(2):'?'}\n` +
+          `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
+          `  TECHNICALS: RSI=${mf.rsi!=null?mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi:'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'}\n` +
+          `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
+          (delData ? `  DELIVERY: Delivery%=${delData.deliveryPct||'?'}%\n` : '') +
+          (optData ? `  OPTIONS: PCR=${optData.pcr} MaxPain=₹${optData.maxPain||'?'} IV=${optData.atmIV||'?'}%\n` : '') +
+          (peerData ? `  PEERS: SectorAvgPE=${peerData.sectorAvgPE} SectorAvgROE=${peerData.sectorAvgROE}\n` : '');
       }).join('\n') : 'Model portfolio not available';
 
     // ── SIGNAL DATA (enriched) ──
@@ -9743,12 +10027,41 @@ async function validateSignalsWithAI(mode = 'auto') {
     const trailingStopData = Object.keys(_posHighWaterMark || {}).length ?
       Object.entries(_posHighWaterMark).map(([sym, hwm]) => `${sym}: HighWater=₹${hwm}`).join(', ') : 'No trailing stops active';
 
+    // ── MACRO DATA (Module 1, 4, 5, 8) ──
+    const vix = _marketDataCache.vix;
+    const fiiDii = _marketDataCache.fiiDii;
+    const macroSummary = [
+      `India VIX: ${vix ? vix.value + ' (' + (vix.change>0?'+':'') + vix.change + '%)' : '?'}`,
+      vix ? `VIX Range: ${vix.low}-${vix.high}` : '',
+      `Crude Oil: $${_marketDataCache.crude || '?'}/barrel`,
+      `USD/INR: ₹${_marketDataCache.usdInr || '?'}`,
+      fiiDii ? `FII: Buy ₹${fiiDii.fii_buy}Cr Sell ₹${fiiDii.fii_sell}Cr Net ₹${fiiDii.fii_net}Cr` : 'FII: N/A',
+      fiiDii ? `DII: Buy ₹${fiiDii.dii_buy}Cr Sell ₹${fiiDii.dii_sell}Cr Net ₹${fiiDii.dii_net}Cr` : 'DII: N/A',
+    ].filter(Boolean).join('\n');
+
+    // ── MARKET BREADTH ──
+    const breadthSummary = marketRegimeData ? [
+      `Breadth: ${marketRegimeData.breadth||'?'}% stocks above 200DMA (${marketRegimeData.abv200Count||'?'}/${marketRegimeData.totalStocks||'?'})`,
+      `Advance/Decline: ${marketRegimeData.adRatio||'?'}`,
+      `Nifty Returns: 1m=${marketRegimeData.nifty?.['1m']||'?'}% 3m=${marketRegimeData.nifty?.['3m']||'?'}% 6m=${marketRegimeData.nifty?.['6m']||'?'}% 1y=${marketRegimeData.nifty?.['52w']||'?'}%`,
+    ].join('\n') : 'Market breadth: N/A';
+
     const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
-REGIME DATA: Nifty50Trend=${marketRegimeData?.niftyTrend||'?'} AvgRSI=${marketRegimeData?.niftyRSI||'?'} VIX=${marketRegimeData?.vix||'?'} Sentiment=${marketRegimeData?.marketSentiment||'?'} AdvDecline=${marketRegimeData?.advDeclineRatio||'?'}
+REGIME DATA: Nifty50Trend=${marketRegimeData?.niftyTrend||'?'} AvgRSI=${marketRegimeData?.niftyRSI||'?'} Sentiment=${marketRegimeData?.marketSentiment||'?'}
 REGIME PENDING: ${_regimePending ? _regimePending + ' (confirming since ' + new Date(_regimePendingSince).toISOString() + ')' : 'None'}
 
 ════════════════════════════════════════
-PORTFOLIO POSITIONS (${positions.length} stocks):
+MACRO DATA (Module 1, 4, 5, 8):
+════════════════════════════════════════
+${macroSummary}
+
+════════════════════════════════════════
+MARKET BREADTH (Module 9):
+════════════════════════════════════════
+${breadthSummary}
+
+════════════════════════════════════════
+PORTFOLIO POSITIONS — FULL DATA (${positions.length} stocks):
 ════════════════════════════════════════
 ${positionData}
 
@@ -9768,7 +10081,7 @@ ACTIVE SIGNALS (last 24h):
 ${signalDataRich || 'No signals generated'}
 
 ════════════════════════════════════════
-MODEL PORTFOLIO (top 15 — what AI recommends):
+MODEL PORTFOLIO — FULL DATA (top 15):
 ════════════════════════════════════════
 ${modelStocks}
 
@@ -9776,13 +10089,16 @@ ${modelStocks}
 TASK:
 ════════════════════════════════════════
 Validate ALL active signals against Varsity principles. For each stock:
-1. Cross-check EVERY indicator — don't just look at one. Check RSI+MACD+Volume+OBV alignment.
-2. Verify fundamentals match the signal (ROE, D/E, EPS growth, promoter holding trends).
+1. Cross-check EVERY indicator — don't just look at one. Check RSI+MACD+Volume+OBV+Delivery% alignment.
+2. Verify fundamentals match the signal (ROE, D/E, EPS growth, promoter holding trends, FII/DII flows).
 3. Check if price is near key levels (200DMA, 52-week high/low, Fibonacci levels).
 4. Apply sector-specific rules from Module 15.
 5. Check tax implications from Module 7 (STCG if held <365 days).
-6. Flag any stock that SHOULD have a signal but doesn't.
-${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- Macro impact (regime, VIX level, FII/DII flows)\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
+6. Check Options data (PCR, OI, Max Pain, IV) for F&O stocks — Module 4 & 5.
+7. Check Macro: VIX level (>20=fear, <12=complacency), FII/DII flows, crude oil impact, USD/INR.
+8. Compare each stock to sector peers — is it the best pick in its sector?
+9. Flag any stock that SHOULD have a signal but doesn't.
+${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- VIX interpretation: >20=fear(often near bottom), >30=extreme fear, <12=complacency(often near top)\n- FII/DII flow analysis: persistent FII selling = bear pressure, DII buying = support\n- Crude oil impact on sectors: rising crude hurts OMCs, benefits upstream\n- USD/INR impact: weak rupee hurts importers, benefits IT exporters\n- PCR > 1.2 = bearish sentiment, PCR < 0.8 = bullish, Max Pain for near-expiry price target\n- Delivery% analysis: High delivery% (>50%) = institutional interest, Low (<30%) = speculative\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
 Respond ONLY in the JSON format specified in your system prompt.`;
 
     // ── Call ALL 6 models in parallel ──
