@@ -9931,6 +9931,7 @@ Respond in JSON:
 
 let _lastAIValidation = null;
 let _aiValidationRunning = false;
+let _aiStatus = { running: false, steps: [], startedAt: null };
 
 async function validateSignalsWithAI(mode = 'auto') {
   if (_aiValidationRunning) return _lastAIValidation;
@@ -9943,7 +9944,10 @@ async function validateSignalsWithAI(mode = 'auto') {
   }
 
   _aiValidationRunning = true;
+  _aiStatus = { running: true, steps: [], startedAt: Date.now(), models: {} };
+  const aiStep = (msg, type = 'info') => { _aiStatus.steps.push({ msg, type, ts: Date.now() }); console.log(`🤖 [status] ${msg}`); };
   const startTime = Date.now();
+  aiStep(`Multi-Model AI validation started (mode: ${mode}, ${AI_MODELS.length} models)`, 'info');
   console.log(`🤖 Multi-Model AI Validation starting (mode: ${mode}, ${AI_MODELS.length} models)...`);
 
   try {
@@ -9967,7 +9971,9 @@ async function validateSignalsWithAI(mode = 'auto') {
       ...positions.map(p => p.sym),
       ...(modelPortfolio?.portfolio?.slice(0, 15)?.map(m => m.sym) || []),
     ])];
-    await fetchAIMarketData(allStockSyms).catch(e => console.error('Market data fetch error:', e.message));
+    aiStep(`Fetching market data for ${allStockSyms.length} stocks (VIX, FII/DII, delivery%, options, crude, USD/INR)...`);
+    await fetchAIMarketData(allStockSyms).catch(e => { aiStep(`Market data fetch warning: ${e.message}`, 'warn'); });
+    aiStep('Market data fetched', 'ok');
 
     // 4) Build RICH portfolio snapshot for the AI — send ALL available data per stock
     const positionData = positions.map(p => {
@@ -10229,19 +10235,20 @@ Validate ALL active signals against Varsity principles. For each stock:
 ${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- VIX interpretation: >20=fear(often near bottom), >30=extreme fear, <12=complacency(often near top)\n- FII/DII flow analysis: persistent FII selling = bear pressure, DII buying = support\n- Crude oil impact on sectors: rising crude hurts OMCs, benefits upstream\n- USD/INR impact: weak rupee hurts importers, benefits IT exporters\n- PCR > 1.2 = bearish sentiment, PCR < 0.8 = bullish, Max Pain for near-expiry price target\n- Delivery% analysis: High delivery% (>50%) = institutional interest, Low (<30%) = speculative\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
 Respond ONLY in the JSON format specified in your system prompt.`;
 
-    // ── Call ALL 6 models in parallel ──
-    console.log(`🤖 Dispatching to ${AI_MODELS.length} models in parallel...`);
-    const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt));
+    // ── Call ALL 6 models in parallel with live status tracking ──
+    aiStep(`Dispatching to ${AI_MODELS.length} models in parallel...`);
+    AI_MODELS.forEach(m => { _aiStatus.models[m.id] = { name: m.name, status: 'pending' }; });
+    const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt).then(r => {
+      if (r.skipped) { _aiStatus.models[m.id] = { name: m.name, status: 'skipped' }; aiStep(`${m.name}: skipped (no API key)`, 'warn'); }
+      else if (r.error) { _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, error: r.error }; aiStep(`${m.name}: error — ${r.error} (${r.took_ms}ms)`, 'err'); }
+      else { _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: r.result?.signal_reviews?.length || 0 }; aiStep(`${m.name}: ✅ ${r.result?.signal_reviews?.length || 0} reviews (${r.took_ms}ms)`, 'ok'); }
+      return r;
+    }));
     const modelResults = await Promise.all(modelPromises);
 
-    // Log per-model status
-    modelResults.forEach(m => {
-      if (m.skipped) console.log(`  ⏭ ${m.name}: skipped (no API key)`);
-      else if (m.error) console.log(`  ❌ ${m.name}: ${m.error} (${m.took_ms}ms)`);
-      else console.log(`  ✅ ${m.name}: ${m.result?.signal_reviews?.length || 0} reviews (${m.took_ms}ms)`);
-    });
-
     // ── Build consensus from all model responses ──
+    const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+    aiStep(`Building consensus from ${okCount}/${AI_MODELS.length} model responses...`);
     const result = buildConsensus(modelResults);
     result.mode = mode;
     result.took_ms = Date.now() - startTime;
@@ -10254,17 +10261,32 @@ Respond ONLY in the JSON format specified in your system prompt.`;
     await dbSet('ai_validation_latest', JSON.stringify(result));
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+    aiStep(`Done! ${okCount}/${AI_MODELS.length} models, ${result.signal_reviews?.length || 0} stocks reviewed in ${elapsed}s`, 'ok');
+    _aiStatus.running = false;
     console.log(`🤖 Multi-model validation complete in ${elapsed}s — ${okCount}/${AI_MODELS.length} models responded, ${result.signal_reviews?.length || 0} stocks reviewed`);
 
     _aiValidationRunning = false;
     return result;
   } catch (e) {
     _aiValidationRunning = false;
+    _aiStatus.running = false;
+    _aiStatus.steps.push({ msg: `Error: ${e.message}`, type: 'err', ts: Date.now() });
     console.error('🤖 AI validation error:', e.message);
     return { error: e.message, took_ms: Date.now() - startTime };
   }
 }
+
+// API endpoint — live status during AI validation
+app.get('/api/ai/status', (req, res) => {
+  const since = parseInt(req.query.since) || 0;
+  const newSteps = _aiStatus.steps.filter(s => s.ts > since);
+  res.json({
+    running: _aiStatus.running,
+    models: _aiStatus.models || {},
+    steps: newSteps,
+    startedAt: _aiStatus.startedAt,
+  });
+});
 
 // API endpoint — manual trigger
 app.get('/api/ai/validate', async (req, res) => {

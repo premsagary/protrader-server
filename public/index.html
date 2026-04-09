@@ -4255,38 +4255,53 @@ async function psRunAIValidation(mode){
   var log=document.getElementById('ps-ai-log');
   if(log){log.style.display='block';log.innerHTML='';}
 
-  var startTime=Date.now();
   aiLog('AI Deep Review started — sending 15 stocks to 6 AI models');
-  aiLog('Fetching market data: VIX, FII/DII, delivery%, OI/PCR, crude, USD/INR, RBI rate...');
 
+  // Poll /api/ai/status every 2s for real-time model-by-model progress
+  var pollSince=Date.now();
+  var pollTimer=setInterval(async function(){
+    try{
+      var sr=await fetch('/api/ai/status?since='+pollSince);
+      var st=await sr.json();
+      if(st.steps&&st.steps.length){
+        st.steps.forEach(function(s){
+          var t=s.type==='ok'?'ok':s.type==='err'?'err':s.type==='warn'?'warn':'info';
+          aiLog(s.msg,t);
+          if(s.ts>pollSince) pollSince=s.ts;
+        });
+      }
+      // Live model status pills
+      if(st.models&&Object.keys(st.models).length){
+        var mp=document.getElementById('ps-ai-model-pills');
+        if(!mp){mp=document.createElement('div');mp.id='ps-ai-model-pills';mp.style.cssText='display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;';if(log)log.appendChild(mp);}
+        var ph='';
+        Object.keys(st.models).forEach(function(k){
+          var m=st.models[k];
+          var bg=m.status==='ok'?'#166534':m.status==='error'?'#991b1b':m.status==='skipped'?'#92400e':'#1e3a5f';
+          var icon=m.status==='ok'?'✅':m.status==='error'?'❌':m.status==='skipped'?'⏭':'⏳';
+          var extra=m.took_ms?' ('+((m.took_ms/1000).toFixed(1))+'s)':'';
+          ph+='<span style="background:'+bg+';color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;white-space:nowrap">'+icon+' '+m.name+extra+'</span>';
+        });
+        mp.innerHTML=ph;
+      }
+      if(!st.running) clearInterval(pollTimer);
+    }catch(e){}
+  },2000);
+
+  // Fire AI validation call (runs ~30-90s)
   try{
     var r=await fetch('/api/ai/validate?mode='+mode);
     _psAIValidation=await r.json();
+    clearInterval(pollTimer);
 
     if(_psAIValidation.error){
       aiLog('Error: '+_psAIValidation.error,'err');
     } else {
-      var elapsed=((Date.now()-startTime)/1000).toFixed(1);
-      aiLog('Market data fetched from NSE','ok');
-
-      // Log each model's status
-      if(_psAIValidation.model_details){
-        _psAIValidation.model_details.forEach(function(md){
-          if(md.status==='ok') aiLog(md.name+': '+md.signals_count+' stocks reviewed ('+md.took_ms+'ms)','ok');
-          else if(md.status==='skipped') aiLog(md.name+': skipped (no API key)','warn');
-          else aiLog(md.name+': '+(md.error||'failed'),'err');
-        });
-      }
-
-      // Summary
       var reviews=_psAIValidation.signal_reviews||[];
       var agrees=reviews.filter(function(r){return r.consensus_verdict==='AGREE';}).length;
       var disagrees=reviews.filter(function(r){return r.consensus_verdict==='DISAGREE';}).length;
       var modifies=reviews.filter(function(r){return r.consensus_verdict==='MODIFY';}).length;
-      aiLog('Consensus built: '+reviews.length+' stocks — '+agrees+' AGREE, '+disagrees+' DISAGREE, '+modifies+' MODIFY','ok');
-      if(_psAIValidation.missed_signals&&_psAIValidation.missed_signals.length)
-        aiLog('Found '+_psAIValidation.missed_signals.length+' missed signals','warn');
-      aiLog('Done in '+elapsed+'s — '+(_psAIValidation.models_used||0)+'/'+(_psAIValidation.models_total||0)+' models responded','ok');
+      aiLog('Final consensus: '+reviews.length+' stocks — '+agrees+' AGREE, '+disagrees+' DISAGREE, '+modifies+' MODIFY','ok');
     }
 
     var tc=document.getElementById('ps-tab-content');
@@ -4295,8 +4310,8 @@ async function psRunAIValidation(mode){
       else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
     }
   }catch(e){
+    clearInterval(pollTimer);
     aiLog('Error: '+e.message,'err');
-    alert('AI validation error: '+e.message);
   }
   finally{btn.disabled=false;btn.textContent='🧠 AI Deep Review';}
 }
