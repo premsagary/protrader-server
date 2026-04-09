@@ -3789,7 +3789,8 @@ function renderPortfolioSuggestion(){
   h+='</div>';
   cont.innerHTML=h;
 
-  // Auto-load data for holdings/signals tabs
+  // Auto-load data for all tabs
+  if(_psTab==='model'&&!_psData&&!_psLoading) psAutoLoadModel();
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='signals'&&!_psSignals) psLoadSignals();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
@@ -3820,11 +3821,17 @@ function psRenderModelTab(){
   // Results
   h+='<div id="ps-results">';
   if(_psData && _psData.portfolio) h+=psRenderModelResults(_psData);
-  else {
+  else if(_psLoading) {
+    h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
+    h+='<div style="font-size:36px;margin-bottom:10px">⏳</div>';
+    h+='<div style="font-size:14px;font-weight:600">Analyzing 500+ stocks...</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Building model portfolio with 5-factor Varsity scoring</div>';
+    h+='</div>';
+  } else {
     h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
     h+='<div style="font-size:36px;margin-bottom:10px">💼</div>';
-    h+='<div style="font-size:14px;font-weight:600">Enter investment amount and Generate</div>';
-    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Analyzes 500+ stocks with live Varsity-aligned scoring</div>';
+    h+='<div style="font-size:14px;font-weight:600">Loading model portfolio...</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Auto-generating with ₹'+(_psAmount/1000)+'K. Change amount above and click Generate to customize.</div>';
     h+='</div>';
   }
   h+='</div>';
@@ -4124,6 +4131,27 @@ function psRenderPerformanceTab(){
 }
 
 // ── API CALLS ──
+// Auto-load model portfolio (called when tab opens and no data exists)
+async function psAutoLoadModel(){
+  if(_psLoading||_psData)return;
+  _psLoading=true;
+  renderPortfolioSuggestion(); // show loading state
+  try{
+    var r=await fetch('/api/portfolio/model?amount='+_psAmount);
+    var d=await r.json();
+    if(d.error){
+      console.log('Model auto-load:',d.error);
+      // Retry once after 3 seconds
+      setTimeout(function(){_psLoading=false;if(!_psData)psAutoLoadModel();},3000);
+      return;
+    }
+    _psData=d;
+    psStartAutoRefresh();
+    if(_psTab==='model'){var rc=document.getElementById('ps-results');if(rc)rc.innerHTML=psRenderModelResults(d);}
+  }catch(e){console.log('Model auto-load error:',e.message);setTimeout(function(){_psLoading=false;},3000);}
+  finally{_psLoading=false;}
+}
+
 async function psGenerate(){
   if(_psLoading)return;
   _psLoading=true;

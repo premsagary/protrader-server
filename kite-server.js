@@ -6061,14 +6061,46 @@ app.post('/api/portfolio/suggest', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/portfolio/suggest/refresh — live refresh with exit signals
+// GET /api/portfolio/suggest/refresh — live refresh with exit signals (auto-generates if needed)
 app.get('/api/portfolio/suggest/refresh', (req, res) => {
   try {
-    const amount = parseFloat(req.query.amount);
-    const cached = portfolioSuggestions[Math.round(amount)];
-    if (!cached) return res.status(404).json({ error: 'Generate a portfolio first' });
+    const amount = parseFloat(req.query.amount) || 100000;
+    const key = Math.round(amount);
+    let cached = portfolioSuggestions[key];
+    // Auto-generate if no cached portfolio exists
+    if (!cached) {
+      const result = buildPortfolioSuggestion(amount);
+      if (result.error) return res.status(503).json(result);
+      portfolioSuggestions[key] = result;
+      cached = result;
+    }
     const refreshed = refreshPortfolioSignals(cached);
-    portfolioSuggestions[Math.round(amount)] = refreshed;
+    portfolioSuggestions[key] = refreshed;
+    res.json(refreshed);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portfolio/model — always returns current model portfolio (auto-generates with default ₹1L)
+app.get('/api/portfolio/model', (req, res) => {
+  try {
+    const amount = parseFloat(req.query.amount) || 100000;
+    const key = Math.round(amount);
+    let cached = portfolioSuggestions[key];
+    // Auto-generate if stale (>1 hour) or missing
+    const isStale = cached && cached.summary?.generatedAt && (Date.now() - cached.summary.generatedAt > 3600000);
+    if (!cached || isStale) {
+      const result = buildPortfolioSuggestion(amount);
+      if (result.error) {
+        // If generation fails but we have stale data, return stale with warning
+        if (cached) { return res.json({ ...cached, warning: 'Using cached data: ' + result.error }); }
+        return res.status(503).json(result);
+      }
+      portfolioSuggestions[key] = result;
+      cached = result;
+    }
+    // Always refresh with live signals
+    const refreshed = refreshPortfolioSignals(cached);
+    portfolioSuggestions[key] = refreshed;
     res.json(refreshed);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
