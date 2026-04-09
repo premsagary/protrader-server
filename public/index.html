@@ -4240,14 +4240,24 @@ function psRenderAIValidation(){
   return h;
 }
 
+var _aiLogEntries=[];
 function aiLog(msg,type){
-  var log=document.getElementById('ps-ai-log');
-  if(!log)return;
-  log.style.display='block';
   var color=type==='ok'?'#22c55e':type==='err'?'#ef4444':type==='warn'?'#f59e0b':'#94a3b8';
   var icon=type==='ok'?'✅':type==='err'?'❌':type==='warn'?'⚠️':'⏳';
   var time=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  log.innerHTML+='<div style="color:'+color+';padding:1px 0">'+icon+' <span style="color:var(--text4)">'+time+'</span> '+msg+'</div>';
+  var html='<div style="color:'+color+';padding:1px 0">'+icon+' <span style="color:var(--text4)">'+time+'</span> '+msg+'</div>';
+  _aiLogEntries.push(html);
+  var log=document.getElementById('ps-ai-log');
+  if(!log)return;
+  log.style.display='block';
+  log.innerHTML+=html;
+  log.scrollTop=log.scrollHeight;
+}
+function aiLogRestore(){
+  var log=document.getElementById('ps-ai-log');
+  if(!log||!_aiLogEntries.length)return;
+  log.style.display='block';
+  log.innerHTML=_aiLogEntries.join('');
   log.scrollTop=log.scrollHeight;
 }
 
@@ -4255,6 +4265,7 @@ async function psRunAIValidation(mode){
   var btn=document.getElementById('ps-ai-btn')||event.target;
   btn.textContent='🧠 Running...';
   btn.disabled=true;
+  _aiLogEntries=[];
   var log=document.getElementById('ps-ai-log');
   if(log){log.style.display='block';log.innerHTML='';}
 
@@ -4313,6 +4324,7 @@ async function psRunAIValidation(mode){
       if(_psTab==='model') tc.innerHTML=psRenderModelTab();
       else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
     }
+    aiLogRestore();
   }catch(e){
     clearInterval(pollTimer);
     aiLog('Error: '+e.message,'err');
