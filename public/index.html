@@ -3944,7 +3944,7 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
     if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
-    // AI consensus badge (multi-model) — new format: ❌3/✅2/5
+    // AI consensus badge (multi-model) — format: ❌3/⚠️1/✅3/7
     var _aiStockReview=null;
     if(_psAIValidation&&_psAIValidation.signal_reviews){
       _aiStockReview=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
@@ -3957,11 +3957,11 @@ function psRenderModelResults(data){
       var aiR=_aiStockReview;
       var pm=aiR.per_model||aiR.models||{};
       var pmKeys=Object.keys(pm);
-      var agreeCount=0,disagreeCount=0,totalCount=pmKeys.length;
-      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')agreeCount++;else if(v==='DISAGREE')disagreeCount++;});
+      var agreeCount=0,disagreeCount=0,modifyCount=0,totalCount=pmKeys.length;
+      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')agreeCount++;else if(v==='DISAGREE')disagreeCount++;else if(v==='MODIFY')modifyCount++;});
       var majorityVerdict=agreeCount>=disagreeCount?'AGREE':'DISAGREE';
       var cBg=majorityVerdict==='AGREE'?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)';
-      var badgeLabel='❌'+disagreeCount+'/✅'+agreeCount+'/'+totalCount;
+      var badgeLabel='❌'+disagreeCount+(modifyCount>0?'/⚠️'+modifyCount:'')+'/✅'+agreeCount+'/'+totalCount;
       h+=' <span onclick="psToggleAIRow(\''+stk.sym+'\')" title="Click to see AI model details" style="background:'+cBg+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;cursor:pointer;white-space:nowrap">'+badgeLabel+'</span>';
     }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
