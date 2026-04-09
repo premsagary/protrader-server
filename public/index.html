@@ -3792,6 +3792,7 @@ function renderPortfolioSuggestion(){
 
   // Auto-load data for all tabs
   if(_psTab==='model'&&!_psData&&!_psLoading) psAutoLoadModel();
+  if(_psTab==='model'&&!_psSignals) psLoadSignals(); // needed for FRESH_BUY ideas in model tab
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='signals'&&!_psSignals) psLoadSignals();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
@@ -3883,20 +3884,46 @@ function psRenderModelResults(data){
   h+='<span style="font-size:10px;color:'+(s.marketOpen?'#22c55e':'#ef4444')+'">● '+(s.marketOpen?'Open':'Closed')+'</span>';
   h+='</div>';
 
+  // Sort stocks: active BUY/HOLD at top, EXIT/REDUCE/SELL pushed to bottom
+  var pSorted=p.slice().sort(function(a,b){
+    var sellActions={EXIT:1,REDUCE:1,'BOOK PROFIT':1,REVIEW:1};
+    var aIsSell=sellActions[a.action]?1:0;
+    var bIsSell=sellActions[b.action]?1:0;
+    if(aIsSell!==bIsSell) return aIsSell-bIsSell; // sell goes bottom
+    return b.composite-a.composite; // within group, sort by score
+  });
+
+  // Count how many are sell-flagged
+  var sellFlagged=pSorted.filter(function(s){return s.action==='EXIT'||s.action==='REDUCE'||s.action==='BOOK PROFIT'||s.action==='REVIEW';});
+
   // Stock table
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  ['#','Stock','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Action','SL','Target','R:R','Track'].forEach(function(hdr){
+  ['#','Stock','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Signal','SL','Target','R:R','Track'].forEach(function(hdr){
     h+='<th style="padding:7px 5px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
 
-  p.forEach(function(stk,i){
-    var pnlCol=(stk.pnlPct||0)>=0?'#22c55e':'#ef4444';
-    h+='<tr style="background:'+(i%2===0?'var(--bg2)':'var(--bg)')+';border-bottom:1px solid var(--border2)">';
+  var printedSellDivider=false;
+  pSorted.forEach(function(stk,i){
+    var isSellFlagged=(stk.action==='EXIT'||stk.action==='REDUCE'||stk.action==='BOOK PROFIT'||stk.action==='REVIEW');
+
+    // Insert divider before first sell-flagged stock
+    if(isSellFlagged&&!printedSellDivider&&sellFlagged.length>0){
+      printedSellDivider=true;
+      h+='<tr><td colspan="15" style="padding:8px 10px;background:rgba(239,68,68,.08);border-top:2px solid rgba(239,68,68,.3);border-bottom:1px solid var(--border)">';
+      h+='<span style="font-size:10px;font-weight:800;color:#ef4444">⚠ CHANGED — AI no longer recommends these ('+sellFlagged.length+')</span>';
+      h+='</td></tr>';
+    }
+
+    var rowBg=isSellFlagged?'rgba(239,68,68,.04)':(i%2===0?'var(--bg2)':'var(--bg)');
+    var rowOpacity=isSellFlagged?'opacity:0.7;':'';
+    h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2);'+rowOpacity+'">';
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
-    h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px">'+stk.sym+'</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
+    h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
+    if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
+    h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
     if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
     h+='<td style="padding:5px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
@@ -3907,23 +3934,76 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;font-weight:700;color:'+(stk.composite>=60?'#22c55e':stk.composite>=45?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
     h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+stk.faScore+'</td>';
     h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+(stk.taScore||'—')+'</td>';
-    // Action signal
-    h+='<td style="padding:5px"><span style="background:'+(stk.actionColor||'#22c55e')+'20;color:'+(stk.actionColor||'#22c55e')+';border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+(stk.action||'BUY')+'</span>';
-    if(stk.signalReasons&&stk.signalReasons.length)h+='<div style="font-size:8px;color:var(--text4);margin-top:1px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+stk.signalReasons[0]+'</div>';
-    h+='</td>';
+    // Signal column
+    if(isSellFlagged){
+      h+='<td style="padding:5px"><span style="background:#ef444430;color:#ef4444;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+stk.action+'</span>';
+      if(stk.signalReasons&&stk.signalReasons.length)h+='<div style="font-size:8px;color:#ef4444;margin-top:1px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+stk.signalReasons[0]+'</div>';
+      h+='</td>';
+    } else {
+      h+='<td style="padding:5px"><span style="background:'+(stk.actionColor||'#22c55e')+'20;color:'+(stk.actionColor||'#22c55e')+';border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+(stk.action||'BUY')+'</span>';
+      if(stk.signalReasons&&stk.signalReasons.length)h+='<div style="font-size:8px;color:var(--text4);margin-top:1px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+stk.signalReasons[0]+'</div>';
+      h+='</td>';
+    }
     h+='<td style="padding:5px;color:#ef4444;font-size:10px">'+(stk.stopLoss?'₹'+stk.stopLoss:'—')+'</td>';
     h+='<td style="padding:5px;color:#22c55e;font-size:10px">'+(stk.target?'₹'+stk.target:'—')+'</td>';
     h+='<td style="padding:5px;font-weight:700;color:'+(stk.rrRatio>=2?'#22c55e':'#f59e0b')+'">'+(stk.rrRatio?stk.rrRatio+'x':'—')+'</td>';
-    // Track button — mark as bought
-    h+='<td style="padding:5px"><button onclick="psBuyStock(\''+stk.sym+'\','+stk.shares+','+(stk.currentPrice||stk.price).toFixed(2)+','+(stk.stopLoss||0)+','+(stk.target||0)+',\''+stk.conviction+'\')" style="background:rgba(34,211,238,.15);color:#22d3ee;border:1px solid rgba(34,211,238,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button></td>';
+    // Track button — only show for non-sell stocks
+    h+='<td style="padding:5px">';
+    if(isSellFlagged){
+      h+='<span style="font-size:9px;color:#ef4444;font-weight:700">Don\'t buy</span>';
+    } else {
+      h+='<button onclick="psBuyStock(\''+stk.sym+'\','+stk.shares+','+(stk.currentPrice||stk.price).toFixed(2)+','+(stk.stopLoss||0)+','+(stk.target||0)+',\''+stk.conviction+'\')" style="background:rgba(34,211,238,.15);color:#22d3ee;border:1px solid rgba(34,211,238,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button>';
+    }
+    h+='</td>';
     h+='</tr>';
   });
   h+='</tbody></table></div>';
 
-  // New opportunities (if refreshed)
+  // FRESH BUY ideas from signal history (AI buy suggestions not in model)
+  if(_psSignals&&_psSignals.length){
+    var freshBuys=_psSignals.filter(function(sig){return sig.signal_type==='FRESH_BUY'&&!sig.acted;});
+    // Check if any fresh buy stocks now have sell conditions
+    freshBuys=freshBuys.map(function(sig){
+      var f=null; // check if this stock currently has exit signals
+      if(data.portfolio){
+        var match=data.portfolio.find(function(s){return s.sym===sig.sym;});
+        if(match&&(match.action==='EXIT'||match.action==='REDUCE'))sig._nowSell=true;
+      }
+      return sig;
+    });
+    // Sort: active buys first, now-sell at bottom
+    freshBuys.sort(function(a,b){return (a._nowSell?1:0)-(b._nowSell?1:0);});
+
+    if(freshBuys.length){
+      h+='<div style="margin-top:14px;background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:10px;padding:12px">';
+      h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:8px">🆕 AI Buy Ideas ('+freshBuys.length+' from signal engine)</div>';
+      freshBuys.forEach(function(sig){
+        var isSell=sig._nowSell;
+        h+='<div style="background:'+(isSell?'rgba(239,68,68,.06)':'var(--bg2)')+';border:1px solid '+(isSell?'rgba(239,68,68,.2)':'var(--border)')+';border-radius:8px;padding:8px 12px;margin-bottom:5px;display:flex;align-items:center;gap:10px;'+(isSell?'opacity:0.65;':'')+'\">';
+        h+='<div style="flex:1">';
+        h+='<div style="display:flex;align-items:center;gap:6px">';
+        h+='<span style="font-weight:700;color:var(--text)">'+sig.sym+'</span>';
+        if(isSell){
+          h+='<span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800">SELL — conditions changed</span>';
+        } else {
+          h+='<span style="background:rgba(34,211,238,.15);color:#22d3ee;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700">BUY IDEA</span>';
+        }
+        h+='</div>';
+        h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
+        h+='</div>';
+        h+='<div style="text-align:right;min-width:70px">';
+        if(sig.price_at)h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
+        h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+'</div>';
+        h+='</div></div>';
+      });
+      h+='</div>';
+    }
+  }
+
+  // New opportunities (if refreshed, and different from fresh buys)
   if(data.newOpportunities&&data.newOpportunities.length){
     h+='<div style="margin-top:14px;background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:10px;padding:12px">';
-    h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:6px">🆕 New Opportunities (not in your portfolio)</div>';
+    h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:6px">🔍 More Opportunities (not in model)</div>';
     h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
     data.newOpportunities.forEach(function(o){
       h+='<div style="background:var(--bg3);border-radius:6px;padding:6px 10px;font-size:10px">';
@@ -4095,28 +4175,26 @@ function psRenderSignalsTab(){
   }
 
   // ── CATEGORIZE: AI Recommendations vs Your Activity ──
-  // AI recommendations = what ProTrader suggests you should do
-  var aiExitSignals=[];   // EXIT, REDUCE — AI says sell/reduce
-  var aiBuySignals=[];    // FRESH_BUY — AI says consider buying
+  // FRESH_BUY is shown in Model Portfolio tab, not here
+  var aiExitSignals=[];   // EXIT, REDUCE — AI says sell/reduce your holdings
   var aiSwitchSignals=[]; // SWITCH — AI says swap stocks
   var alertSignals=[];    // SECTOR_WARN, DRAWDOWN — portfolio alerts
-  // Your activity = what you actually did (trade log)
   var yourActivity=[];    // BUY, SELL, ADD — your executed trades
 
   _psSignals.forEach(function(sig){
     var t=sig.signal_type;
-    if(t==='FRESH_BUY') aiBuySignals.push(sig);
-    else if(t==='EXIT'||t==='REDUCE') aiExitSignals.push(sig);
+    if(t==='FRESH_BUY') return; // skip — shown in Model Portfolio tab
+    if(t==='EXIT'||t==='REDUCE') aiExitSignals.push(sig);
     else if(t==='SWITCH') aiSwitchSignals.push(sig);
     else if(t==='SECTOR_WARN'||t==='DRAWDOWN') alertSignals.push(sig);
     else yourActivity.push(sig); // BUY, SELL, ADD — user actions
   });
 
-  // All AI recommendations combined
-  var aiAll=aiExitSignals.concat(aiBuySignals).concat(aiSwitchSignals).concat(alertSignals);
+  // All AI recommendations combined (no FRESH_BUY)
+  var aiAll=aiExitSignals.concat(aiSwitchSignals).concat(alertSignals);
   aiAll.sort(function(a,b){return new Date(b.created_at)-new Date(a.created_at);});
 
-  // Urgent = only AI signals that need attention (not your past trades)
+  // Urgent = only AI signals that need attention
   var urgentItems=aiAll.filter(function(s){return s.urgency==='URGENT'||s.urgency==='HIGH';});
 
   // ── FILTER PILLS ──
@@ -4124,7 +4202,6 @@ function psRenderSignalsTab(){
     {key:'all',       label:'All AI Signals',    count:aiAll.length, color:'#22d3ee'},
     {key:'action',    label:'🚨 Needs Action',   count:urgentItems.length, color:'#ef4444'},
     {key:'exit',      label:'📉 Exit / Reduce',  count:aiExitSignals.length, color:'#ef4444'},
-    {key:'buy',       label:'📈 Buy Ideas',      count:aiBuySignals.length,  color:'#22c55e'},
     {key:'switch',    label:'🔄 Switch',         count:aiSwitchSignals.length, color:'#a855f7'},
     {key:'alerts',    label:'⚠ Alerts',          count:alertSignals.length, color:'#f97316'},
     {key:'history',   label:'📋 My Trades',      count:yourActivity.length, color:'#94a3b8'},
@@ -4158,14 +4235,6 @@ function psRenderSignalsTab(){
       h+='<div style="font-size:11px;font-weight:700;color:#ef4444;margin-bottom:6px">📉 AI Says Exit / Reduce ('+aiExitSignals.length+')</div>';
       aiExitSignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
       if(aiExitSignals.length>10)h+='<div style="text-align:center;font-size:10px;color:var(--text4);padding:4px">+'+(aiExitSignals.length-10)+' more — use filter</div>';
-      h+='</div>';
-    }
-    // AI Buy Ideas
-    if(aiBuySignals.length){
-      h+='<div style="margin-bottom:14px">';
-      h+='<div style="font-size:11px;font-weight:700;color:#22c55e;margin-bottom:6px">📈 AI Buy Ideas ('+aiBuySignals.length+')</div>';
-      aiBuySignals.slice(0,10).forEach(function(sig){ h+=psRenderSignalCard(sig); });
-      if(aiBuySignals.length>10)h+='<div style="text-align:center;font-size:10px;color:var(--text4);padding:4px">+'+(aiBuySignals.length-10)+' more — use filter</div>';
       h+='</div>';
     }
     // Switch recommendations
@@ -4215,9 +4284,9 @@ function psRenderSignalsTab(){
       });
     }
   } else {
-    var list=flt==='action'?urgentItems:flt==='exit'?aiExitSignals:flt==='buy'?aiBuySignals:flt==='switch'?aiSwitchSignals:alertSignals;
-    var titles={action:'🚨 Needs Your Attention',exit:'📉 AI Says Exit / Reduce',buy:'📈 AI Buy Ideas',switch:'🔄 AI Switch Suggestions',alerts:'⚠ Portfolio Alerts'};
-    var colors={action:'#ef4444',exit:'#ef4444',buy:'#22c55e',switch:'#a855f7',alerts:'#f97316'};
+    var list=flt==='action'?urgentItems:flt==='exit'?aiExitSignals:flt==='switch'?aiSwitchSignals:alertSignals;
+    var titles={action:'🚨 Needs Your Attention',exit:'📉 AI Says Exit / Reduce',switch:'🔄 AI Switch Suggestions',alerts:'⚠ Portfolio Alerts'};
+    var colors={action:'#ef4444',exit:'#ef4444',switch:'#a855f7',alerts:'#f97316'};
     h+='<div style="font-size:12px;font-weight:700;color:'+(colors[flt]||'var(--text)')+';margin-bottom:8px">'+(titles[flt]||'Signals')+' ('+list.length+')</div>';
     if(!list.length){
       h+='<div style="text-align:center;padding:30px;color:var(--text3)">No signals in this category</div>';
