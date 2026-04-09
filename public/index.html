@@ -3798,8 +3798,9 @@ function psRenderModelTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">5-factor model: FA 30% + TA 25% + Valuation 15% + Momentum 15% + Risk 15%. Market regime-aware cash allocation. Sector diversification.</div>';
-  h+='<button onclick="psRunAIValidation(\'deep\')" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   h+='</div>';
+  h+='<div id="ps-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-family:monospace;font-size:10px;color:var(--text3);max-height:150px;overflow-y:auto"></div>';
   h+='</div>';
 
   // ── AI VALIDATION PANEL (in Model Portfolio) ──
@@ -4236,20 +4237,68 @@ function psRenderAIValidation(){
   return h;
 }
 
+function aiLog(msg,type){
+  var log=document.getElementById('ps-ai-log');
+  if(!log)return;
+  log.style.display='block';
+  var color=type==='ok'?'#22c55e':type==='err'?'#ef4444':type==='warn'?'#f59e0b':'#94a3b8';
+  var icon=type==='ok'?'✅':type==='err'?'❌':type==='warn'?'⚠️':'⏳';
+  var time=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  log.innerHTML+='<div style="color:'+color+';padding:1px 0">'+icon+' <span style="color:var(--text4)">'+time+'</span> '+msg+'</div>';
+  log.scrollTop=log.scrollHeight;
+}
+
 async function psRunAIValidation(mode){
-  var btn=event.target;
-  btn.textContent=mode==='deep'?'🧠 Running deep review...':'🤖 Running...';
+  var btn=document.getElementById('ps-ai-btn')||event.target;
+  btn.textContent='🧠 Running...';
   btn.disabled=true;
+  var log=document.getElementById('ps-ai-log');
+  if(log){log.style.display='block';log.innerHTML='';}
+
+  var startTime=Date.now();
+  aiLog('AI Deep Review started — sending 15 stocks to 6 AI models');
+  aiLog('Fetching market data: VIX, FII/DII, delivery%, OI/PCR, crude, USD/INR, RBI rate...');
+
   try{
     var r=await fetch('/api/ai/validate?mode='+mode);
     _psAIValidation=await r.json();
+
+    if(_psAIValidation.error){
+      aiLog('Error: '+_psAIValidation.error,'err');
+    } else {
+      var elapsed=((Date.now()-startTime)/1000).toFixed(1);
+      aiLog('Market data fetched from NSE','ok');
+
+      // Log each model's status
+      if(_psAIValidation.model_details){
+        _psAIValidation.model_details.forEach(function(md){
+          if(md.status==='ok') aiLog(md.name+': '+md.signals_count+' stocks reviewed ('+md.took_ms+'ms)','ok');
+          else if(md.status==='skipped') aiLog(md.name+': skipped (no API key)','warn');
+          else aiLog(md.name+': '+(md.error||'failed'),'err');
+        });
+      }
+
+      // Summary
+      var reviews=_psAIValidation.signal_reviews||[];
+      var agrees=reviews.filter(function(r){return r.consensus_verdict==='AGREE';}).length;
+      var disagrees=reviews.filter(function(r){return r.consensus_verdict==='DISAGREE';}).length;
+      var modifies=reviews.filter(function(r){return r.consensus_verdict==='MODIFY';}).length;
+      aiLog('Consensus built: '+reviews.length+' stocks — '+agrees+' AGREE, '+disagrees+' DISAGREE, '+modifies+' MODIFY','ok');
+      if(_psAIValidation.missed_signals&&_psAIValidation.missed_signals.length)
+        aiLog('Found '+_psAIValidation.missed_signals.length+' missed signals','warn');
+      aiLog('Done in '+elapsed+'s — '+(_psAIValidation.models_used||0)+'/'+(_psAIValidation.models_total||0)+' models responded','ok');
+    }
+
     var tc=document.getElementById('ps-tab-content');
     if(tc){
       if(_psTab==='model') tc.innerHTML=psRenderModelTab();
       else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
     }
-  }catch(e){alert('AI validation error: '+e.message);}
-  finally{btn.disabled=false;btn.textContent=mode==='deep'?'🧠 AI Deep Review':'🤖 AI Quick Review';}
+  }catch(e){
+    aiLog('Error: '+e.message,'err');
+    alert('AI validation error: '+e.message);
+  }
+  finally{btn.disabled=false;btn.textContent='🧠 AI Deep Review';}
 }
 
 async function psLoadAIValidation(){
