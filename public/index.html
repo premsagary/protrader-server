@@ -3959,59 +3959,34 @@ function psRenderModelResults(data){
   });
   h+='</tbody></table></div>';
 
-  // FRESH BUY ideas from signal history (AI buy suggestions not in model)
-  if(_psSignals&&_psSignals.length){
-    var freshBuys=_psSignals.filter(function(sig){return sig.signal_type==='FRESH_BUY'&&!sig.acted;});
-    // Check if any fresh buy stocks now have sell conditions
-    freshBuys=freshBuys.map(function(sig){
-      var f=null; // check if this stock currently has exit signals
-      if(data.portfolio){
-        var match=data.portfolio.find(function(s){return s.sym===sig.sym;});
-        if(match&&(match.action==='EXIT'||match.action==='REDUCE'))sig._nowSell=true;
-      }
-      return sig;
-    });
-    // Sort: active buys first, now-sell at bottom
-    freshBuys.sort(function(a,b){return (a._nowSell?1:0)-(b._nowSell?1:0);});
+  // Only show "New Buy Ideas" when user has actual holdings
+  // (otherwise the model table above IS the buy list — no need to duplicate)
+  var hasHoldings=_psPositions&&_psPositions.positions&&_psPositions.positions.length>0;
+  var modelSyms={};
+  pSorted.forEach(function(s){modelSyms[s.sym]=true;});
 
-    if(freshBuys.length){
+  if(hasHoldings&&data.newOpportunities&&data.newOpportunities.length){
+    // Show stocks in model that user doesn't own — these are the actual buy ideas
+    var newIdeas=data.newOpportunities.filter(function(o){return !modelSyms[o.sym];});
+    if(newIdeas.length){
       h+='<div style="margin-top:14px;background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:10px;padding:12px">';
-      h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:8px">🆕 AI Buy Ideas ('+freshBuys.length+' from signal engine)</div>';
-      freshBuys.forEach(function(sig){
-        var isSell=sig._nowSell;
-        h+='<div style="background:'+(isSell?'rgba(239,68,68,.06)':'var(--bg2)')+';border:1px solid '+(isSell?'rgba(239,68,68,.2)':'var(--border)')+';border-radius:8px;padding:8px 12px;margin-bottom:5px;display:flex;align-items:center;gap:10px;'+(isSell?'opacity:0.65;':'')+'\">';
+      h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:8px">🆕 New Buy Ideas — not in your holdings ('+newIdeas.length+')</div>';
+      newIdeas.forEach(function(o){
+        h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:5px;display:flex;align-items:center;gap:10px">';
         h+='<div style="flex:1">';
         h+='<div style="display:flex;align-items:center;gap:6px">';
-        h+='<span style="font-weight:700;color:var(--text)">'+sig.sym+'</span>';
-        if(isSell){
-          h+='<span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800">SELL — conditions changed</span>';
-        } else {
-          h+='<span style="background:rgba(34,211,238,.15);color:#22d3ee;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700">BUY IDEA</span>';
-        }
+        h+='<span style="font-weight:700;color:var(--text)">'+o.sym+'</span>';
+        h+='<span style="background:'+o.convColor+'20;color:'+o.convColor+';border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700">'+o.conviction+'</span>';
+        h+='<span style="font-size:10px;color:var(--text3)">Score '+o.composite+'</span>';
         h+='</div>';
-        h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
+        h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(o.reason||o.sector||'')+'</div>';
         h+='</div>';
         h+='<div style="text-align:right;min-width:70px">';
-        if(sig.price_at)h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
-        h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+'</div>';
+        if(o.price)h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+o.price).toFixed(0)+'</div>';
         h+='</div></div>';
       });
       h+='</div>';
     }
-  }
-
-  // New opportunities (if refreshed, and different from fresh buys)
-  if(data.newOpportunities&&data.newOpportunities.length){
-    h+='<div style="margin-top:14px;background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:10px;padding:12px">';
-    h+='<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:6px">🔍 More Opportunities (not in model)</div>';
-    h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    data.newOpportunities.forEach(function(o){
-      h+='<div style="background:var(--bg3);border-radius:6px;padding:6px 10px;font-size:10px">';
-      h+='<span style="font-weight:700;color:var(--text)">'+o.sym+'</span> ';
-      h+='<span style="color:'+o.convColor+';font-weight:600">'+o.conviction+'</span> ';
-      h+='<span style="color:var(--text3)">Score '+o.composite+'</span></div>';
-    });
-    h+='</div></div>';
   }
 
   // Sector breakdown
