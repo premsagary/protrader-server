@@ -9449,7 +9449,7 @@ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 
 // ── AI MODEL DEFINITIONS ──
 const AI_MODELS = [
-  { id: 'groq-llama', name: 'Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
+  { id: 'groq-llama', name: 'Groq Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
   { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
   { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
   { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
@@ -9616,7 +9616,10 @@ function buildConsensus(modelResults, allowedSymbols) {
   // Count models that actually contributed at least 1 review
   const modelsWithReviews = validResults.filter(m => m.result.signal_reviews && m.result.signal_reviews.length > 0).length;
 
-  // Calculate consensus per stock
+  // Build list of model IDs that contributed at least 1 review
+  const activeModelIds = validResults.filter(m => m.result.signal_reviews && m.result.signal_reviews.length > 0).map(m => m.id);
+
+  // Calculate consensus per stock — always use total active models as denominator
   const signal_reviews = Object.values(stockMap).map(s => {
     const verdicts = Object.values(s.models).map(m => m.verdict);
     const counts = { AGREE: 0, DISAGREE: 0, MODIFY: 0 };
@@ -9624,19 +9627,26 @@ function buildConsensus(modelResults, allowedSymbols) {
     const majority = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
     const respondedCount = verdicts.length;
 
-    // Pick the best reasoning (from the model with highest confidence)
-    const bestModel = Object.entries(s.models).sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
+    // Fill in "no review" for active models that didn't review this stock
+    activeModelIds.forEach(mid => {
+      if (!s.models[mid]) {
+        s.models[mid] = { verdict: 'NO_REVIEW', confidence: 0, varsity_reasoning: 'Model did not return a review for this stock', recommendation: '', risk_flag: '' };
+      }
+    });
+
+    // Pick the best reasoning (from the model with highest confidence, excluding NO_REVIEW)
+    const bestModel = Object.entries(s.models).filter(([,m]) => m.verdict !== 'NO_REVIEW').sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
 
     return {
       sym: s.sym,
       signal_type: bestModel?.[1]?.signal_type || '?',
       consensus_verdict: majority[0],
-      consensus_score: `${majority[1]}/${respondedCount}`,
-      consensus_pct: Math.round((majority[1] / respondedCount) * 100),
+      consensus_score: `${majority[1]}/${modelsWithReviews}`,
+      consensus_pct: Math.round((majority[1] / modelsWithReviews) * 100),
       models_responded: respondedCount,
       models_total: modelsWithReviews,
       verdict: majority[0],   // backward compat
-      confidence: Math.round(Object.values(s.models).reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
+      confidence: Math.round(Object.values(s.models).filter(m => m.verdict !== 'NO_REVIEW').reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
       varsity_module: bestModel?.[1]?.varsity_module || '',
       varsity_reasoning: bestModel?.[1]?.varsity_reasoning || '',
       recommendation: bestModel?.[1]?.recommendation || '',

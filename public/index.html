@@ -3931,8 +3931,9 @@ function psRenderModelResults(data){
         var cColor=cVerdict==='AGREE'?'#22c55e':cVerdict==='DISAGREE'?'#ef4444':'#f59e0b';
         var cIcon=cVerdict==='AGREE'?'✅':cVerdict==='DISAGREE'?'❌':'⚠️';
         // Build tooltip with per-model details
+        var _tipModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
         var tipLines=cScore+' '+cVerdict;
-        if(aiR.per_model){Object.keys(aiR.per_model).forEach(function(mid){var mv=aiR.per_model[mid];tipLines+='\n'+mid+': '+mv.verdict;});}
+        if(aiR.per_model){Object.keys(aiR.per_model).forEach(function(mid){var mv=aiR.per_model[mid];var mn=_tipModelNames[mid]||mid;tipLines+='\n'+(mv.verdict==='AGREE'?'✅':'❌')+' '+mn+': '+mv.verdict;});}
         h+=' <span title="'+tipLines.replace(/"/g,'&quot;')+'" style="background:'+cBg+';color:'+cColor+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;cursor:help;white-space:nowrap">'+cIcon+' '+cScore+'</span>';
       }
     }
@@ -4214,22 +4215,31 @@ function psRenderAIValidation(){
       if(r.recommendation)h+='<div style="font-size:10px;color:#22d3ee;margin-top:2px">💡 '+r.recommendation+'</div>';
       if(r.risk_flag)h+='<div style="font-size:10px;color:#f97316;margin-top:2px">⚠ '+r.risk_flag+'</div>';
 
-      // Per-model breakdown (expandable)
+      // Per-model breakdown (always visible)
+      var _aiModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
       if(r.per_model){
         var pmKeys=Object.keys(r.per_model);
         if(pmKeys.length>0){
-          h+='<details style="margin-top:6px"><summary style="font-size:9px;color:var(--text4);cursor:pointer;font-weight:600">📊 View all '+pmKeys.length+' model opinions</summary>';
+          h+='<div style="margin-top:8px;font-size:9px;font-weight:700;color:var(--text4)">📊 Per-Model Verdicts ('+pmKeys.length+' models):</div>';
           h+='<div style="margin-top:4px;display:grid;gap:3px">';
           pmKeys.forEach(function(mid){
             var mv=r.per_model[mid];
-            var mvc=mv.verdict==='AGREE'?'#22c55e':mv.verdict==='DISAGREE'?'#ef4444':'#f59e0b';
-            var mvi=mv.verdict==='AGREE'?'✅':mv.verdict==='DISAGREE'?'❌':'⚠️';
-            h+='<div style="background:var(--bg);border-radius:4px;padding:4px 8px;font-size:9px;display:flex;align-items:start;gap:6px">';
-            h+='<span style="color:'+mvc+';font-weight:700;min-width:90px;white-space:nowrap">'+mvi+' '+mid+'</span>';
-            h+='<span style="color:var(--text3);line-height:1.3">'+(mv.varsity_reasoning||mv.recommendation||mv.verdict)+'</span>';
+            var mvc=mv.verdict==='AGREE'?'#22c55e':mv.verdict==='DISAGREE'?'#ef4444':mv.verdict==='NO_REVIEW'?'#6b7280':'#f59e0b';
+            var mvi=mv.verdict==='AGREE'?'✅':mv.verdict==='DISAGREE'?'❌':mv.verdict==='NO_REVIEW'?'⏭':'⚠️';
+            var mName=_aiModelNames[mid]||mid;
+            var reason=mv.varsity_reasoning||mv.recommendation||'';
+            var riskNote=(mv.risk_flag&&mv.verdict!=='NO_REVIEW')?' ⚠ '+mv.risk_flag:'';
+            h+='<div style="background:var(--bg);border-radius:4px;padding:5px 8px;font-size:9px;border-left:2px solid '+mvc+';'+(mv.verdict==='NO_REVIEW'?'opacity:0.6;':'')+'">';
+            h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
+            h+='<span style="color:'+mvc+';font-weight:700;white-space:nowrap">'+mvi+' '+mName+'</span>';
+            h+='<span style="color:'+mvc+';font-size:8px;font-weight:800;text-transform:uppercase">'+mv.verdict.replace('_',' ')+'</span>';
+            if(mv.confidence&&mv.verdict!=='NO_REVIEW')h+='<span style="color:var(--text4);font-size:8px">'+mv.confidence+'%</span>';
+            h+='</div>';
+            if(reason)h+='<div style="color:var(--text3);line-height:1.3;margin-left:0px">'+reason+'</div>';
+            if(riskNote)h+='<div style="color:#f97316;line-height:1.3;margin-left:0px">'+riskNote+'</div>';
             h+='</div>';
           });
-          h+='</div></details>';
+          h+='</div>';
         }
       }
       h+='</div>';
