@@ -385,6 +385,29 @@ const pill  = (t,c) => `<span class="pill p${c||"gr"}">${t}</span>`;
 const sc    = (l,v,c,s) => `<div class="sc"><div class="l">${l}</div><div class="v" style="color:${c||"var(--text)"}">${v}</div>${s?`<div class="s">${s}</div>`:""}</div>`;
 
 // =======================================================
+// TRADING MODE TOGGLE
+// =======================================================
+async function toggleTradingMode(){
+  const goingLive = S.tradingMode !== 'LIVE';
+  if(goingLive){
+    const ok = confirm('⚠️ SWITCH TO LIVE TRADING?\n\nThis will place REAL orders on Kite Connect using real money.\n\n• BUY orders will be placed as LIMIT orders\n• SELL orders will be placed as MARKET orders\n• All trades will use your Kite account balance\n\nAre you sure you want to enable LIVE trading?');
+    if(!ok) return;
+  }
+  try {
+    const r = await fetch('/api/trading-mode', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ live: goingLive })
+    });
+    const d = await r.json();
+    if(!r.ok){ alert('❌ ' + (d.error || 'Failed to toggle trading mode')); return; }
+    S.tradingMode = d.mode || 'PAPER';
+    renderTopBar();
+    render();
+  } catch(e){ alert('❌ Network error: ' + e.message); }
+}
+
+// =======================================================
 // FETCH
 // =======================================================
 async function fetchAll(){
@@ -552,9 +575,12 @@ function renderTopBar(){
   if(!el) return;
   if(S.mode==="stocks"){
     var ls=S.liveStats||{}, livePnL=+(ls.total_pnl||0), liveOpen=(S.liveTrades||[]).filter(t=>t.status==="OPEN").length;
-    var modeTag=S.tradingMode==='LIVE'?'<span style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700">LIVE</span>':'<span style="background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700">PAPER</span>';
+    var isLive=S.tradingMode==='LIVE';
+    var modeToggle=isLive
+      ?'<button onclick="toggleTradingMode()" style="background:#ef4444;color:#fff;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #dc2626;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#dc2626\'" onmouseout="this.style.background=\'#ef4444\'"><span style="font-size:7px">&#9679;</span> LIVE</button>'
+      :'<button onclick="toggleTradingMode()" style="background:#1e3a5f;color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #3b82f6;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#2d4a6f\'" onmouseout="this.style.background=\'#1e3a5f\'"><span style="font-size:7px">&#9679;</span> PAPER</button>';
     el.innerHTML=[
-      '<div class="hstat">'+modeTag+'</div>',
+      '<div class="hstat">'+modeToggle+'</div>',
       S.liveTrades.length>0?stat("Live P&L",(livePnL>=0?"+":"")+INR(livePnL.toFixed(0)),clr(livePnL)):"",
       S.liveTrades.length>0?stat("Live Open",liveOpen,""):"",
       stat("Paper P&L",(nsePnL>=0?"+":"")+INR(nsePnL.toFixed(0)),clr(nsePnL)),

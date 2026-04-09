@@ -1525,8 +1525,8 @@ function selectAndRunStrategy(candles, dailyCandles=null) {
 // -- PAPER TRADING ENGINE ------------------------------------------------------
 // ===============================================================================
 
-// ── LIVE vs PAPER trading toggle (set LIVE_TRADING=true in Railway env vars) ──
-const LIVE_TRADING = (process.env.LIVE_TRADING || '').toLowerCase() === 'true';
+// ── LIVE vs PAPER trading toggle (set LIVE_TRADING=true in Railway env vars, or toggle via UI) ──
+let LIVE_TRADING = (process.env.LIVE_TRADING || '').toLowerCase() === 'true';
 console.log(`🔀 Trading mode: ${LIVE_TRADING ? '🔴 LIVE (real orders via Kite)' : '📝 PAPER (simulated only)'}`);
 
 const CONFIG = {
@@ -3537,9 +3537,17 @@ app.get("/paper-trades/daily", async(req,res)=>{
   } catch(e){res.status(500).json({error:e.message});}
 });
 
-// ── Trading mode endpoint ──
+// ── Trading mode endpoints ──
 app.get("/api/trading-mode", (req,res) => {
-  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER' });
+  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER', kiteConnected: !!kite });
+});
+app.post("/api/trading-mode", express.json(), (req,res) => {
+  const { live } = req.body;
+  if (typeof live !== 'boolean') return res.status(400).json({ error: 'live must be boolean' });
+  if (live && !kite) return res.status(400).json({ error: 'Cannot enable LIVE mode — Kite is not connected. Login to Kite first.' });
+  LIVE_TRADING = live;
+  console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'}`);
+  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER', kiteConnected: !!kite });
 });
 
 // ── Live trades endpoints (mirror paper-trades structure) ──
