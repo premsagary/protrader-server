@@ -6119,7 +6119,10 @@ function buildPortfolioSuggestion(amount) {
   }
 
   // --- PROGRESSIVE SELECTION (Varsity M9: always find investable stocks) ---
-  const MAX_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000)));
+  // Always select 15 stocks for full AI validation + opportunity visibility
+  // Capital allocation only goes to stocks your investment amount supports
+  const MAX_STOCKS = 15;
+  const ALLOC_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000))); // how many get capital
   const SECTOR_CAP = marketRegime === 'BEAR' ? 2 : 3; // tighter diversification in bear
   const CRITERIA = [
     { label: 'Strong Buy + Buy', filter: s => s.conviction === 'Strong Buy' || s.conviction === 'Buy' },
@@ -6169,7 +6172,11 @@ function buildPortfolioSuggestion(amount) {
   const investableAmount = Math.round(amount * (1 - cashPct));
 
   // --- ALLOCATION (Varsity M9: conviction-weighted + volatility-adjusted) ---
-  const rawWeights = selected.map(s => {
+  // Only allocate capital to top ALLOC_STOCKS, rest are bench/watchlist
+  const activeStocks = selected.slice(0, ALLOC_STOCKS);
+  const benchStocks = selected.slice(ALLOC_STOCKS);
+
+  const rawWeights = activeStocks.map(s => {
     let w = s.composite;
     if (s.conviction === 'Strong Buy') w *= 1.5;
     else if (s.conviction === 'Buy') w *= 1.2;
@@ -6205,8 +6212,8 @@ function buildPortfolioSuggestion(amount) {
   const allocSum = allocations.reduce((a, b) => a + b, 0);
   allocations = allocations.map(a => a / allocSum);
 
-  // Build portfolio
-  const portfolio = selected.map((s, i) => {
+  // Build portfolio — active stocks get capital allocation
+  const activePortfolio = activeStocks.map((s, i) => {
     const allocPct = +(allocations[i] * 100).toFixed(1);
     const allocAmt = Math.round(investableAmount * allocations[i]);
     const shares = Math.max(1, Math.floor(allocAmt / s.price));
@@ -6234,12 +6241,40 @@ function buildPortfolioSuggestion(amount) {
       earGrowth: s.earGrowth, promoter: s.promoter, pledged: s.pledged,
       earningsYield: s.earningsYield, divYield: s.divYield,
       entryPrice: s.price, entryTime: Date.now(),
-      signalReasons: [],
+      signalReasons: [], isBench: false,
     };
   });
 
-  // Portfolio stats
-  const totalInvested = portfolio.reduce((a, s) => a + s.allocAmt, 0);
+  // Bench stocks — shown in model portfolio but no capital allocated (watchlist/replacements)
+  const benchPortfolio = benchStocks.map(s => {
+    let reason = `BENCH — ${s.conviction} — composite ${s.composite} (next in line, no capital allocated at current investment amount)`;
+    return {
+      sym: s.sym, name: s.name, grp: s.grp, sector: s.sector,
+      price: s.price, shares: 0, allocPct: 0, allocAmt: 0,
+      action: 'WATCH', actionColor: '#64748b', reason,
+      conviction: s.conviction, convColor: s.convColor,
+      composite: s.composite, faScore: s.faScore, taScore: s.taScore,
+      momScore: s.momScore, valScore: s.valScore, riskScore: s.riskScore,
+      checkCount: s.checkCount,
+      isFallenAngel: s.isFallenAngel, fallenVerdict: s.fallenVerdict || null,
+      stopLoss: s.stopLoss, target: s.target,
+      rrRatio: s.rrRatio, riskPct: s.riskPct, rewardPct: s.rewardPct,
+      stopReason: s.stopReason, targetReason: s.targetReason,
+      roe: s.roe, roce: s.roce, debtToEq: s.debtToEq, pe: s.pe, peg: s.peg,
+      rsi: s.rsi, macdBull: s.macdBull, goldenCross: s.goldenCross,
+      pctFromHigh: s.pctFromHigh, pctAbove200: s.pctAbove200,
+      beta: s.beta, annualVol: s.annualVol, opMargin: s.opMargin,
+      earGrowth: s.earGrowth, promoter: s.promoter, pledged: s.pledged,
+      earningsYield: s.earningsYield, divYield: s.divYield,
+      entryPrice: s.price, entryTime: Date.now(),
+      signalReasons: [], isBench: true,
+    };
+  });
+
+  const portfolio = [...activePortfolio, ...benchPortfolio];
+
+  // Portfolio stats (only active stocks count for invested amount)
+  const totalInvested = activePortfolio.reduce((a, s) => a + s.allocAmt, 0);
   const avgComposite = +(portfolio.reduce((a, s) => a + s.composite, 0) / portfolio.length).toFixed(1);
   const sectorBreakdown = {};
   portfolio.forEach(s => { sectorBreakdown[s.sector] = (sectorBreakdown[s.sector] || 0) + s.allocPct; });

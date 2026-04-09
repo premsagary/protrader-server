@@ -3869,17 +3869,18 @@ function psRenderModelResults(data){
   h+='<span style="font-size:10px;color:'+(s.marketOpen?'#22c55e':'#ef4444')+'">● '+(s.marketOpen?'Open':'Closed')+'</span>';
   h+='</div>';
 
-  // Sort stocks: active BUY/HOLD at top, EXIT/REDUCE/SELL pushed to bottom
+  // Sort stocks: active BUY/HOLD at top, WATCH (bench) in middle, EXIT/REDUCE/SELL at bottom
   var pSorted=p.slice().sort(function(a,b){
     var sellActions={EXIT:1,REDUCE:1,'BOOK PROFIT':1,REVIEW:1};
-    var aIsSell=sellActions[a.action]?1:0;
-    var bIsSell=sellActions[b.action]?1:0;
-    if(aIsSell!==bIsSell) return aIsSell-bIsSell; // sell goes bottom
+    var aOrder=sellActions[a.action]?2:(a.action==='WATCH'||a.isBench)?1:0;
+    var bOrder=sellActions[b.action]?2:(b.action==='WATCH'||b.isBench)?1:0;
+    if(aOrder!==bOrder) return aOrder-bOrder;
     return b.composite-a.composite; // within group, sort by score
   });
 
-  // Count how many are sell-flagged
+  // Count groups
   var sellFlagged=pSorted.filter(function(s){return s.action==='EXIT'||s.action==='REDUCE'||s.action==='BOOK PROFIT'||s.action==='REVIEW';});
+  var benchStocks=pSorted.filter(function(s){return s.action==='WATCH'||s.isBench;});
 
   // Stock table
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
@@ -3891,8 +3892,18 @@ function psRenderModelResults(data){
   h+='</tr></thead><tbody>';
 
   var printedSellDivider=false;
+  var printedBenchDivider=false;
   pSorted.forEach(function(stk,i){
     var isSellFlagged=(stk.action==='EXIT'||stk.action==='REDUCE'||stk.action==='BOOK PROFIT'||stk.action==='REVIEW');
+    var isBench=(stk.action==='WATCH'||stk.isBench);
+
+    // Insert divider before first bench stock
+    if(isBench&&!printedBenchDivider&&benchStocks.length>0){
+      printedBenchDivider=true;
+      h+='<tr><td colspan="15" style="padding:8px 10px;background:rgba(100,116,139,.08);border-top:2px solid rgba(100,116,139,.3);border-bottom:1px solid var(--border)">';
+      h+='<span style="font-size:10px;font-weight:800;color:#64748b">📋 BENCH — Watchlist ('+benchStocks.length+') — next in line when capital increases or active stocks get EXIT signal</span>';
+      h+='</td></tr>';
+    }
 
     // Insert divider before first sell-flagged stock
     if(isSellFlagged&&!printedSellDivider&&sellFlagged.length>0){
@@ -3902,8 +3913,8 @@ function psRenderModelResults(data){
       h+='</td></tr>';
     }
 
-    var rowBg=isSellFlagged?'rgba(239,68,68,.04)':(i%2===0?'var(--bg2)':'var(--bg)');
-    var rowOpacity=isSellFlagged?'opacity:0.7;':'';
+    var rowBg=isSellFlagged?'rgba(239,68,68,.04)':isBench?'rgba(100,116,139,.04)':(i%2===0?'var(--bg2)':'var(--bg)');
+    var rowOpacity=isSellFlagged?'opacity:0.7;':isBench?'opacity:0.6;':'';
     h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2);'+rowOpacity+'">';
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
@@ -3948,10 +3959,12 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:#ef4444;font-size:10px">'+(stk.stopLoss?'₹'+stk.stopLoss:'—')+'</td>';
     h+='<td style="padding:5px;color:#22c55e;font-size:10px">'+(stk.target?'₹'+stk.target:'—')+'</td>';
     h+='<td style="padding:5px;font-weight:700;color:'+(stk.rrRatio>=2?'#22c55e':'#f59e0b')+'">'+(stk.rrRatio?stk.rrRatio+'x':'—')+'</td>';
-    // Track button — only show for non-sell stocks
+    // Track button — context-dependent
     h+='<td style="padding:5px">';
     if(isSellFlagged){
       h+='<span style="font-size:9px;color:#ef4444;font-weight:700">Don\'t buy</span>';
+    } else if(isBench){
+      h+='<span style="font-size:9px;color:#64748b;font-weight:600">Bench</span>';
     } else {
       h+='<button onclick="psBuyStock(\''+stk.sym+'\','+stk.shares+','+(stk.currentPrice||stk.price).toFixed(2)+','+(stk.stopLoss||0)+','+(stk.target||0)+',\''+stk.conviction+'\')" style="background:rgba(34,211,238,.15);color:#22d3ee;border:1px solid rgba(34,211,238,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button>';
     }
