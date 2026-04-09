@@ -1760,6 +1760,12 @@ async function scanAndTrade() {
   // Phase 3: Kelly-based risk sizing
   const kellyRisk = await computeKelly();
 
+  // ╔══════════════════════════════════════════════════════════════════════╗
+  // ║  PASS 1: Scan ALL stocks — manage exits immediately, collect BUY   ║
+  // ║  candidates into a ranked queue. No entries happen in this pass.    ║
+  // ╚══════════════════════════════════════════════════════════════════════╝
+  const buyCandidates = []; // { stock, result, candles, last }
+
   for (const stock of UNIVERSE) {
     try {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
@@ -1783,8 +1789,11 @@ async function scanAndTrade() {
 
       // Multi-timeframe conviction adjustment — Varsity M2 Ch 18
       if (dailyTrend === 'bearish' && result.signal === 'BUY') {
-        result.score = result.score * 0.7; // reduce conviction by 30% when daily trend opposes
+        result.score = result.score * 0.7;
         result.detail = (result.detail||'') + ' [MTF: bearish daily trend reduces conviction]';
+      }
+      if (dailyTrend === 'bullish' && result.signal === 'BUY') {
+        result.detail = (result.detail||'') + ' [MTF: daily bullish confirms]';
       }
 
       // Track dominant regime across all stocks
@@ -1792,21 +1801,21 @@ async function scanAndTrade() {
 
       const openPos = openTrades.find(t=>t.symbol===stock.sym&&t.status==='OPEN');
 
+      // ── EXIT MANAGEMENT (immediate — can't wait for pass 2) ──
       if (openPos) {
         const cmp = last.close;
         const sl  = parseFloat(openPos.stop_loss);
         const tgt = parseFloat(openPos.target);
         const entryPrice = parseFloat(openPos.price);
 
-        // Phase 3: Trailing stop — once 1 ATR in profit, trail at 1.5 ATR from high
+        // Trailing stop — once 1 ATR in profit, trail at 1.5 ATR from high
         const highs = candles.slice(-14).map(c=>c.high);
         const lows  = candles.slice(-14).map(c=>c.low);
         const trs   = highs.map((h,i)=>h-lows[i]);
         const atr   = trs.reduce((a,b)=>a+b,0)/trs.length;
-        const atrMult = CONFIG.ATR_MULT[result.regime]||2.0;
         const profit = cmp - entryPrice;
         let trailSL = sl;
-        if (profit > atr) { // trade is 1 ATR in profit — activate trailing stop
+        if (profit > atr) {
           const trailLevel = cmp - (atr * 1.5);
           if (trailLevel > sl) {
             trailSL = +trailLevel.toFixed(2);
@@ -1816,31 +1825,22 @@ async function scanAndTrade() {
 
         const hitSL  = cmp <= Math.max(sl, trailSL);
         const hitTgt = cmp >= tgt;
-        // Exit consensus: 2/3 strategies voting SELL (matches entry consensus)
-        // Previously required buyVotes===0 (all 3 non-BUY) which held losers too long
         const exitSig = result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
 
         if (hitSL||hitTgt||exitSig) {
           const pnl    = +((cmp-entryPrice)*openPos.quantity).toFixed(2);
           const pnlPct = +((cmp-entryPrice)/entryPrice*100).toFixed(2);
           const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":`Strategy Exit (${result.sellVotes}/3 SELL)`;
-          // Close paper trade
           await pool.query(
             `UPDATE paper_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
             [cmp,pnl,pnlPct,reason,openPos.id]
           );
 
-          // Place REAL sell order on Kite if live trading enabled
           if (LIVE_TRADING && kite) {
             try {
               const order = await kite.placeOrder('regular', {
-                exchange: 'NSE',
-                tradingsymbol: stock.sym,
-                transaction_type: 'SELL',
-                quantity: openPos.quantity,
-                product: 'CNC',
-                order_type: 'MARKET',
-                validity: 'DAY',
+                exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'SELL',
+                quantity: openPos.quantity, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
               });
               const orderId = order.order_id || order.orderId || '';
               await pool.query(
@@ -1853,80 +1853,18 @@ async function scanAndTrade() {
             }
           }
 
+          // Update openTrades array so freed slot is available for pass 2
+          openPos.status = 'CLOSED';
           console.log(`  ▼ EXIT ${stock.sym} @ ₹${cmp} | ${reason} | ${pnl>=0?"+":""}₹${pnl} | ${result.regime} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
           signalCount++;
         }
 
+      // ── COLLECT BUY CANDIDATES (don't enter yet — rank first) ──
       } else if (canEnterNew
-                 && openTrades.filter(t=>t.status==="OPEN").length < CONFIG.MAX_POSITIONS
                  && result.signal==="BUY"
                  && result.buyVotes >= CONFIG.CONSENSUS_NEEDED
                  && result.score >= CONFIG.BUY_SCORE) {
-
-        // Phase 3: Correlation guard — skip if too correlated with existing positions
-        const tooCorrrelated = await isTooCorrelated(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
-        if (tooCorrrelated) {
-          console.log(`  ⊘ SKIP ${stock.sym} — sector concentration limit reached`);
-          continue;
-        }
-
-        // Phase 3: ATR-based position sizing + S/R-anchored SL + Kelly
-        const price   = last.close;
-        const highs14 = candles.slice(-14).map(c=>c.high);
-        const lows14  = candles.slice(-14).map(c=>c.low);
-        const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
-        const posSize = computePositionSize(
-          price, atrVal, result.regime,
-          ddStatus.equity * sizeMult,
-          kellyRisk,
-          candles // pass candles for swing-low SL anchoring
-        );
-        const sl  = posSize.stopLoss; // S/R-anchored or ATR-based (computed inside)
-        const tgt = posSize.target;
-        const qty = posSize.shares;
-        const capital = posSize.capital;
-        if (posSize.slSource === 'swing_low') {
-          result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
-        }
-
-        // Always log paper trade
-        await pool.query(
-          `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
-           VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
-          [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
-           +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail]
-        );
-
-        // Place REAL order on Kite if live trading enabled
-        if (LIVE_TRADING && kite) {
-          try {
-            const order = await kite.placeOrder('regular', {
-              exchange: 'NSE',
-              tradingsymbol: stock.sym,
-              transaction_type: 'BUY',
-              quantity: qty,
-              product: 'CNC',
-              order_type: 'LIMIT',
-              price: price,
-              validity: 'DAY',
-            });
-            const orderId = order.order_id || order.orderId || '';
-            await pool.query(
-              `INSERT INTO live_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,order_id)
-               VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12)`,
-              [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
-               +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
-            );
-            console.log(`  🔴 LIVE BUY ${stock.sym} @ ₹${price} | Order ID: ${orderId}`);
-          } catch(liveErr) {
-            console.error(`  ✗ LIVE BUY FAILED ${stock.sym}: ${liveErr.message}`);
-          }
-        }
-
-        openTrades.push({symbol:stock.sym,status:"OPEN"});
-        dominantStrategy=result.strategy;
-        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
-        signalCount++;
+        buyCandidates.push({ stock, result, candles, last });
       }
 
       await delay(CONFIG.SCAN_DELAY_MS);
@@ -1935,6 +1873,86 @@ async function scanAndTrade() {
       if (e.message && e.message.includes('api_key')) tokenValid = false;
       await delay(500);
     }
+  }
+
+  // ╔══════════════════════════════════════════════════════════════════════╗
+  // ║  PASS 2: Rank BUY candidates by score (highest first) and enter    ║
+  // ║  top signals respecting position limits + correlation guards.       ║
+  // ║  This eliminates large-cap bias from sequential scanning.          ║
+  // ╚══════════════════════════════════════════════════════════════════════╝
+  buyCandidates.sort((a, b) => b.result.score - a.result.score);
+
+  if (buyCandidates.length > 0) {
+    console.log(`  📊 Ranked ${buyCandidates.length} BUY candidates: ${buyCandidates.slice(0,10).map(c=>`${c.stock.sym}(${c.result.score})`).join(' > ')}`);
+  }
+
+  for (const candidate of buyCandidates) {
+    const { stock, result, candles, last } = candidate;
+
+    // Re-check slot availability (exits in pass 1 may have freed slots)
+    const currentOpen = openTrades.filter(t=>t.status==="OPEN").length;
+    if (currentOpen >= CONFIG.MAX_POSITIONS) {
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — all ${CONFIG.MAX_POSITIONS} slots full`);
+      break; // sorted by score, so remaining are weaker — stop here
+    }
+
+    // Correlation guard
+    const tooCorrrelated = await isTooCorrelated(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
+    if (tooCorrrelated) {
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — sector concentration limit`);
+      continue;
+    }
+
+    // ATR-based position sizing + S/R-anchored SL + Kelly
+    const price   = last.close;
+    const highs14 = candles.slice(-14).map(c=>c.high);
+    const lows14  = candles.slice(-14).map(c=>c.low);
+    const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
+    const posSize = computePositionSize(
+      price, atrVal, result.regime,
+      ddStatus.equity * sizeMult,
+      kellyRisk,
+      candles
+    );
+    const sl  = posSize.stopLoss;
+    const tgt = posSize.target;
+    const qty = posSize.shares;
+    if (posSize.slSource === 'swing_low') {
+      result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
+    }
+
+    // Paper trade
+    await pool.query(
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
+       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
+      [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
+       +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail]
+    );
+
+    // Live order
+    if (LIVE_TRADING && kite) {
+      try {
+        const order = await kite.placeOrder('regular', {
+          exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
+          quantity: qty, product: 'CNC', order_type: 'LIMIT', price: price, validity: 'DAY',
+        });
+        const orderId = order.order_id || order.orderId || '';
+        await pool.query(
+          `INSERT INTO live_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,order_id)
+           VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12)`,
+          [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
+           +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
+        );
+        console.log(`  🔴 LIVE BUY ${stock.sym} @ ₹${price} | Order ID: ${orderId}`);
+      } catch(liveErr) {
+        console.error(`  ✗ LIVE BUY FAILED ${stock.sym}: ${liveErr.message}`);
+      }
+    }
+
+    openTrades.push({symbol:stock.sym,status:"OPEN"});
+    dominantStrategy=result.strategy;
+    console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | Rank:${buyCandidates.indexOf(candidate)+1}/${buyCandidates.length} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
+    signalCount++;
   }
 
   // Dominant regime across this scan
