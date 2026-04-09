@@ -5588,29 +5588,9 @@ async function doLogout() {
   showLogin();
 }
 
-// ── 5-minute inactivity auto-logout ──
-var _inactivityTimer = null;
-var INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-
-function _resetInactivityTimer() {
-  if (_inactivityTimer) clearTimeout(_inactivityTimer);
-  if (!_authToken) return;
-  _inactivityTimer = setTimeout(function() {
-    console.log('⏱ Auto-logout: 5 minutes of inactivity');
-    doLogout();
-  }, INACTIVITY_TIMEOUT);
-}
-
-function _clearInactivityTimer() {
-  if (_inactivityTimer) { clearTimeout(_inactivityTimer); _inactivityTimer = null; }
-}
-
-// Reset timer on any user interaction
-['click','keydown','scroll','mousemove','touchstart'].forEach(function(evt) {
-  document.addEventListener(evt, function() {
-    if (_authToken) _resetInactivityTimer();
-  }, { passive: true });
-});
+// ── Inactivity auto-logout (disabled) ──
+function _resetInactivityTimer() {}
+function _clearInactivityTimer() {}
 
 // On page load — check for saved session
 (async function checkSession() {
