@@ -3744,7 +3744,7 @@ async function refreshAllFundamentals() {
         stockFundamentals[stock.sym] = {
           sym:stock.sym, name:stock.n, grp:stock.grp,
           sector: SECTOR_MAP[stock.sym] || ext?.industry || 'Other',
-          price:tech.price??livePrices[stock.sym]?.price??null,
+          price:tech.price??livePrices[stock.sym]?.price??stockFundamentals[stock.sym]?.price??ext?.price??null,
           dma20:tech.dma20??null, dma50:tech.dma50??null, dma100:tech.dma100??null, dma200:tech.dma200??null,
           wk52Hi:tech.wk52Hi??null, wk52Lo:tech.wk52Lo??null,
           change52w:tech.change52w??null, change6m:tech.change6m??null, change3m:tech.change3m??null, change1m:tech.change1m??null,
@@ -5942,7 +5942,7 @@ function refreshPortfolioSignals(suggestion) {
 
   const updated = suggestion.portfolio.map(s => {
     const lp = livePrices[s.sym]?.price;
-    const currentPrice = lp || s.price;
+    const currentPrice = lp || stockFundamentals[s.sym]?.price || s.price || global.FUND_EXT?.[s.sym]?.price;
     const entryPx = s.avg_price || s.entryPrice || s.price;
     const pnl = currentPrice - entryPx;
     const pnlPct = +((pnl / entryPx) * 100).toFixed(2);
@@ -6184,7 +6184,7 @@ app.get('/api/portfolio/positions', async (req, res) => {
     // Enrich with live data + exit signals
     const enriched = rows.map(p => {
       const f = stockFundamentals[p.sym];
-      const currentPrice = livePrices[p.sym]?.price || f?.price || p.avg_price;
+      const currentPrice = livePrices[p.sym]?.price || f?.price || global.FUND_EXT?.[p.sym]?.price || p.avg_price;
       const pnl = (currentPrice - p.avg_price) * p.qty;
       const pnlPct = ((currentPrice - p.avg_price) / p.avg_price) * 100;
       const currentValue = p.qty * currentPrice;
