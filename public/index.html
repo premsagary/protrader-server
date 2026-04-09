@@ -3412,30 +3412,7 @@ function buildStockCard(s, medal){
     h+='</div>';
   }
 
-  // -- MIROFISH GROWTH PREDICTION (live call, shows inline, no redirect) -------
-  if(isFallenAngel) {
-    var faCardId = 'fa-pred-'+s.sym;
-    h+='<div style="margin-top:10px;border-top:1px solid rgba(245,158,11,.25);padding-top:10px" id="'+faCardId+'">';
-    h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
-    h+='<span style="font-size:10px;font-weight:700;color:#f59e0b">🐟 MiroFish Growth Prediction</span>';
-    h+='<button onclick="predictFallenAngel(\''+s.sym+'\',\''+faCardId+'\')" '
-     +'style="background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);'
-     +'border-radius:5px;padding:2px 10px;font-size:10px;cursor:pointer;font-weight:700" '
-     +'id="btn-'+faCardId+'">Predict →</button>';
-    h+='</div>';
-    // 4 projection cells — filled by predictFallenAngel()
-    h+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:6px" id="grid-'+faCardId+'">';
-    ['6M','1Y','2Y','3Y'].forEach(function(yr){
-      h+='<div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:6px;padding:5px;text-align:center">';
-      h+='<div style="font-size:10px;color:var(--text4);margin-bottom:2px">'+yr+'</div>';
-      h+='<div style="font-size:11px;font-weight:700;color:var(--text3)" id="val-'+faCardId+'-'+yr+'">—</div>';
-      h+='<div style="font-size:10px;color:var(--text4)" id="pct-'+faCardId+'-'+yr+'"></div>';
-      h+='</div>';
-    });
-    h+='</div>';
-    h+='<div style="font-size:10px;color:var(--text3);line-height:1.5;min-height:20px" id="txt-'+faCardId+'">Click Predict to get MiroFish recovery analysis</div>';
-    h+='</div>';
-  }
+  // Fallen Angel prediction removed (MiroFish deprecated — use AI Signal Validator instead)
 
   h+='</div>'; // end show-more collapsible div
 
@@ -3446,7 +3423,7 @@ function buildStockCard(s, medal){
 // -- End Stocks Recommendation --------------------------------------------------
 // -- Kite Token Management -----------------------------------------------------
 // =============================================================================
-// MIROFISH UI
+// LEGACY STUBS (MiroFish removed — AI Signal Validator replaces it)
 // =============================================================================
 var mfishData = null;
 var mfishPolling = null;
@@ -3454,8 +3431,10 @@ var mfishPolling = null;
 async function renderMiroFish() {
   var cont = document.getElementById('main-content');
   if(!cont) return;
+  cont.innerHTML = '<div style="padding:48px;text-align:center"><div style="font-size:14px;color:var(--text3)">MiroFish has been replaced by the AI Signal Validator.<br>Go to Portfolio Manager → Signals tab to see AI-powered Varsity reviews.</div></div>';
+  return;
 
-  // Check status first
+  // DEPRECATED — original code below (dead code)
   var status = {};
   try {
     var r = await fetch('/api/mirofish/status');
@@ -4187,7 +4166,8 @@ function psRenderAIValidation(){
       h+='<span style="font-size:10px">'+vi+' '+r.verdict+'</span>';
       if(r.confidence)h+=' <span style="font-size:9px;color:var(--text4)">'+r.confidence+'%</span>';
       h+='</div></div>';
-      if(r.varsity_reasoning)h+='<div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.4">📚 '+r.varsity_reasoning+'</div>';
+      if(r.varsity_module)h+='<div style="font-size:9px;color:#a855f7;margin-top:4px;font-weight:600">Varsity: '+r.varsity_module+'</div>';
+      if(r.varsity_reasoning)h+='<div style="font-size:10px;color:var(--text3);margin-top:2px;line-height:1.4">📚 '+r.varsity_reasoning+'</div>';
       if(r.recommendation)h+='<div style="font-size:10px;color:#22d3ee;margin-top:2px">💡 '+r.recommendation+'</div>';
       if(r.risk_flag)h+='<div style="font-size:10px;color:#f97316;margin-top:2px">⚠ '+r.risk_flag+'</div>';
       h+='</div>';
@@ -4885,17 +4865,10 @@ async function adminRunAll() {
   await adminRun('screener');
 }
 
-// Preload MiroFish lookup data (non-blocking)
-async function loadMiroFishLookup() {
-  try {
-    const r = await fetch('/api/mirofish/status');
-    if (r.ok) { const d = await r.json(); window._mfishStatus = d; }
-  } catch(e) { /* non-critical — MiroFish loads on demand */ }
-}
+// MiroFish removed — AI Signal Validator replaces it
+async function loadMiroFishLookup() { /* deprecated */ }
 
 function _init() {
-  // Load MiroFish lookup silently on startup (reads from DB, no Anthropic call)
-  setTimeout(loadMiroFishLookup, 2000);
   // Start with MF Recommendation - loads instantly from in-memory cache
   try { setMode("mf"); } catch(e){ console.error('setMode error:', e); }
   try { fetchAll(); } catch(e){}

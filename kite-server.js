@@ -4462,8 +4462,7 @@ async function refreshMissingFundamentals(forceAll=false) {
 }
 
 // =============================================================================
-// NEW FEATURES — from multi-agent analysis (MiroFish-style simulation)
-// Agents: Retail Investor, Quant Trader, Portfolio Manager, Engineer, PM, Risk Analyst
+// SYSTEM UTILITIES — Error tracking, monitoring
 // =============================================================================
 
 // -- Error tracking (Sneha: Engineer) -----------------------------------------
@@ -9102,59 +9101,79 @@ start();
 // Runs on 30-min cron during market hours + manual /api/ai/validate endpoint
 // =============================================================================
 
-const VARSITY_KNOWLEDGE_PROMPT = `You are an expert Indian stock market analyst deeply trained on Zerodha Varsity's complete curriculum.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+
+const VARSITY_KNOWLEDGE_PROMPT = `You are an expert Indian stock market analyst deeply trained on ALL 17 modules of Zerodha Varsity.
 Your job: validate portfolio signals (EXIT, REDUCE, SWITCH, FRESH_BUY, SECTOR_WARN, DRAWDOWN) against Varsity principles.
 
-## ZERODHA VARSITY KNOWLEDGE BASE
+## ZERODHA VARSITY — COMPLETE 17-MODULE KNOWLEDGE BASE
 
-### Module 1: Introduction to Stock Markets
+### Module 1: Introduction to Stock Markets (15 chapters)
 - Stock exchanges: NSE (Nifty50, NiftyNext50, sectoral indices), BSE (Sensex)
 - Market participants: retail investors, FIIs, DIIs, HNIs — FII flows drive short-term sentiment
 - Market hours: 9:15AM-3:30PM IST. Pre-open 9:00-9:15AM. Settlement T+1
 - Circuit limits: 5%, 10%, 20% on individual stocks. Market-wide at 10%, 15%, 20% on Sensex/Nifty
 - Corporate actions: dividends (ex-date matters), bonus, splits, buybacks affect price
+- IPO process: red herring prospectus, book building, listing day dynamics, lock-in periods
+- Clearing & settlement: T+1 rolling settlement, margins, pledging, demat process
+- Market index: free-float market cap weighted, rebalancing events move prices
 
-### Module 2: Technical Analysis (TA)
+### Module 2: Technical Analysis (22 chapters)
 - CANDLESTICKS: Marubozu (strong trend), Doji (indecision), Hammer/Hanging Man (reversal), Engulfing (trend change)
   * Bullish: Hammer at support + volume confirmation = BUY signal valid
   * Bearish: Shooting Star at resistance + declining volume = EXIT signal valid
+  * Morning Star / Evening Star: 3-candle reversal patterns at key S/R levels
+  * Harami: inside bar = indecision, needs confirmation candle
 - SUPPORT & RESISTANCE: Prior swing highs/lows. Broken support becomes resistance. Volume at S/R validates levels.
   * EXIT near resistance is premature if RSI < 70 and volume expanding (breakout possible)
   * EXIT at broken support with volume = valid
+  * Checklist: S&R near buy price, pattern recognition, volume confirmation, indicator alignment
 - MOVING AVERAGES:
   * 50DMA: short-term trend. Price > 50DMA = bullish
   * 200DMA: long-term trend. Price > 200DMA = bull market for that stock
   * Golden Cross (50 > 200) = bullish. Death Cross (50 < 200) = bearish
   * Stock below 200DMA for 20+ days with no recovery attempt = structural weakness
+  * EMA vs SMA: EMA more responsive to recent prices, better for short-term
 - RSI (Relative Strength Index):
   * >70 = overbought (not always sell — can stay overbought in strong uptrends)
   * <30 = oversold (potential bounce, but confirm with volume and fundamentals)
   * BULLISH DIVERGENCE: price makes lower low but RSI makes higher low = reversal signal (strong BUY indicator)
   * BEARISH DIVERGENCE: price makes higher high but RSI makes lower high = weakness (valid EXIT pre-signal)
+  * Centreline crossover: RSI crossing 50 = trend direction change
 - MACD:
   * Signal line crossover + histogram expansion = trend confirmation
   * MACD above zero line = bullish bias. Below = bearish.
   * MACD + RSI alignment = high-conviction signal
+  * Zero-line crossover more significant than signal crossover
 - BOLLINGER BANDS:
   * Squeeze (narrow bands) = volatility expansion imminent
   * Price at lower band + RSI < 30 = oversold bounce setup
   * Price at upper band + RSI > 70 = potential reversal
+  * Band width = volatility measure. Expanding bands = trending market
 - VOLUME:
   * Volume confirms price. Rising price + rising volume = healthy trend
   * Rising price + falling volume = weak rally, potential reversal
   * OBV (On-Balance Volume) rising = accumulation. Falling = distribution.
   * Sudden volume spike on decline = panic selling, potential capitulation bottom
+  * Volume precedes price — always check volume before acting on signals
 - SUPERTREND: Above price = bearish, below = bullish. Good for trailing stops.
 - ADX: >25 = trending market (trust momentum signals). <20 = range-bound (trust mean-reversion).
-- FIBONACCI: 38.2%, 50%, 61.8% retracement levels for pullback entries
+  * +DI > -DI = bullish. -DI > +DI = bearish. ADX rising = trend strengthening.
+- FIBONACCI: 38.2%, 50%, 61.8% retracement levels for pullback entries. 161.8% extension for targets.
+- ICHIMOKU CLOUD: Price above cloud = bullish. Below = bearish. Inside = no-trade zone.
+  * Tenkan-Kijun crossover inside cloud = weak. Outside cloud = strong.
+- DOW THEORY: Higher highs + higher lows = uptrend. Lower highs + lower lows = downtrend.
+  * Primary trend (months-years), Secondary trend (weeks-months), Minor trend (days-weeks)
+  * Volume must confirm the trend
 - MULTI-TIMEFRAME: Daily signal must align with weekly trend. Weekly trend overrides daily noise.
 
-### Module 3: Fundamental Analysis (FA)
+### Module 3: Fundamental Analysis (16 chapters)
+- ANNUAL REPORT: P&L statement, Balance Sheet, Cash Flow Statement — the holy trinity
 - EARNINGS PER SHARE (EPS): Must be growing. Declining EPS for 2+ quarters = red flag
 - PRICE TO EARNINGS (PE): Compare to sector average, not market. Low PE alone ≠ cheap. Check PEG ratio.
   * PEG < 1 = undervalued growth. PEG > 2 = expensive relative to growth.
-- RETURN ON EQUITY (ROE): >15% = good capital allocation. <10% = poor management. Compare to cost of equity.
-  * DuPont ROE = Net Margin × Asset Turnover × Equity Multiplier — tells you WHERE returns come from
+- RETURN ON EQUITY (ROE): >15% = good capital allocation. <10% = poor management.
+  * DuPont ROE = Net Margin × Asset Turnover × Equity Multiplier — tells WHERE returns come from
 - RETURN ON CAPITAL EMPLOYED (ROCE): >15% = real efficiency. More reliable than ROE for debt-heavy companies.
 - DEBT TO EQUITY (D/E):
   * General: <1.5 healthy, >2.5 risky
@@ -9163,47 +9182,195 @@ Your job: validate portfolio signals (EXIT, REDUCE, SWITCH, FRESH_BUY, SECTOR_WA
 - INTEREST COVERAGE: >3x comfortable. <1.5x = debt stress. <1x = cannot service debt (EXIT immediately)
 - OPERATING PROFIT MARGIN (OPM): Stable or expanding = good. Declining = competitive pressure or cost issues.
 - FREE CASH FLOW (FCF): Positive FCF validates earnings are real. Negative FCF with profit = accounting quality issue.
+  * FCF = Cash from Operations - CapEx. Consistent positive FCF = high-quality business.
 - PROMOTER HOLDING: >50% = strong alignment. Declining trend = red flag. Pledging >20% = URGENT risk.
 - DIVIDEND HISTORY: Consistent dividends = cash flow confidence. Sudden cut = trouble.
+- DCF VALUATION: Intrinsic value = PV of future cash flows. Discount rate = WACC. Growth rate must be realistic.
+  * Margin of Safety: Buy only at 20-30% below intrinsic value.
+- EQUITY RESEARCH: Industry analysis → Company analysis → Financial analysis → Valuation → Investment decision
+- MOAT: Pricing power, brand, network effects, switching costs, regulatory barriers = sustainable competitive advantage
 
-### Module 5: Options Theory (for context)
-- High implied volatility = market expects big move. Relevant for regime detection.
-- Put-Call Ratio (PCR) > 1.2 = bearish sentiment. PCR < 0.8 = bullish sentiment.
-- India VIX > 20 = fear. VIX > 30 = extreme fear (often near bottoms). VIX < 12 = complacency.
+### Module 4: Futures Trading (13 chapters)
+- Futures = obligation to buy/sell at agreed price on expiry. Margin-based leverage.
+- Initial margin + exposure margin. Mark-to-market (M2M) settlement daily.
+- Contango: futures > spot (normal). Backwardation: futures < spot (bearish signal).
+- Basis = spot - futures. Converges to zero at expiry. Basis risk in hedging.
+- Rollover: high rollover = trend continuation. Low rollover = uncertainty.
+- Open Interest (OI): Rising OI + rising price = fresh longs (bullish). Rising OI + falling price = fresh shorts (bearish).
+  * Falling OI + rising price = short covering (weak rally). Falling OI + falling price = long unwinding (weak decline).
+- Calendar spread: buy near month, sell far month — low risk, limited reward.
+- Futures for hedging: short futures against long portfolio to reduce market risk.
 
-### Module 6: Currency & Commodity Impact
-- Weak INR hurts importers (Oil, Gold companies). Benefits IT exporters.
-- Rising crude oil = negative for India market (current account deficit widens)
-- Gold rising = risk-off sentiment, typically negative for equities
+### Module 5: Options Theory for Professional Trading (25 chapters)
+- Call: right to buy. Put: right to sell. Premium = intrinsic + time value.
+- Moneyness: ITM (intrinsic value > 0), ATM, OTM (intrinsic = 0, pure time value).
+- OPTION GREEKS:
+  * Delta: rate of option price change per ₹1 move. Call delta 0 to 1, Put -1 to 0.
+  * Gamma: rate of delta change. Highest for ATM options near expiry.
+  * Theta: time decay. Options lose value daily. Sellers benefit, buyers suffer.
+  * Vega: sensitivity to volatility. High vega = vol change moves premium significantly.
+- IMPLIED VOLATILITY (IV): Market's expectation of future vol. High IV = expensive options.
+  * IV Rank: Current IV vs historical range. >80 = expensive, sell premium. <20 = cheap, buy options.
+  * India VIX > 20 = fear. VIX > 30 = extreme fear (often near bottoms). VIX < 12 = complacency.
+- PUT-CALL RATIO (PCR) > 1.2 = bearish sentiment (too many puts). PCR < 0.8 = bullish sentiment.
+- MAX PAIN: Strike with maximum open interest = where most options expire worthless. Price gravitates here near expiry.
+- Black-Scholes model: theoretical pricing. Inputs = spot, strike, time, rate, vol.
 
-### Module 8: Currency, Commodity & Government Securities
-- RBI rate hikes = negative for rate-sensitive sectors (Banking, Real Estate, Auto)
-- RBI rate cuts = positive for growth stocks and rate-sensitive sectors
-- Bond yield rising = "sell equities" pressure (money moves to fixed income)
+### Module 6: Option Strategies (14 chapters)
+- BULL CALL SPREAD: Buy lower call + sell higher call. Capped profit, limited loss. For moderately bullish view.
+- BEAR PUT SPREAD: Buy higher put + sell lower put. For moderately bearish view.
+- STRADDLE: Buy call + put same strike. Profit from big move either direction. High IV = expensive.
+- STRANGLE: Buy OTM call + OTM put. Cheaper than straddle but needs bigger move.
+- IRON CONDOR: Sell strangle + buy wider strangle. Profit from range-bound market.
+- PROTECTIVE PUT: Own stock + buy put = insurance. Cost = put premium.
+- COVERED CALL: Own stock + sell call = income generation. Cap upside for premium.
+- Synthetic positions: replicate stock using options. Useful for capital efficiency.
 
-### Module 9: Risk Management
+### Module 7: Markets and Taxation (8 chapters)
+- STCG (Short Term Capital Gains): Equity held < 12 months = 15% tax on gains
+- LTCG (Long Term Capital Gains): Equity held > 12 months = 10% on gains > ₹1 lakh
+- STT (Securities Transaction Tax): 0.1% on delivery trades (both buy+sell), 0.025% on intraday sell
+- SPECULATIVE INCOME: Intraday profits taxed as speculative business income
+- NON-SPECULATIVE: F&O profits = non-speculative business income. Can offset against other business income.
+- TURNOVER CALCULATION: Intraday = sum of all profits + losses. F&O = premium received + settlement P&L.
+- TAX AUDIT: Required if F&O turnover > ₹10 crore (or ₹2 crore + profit < 6% of turnover)
+- ADVANCE TAX: Pay quarterly if tax liability > ₹10,000/year. Avoid interest penalty.
+- GRANDFATHERING: For LTCG, cost of acquisition = higher of actual cost or Jan 31, 2018 price.
+
+### Module 8: Currency, Commodity & Government Securities (20 chapters)
+- CURRENCY: INR depreciation hurts importers (Oil, Gold companies). Benefits IT exporters.
+- USD/INR futures on NSE. Lot size = $1000. Used for hedging export/import exposure.
+- CRUDE OIL: Rising crude = negative for India (current account deficit widens, inflation up).
+  * Oil marketing companies: margin squeeze. Downstream = hurt. Upstream = benefit.
+- GOLD: Rising gold = risk-off sentiment, typically negative for equities. Inflation hedge.
+- BASE METALS: Copper rising = global growth signal. Copper falling = slowdown.
+- G-SECS (Government Securities): RBI rate hikes = bond prices fall, yields rise.
+  * Rising bond yields = "sell equities" pressure (money moves to fixed income)
+  * RBI rate cuts = positive for growth stocks and rate-sensitive sectors (Banking, Real Estate, Auto)
+- YIELD CURVE: Normal (upward) = healthy. Inverted = recession signal. Flat = uncertainty.
+- INFLATION: CPI > 6% = RBI tightening likely. Negative for equity markets.
+
+### Module 9: Risk Management & Trading Psychology (16 chapters)
 - POSITION SIZING: No single stock > 10-15% of portfolio. No single sector > 25%.
-  * Kelly Criterion for optimal sizing: f = (bp - q) / b where b=odds, p=win%, q=loss%
+  * Kelly Criterion: f = (bp - q) / b where b=odds, p=win%, q=loss%
+  * Half-Kelly preferred for safety: f/2
 - VALUE AT RISK (VaR): VaR = Portfolio × Z × σ × √t
-  * 95% confidence Z=1.645. 99% Z=2.326
+  * 95% confidence Z=1.645. 99% Z=2.326.
   * Regime-adjusted: correlations spike in bear markets (use 0.75 vs 0.4 in bull)
+  * Parametric VaR assumes normal distribution — underestimates tail risk
 - STOP LOSS: ATR-based preferred over fixed %. Trail stops with profit. Entry floor protects capital.
   * 2x ATR trailing stop in bear market, 2.5x in bull (wider in trending markets)
+  * Never move stop loss away from price — only tighten
 - DIVERSIFICATION: Minimum 8-12 stocks across 4+ sectors. Herfindahl index < 0.15 = diversified.
 - DRAWDOWN MANAGEMENT: -10% = review. -15% = reduce exposure. -20% = emergency de-risk.
 - RISK-REWARD: Minimum 1:2 risk-reward before entering. 1:3 for small caps.
 - CORRELATION: Avoid holding 3+ stocks in same sector with similar beta profiles.
+- EXPECTED SHORTFALL (CVaR): Average loss beyond VaR threshold — captures tail risk.
+- TRADING PSYCHOLOGY:
+  * Confirmation bias: Don't hold losers hoping for recovery. Cut losses, let winners run.
+  * Loss aversion: Selling winners too early, holding losers too long — the #1 retail mistake.
+  * Recency bias: Last few trades influence perception more than they should.
+  * Anchoring: Don't anchor to buy price. Market doesn't care about your entry.
+  * DISCIPLINE: Follow the system. Emotional overrides lose money over time.
+  * Journal every trade: entry reason, exit reason, lessons learned.
 
-### Module 11: Personal Finance
-- Asset allocation: Equity % = 100 - age (aggressive). Conservative = 100 - age - 10.
-- Emergency fund: 6 months expenses in liquid assets before investing.
-- Compounding: Even 1% better annual return compounds massively over 10+ years.
+### Module 10: Trading Systems (16 chapters)
+- SYSTEMATIC TRADING: Rules-based > discretionary. Backtest before deploying capital.
+- PAIR TRADING: Long underperformer + Short outperformer in same sector. Mean-reversion play.
+  * Spread = stock1 - beta × stock2. Trade when spread deviates 2+ sigma from mean.
+  * Cointegration test: stocks must move together long-term. Correlation alone is not enough.
+- RELATIVE VALUE: Compare PE, PB, EV/EBITDA of similar companies. Buy the cheaper one.
+- MOMENTUM STRATEGY: Buy top performers, sell bottom. 3-6 month lookback optimal.
+  * Momentum works in trending markets. Fails in mean-reverting/range-bound markets.
+- MEAN REVERSION: Oversold stocks (RSI<30, >2 sigma below mean) tend to bounce.
+- BREAKOUT SYSTEM: New 52-week high + volume = continuation. False breakout = no volume.
+- PYRAMIDING: Add to winners, not losers. Scale in 50-30-20 or 40-30-30.
+- EXPECTANCY = (Win% × Avg Win) - (Loss% × Avg Loss). Positive expectancy = profitable system.
+- SHARPE RATIO: (Return - Risk Free) / StdDev. >1 = good. >2 = excellent. <0.5 = poor.
 
-### Module 15: Inner Game of Trading (Psychology)
-- Confirmation bias: Don't hold losers hoping for recovery. Cut losses, let winners run.
-- Loss aversion: Selling winners too early, holding losers too long — the #1 retail mistake.
-- Recency bias: Last few trades influence perception more than they should.
-- DISCIPLINE: Follow the system. Emotional overrides lose money over time.
+### Module 11: Personal Finance — Mutual Funds (32 chapters)
+- ASSET ALLOCATION: Equity % = 100 - age (aggressive). Conservative = 100 - age - 10.
+- EMERGENCY FUND: 6 months expenses in liquid funds before investing in equity.
+- COMPOUNDING: Even 1% better annual return compounds massively over 10+ years. Start early.
+- MUTUAL FUND CATEGORIES: Large cap, Mid cap, Small cap, Flexi cap, Sectoral, Thematic.
+  * Large cap = stability. Mid cap = growth + moderate risk. Small cap = high growth + high risk.
+- SIP (Systematic Investment Plan): Rupee cost averaging. Invest fixed amount monthly regardless of market level.
+  * SIP works best in volatile markets — buys more units when cheap.
+- EXPENSE RATIO: Direct plans ~0.5-1%. Regular plans ~1.5-2.5%. Always prefer direct.
+- CAGR vs XIRR: CAGR for lump sum. XIRR for SIPs (accounts for timing of cash flows).
+- INDEX FUNDS: Track Nifty50/Sensex. Low cost, beat 80%+ of active funds over 10 years.
+- DEBT FUNDS: Liquid, ultra-short, short-term, gilt. For parking surplus. Credit risk assessment crucial.
+- ELSS: Tax saving under 80C. 3-year lock-in. Equity exposure with tax benefit.
+- REBALANCING: Annual rebalance back to target allocation. Forces buy low, sell high.
+
+### Module 12: Innerworth — Mind over Markets (603 chapters)
+- EMOTIONAL DISCIPLINE: Markets are designed to extract maximum pain from maximum participants.
+- FEAR & GREED: Fear at bottoms, greed at tops. Contrarian advantage for disciplined investors.
+- PROCESS OVER OUTCOME: A good process can produce a bad trade. Judge the process, not individual results.
+- PATIENCE: Big moves take time. Overtrading = commission drag + emotional exhaustion.
+- DETACHMENT: Don't fall in love with stocks. Sell when the thesis breaks, not when the price drops.
+- JOURNAL: Track every trade decision. Review weekly. Identify patterns in your mistakes.
+- COGNITIVE BIASES: Dunning-Kruger, sunk cost fallacy, herd mentality, overconfidence.
+- POSITION SIZING PSYCHOLOGY: Risk only 1-2% of capital per trade. No single trade should matter.
+
+### Module 13: Integrated Financial Modelling (18 chapters)
+- 3-STATEMENT MODEL: P&L + Balance Sheet + Cash Flow linked together.
+- REVENUE FORECASTING: Top-down (market size × share) or Bottom-up (units × price).
+- WORKING CAPITAL: Days inventory + Days receivable - Days payable = Cash conversion cycle.
+  * Improving CCC = business becoming more efficient. Deteriorating = red flag.
+- DEPRECIATION SCHEDULE: Asset life, method (SLM vs WDV). Affects profit and tax.
+- DEBT SCHEDULE: Repayment timeline, interest cost, refinancing risk.
+- DCF MODEL: Project FCF 5-10 years → Terminal value (perpetuity or exit multiple) → Discount at WACC.
+  * Terminal value often 60-80% of total value — assumptions here are critical.
+  * WACC = (E/V × Re) + (D/V × Rd × (1-tax)). Lower WACC = higher valuation.
+- SENSITIVITY ANALYSIS: Test valuation against different growth rates and discount rates.
+- COMPARABLE COMPANY ANALYSIS: EV/EBITDA, PE, PB multiples of peers. Relative valuation.
+
+### Module 14: Personal Finance — Insurance (9 chapters)
+- TERM INSURANCE: Pure protection. Cover = 10-15x annual income. Cheapest form of life cover.
+- HEALTH INSURANCE: Family floater vs individual. Super top-up for cost efficiency.
+- AVOID ULIPs & ENDOWMENT: Insurance + investment = bad product. Keep them separate.
+- CLAIM SETTLEMENT RATIO: >95% = reliable insurer. Check before buying.
+- RIDERS: Critical illness, accidental death. Add only if needed.
+
+### Module 15: Sector Analysis (17 chapters)
+- BANKING: NIM (Net Interest Margin) > 3%, NPA (Non-Performing Assets) < 3%, CAR > 12%.
+  * CASA ratio > 40% = cheap funding. PCR (Provision Coverage) > 70% = adequate buffer.
+  * Retail vs Corporate book: Retail = stable, Corporate = lumpy.
+  * Rate sensitivity: Rate cuts = NIM compression short-term, volume expansion long-term.
+- IT SERVICES: Revenue in USD, costs in INR. CC (Constant Currency) revenue growth = real growth.
+  * Deal TCV (Total Contract Value) pipeline. Employee utilization > 80%. Attrition < 15%.
+  * Margin levers: offshoring, pyramid optimization, automation.
+- PHARMA: ANDA filings (US generic market), domestic branded growth, API vs formulations.
+  * FDA approvals, warning letters, import alerts. Regulatory risk is #1 risk.
+  * CRAMS/CDMO: Contract manufacturing growth — long-term revenue visibility.
+- FMCG: Volume growth > price growth = healthy demand. Rural vs urban split.
+  * Gross margin stability. Distribution network = moat. Brand premium = pricing power.
+- AUTO: Monthly sales data. Dealer inventory days. EV transition risk for ICE players.
+  * Two-wheeler = rural economy proxy. PV (Passenger Vehicle) = urban affluence proxy.
+  * Margin pressure from raw material (steel, rubber, precious metals).
+- CEMENT: Capacity utilization > 75% = pricing power. Per-ton EBITDA is the key metric.
+  * Regional demand patterns. Infrastructure/housing cycle drives volume.
+- METALS & MINING: Commodity price cycle. China demand is the key driver.
+  * Operating leverage: small price increase = big profit jump (and vice versa).
+- REAL ESTATE: Pre-sales, collections, net debt/equity. Inventory overhang in months.
+  * RERA compliance. Carpet area pricing. Geographic concentration risk.
+- TELECOM: ARPU (Average Revenue Per User), subscriber adds, churn rate, data consumption.
+- ENERGY: Regulated vs deregulated. GRM (Gross Refining Margin) for refiners. PLF for power.
+
+### Module 16: Social Stock Exchanges (SSEs) (4 chapters)
+- Platform for social enterprises to raise funds from public.
+- Zero Coupon Zero Principal Instruments (ZCZP) for non-profits.
+- Social Impact Assessment: mandatory for listing on SSE.
+- Regulatory framework under SEBI — emerging space.
+
+### Module 17: NPS — National Pension System (9 chapters)
+- Tax benefit: 80CCD(1B) = extra ₹50,000 deduction beyond 80C limit.
+- Asset allocation: Equity (E), Corporate Bond (C), Government Securities (G), Alternative (A).
+- Active vs Auto choice. Auto reduces equity as age increases (lifecycle approach).
+- Tier 1 = pension (restricted withdrawal). Tier 2 = savings (flexible but no extra tax benefit).
+- Annuity at 60: Minimum 40% of corpus must buy annuity. Rest = lump sum (60% tax-free).
+- Low cost: Fund management charge ~0.09%. Cheapest long-term investment vehicle.
 
 ## SIGNAL VALIDATION RULES
 
@@ -9215,27 +9382,32 @@ For each signal, check:
 3. Is the stop loss justified by ATR? Not too tight (whipsaw risk) or too loose (excess loss)?
 4. Is this a panic exit in oversold conditions? (RSI < 30 might mean HOLD, not EXIT)
 5. Multi-timeframe check: Is weekly trend also bearish or just daily noise?
+6. Check Module 9: Are we being loss averse or following the system?
+7. Check Module 15: Is this sector-specific? Apply sector-appropriate metrics.
 
 **FRESH_BUY signals:**
 1. Does the stock pass fundamental quality gate? (ROE>12%, D/E appropriate for sector, FCF positive)
 2. Is the technical setup valid? (not buying into resistance, volume confirms, trend aligned)
-3. Is the entry at a reasonable valuation? (PE vs sector, PEG<1.5)
-4. Is there sector tailwind or headwind?
-5. Position sizing: Will this create concentration risk?
+3. Is the entry at a reasonable valuation? (PE vs sector, PEG<1.5, DCF margin of safety per Module 13)
+4. Is there sector tailwind or headwind? (Module 15 sector-specific checks)
+5. Position sizing: Will this create concentration risk? (Module 9 limits)
+6. Tax efficiency: Will this create STCG if sold within a year? (Module 7)
 
 **SWITCH signals:**
-1. Is the expected alpha > transaction costs (STT + brokerage + STCG tax if <1 year)?
+1. Is the expected alpha > transaction costs (STT + brokerage + STCG tax if <1 year)? (Module 7)
 2. Is the replacement stock genuinely better? (not just higher score — check WHY it scores higher)
 3. Are we switching at a bad time? (selling at 52-week low to buy at 52-week high = value destruction)
-4. Tax impact: If held <1 year, 15% STCG on gains. Factor this into switch decision.
+4. Tax impact: If held <1 year, 15% STCG on gains. Factor into switch decision. (Module 7)
 
 **SECTOR_WARN signals:**
-1. Is the sector decline structural or cyclical? (cyclical dips = opportunities, structural = exit)
+1. Is the sector decline structural or cyclical? (Module 15 sector context)
 2. Are ALL stocks in the sector declining or just the ones we hold? (stock-specific vs sector-wide)
+3. Check for macro triggers: RBI rate changes, currency moves, commodity prices (Module 8)
 
 **DRAWDOWN alerts:**
 1. Is the drawdown market-wide or portfolio-specific? Portfolio-specific = check individual stocks.
-2. At what VaR level are we? If near 1-week VaR, reduce exposure.
+2. At what VaR level are we? If near 1-week VaR, reduce exposure. (Module 9)
+3. Check Module 4/5: Is OI data showing fresh shorts or long unwinding?
 
 Respond in JSON:
 {
@@ -9248,12 +9420,13 @@ Respond in JSON:
       "signal_type": "EXIT/REDUCE/SWITCH/FRESH_BUY/etc",
       "verdict": "AGREE/DISAGREE/MODIFY",
       "confidence": 85,
+      "varsity_module": "Which Varsity module(s) informed this verdict (e.g. M2+M3+M15)",
       "varsity_reasoning": "Which Varsity principle supports/contradicts this signal",
       "recommendation": "What to actually do",
       "risk_flag": "Any risk the scoring engine might have missed"
     }
   ],
-  "portfolio_flags": ["Any overall portfolio concerns — concentration, correlation, regime mismatch"],
+  "portfolio_flags": ["Any overall portfolio concerns — concentration, correlation, regime mismatch, tax inefficiency"],
   "missed_signals": ["Stocks that SHOULD have a signal but don't — e.g. stock with bearish divergence but no EXIT signal"]
 }`;
 
@@ -9414,1048 +9587,3 @@ app.get('/api/ai/validation', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// =============================================================================
-// MIROFISH ENGINE — Multi-Agent Fallen Angel Recovery Predictor
-// Inspired by MiroFish's swarm intelligence approach
-// Uses Anthropic Claude API to run parallel agents with distinct personas
-// Each agent analyzes Fallen Angels from a different investment perspective
-// Synthesis agent produces final ranked recovery predictions
-// =============================================================================
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const MIROFISH_MODEL    = 'claude-sonnet-4-20250514';
-
-// Agent personas — each has a distinct investment philosophy
-const MIROFISH_AGENTS = [
-  {
-    id: 'fundamentalist',
-    name: 'Vikram Mehta — Fundamental Analyst',
-    persona: `You are a senior equity analyst at a top Indian brokerage with 20 years experience.
-You believe: businesses with strong ROE (>15%), low debt (D/E < 1), and growing EPS always recover.
-You distrust momentum. You trust balance sheets. You look for margin of safety.
-Varsity framework: ROCE>15% = real capital efficiency. DuPont ROE = quality check. FCF>0 = earnings are real.
-Sector expertise: Banking (NIM/CAR), FMCG, IT (CC revenue), Pharma.`,
-    weight: 0.22,
-  },
-  {
-    id: 'technician',
-    name: 'Priya Sharma — Technical Analyst',
-    persona: `You are a CMT-certified technical analyst with 12 years on NSE.
-You believe: price action never lies. RSI divergence, volume accumulation, and 200DMA reclaim = recovery.
-You are skeptical of stocks below 200DMA with declining OBV regardless of fundamentals.
-You use: RSI, MACD, Supertrend, Fibonacci retracement levels, ADX +DI/-DI crossover, Ichimoku cloud.
-Multi-timeframe: daily trend must align with weekly trend before calling recovery.`,
-    weight: 0.18,
-  },
-  {
-    id: 'contrarian',
-    name: 'Arjun Kapoor — Contrarian Investor',
-    persona: `You are a contrarian fund manager inspired by Howard Marks and Rakesh Jhunjhunwala.
-You believe: maximum pessimism = maximum opportunity. Stocks hated by everyone are often the best buys.
-You look for: highest quality businesses at maximum fear. RSI below 30 + strong ROE = buy signal.
-You are NOT afraid of stocks down 50%+ if fundamentals are intact.
-Varsity: "Bear Market Phase 3 = maximum fear = maximum opportunity for the prepared investor."`,
-    weight: 0.20,
-  },
-  {
-    id: 'risk_manager',
-    name: 'Meera Nair — Risk Manager',
-    persona: `You are a risk manager who has seen 2008, 2020, and multiple NSE crashes.
-You believe: avoid value traps at all costs. A cheap stock can always get cheaper.
-Red flags per Varsity M3: EPS declining, debt rising, promoter pledging, interest coverage < 1.5x.
-You only recommend stocks where downside is clearly limited by strong balance sheet.
-You use: Composite Risk Score, portfolio correlation, sector concentration limits (max 3 in same sector).`,
-    weight: 0.20,
-  },
-  {
-    id: 'quant',
-    name: 'Rahul Iyer — Quantitative Analyst',
-    persona: `You are a quant analyst who builds factor models for a hedge fund.
-You believe: recovery probability correlates with: depth of fall, RSI oversold level, ROE rank, sector momentum.
-You think in probabilities, not certainties. You size positions by conviction.
-You use historical base rates: stocks with RSI<30 + ROE>15% recover 73% of the time in 6 months.
-You weight the Composite Score (FA 35% + TA 25% + Momentum 20% + Risk 20%) heavily in your analysis.`,
-    weight: 0.15,
-  },
-  {
-    id: 'backtest_validator',
-    name: 'Sanjay Gupta — Backtest Validator',
-    persona: `You are a systematic trader who validates every call against historical patterns.
-You believe: if a similar setup didn't work historically, be skeptical. Data beats intuition.
-Your job: cross-check each Fallen Angel against its historical behavior:
-- Has this stock recovered before after similar falls? (depth + RSI + sector regime)
-- What is the base rate for recovery in this sector during similar market conditions?
-- Does the composite score meet the historical threshold for a profitable trade?
-Red flags: first time falling this much (no historical base), sector in structural decline, macro headwinds.
-You provide a CONFIDENCE MULTIPLIER (0.5x to 1.5x) for each pick based on historical backing.`,
-    weight: 0.05,
-  },
-];
-
-// Fetch macro context — India VIX, Nifty trend, FII/DII flows
-async function fetchMacroContext() {
-  const context = {
-    niftyTrend: 'unknown',
-    niftyRSI: null,
-    vix: null,
-    vixLevel: 'unknown',
-    fiiFlow: null,
-    marketRegime: 'UNKNOWN',
-    marketSentiment: 'neutral',
-  };
-  try {
-    // Nifty 50 trend from UNIVERSE stocks aggregate
-    const n50 = Object.values(stockFundamentals).filter(f=>f.grp==='NIFTY50'&&f.price&&f.dma200);
-    if (n50.length > 20) {
-      const abv200 = n50.filter(f=>f.price>f.dma200).length;
-      const pct = abv200/n50.length;
-      context.niftyTrend = pct > 0.65 ? 'bullish' : pct < 0.35 ? 'bearish' : 'mixed';
-      const avgRSI = n50.reduce((s,f)=>s+(f.rsi||50),0)/n50.length;
-      context.niftyRSI = +avgRSI.toFixed(1);
-      context.marketSentiment = avgRSI > 60 ? 'greedy' : avgRSI < 40 ? 'fearful' : 'neutral';
-    }
-    // VIX from Kite if available
-    if (kite && process.env.KITE_ACCESS_TOKEN) {
-      try {
-        const vixToken = validTokens['INDIAVIX'] || 264969;
-        const to = new Date().toISOString().split('T')[0];
-        const from = new Date(Date.now()-7*864e5).toISOString().split('T')[0];
-        const vixCandles = await kite.getHistoricalData(vixToken, 'day', from, to);
-        if (vixCandles?.length) {
-          context.vix = +vixCandles[vixCandles.length-1].close.toFixed(2);
-          context.vixLevel = context.vix > 20 ? 'high_fear' : context.vix > 14 ? 'moderate' : 'low_complacency';
-        }
-      } catch(e) {} // VIX fetch is optional
-    }
-    // Market regime from last scan log
-    const { rows } = await pool.query('SELECT regime FROM scan_log ORDER BY scanned_at DESC LIMIT 1');
-    if (rows[0]) context.marketRegime = rows[0].regime;
-  } catch(e) {}
-  return context;
-}
-
-// Fetch historical accuracy for backtest validator context
-async function fetchHistoricalAccuracy() {
-  try {
-    const { rows } = await pool.query(`
-      SELECT strategy, regime,
-        COUNT(*) as trades,
-        COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
-        AVG(pnl_pct) as avg_return,
-        AVG(CASE WHEN pnl > 0 THEN pnl_pct END) as avg_win
-      FROM paper_trades
-      WHERE status='CLOSED' AND pnl IS NOT NULL
-      GROUP BY strategy, regime
-      ORDER BY COUNT(*) DESC
-      LIMIT 10
-    `);
-    return rows.map(r=>({
-      strategy: r.strategy,
-      regime: r.regime,
-      trades: parseInt(r.trades),
-      winRate: +((r.wins/r.trades)*100).toFixed(0),
-      avgReturn: +parseFloat(r.avg_return).toFixed(1),
-    }));
-  } catch(e) { return []; }
-}
-
-// In-memory store for simulation results
-let mfLastSimulation = null;
-let mfSimulationRunning = false;
-
-async function callAnthropicAgent(systemPrompt, userPrompt, maxTokens) {
-  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set in Railway env vars');
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type':      'application/json',
-      'anthropic-version': '2023-06-01',
-      'x-api-key':         ANTHROPIC_API_KEY,
-    },
-    body: JSON.stringify({
-      model:      MIROFISH_MODEL,
-      max_tokens: maxTokens || 1200,
-      system:     systemPrompt,
-      messages:   [{ role: 'user', content: userPrompt }],
-    }),
-    signal: AbortSignal.timeout(55000),
-  });
-
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`Anthropic API error ${resp.status}: ${err.slice(0,200)}`);
-  }
-  const data = await resp.json();
-  return data.content?.[0]?.text || '';
-}
-
-async function runMiroFishAgent(agent, fallenAngels, macroCtx, historicalAccuracy) {
-  // Enriched stock list with composite scores fed to agents
-  const stockList = fallenAngels.slice(0, 15).map((s, i) => {
-    const comp = s._composite || {};
-    const roce = s.roce ?? (s.roe && s.debtToEq ? (s.roe * (1 + s.debtToEq)).toFixed(1) : null);
-    const mos  = s.eps && s.earGrowth > 0 && s.price
-      ? (((s.earGrowth * 1.5 * s.eps) - s.price) / s.price * 100).toFixed(0) + '%' : '?';
-    return (
-      `${i+1}. ${s.sym} (${s.name}) [${s.grp||'NSE'}]\n` +
-      `   COMPOSITE:${comp.composite||'?'}/100 FA:${comp.faScore||s.score||'?'} TA:${comp.taScore||'?'} MOM:${comp.momentumScore||'?'} RISK:${comp.riskScore||'?'} Conviction:${comp.conviction||'?'}\n` +
-      `   Fall:${Math.abs(s.pctFromHigh||0).toFixed(0)}% | RSI:${(s.rsi||'?').toString().slice(0,5)} | BB%B:${s.bbPct!=null?s.bbPct.toFixed(2):'?'} | Stoch:${s.stochK||'?'}\n` +
-      `   ROE:${s.roe||'?'}% | ROCE:${roce||'?'}% | D/E:${s.debtToEq||'?'}x | OPM:${s.opMargin||'?'}% | EPS gr:${s.earGrowth||'?'}% | MoS:${mos}\n` +
-      `   PE:${s.pe||'?'}x | PEG:${s.pe&&s.earGrowth>0?(s.pe/s.earGrowth).toFixed(2):'?'} | IntCov:${s.intCov||'?'}x | Promoter:${s.promoter||'?'}% | Pledged:${s.pledged||'?'}%\n` +
-      `   MACD:${s.macdBull?'Bull':'Bear'} | OBV:${s.obvRising?'Rising':'Falling'} | BullDiv:${s.bullishDiv?'YES':'no'} | Supertrend:${s.supertrendSig||'?'}\n` +
-      `   ADX:${s.adx||'?'} +DI:${s.adxPdi||'?'} -DI:${s.adxNdi||'?'} | Patterns:${s.candlePatterns?.length?s.candlePatterns.map(p=>p.pattern).join(','):'none'}\n` +
-      `   Sector:${s.sector||'?'} | MktCap:₹${s.mktCap?Math.round(s.mktCap)+'Cr':'?'}`
-    );
-  }).join('\n\n');
-
-  // Macro context block for all agents
-  const macroBlock = macroCtx ? `
-MACRO CONTEXT:
-- Nifty Trend: ${macroCtx.niftyTrend} | Avg RSI: ${macroCtx.niftyRSI} | Sentiment: ${macroCtx.marketSentiment}
-- India VIX: ${macroCtx.vix||'N/A'} (${macroCtx.vixLevel})${macroCtx.vixLevel==='high_fear'?' — fear peak, recoveries accelerate often':macroCtx.vixLevel==='low_complacency'?' — complacency, be selective':''}
-- Market Regime: ${macroCtx.marketRegime}
-` : '';
-
-  // Historical accuracy for backtest validator agent only
-  const histBlock = agent.id === 'backtest_validator' && historicalAccuracy?.length ? `
-PAPER TRADE HISTORY (use to validate setups):
-${historicalAccuracy.map(r=>`- ${r.strategy}/${r.regime}: ${r.winRate}% win (${r.trades} trades, avg ${r.avgReturn>0?'+':''}${r.avgReturn}%)`).join('\n')}
-Provide a confidence_multiplier (0.5=low historical backing, 1.0=neutral, 1.5=strong historical backing).
-` : '';
-
-  const system = `${agent.persona}
-${macroBlock}${histBlock}
-You are Agent ${MIROFISH_AGENTS.indexOf(agent)+1} of 6 in the MiroFish multi-agent simulation.
-Job: Identify which Fallen Angels will recover 15%+ in 3-6 months.
-
-SIZE-AWARE (Varsity M15): SMALLCAP needs ROE>15%,D/E<1,IntCov>2x. MIDCAP needs ROE>12%,D/E<1.5. LARGECAP: lowest risk.
-
-COMPOSITE SCORE GUIDE: >65=strong setup, 50-65=decent, <50=be cautious.
-
-JSON only (no markdown):
-{"agent":"${agent.name}","top_picks":[{"sym":"X","cap":"MIDCAP","conviction":80,"confidence_multiplier":1.1,"horizon":"3 months","target_upside":25,"thesis":"reason","risk":"main risk","composite_score_view":"agree/disagree and why"}],"avoid":["SYM"],"market_view":"macro impact on recovery","agent_insight":"unique angle"}
-Exactly 5 picks, ordered by conviction desc.`;
-
-  const user = `Fallen Angels:\n\n${stockList}\n\nPick 5 recoveries. JSON only.`;
-  const raw = await callAnthropicAgent(system, user, agent.id === 'backtest_validator' ? 1500 : 1200);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
-}
-
-async function runMiroFishSynthesis(agentResults, fallenAngels) {
-  const allPicks = {};
-  const allAvoids = new Set();
-
-  // Aggregate votes with weights
-  agentResults.forEach(({ agent, result, weight }) => {
-    (result.top_picks || []).forEach(p => {
-      if (!allPicks[p.sym]) allPicks[p.sym] = { sym:p.sym, votes:0, weightedConviction:0, theses:[], risks:[], horizons:[], upsides:[] };
-      allPicks[p.sym].votes++;
-      allPicks[p.sym].weightedConviction += (p.conviction||50) * weight;
-      allPicks[p.sym].theses.push(`${agent.split('—')[0].trim()}: ${p.thesis}`);
-      allPicks[p.sym].risks.push(p.risk);
-      allPicks[p.sym].horizons.push(p.horizon);
-      allPicks[p.sym].upsides.push(p.target_upside||15);
-    });
-    (result.avoid || []).forEach(s => allAvoids.add(s));
-  });
-
-  // Score each stock: votes × weighted conviction
-  const ranked = Object.values(allPicks)
-    .map(s => ({
-      ...s,
-      finalScore: Math.round(s.weightedConviction / s.votes * (s.votes / agentResults.length * 100)) / 10,
-      avgUpside:  Math.round(s.upsides.reduce((a,b)=>a+b,0)/s.upsides.length),
-      consensus:  s.votes >= 3 ? 'High' : s.votes === 2 ? 'Medium' : 'Low',
-    }))
-    .sort((a,b) => b.finalScore - a.finalScore);
-
-  // Synthesis agent — final verdict
-  const summaryText = ranked.slice(0,8).map(s =>
-    `${s.sym}: ${s.votes} agents picked it, conviction ${s.finalScore.toFixed(0)}, avg upside ${s.avgUpside}%, consensus: ${s.consensus}`
-  ).join('\n');
-
-  const system = `You are a senior portfolio manager synthesizing a MiroFish multi-agent analysis.
-5 agents have analyzed Fallen Angel stocks on NSE. Your job: produce the FINAL investment report.
-
-Respond in JSON only:
-{
-  "simulation_title": "MiroFish Fallen Angel Recovery Simulation — NSE",
-  "simulation_date": "${new Date().toLocaleDateString('en-IN')}",
-  "market_regime": "Bull/Bear/Sideways + one sentence explanation",
-  "top_recovery_picks": [
-    {
-      "rank": 1,
-      "sym": "SYMBOLNAME",
-      "verdict": "Strong Recovery / Likely Recovery / Speculative",
-      "conviction_score": 87,
-      "avg_target_upside": 32,
-      "recommended_horizon": "3 months",
-      "consensus": "High/Medium/Low",
-      "bull_case": "Why it recovers",
-      "bear_case": "Why it doesn't",
-      "position_sizing": "Core (5-8%) / Moderate (3-5%) / Small (1-3%)"
-    }
-  ],
-  "stocks_to_avoid": ["SYM1", "SYM2"],
-  "avoid_reason": "One sentence why these are value traps",
-  "key_risks": ["Risk 1", "Risk 2", "Risk 3"],
-  "agent_consensus_summary": "2-3 sentences on where all agents agreed and disagreed"
-}
-Pick top 7 recovery picks. Order by conviction.`;
-
-  const user = `Agent voting results:\n${summaryText}\n\nAgent market views:\n${
-    agentResults.map(a => `${a.agent}: ${a.result.market_view}`).join('\n')
-  }\n\nProduce the final synthesis report. JSON only.`;
-
-  const raw = await callAnthropicAgent(system, user);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  const synthesis = JSON.parse(clean);
-
-  // Enrich synthesis with full stock data from ProTrader
-  synthesis.top_recovery_picks = synthesis.top_recovery_picks.map(pick => {
-    const stock = fallenAngels.find(s => s.sym === pick.sym);
-    return {
-      ...pick,
-      stock_data: stock ? {
-        price: stock.price, pctFromHigh: stock.pctFromHigh, rsi: stock.rsi,
-        roe: stock.roe, debtToEq: stock.debtToEq, pe: stock.pe,
-        earGrowth: stock.earGrowth, opMargin: stock.opMargin,
-        macdBull: stock.macdBull, obvRising: stock.obvRising,
-        bullishDiv: stock.bullishDiv, dma200: stock.dma200,
-        fallenScore: stock.fallenScore, fallenVerdict: stock.fallenVerdict,
-        stopLoss: stock.stopLoss, rrRatio: stock.rrRatio,
-      } : null,
-      agent_theses: ranked.find(r=>r.sym===pick.sym)?.theses || [],
-    };
-  });
-
-  return { synthesis, agentDetails: ranked, allAvoids: [...allAvoids] };
-}
-
-async function runMiroFishSimulation() {
-  if (mfSimulationRunning) return { error: 'Simulation already running' };
-  if (!ANTHROPIC_API_KEY)  return { error: 'Set ANTHROPIC_API_KEY in Railway environment variables' };
-
-  mfSimulationRunning = true;
-  console.log('🐟 MiroFish simulation starting (6-agent + macro context)...');
-
-  try {
-    const all = Object.values(stockFundamentals);
-    if (!all.length) return { error: 'No scored stocks yet. Wait for scoring to complete.' };
-
-    // Filter Fallen Angels
-    const fallenAngels = all
-      .filter(s => {
-        const score   = s.score || 0;
-        const minScore= s.grp==='SMALLCAP' ? 55 : s.grp==='MIDCAP' ? 52 : 45;
-        const minFall = s.grp==='SMALLCAP' ? -25 : -20;
-        return score >= minScore && (s.pctFromHigh||0) <= minFall && (s.rsi||50) <= 55;
-      })
-      .sort((a,b) => (b.fallenScore||b.score||0) - (a.fallenScore||a.score||0))
-      .slice(0, 20);
-
-    // Phase 5: Pre-compute composite score for each Fallen Angel — fed to all agents
-    fallenAngels.forEach(s => {
-      try {
-        const taSignal = {
-          signal: s.macdBull && s.obvRising ? 'BUY' : 'NEUTRAL',
-          score:  (s.macdBull?3:0) + (s.obvRising?2:0) + (s.bullishDiv?3:0) + (s.supertrendSig==='bullish'?2:0),
-        };
-        s._composite = computeCompositeScore(s, taSignal);
-      } catch(e) { s._composite = {}; }
-    });
-
-    const capBreakdown = {
-      NIFTY50:  fallenAngels.filter(s=>s.grp==='NIFTY50').length,
-      NEXT50:   fallenAngels.filter(s=>s.grp==='NEXT50').length,
-      MIDCAP:   fallenAngels.filter(s=>s.grp==='MIDCAP').length,
-      SMALLCAP: fallenAngels.filter(s=>s.grp==='SMALLCAP').length,
-    };
-    console.log(`🐟 MiroFish: ${fallenAngels.length} Fallen Angels — ${JSON.stringify(capBreakdown)}`);
-
-    // Phase 5: Fetch macro context + historical accuracy in parallel
-    const [macroCtx, historicalAccuracy] = await Promise.all([
-      fetchMacroContext(),
-      fetchHistoricalAccuracy(),
-    ]);
-    console.log(`🐟 Macro: Nifty ${macroCtx.niftyTrend} | VIX ${macroCtx.vix||'N/A'} | Regime: ${macroCtx.marketRegime}`);
-
-    // Run all 6 agents in parallel (Agent #6 = backtest_validator)
-    const agentPromises = MIROFISH_AGENTS.map(async agent => {
-      try {
-        console.log(`🐟 Agent running: ${agent.name}`);
-        const result = await runMiroFishAgent(agent, fallenAngels, macroCtx, historicalAccuracy);
-        return { agent: agent.name, id: agent.id, result, weight: agent.weight };
-      } catch(e) {
-        console.log(`🐟 Agent ${agent.id} failed: ${e.message}`);
-        return null;
-      }
-    });
-
-    const agentResults = (await Promise.all(agentPromises)).filter(Boolean);
-    if (agentResults.length < 2) return { error: `Too few agents succeeded (${agentResults.length}). Check API key.` };
-
-    console.log(`🐟 MiroFish: ${agentResults.length}/6 agents done, running synthesis...`);
-    const { synthesis, agentDetails, allAvoids } = await runMiroFishSynthesis(agentResults, fallenAngels);
-
-    mfLastSimulation = {
-      ...synthesis,
-      agent_details:          agentDetails,
-      all_avoids:             allAvoids,
-      agent_count:            agentResults.length,
-      fallen_angels_analyzed: fallenAngels.length,
-      cap_breakdown:          capBreakdown,
-      macro_context:          macroCtx,
-      run_at:                 Date.now(),
-      run_at_str:             new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-    };
-
-    await dbSet('mirofish_last_simulation', JSON.stringify(mfLastSimulation));
-    console.log(`🐟 MiroFish complete. Top pick: ${synthesis.top_recovery_picks?.[0]?.sym}`);
-    return mfLastSimulation;
-
-  } catch(e) {
-    console.log('🐟 MiroFish error:', e.message);
-    return { error: e.message };
-  } finally {
-    mfSimulationRunning = false;
-  }
-}
-
-// Load last simulation from DB on startup
-(async () => {
-  try {
-    const cached = await dbGet('mirofish_last_simulation');
-    if (cached) {
-      mfLastSimulation = JSON.parse(cached);
-      console.log(`🐟 MiroFish: loaded last simulation from DB (${mfLastSimulation.run_at_str})`);
-    }
-  } catch(e) {}
-})();
-
-// API endpoints
-app.post('/api/mirofish/run', async(req,res) => {
-  if (!ANTHROPIC_API_KEY) {
-    return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables first.' });
-  }
-  if (mfSimulationRunning) {
-    return res.json({ running: true, message: 'Simulation in progress... check /api/mirofish/status' });
-  }
-  res.json({ message: 'MiroFish simulation started. 6 agents + macro context analyzing Fallen Angels...', estimated_time: '90-120 seconds' });
-  runMiroFishSimulation().catch(e => console.log('MiroFish run error:', e.message));
-});
-
-app.get('/api/mirofish/status', (req,res) => {
-  res.json({
-    running:          mfSimulationRunning,
-    hasResult:        !!mfLastSimulation,
-    lastRun:          mfLastSimulation?.run_at_str || null,
-    topPick:          mfLastSimulation?.top_recovery_picks?.[0]?.sym || null,
-    apiKeyConfigured: !!ANTHROPIC_API_KEY,
-  });
-});
-
-app.get('/api/mirofish/result', (req,res) => {
-  if (!mfLastSimulation) {
-    return res.json({ error: 'No simulation run yet. POST /api/mirofish/run to start.' });
-  }
-  res.json(mfLastSimulation);
-});
-
-// MiroFish — Fallen Angel inline prediction (per stock, called from card)
-app.post('/api/mirofish/fa-predict', async(req,res) => {
-  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
-  const f = req.body;
-  const n = v => (v==null||v===''||isNaN(+v)) ? 'N/A' : (+v).toFixed(2);
-  const p = v => (v==null||v===''||isNaN(+v)) ? 'N/A' : (+v).toFixed(1)+'%';
-
-  const system = `You are a panel of 5 expert NSE equity analysts (Fundamental, Technical, Contrarian, Risk, Quant).
-You analyze a Fallen Angel stock — a quality business that has fallen 20%+ from its peak.
-Your job: predict the stock price at 6 months, 1 year, 2 years, 3 years from today.
-
-Base your prediction on all provided data. Be realistic — not bullish marketing.
-If debt is high or earnings are collapsing, say so.
-
-Respond ONLY in valid JSON, no markdown:
-{
-  "current_price": 148.4,
-  "price_6m": 172.0,
-  "price_1y": 195.0,
-  "price_2y": 235.0,
-  "price_3y": 280.0,
-  "verdict": "Strong Recovery / Likely Recovery / Slow Recovery / Value Trap",
-  "confidence": "High / Medium / Low",
-  "analysis": "2-3 sentence explanation of why these prices",
-  "key_risk": "Single biggest risk to this prediction"
-}
-All prices must be in INR. Be consistent — prices should reflect the analysis.`;
-
-  const user = `Stock: ${f.sym} — ${f.name||f.sym}
-Sector: ${f.sector||'N/A'} | Group: ${f.grp||'N/A'}
-
-PRICE ACTION
-  Current: ₹${f.price||'N/A'} | 52W High: ₹${f.wk52Hi||'N/A'} | 52W Low: ₹${f.wk52Lo||'N/A'}
-  Down from peak: ${p(f.pctFromHigh)} | vs 200DMA: ${p(f.pctAbove200)}
-
-FUNDAMENTALS (Varsity Ch12 Checklist)
-  ROE: ${p(f.roe)} | D/E: ${n(f.debtToEq)}x | PE: ${n(f.pe)}x | PEG: ${f.pe&&f.earGrowth>0?n(f.pe/f.earGrowth):'N/A'}
-  PE/ROE: ${f.pe&&f.roe?n(f.pe/f.roe):'N/A'} | Op Margin: ${p(f.opMargin)}
-  EPS Growth: ${p(f.earGrowth)} | Revenue Growth: ${p(f.revGrowth)}
-
-OVERSOLD SIGNALS (Varsity M2 — all 4 indicators)
-  RSI: ${n(f.rsi)} ${(+f.rsi||50)<=30?'(EXTREME OVERSOLD)':''} 
-  Stochastic: ${n(f.stochK)} ${(+f.stochK||50)<=20?'(OVERSOLD CONFIRMED)':''}
-  Bollinger %B: ${n(f.bbPct)} ${(+f.bbPct||0.5)<=0?'(BELOW LOWER BAND — EXTREME)':''}
-  ADX: ${n(f.adx)} | Beta: ${n(f.beta)} | Annual Volatility: ${p(f.annualVol)}
-
-RECOVERY SIGNALS (Varsity M2)
-  RSI Bullish Divergence: ${f.bullishDiv?'YES — Varsity #1 reversal signal':'No'}
-  RSI Bearish Divergence: ${f.bearishDiv?'YES — warning of further downside':'No'}
-  MACD: ${f.macdBull?'Bullish crossover':'Bearish'} | Histogram: ${n(f.macdHist)}
-  OBV: ${f.obvRising?'Rising (institutional accumulation)':'Falling (distribution)'}
-  Volume Ratio: ${n(f.volRatio)}x avg ${(+f.volRatio||1)>=2?'(CLIMAX — possible exhaustion)':''}
-  Supertrend: ${f.supertrendSig||'N/A'} | 200DMA: ₹${f.dma200||'N/A'} | 50DMA: ₹${f.dma50||'N/A'}
-
-PROTRADER FALLEN ANGEL SCORING
-  FA Score: ${f.fallenScore||'N/A'}/100 | Verdict: ${f.fallenVerdict||'N/A'}
-  Stop Loss: ₹${f.stopLoss||'N/A'} (${f.stopReason||'N/A'}) | Risk: ${p(f.riskPct)}
-  Target: ₹${f.target||'N/A'} (${f.targetReason||'N/A'}) | Reward: ${p(f.rewardPct)}
-  R:R Ratio: ${f.rrRatio||'N/A'}x ${f.goodRR?'✓ Acceptable':'⚠ Below 2:1'}
-
-Using all Varsity signals above, predict price at 6M, 1Y, 2Y, 3Y. Return JSON only.`;
-
-  try {
-    const raw = await callAnthropicAgent(system, user);
-    const clean = raw.replace(/```json|```/g,'').trim();
-    res.json(JSON.parse(clean));
-  } catch(e) { res.json({ error: e.message }); }
-});
-
-// MiroFish — Portfolio prediction (multiple stocks + MFs, per-item + total)
-app.post('/api/mirofish/portfolio-predict', async(req,res) => {
-  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
-  const { items, years } = req.body;
-  if (!items||!items.length) return res.json({ error: 'No items provided' });
-
-  const system = `You are MiroFish, a senior Indian portfolio manager with deep knowledge of NSE equity and mutual fund markets.
-Your job: predict realistic portfolio growth over ${years} year${years>1?'s':''} based on each asset's actual historical data.
-
-CAGR guidelines by asset type (use historical data provided as your primary anchor):
-- Small Cap MF: 18-26% CAGR based on historical. Apply mild mean reversion for 20Y+ horizons (-1 to -3%).
-- Mid Cap MF: 16-22% CAGR based on historical. Slight mean reversion for 20Y+ (-1 to -2%).
-- Flexi Cap MF: 14-20% CAGR based on historical.
-- Large Cap MF / Index: 11-14% CAGR.
-- High-quality stocks (ROE>20%, golden cross): 14-22% CAGR.
-- Average stocks: 10-14% CAGR.
-
-DO NOT default to 12% unless the asset genuinely has low historical returns.
-USE the historical_cagr_3y field as your primary anchor. Adjust for horizon, not drastically.
-Nifty average is 12% — small/mid cap should be HIGHER than this, not equal.
-
-Respond ONLY in valid JSON, no markdown:
-{
-  "items": [
-    {
-      "sym": "Fund or stock name",
-      "name": "Full name",
-      "type": "mf or stock",
-      "amount": 100000,
-      "cagr": 19.5,
-      "projected": 1280000,
-      "thesis": "One sentence anchored to historical data"
-    }
-  ],
-  "total_projected": 2500000,
-  "portfolio_cagr": 18.2,
-  "risk_level": "High",
-  "confidence": "High/Medium/Low",
-  "portfolio_insight": "2-3 sentence overall assessment referencing the actual historical returns",
-  "key_risk": "Biggest single risk to this portfolio",
-  "best_case": 3000000,
-  "worst_case": 1800000,
-  "inflation_adjusted": 900000
-}`;
-
-  const itemsText = items.map((x, i) => {
-    const n = v => (v == null || isNaN(v)) ? null : +v;
-    if (x.type === 'mf') {
-      const lines = [
-        `${i+1}. [MUTUAL FUND] ${x.name}`,
-        `   Category: ${x.cat} | Risk: ${x.sebi_risk||x.risk||'N/A'} | AMC: ${x.amc||'N/A'}`,
-        `   Amount invested: ₹${x.amount.toLocaleString('en-IN')}`,
-        `   --- ACTUAL HISTORICAL RETURNS (use as primary anchor) ---`,
-        `   3Y CAGR: ${n(x.cagr_3y)!=null ? n(x.cagr_3y).toFixed(1)+'%' : 'N/A'}`,
-        `   5Y CAGR: ${n(x.cagr_5y)!=null ? n(x.cagr_5y).toFixed(1)+'%' : 'N/A'}`,
-        `   10Y CAGR: ${n(x.cagr_10y)!=null ? n(x.cagr_10y).toFixed(1)+'%' : 'N/A'}`,
-        `   Rolling 3Y avg: ${n(x.rolling_3y)!=null ? n(x.rolling_3y).toFixed(1)+'%' : 'N/A'}`,
-        `   --- RISK METRICS ---`,
-        `   Sharpe: ${n(x.sharpe)!=null ? n(x.sharpe).toFixed(3) : 'N/A'} | Sortino: ${n(x.sortino)!=null ? n(x.sortino).toFixed(3) : 'N/A'}`,
-        `   Max Drawdown: ${n(x.max_drawdown)!=null ? n(x.max_drawdown).toFixed(1)+'%' : 'N/A'}`,
-        `   --- COST & SIZE ---`,
-        `   Expense Ratio: ${n(x.expense_ratio)!=null ? n(x.expense_ratio).toFixed(2)+'%' : 'N/A'} | AUM: ${n(x.aum_cr)!=null ? '₹'+Math.round(n(x.aum_cr)).toLocaleString('en-IN')+' Cr' : 'N/A'}`,
-        `   Alpha vs benchmark: ${n(x.alpha)!=null ? n(x.alpha).toFixed(2) : 'N/A'}`,
-        `   vs Category 3Y: ${n(x.vs_cat_3y)!=null ? n(x.vs_cat_3y).toFixed(2)+'x' : 'N/A'} | vs Category 5Y: ${n(x.vs_cat_5y)!=null ? n(x.vs_cat_5y).toFixed(2)+'x' : 'N/A'}`,
-        `   ProTrader Score: ${x.score||'N/A'}/100`,
-        `   SEBI/AMC record: ${x.amc_sebi||'clean'}`,
-      ];
-      return lines.filter(Boolean).join('\n');
-    } else {
-      const lines = [
-        `${i+1}. [STOCK] ${x.name} (${x.grp||'NSE'} | ${x.sector||'N/A'})`,
-        `   Amount invested: ₹${x.amount.toLocaleString('en-IN')}`,
-        `   Price: ₹${n(x.price)!=null ? n(x.price).toFixed(1) : 'N/A'}`,
-        `   --- FUNDAMENTALS ---`,
-        `   ROE: ${n(x.roe)!=null ? n(x.roe).toFixed(1)+'%' : 'N/A'} | P/E: ${n(x.pe)!=null ? n(x.pe).toFixed(1) : 'N/A'} | D/E: ${n(x.debtToEq)!=null ? n(x.debtToEq).toFixed(2)+'x' : 'N/A'}`,
-        `   Op Margin: ${n(x.opMargin)!=null ? n(x.opMargin).toFixed(1)+'%' : 'N/A'}`,
-        `   EPS Growth: ${n(x.earGrowth)!=null ? n(x.earGrowth).toFixed(1)+'%' : 'N/A'} | Rev Growth: ${n(x.revGrowth)!=null ? n(x.revGrowth).toFixed(1)+'%' : 'N/A'}`,
-        `   --- TECHNICAL ---`,
-        `   From 52W High: ${n(x.pctFromHigh)!=null ? n(x.pctFromHigh).toFixed(1)+'%' : 'N/A'} | 52W Change: ${n(x.wk52Change)!=null ? n(x.wk52Change).toFixed(1)+'%' : 'N/A'}`,
-        `   RSI: ${n(x.rsi)!=null ? n(x.rsi).toFixed(0) : 'N/A'} | Golden Cross: ${x.goldenCross==null?'N/A':x.goldenCross?'Yes (bullish)':'No (bearish)'}`,
-        `   200 DMA: ${n(x.dma200)!=null ? '₹'+n(x.dma200).toFixed(0) : 'N/A'}`,
-        `   ProTrader Score: ${x.score||'N/A'}/100`,
-      ];
-      return lines.filter(Boolean).join('\n');
-    }
-  }).join('\n\n');
-
-  const user = `Predict portfolio growth over ${years} year${years>1?'s':''}. All historical data is provided above — USE IT as your anchor.
-
-${itemsText}
-
-Rules:
-- For MF: base your CAGR on the actual historical 3Y/5Y CAGR shown. A mid cap fund with 24% 3Y CAGR should NOT get 12% prediction.
-- Apply modest mean reversion for 20Y+ horizons (subtract 1-3%), but never collapse to Nifty average unless it's an index fund.
-- For stocks: anchor to ROE, EPS growth, and sector trajectory.
-- best_case = portfolio_cagr + 4%, worst_case = portfolio_cagr - 5%, inflation_adjusted assumes 6% inflation.
-- total_projected and each item projected must be mathematically consistent with the CAGRs and years.
-
-JSON only, no markdown.`;
-
-  try {
-    const raw = await callAnthropicAgent(system, user);
-    const clean = raw.replace(/```json|```/g,'').trim();
-    res.json(JSON.parse(clean));
-  } catch(e) { res.json({ error: e.message }); }
-});
-
-
-app.post('/api/mirofish/mf-predict', async(req,res) => {
-  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
-
-  const f = req.body; // all 55 fields
-  const catLabel = f.cat==='smallcap'?'Small Cap':f.cat==='midcap'?'Mid Cap':'Flexi Cap';
-  const n = v => (v==null||v===''||isNaN(v)) ? 'N/A' : (+v).toFixed(2);
-  const p = v => (v==null||v===''||isNaN(v)) ? 'N/A' : (+v).toFixed(2)+'%';
-  const cr = v => (v==null||v===''||isNaN(v)) ? 'N/A' : '₹'+Math.round(+v).toLocaleString('en-IN')+' Cr';
-
-  const system = `You are a panel of 3 senior Indian mutual fund analysts with 20+ years each.
-You have access to the COMPLETE Tickertape dataset for this fund — all 55 data points.
-Your job: analyze everything and produce a realistic long-term wealth prediction for ₹1 Lakh invested today.
-
-Rules:
-- Be brutally honest. Account for expense drag, mean reversion, AUM size effects, portfolio quality.
-- High AUM (>₹50K Cr) in small/mid cap = performance drag. Flag it.
-- High expense ratio = compounding headwind. Quantify it.
-- Alpha near 0 = manager not adding value above benchmark.
-- Low sharpe + high drawdown = bad risk/reward even if returns look good.
-- Your adjusted_cagr must be LOWER than historical if AUM is very large, expense is high, or alpha is 0.
-- For 40-year horizon: use 0.75x of adjusted_cagr (regulatory/structural headwinds compound).
-
-Respond ONLY in valid JSON, no markdown, no preamble:
-{
-  "prediction": "3-4 sentence realistic forward outlook covering returns, risks, and suitability",
-  "adjusted_cagr": 14.5,
-  "cagr_7y": 15.2,
-  "cagr_10y": 14.8,
-  "cagr_20y": 13.1,
-  "cagr_30y": 11.8,
-  "cagr_40y": 10.9,
-  "confidence": "High/Medium/Low",
-  "horizon": "7-40 years",
-  "key_driver": "Single most important factor for future returns",
-  "main_risk": "Single biggest risk to long-term performance",
-  "expense_drag_note": "How expense ratio hurts compounding over 40 years",
-  "aum_risk": "Impact of fund size on future alpha generation",
-  "verdict": "Strong Hold / Good for SIP / Reduce exposure / Avoid"
-}`;
-
-  const user = `=== COMPLETE FUND DATA (55 fields from Tickertape) ===
-
-IDENTITY
-  Fund: ${f.name} | Category: ${catLabel} (${f.sub_category||'N/A'})
-  AMC: ${f.amc||'N/A'} | Plan: ${f.plan||'N/A'}
-  Fund Manager: ${f.fund_manager||'N/A'}
-  Benchmark: ${f.benchmark||'N/A'}
-  SEBI Risk: ${f.sebi_risk||'N/A'} | SIP Allowed: ${f.sip_allowed||'N/A'}
-  Inception: ${f.months_inception||'N/A'} months ago
-  NAV: ₹${f.nav||'N/A'} | AUM: ${cr(f.aum)}
-  Min Lumpsum: ₹${f.min_lumpsum||'N/A'} | Min SIP: ₹${f.min_sip||'N/A'}
-  Exit Load: ${f.exit_load||'N/A'}% | Lock-in: ${f.lock_in||'N/A'} days
-
-RETURNS
-  1Y: ${p(f.ret_1y)} | 3M: ${p(f.ret_3m)} | 6M: ${p(f.ret_6m)}
-  3Y CAGR: ${p(f.cagr_3y)} | 5Y CAGR: ${p(f.cagr_5y)} | 10Y CAGR: ${p(f.cagr_10y)}
-  Rolling 3Y avg: ${p(f.rolling_3y)}
-  Alpha (vs benchmark): ${n(f.alpha)}
-  % from ATH: ${p(f.pct_from_ath)}
-
-vs CATEGORY (ratio: >1 = outperforming)
-  vs Cat 1Y: ${n(f.vs_cat_1y)} | vs Cat 3Y: ${n(f.vs_cat_3y)}
-  vs Cat 5Y: ${n(f.vs_cat_5y)} | vs Cat 10Y: ${n(f.vs_cat_10y)}
-
-RISK METRICS
-  Sharpe: ${n(f.sharpe)} | Sortino: ${n(f.sortino)}
-  Volatility: ${p(f.volatility)} | Category StdDev: ${p(f.category_stddev)}
-  Max Drawdown: ${p(f.max_drawdown)} | Tracking Error: ${n(f.tracking_error)}
-
-COST
-  Expense Ratio: ${p(f.expense_ratio)}
-  (Impact: ₹1L at ${p(f.expense_ratio)} drag over 40Y = ~₹${Math.round(100000*Math.pow(1.12,40)-100000*Math.pow(1.12-(+f.expense_ratio||0)/100,40)).toLocaleString('en-IN')} lost to fees)
-
-PORTFOLIO COMPOSITION
-  Equity: ${p(f.pct_equity)} | Debt: ${p(f.pct_debt)} | Cash: ${p(f.pct_cash)}
-  Large Cap: ${p(f.pct_largecap)} | Mid Cap: ${p(f.pct_midcap)} | Small Cap: ${p(f.pct_smallcap)}
-  Other: ${p(f.pct_other)}
-
-BOND QUALITY (if any debt)
-  A-rated: ${p(f.pct_a_bonds)} | B-rated: ${p(f.pct_b_bonds)} | Poor quality: ${p(f.pct_poor_bonds)}
-  Corp Debt: ${p(f.pct_corp_debt)} | Sovereign: ${p(f.pct_sovereign)}
-  Avg Maturity: ${n(f.avg_maturity)} yrs | Avg YTM: ${p(f.avg_ytm)} | Category YTM: ${p(f.category_ytm)}
-
-CONCENTRATION
-  Top 3 holdings: ${p(f.top3_conc)} | Top 5: ${p(f.top5_conc)} | Top 10: ${p(f.top10_conc)}
-
-VALUATION
-  PE Ratio: ${n(f.pe_ratio)}x | Category PE: ${n(f.category_pe)}x
-  (PE vs category: ${f.pe_ratio&&f.category_pe ? ((+f.pe_ratio/(+f.category_pe)-1)*100).toFixed(1)+'% premium/discount' : 'N/A'})
-
-PROTRADER SCORING
-  Score: ${f.score||'N/A'}/100 | Rank in category: #${f.rank||'N/A'}
-  AMC SEBI status: ${f.amc_sebi||'Clean'}
-
-=== QUESTION ===
-If ₹1,00,000 is invested today in lumpsum, what will it grow to in 7, 10, 20, 30, and 40 years?
-Give per-year CAGR for each horizon. Account for ALL the above data — especially AUM size, expense ratio, alpha, and mean reversion.`;
-
-  try {
-    const raw = await callAnthropicAgent(system, user);
-    const clean = raw.replace(/```json|```/g,'').trim();
-    res.json(JSON.parse(clean));
-  } catch(e) {
-    res.json({ error: e.message });
-  }
-});
-
-
-// =============================================================================
-// AI PORTFOLIO — DEEP MIROFISH PREDICTION ENGINE
-// Built on: Varsity scoring pillars + 5-agent debate + Varsity CAGR frameworks
-// =============================================================================
-
-// Varsity-derived CAGR anchors per asset class (Module 11 + Module 15)
-const VARSITY_CAGR_ANCHORS = {
-  'Small Cap':    { base: 19, high: 27, low: 14, meanReversion20y: 3, meanReversion30y: 5 },
-  'Mid Cap':      { base: 17, high: 24, low: 13, meanReversion20y: 2, meanReversion30y: 4 },
-  'Flexi Cap':    { base: 15, high: 21, low: 12, meanReversion20y: 2, meanReversion30y: 3 },
-  'Large Cap':    { base: 13, high: 16, low: 10, meanReversion20y: 1, meanReversion30y: 2 },
-  'Index':        { base: 12, high: 14, low: 10, meanReversion20y: 0, meanReversion30y: 0 },
-  'ELSS':         { base: 14, high: 20, low: 11, meanReversion20y: 2, meanReversion30y: 3 },
-  'Contra':       { base: 14, high: 19, low: 10, meanReversion20y: 2, meanReversion30y: 3 },
-  'IT':           { base: 13, high: 20, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
-  'Banking':      { base: 12, high: 18, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
-  'Consumer':     { base: 13, high: 18, low: 9,  meanReversion20y: 2, meanReversion30y: 3 },
-  'Energy':       { base: 11, high: 16, low: 7,  meanReversion20y: 2, meanReversion30y: 3 },
-  'Pharma':       { base: 12, high: 17, low: 8,  meanReversion20y: 2, meanReversion30y: 3 },
-  'default_mf':   { base: 14, high: 20, low: 10, meanReversion20y: 2, meanReversion30y: 3 },
-  'default_stock':{ base: 12, high: 18, log: 7,  meanReversion20y: 2, meanReversion30y: 3 },
-  'crypto':       { base: 30, high: 60, low: -50, meanReversion20y: 10, meanReversion30y: 15 },
-};
-
-// 5 agents — each applies Varsity principles from their perspective
-const AIP_AGENTS = [
-  {
-    id: 'vikram',
-    name: 'Vikram (FA)',
-    persona: `You are Vikram Mehta, Fundamental Analyst, trained on Zerodha Varsity Modules 3 and 15.
-You evaluate every asset through a business quality lens:
-- For MF: Rolling 3Y CAGR is more reliable than point-to-point. Sortino > Sharpe (Module 11).
-  Expense ratio compounding is brutal — 0.5% more TER costs ₹40L on ₹10L over 30Y.
-  AUM above ₹50K Cr in small/mid cap ALWAYS creates performance drag. Benchmark alpha near 0 = closet indexer.
-- For stocks: ROE>15% + D/E<1 + EPS growth > Revenue growth = operating leverage = compounding machine.
-  CFO/PAT > 1 = real earnings. Negative or falling ROE = capital destroyer, avoid.
-Respond ONLY in JSON. Be specific. Use actual numbers from the data.`,
-    weight: 0.28,
-  },
-  {
-    id: 'priya',
-    name: 'Priya (TA)',
-    persona: `You are Priya Sharma, Technical Analyst, trained on Zerodha Varsity Module 2.
-You read price action and trend signals:
-- For stocks: 200 DMA is the line of truth. Golden Cross = bullish primary trend confirmed.
-  RSI Bullish Divergence is the STRONGEST reversal signal — Varsity Module 2 explicitly calls this out.
-  RSI < 30 + rising OBV = institutional accumulation. MACD bullish crossover above zero line = momentum.
-- For MF: Pct from ATH matters. Funds in drawdown from peak need trend reversal confirmation.
-  Rolling 3Y is the TA equivalent for funds — smooths noise. vs Category ratio trending up = alpha acceleration.
-Respond ONLY in JSON. Reference specific indicator values from the data.`,
-    weight: 0.22,
-  },
-  {
-    id: 'arjun',
-    name: 'Arjun (Contrarian)',
-    persona: `You are Arjun Kapoor, Contrarian Analyst, applying the Varsity "margin of safety" doctrine.
-You look at valuation and cycle positioning:
-- For MF: PE ratio vs Category PE — fund trading at premium to category = expensive. 
-  High cash allocation (>10%) = manager cautious = defensive positioning.
-  Sector concentration risk — top 10 holding % signals how diversified the bet really is.
-- For stocks: PEG ratio (PE/EPS Growth) — PEG<1 = undervalued growth. Sector-relative PE matters more than absolute.
-  Discount from 52W high — deep value vs structural decline, distinguish using ROE trend.
-  Contrarian signal: stock hated by market but ROE still >15% + CFO intact = asymmetric opportunity.
-Respond ONLY in JSON. Focus on valuation and margin of safety.`,
-    weight: 0.20,
-  },
-  {
-    id: 'meera',
-    name: 'Meera (Risk)',
-    persona: `You are Meera Nair, Risk Manager, applying Varsity Module 11 risk framework.
-You quantify downside before upside:
-- For MF: Sortino ratio is PRIMARY (penalizes only bad volatility — Varsity: SIP investors care about downside).
-  Max drawdown tells you the worst you'll experience. Volatility vs category = relative risk.
-  SEBI probe / AMC issues = non-quantifiable tail risk — cap score heavily.
-- For stocks: Beta > 1.5 = amplified market moves. High debt + falling margins = earnings cliff risk.
-  Stop loss discipline: stock below 200DMA + death cross = exit signal regardless of fundamentals.
-  Position sizing: high conviction but high risk = small position. Never bet the farm on one thesis.
-Respond ONLY in JSON. Quantify all risks with specific numbers from the data.`,
-    weight: 0.18,
-  },
-  {
-    id: 'rahul',
-    name: 'Rahul (Quant)',
-    persona: `You are Rahul Iyer, Quantitative Analyst, building factor models grounded in Varsity data.
-You translate all signals into probability-weighted CAGR estimates:
-- For MF: Compute compound wealth: ₹1L * (1 + cagr/100)^years. Then subtract expense drag.
-  Expense drag formula: (1+cagr)^years - (1+cagr-expense_ratio/100)^years = money lost to fees.
-  Alpha consistency (vs category across 1Y/3Y/5Y/10Y) = regime-robust fund vs one-trick pony.
-- For stocks: Factor scoring: Quality (ROE, D/E, margins) + Momentum (52W return, 200DMA) + Value (PEG, PE vs sector).
-  Base rate: stocks with Score>70 + golden cross historically return 18% CAGR on NSE over 5Y.
-  Mean reversion: anything returning >30% annually for 5Y will revert. Build that in.
-Respond ONLY in JSON. Show your math. Give specific CAGR numbers.`,
-    weight: 0.12,
-  },
-];
-
-// Per-agent analysis call
-async function aipRunAgent(agent, items, years) {
-  const itemsText = items.map((x, i) => {
-    const nv = v => (v==null||isNaN(+v)) ? 'N/A' : (+v).toFixed(2);
-    const pv = v => (v==null||isNaN(+v)) ? 'N/A' : (+v).toFixed(1)+'%';
-    const cr = v => (v==null||isNaN(+v)) ? 'N/A' : '₹'+Math.round(+v).toLocaleString('en-IN')+' Cr';
-
-    if (x.type === 'mf') {
-      return `${i+1}. [MF] ${x.name} | ${x.cat} | ${x.sebi_risk||x.risk||'N/A'}
-   ₹${x.amount.toLocaleString('en-IN')} invested
-   RETURNS: 3Y=${pv(x.cagr_3y)} 5Y=${pv(x.cagr_5y)} 10Y=${pv(x.cagr_10y)} Rolling3Y=${pv(x.rolling_3y)}
-   RISK: Sharpe=${nv(x.sharpe)} Sortino=${nv(x.sortino)} MaxDD=${pv(x.max_drawdown)} Vol=${pv(x.volatility)}
-   COST: TER=${pv(x.expense_ratio)} AUM=${cr(x.aum_cr)}
-   QUALITY: Alpha=${nv(x.alpha)} vsCat3Y=${nv(x.vs_cat_3y)}x vsCat5Y=${nv(x.vs_cat_5y)}x
-   PORTFOLIO: PE=${nv(x.pe_ratio)}x CatPE=${nv(x.category_pe)}x Cash=${pv(x.pct_cash)} Top10=${pv(x.top10_conc)}
-   SCORE: ProTrader=${x.score||'N/A'}/100 AMC_SEBI=${x.amc_sebi||'Clean'}`;
-    } else if (x.type === 'stock') {
-      return `${i+1}. [STOCK] ${x.name} (${x.grp||'NSE'}) | ${x.sector||'N/A'}
-   ₹${x.amount.toLocaleString('en-IN')} invested | Price=₹${nv(x.price)}
-   QUALITY: ROE=${pv(x.roe)} D/E=${nv(x.debtToEq)}x OpMgn=${pv(x.opMargin)}
-   GROWTH: EPS=${pv(x.earGrowth)} Rev=${pv(x.revGrowth)}
-   VALUE: PE=${nv(x.pe)}x PEG=${x.pe&&x.earGrowth>0?(+x.pe/+x.earGrowth).toFixed(2):'N/A'} FrHigh=${pv(x.pctFromHigh)}
-   TREND: 200DMA=₹${nv(x.dma200)} GoldCross=${x.goldenCross?'YES':'NO'} RSI=${nv(x.rsi)}
-   SIGNALS: MACD=${x.macdBull?'Bullish':'Bearish'} OBV=${x.obvRising?'Rising':'Falling'} BullDiv=${x.bullishDiv?'YES':'NO'}
-   SCORE: ProTrader=${x.score||'N/A'}/100 52W=${pv(x.wk52Change)}`;
-    } else {
-      return `${i+1}. [CRYPTO] ${x.name} | ₹${x.amount.toLocaleString('en-IN')} | 3Y ret=${pv(x.ret)}`;
-    }
-  }).join('\n\n');
-
-  const anchor = items.map(x => {
-    const cat = x.cat || (x.type==='crypto' ? 'crypto' : 'default_'+x.type);
-    const a = VARSITY_CAGR_ANCHORS[cat] || VARSITY_CAGR_ANCHORS['default_'+x.type] || VARSITY_CAGR_ANCHORS['default_mf'];
-    const hist = parseFloat(x.cagr_3y || x.cagr_5y || x.ret) || a.base;
-    const mr = years >= 30 ? a.meanReversion30y : years >= 20 ? a.meanReversion20y : 0;
-    const adj = Math.max(a.low, Math.min(a.high, hist - mr));
-    return `${x.name}: hist=${hist.toFixed(1)}% anchor=${adj.toFixed(1)}% (Varsity ${cat} base=${a.base}%, mr${years}Y=${mr}%)`;
-  }).join('\n');
-
-  const system = `${agent.persona}
-
-VARSITY-DERIVED CAGR ANCHORS for this portfolio (pre-computed for your reference):
-${anchor}
-
-Your task: Analyze each asset and estimate its realistic CAGR over ${years} years.
-Use the historical data as your primary anchor. Apply your lens (${agent.name}).
-Do NOT ignore the anchors. Do NOT default to 12% for everything.
-
-Respond ONLY in this exact JSON — no markdown, no preamble:
-{
-  "agent": "${agent.id}",
-  "items": [
-    {
-      "id": "asset identifier",
-      "cagr": 19.5,
-      "confidence": 0.8,
-      "key_insight": "One specific sentence from your ${agent.id} perspective referencing actual data",
-      "red_flag": "Specific concern or null"
-    }
-  ],
-  "portfolio_view": "One sentence on overall portfolio from ${agent.id} lens",
-  "biggest_risk": "Single most important risk you see"
-}
-Return exactly ${items.length} items in the same order as input.`;
-
-  const raw = await callAnthropicAgent(system, itemsText, 1400);
-  const clean = raw.replace(/```json|```/g,'').trim();
-  return JSON.parse(clean);
-}
-
-// Synthesis — aggregate 5 agents into final verdict
-async function aipSynthesise(agentResults, items, years) {
-  const total = items.reduce((s,a) => s+a.amount, 0);
-
-  // Weighted CAGR per item
-  const itemCAGRs = items.map((item, i) => {
-    let weightedCAGR = 0, totalWeight = 0, insights = [], redFlags = [];
-    agentResults.forEach(ar => {
-      const agentItem = ar.result.items && ar.result.items[i];
-      if (!agentItem || !agentItem.cagr) return;
-      const conf = agentItem.confidence || 0.7;
-      weightedCAGR += agentItem.cagr * ar.weight * conf;
-      totalWeight   += ar.weight * conf;
-      if (agentItem.key_insight) insights.push(`${ar.agent.name}: ${agentItem.key_insight}`);
-      if (agentItem.red_flag && agentItem.red_flag !== 'null' && agentItem.red_flag !== null)
-        redFlags.push(agentItem.red_flag);
-    });
-    const finalCAGR = totalWeight > 0 ? weightedCAGR / totalWeight : (item.ret || 14);
-    const proj = Math.round(item.amount * Math.pow(1 + finalCAGR/100, years));
-    return { ...item, cagr: +finalCAGR.toFixed(1), projected: proj, insights, redFlags };
-  });
-
-  // Portfolio-level metrics
-  const totalProj = itemCAGRs.reduce((s,a) => s+a.projected, 0);
-  const blendedCAGR = total > 0 ? +((Math.pow(totalProj/total, 1/years)-1)*100).toFixed(1) : 14;
-  const riskScore = items.reduce((s,a) => {
-    const rw = {'Low':1,'Moderate':2,'High':3,'Very High':4}[a.risk]||2;
-    return s + rw*(a.amount/total);
-  }, 0);
-  const riskLabel = riskScore < 1.8 ? 'Low' : riskScore < 2.5 ? 'Moderate' : riskScore < 3.2 ? 'High' : 'Very High';
-
-  // Expense drag calculation (Varsity Module 11)
-  const avgExpense = items.reduce((s,a) => s + (a.expense_ratio||0.5)*(a.amount/total), 0);
-  const projWithoutDrag = Math.round(total * Math.pow(1 + (blendedCAGR + avgExpense)/100, years));
-  const expenseDragTotal = projWithoutDrag - totalProj;
-
-  // Growth curve — year by year
-  const curveSteps = Math.min(years, 30);
-  const growthCurve = [];
-  for (let y = 0; y <= curveSteps; y++) {
-    const yr = Math.round(y/curveSteps * years);
-    growthCurve.push({ year: yr, value: Math.round(total * Math.pow(1 + blendedCAGR/100, yr)) });
-  }
-
-  // Synthesis prompt
-  const agentSummary = agentResults.map(ar =>
-    `${ar.agent.name}: "${ar.result.portfolio_view || 'N/A'}" | Risk: "${ar.result.biggest_risk || 'N/A'}"`
-  ).join('\n');
-
-  const itemSummary = itemCAGRs.map((it,i) =>
-    `${it.name} (${it.type}): CAGR=${it.cagr}% → ${it.projected>=1e7?'₹'+(it.projected/1e7).toFixed(2)+'Cr':'₹'+(it.projected/1e5).toFixed(2)+'L'} | RedFlags: ${it.redFlags.slice(0,2).join('; ')||'none'}`
-  ).join('\n');
-
-  const system = `You are the MiroFish Synthesis Agent — the final layer after 5 expert agents have debated.
-Your job: synthesize their views into a coherent, actionable portfolio prediction.
-
-Apply Zerodha Varsity principles:
-- Sortino > Sharpe for SIP investors (downside-only risk matters more)
-- Rolling 3Y return > point-to-point (removes recency bias)
-- Expense ratio compounding: small % destroys crores over decades
-- 200 DMA and Golden Cross = trend truth for equities
-- Diversification across market caps reduces but doesn't eliminate risk
-
-The math is already done. Your job is interpretation and final insight.
-
-Respond ONLY in JSON:
-{
-  "portfolio_insight": "2-3 sentences synthesizing all agent views into ONE clear portfolio verdict. Be specific about what's working and what isn't.",
-  "key_risk": "The single most important risk to this specific portfolio",
-  "varsity_lesson": "One actionable Varsity insight this portfolio teaches — specific, not generic",
-  "agent_consensus": "High / Medium / Low — how much did the 5 agents agree?",
-  "rebalance_suggestion": "One concrete rebalance suggestion if needed, or null",
-  "sip_vs_lumpsum": "Is SIP or lumpsum better for this portfolio mix, and why?"
-}`;
-
-  const user = `Portfolio: ${items.length} assets | ₹${total.toLocaleString('en-IN')} total | ${years}Y horizon\n\nPER-ASSET RESULTS:\n${itemSummary}\n\nAGENT VIEWS:\n${agentSummary}\n\nBlended CAGR: ${blendedCAGR}% | Risk: ${riskLabel} | Expense drag over ${years}Y: ₹${expenseDragTotal.toLocaleString('en-IN')}`;
-
-  const raw = await callAnthropicAgent(system, user, 800);
-  const clean = raw.replace(/```json|```/g,'').trim();
-  const synthesis = JSON.parse(clean);
-
-  return {
-    items: itemCAGRs,
-    total_projected: totalProj,
-    portfolio_cagr: blendedCAGR,
-    risk_level: riskLabel,
-    best_case:  Math.round(total * Math.pow(1 + (blendedCAGR+5)/100, years)),
-    worst_case: Math.round(total * Math.pow(1 + (blendedCAGR-6)/100, years)),
-    inflation_adjusted: Math.round(totalProj / Math.pow(1.06, years)),
-    expense_drag: expenseDragTotal,
-    avg_expense_ratio: +avgExpense.toFixed(2),
-    growth_curve: growthCurve,
-    portfolio_insight:    synthesis.portfolio_insight,
-    key_risk:             synthesis.key_risk,
-    varsity_lesson:       synthesis.varsity_lesson,
-    agent_consensus:      synthesis.agent_consensus,
-    rebalance_suggestion: synthesis.rebalance_suggestion,
-    sip_vs_lumpsum:       synthesis.sip_vs_lumpsum,
-    agent_views: agentResults.map(ar => ({
-      agent: ar.agent.name,
-      portfolio_view: ar.result.portfolio_view,
-      biggest_risk:   ar.result.biggest_risk,
-    })),
-  };
-}
-
-// Main endpoint — replaces the old simple portfolio-predict
-app.post('/api/mirofish/portfolio-predict-v2', async (req, res) => {
-  if (!ANTHROPIC_API_KEY) return res.json({ error: 'Add ANTHROPIC_API_KEY to Railway environment variables' });
-
-  const { items, years } = req.body;
-  if (!items || !items.length) return res.json({ error: 'No items provided' });
-  if (items.length > 15) return res.json({ error: 'Maximum 15 assets per prediction' });
-
-  const yearsN = Math.max(1, Math.min(40, parseInt(years) || 10));
-
-  try {
-    console.log(`🐟 AIP v2: ${items.length} assets, ${yearsN}Y, ${AIP_AGENTS.length} agents running in parallel`);
-
-    // Run all 5 agents in parallel
-    const agentPromises = AIP_AGENTS.map(async agent => {
-      try {
-        const result = await aipRunAgent(agent, items, yearsN);
-        return { agent, result, weight: agent.weight };
-      } catch(e) {
-        console.log(`🐟 AIP agent ${agent.id} failed: ${e.message}`);
-        return null;
-      }
-    });
-
-    const agentResults = (await Promise.all(agentPromises)).filter(Boolean);
-    if (agentResults.length < 2) return res.json({ error: 'Too few agents succeeded. Check API limits.' });
-
-    console.log(`🐟 AIP v2: ${agentResults.length}/5 agents done, synthesising...`);
-    const result = await aipSynthesise(agentResults, items, yearsN);
-
-    console.log(`🐟 AIP v2 done. Portfolio CAGR: ${result.portfolio_cagr}% → ${result.total_projected.toLocaleString('en-IN')}`);
-    res.json(result);
-
-  } catch(e) {
-    console.log('🐟 AIP v2 error:', e.message);
-    res.json({ error: e.message });
-  }
-});
