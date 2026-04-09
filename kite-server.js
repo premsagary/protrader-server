@@ -9447,55 +9447,59 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 
 // ── AI MODEL DEFINITIONS ──
 const AI_MODELS = [
-  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash', maxTokens: 8000 },
-  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano', maxTokens: 8000 },
-  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat', maxTokens: 8000 },
-  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-3-5-haiku-20241022', maxTokens: 8000 },
-  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro', maxTokens: 8000 },
-  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1', maxTokens: 8000 },
+  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash' },
+  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
+  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
+  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-3-5-haiku-20241022' },
+  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro' },
+  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1' },
 ];
 
-// ── Call a single AI model ──
+// ── Call a single AI model (no output token limit, captures usage) ──
 async function callAIModel(modelDef, systemPrompt, userPrompt) {
   const start = Date.now();
   try {
     let raw = '';
+    let tokens = { input: 0, output: 0 };
 
     if (modelDef.provider === 'anthropic') {
       if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 16384, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       raw = data.content?.[0]?.text || '';
+      tokens = { input: data.usage?.input_tokens || 0, output: data.usage?.output_tokens || 0 };
 
     } else if (modelDef.provider === 'openai') {
       if (!OPENAI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
 
     } else if (modelDef.provider === 'deepseek') {
       if (!DEEPSEEK_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const resp = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
 
     } else if (modelDef.provider === 'google') {
       if (!GOOGLE_AI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
@@ -9505,38 +9509,36 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: userPrompt }] }],
-          generationConfig: { maxOutputTokens: modelDef.maxTokens, temperature: 0.3 },
+          generationConfig: { temperature: 0.3 },
         }),
         signal: AbortSignal.timeout(120000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      tokens = { input: data.usageMetadata?.promptTokenCount || 0, output: data.usageMetadata?.candidatesTokenCount || 0 };
     }
 
-    // Parse JSON from response — handle truncated JSON from token limits
+    // Parse JSON from response — handle truncated JSON
     const clean = raw.replace(/```json|```/g, '').trim();
     let result;
     try { result = JSON.parse(clean); }
     catch {
-      // Try to salvage truncated JSON by closing brackets
       let salvaged = clean;
-      // Count open/close braces and brackets
       const openBraces = (salvaged.match(/\{/g) || []).length;
       const closeBraces = (salvaged.match(/\}/g) || []).length;
       const openBrackets = (salvaged.match(/\[/g) || []).length;
       const closeBrackets = (salvaged.match(/\]/g) || []).length;
-      // Remove trailing partial entries (after last complete object)
       const lastComplete = salvaged.lastIndexOf('}');
       if (lastComplete > 0) salvaged = salvaged.slice(0, lastComplete + 1);
-      // Close remaining open brackets/braces
       for (let i = 0; i < openBrackets - closeBrackets; i++) salvaged += ']';
       for (let i = 0; i < openBraces - closeBraces; i++) salvaged += '}';
       try { result = JSON.parse(salvaged); console.log(`  🔧 ${modelDef.name}: salvaged truncated JSON`); }
       catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; console.error(`  ⚠ ${modelDef.name}: JSON parse failed. Raw start: ${raw.slice(0, 200)}`); }
     }
 
-    return { id: modelDef.id, name: modelDef.name, result, took_ms: Date.now() - start };
+    console.log(`  📊 ${modelDef.name}: ${tokens.input} in + ${tokens.output} out = ${tokens.input + tokens.output} tokens`);
+    return { id: modelDef.id, name: modelDef.name, result, tokens, took_ms: Date.now() - start };
 
   } catch (e) {
     return { id: modelDef.id, name: modelDef.name, error: e.message, took_ms: Date.now() - start };
@@ -9612,7 +9614,13 @@ function buildConsensus(modelResults) {
       status: m.skipped ? 'skipped' : m.error ? 'error' : 'ok',
       error: m.error || null,
       signals_count: m.result?.signal_reviews?.length || 0,
+      tokens: m.tokens || null,
     })),
+    total_tokens: {
+      input: modelResults.reduce((a, m) => a + (m.tokens?.input || 0), 0),
+      output: modelResults.reduce((a, m) => a + (m.tokens?.output || 0), 0),
+      total: modelResults.reduce((a, m) => a + (m.tokens?.input || 0) + (m.tokens?.output || 0), 0),
+    },
     models_used: validResults.length,
     models_total: totalModels,
   };
@@ -10257,7 +10265,11 @@ Respond ONLY in the JSON format specified in your system prompt.`;
     const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt).then(r => {
       if (r.skipped) { _aiStatus.models[m.id] = { name: m.name, status: 'skipped' }; aiStep(`${m.name}: skipped (no API key)`, 'warn'); }
       else if (r.error) { _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, error: r.error }; aiStep(`${m.name}: error — ${r.error} (${r.took_ms}ms)`, 'err'); }
-      else { _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: r.result?.signal_reviews?.length || 0 }; aiStep(`${m.name}: ✅ ${r.result?.signal_reviews?.length || 0} reviews (${r.took_ms}ms)`, 'ok'); }
+      else {
+        const tk = r.tokens || { input: 0, output: 0 };
+        _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: r.result?.signal_reviews?.length || 0, tokens: tk };
+        aiStep(`${m.name}: ✅ ${r.result?.signal_reviews?.length || 0} reviews (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'ok');
+      }
       return r;
     }));
     const modelResults = await Promise.all(modelPromises);

@@ -4141,7 +4141,8 @@ function psRenderAIValidation(){
   h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
   h+='<div style="font-size:12px;font-weight:800;color:#22c55e;display:flex;align-items:center;gap:6px">🤖 AI Multi-Model Consensus</div>';
   var modelsInfo=(v.models_used||1)+'/'+(v.models_total||1)+' models';
-  h+='<div style="font-size:9px;color:var(--text4)">'+(v.took_ms?(v.took_ms/1000).toFixed(1)+'s':'')+'  ·  '+modelsInfo+'</div>';
+  var tokInfo=v.total_tokens?'  ·  '+v.total_tokens.input.toLocaleString()+' in + '+v.total_tokens.output.toLocaleString()+' out = '+v.total_tokens.total.toLocaleString()+' tokens':'';
+  h+='<div style="font-size:9px;color:var(--text4)">'+(v.took_ms?(v.took_ms/1000).toFixed(1)+'s':'')+'  ·  '+modelsInfo+tokInfo+'</div>';
   h+='</div>';
 
   // Model status pills
@@ -4150,7 +4151,9 @@ function psRenderAIValidation(){
     v.model_details.forEach(function(md){
       var sc=md.status==='ok'?'#22c55e':md.status==='skipped'?'#64748b':'#ef4444';
       var si=md.status==='ok'?'✅':md.status==='skipped'?'⏭':'❌';
-      h+='<span style="background:'+sc+'15;color:'+sc+';border-radius:4px;padding:2px 6px;font-size:8px;font-weight:700;white-space:nowrap" title="'+(md.error||'OK')+' ('+(md.took_ms||0)+'ms)">'+si+' '+md.name+'</span>';
+      var tkStr=md.tokens?(' · '+(md.tokens.input+md.tokens.output).toLocaleString()+'tok'):'';
+      var tkTitle=md.tokens?(md.tokens.input+' in + '+md.tokens.output+' out'):(md.error||'OK');
+      h+='<span style="background:'+sc+'15;color:'+sc+';border-radius:4px;padding:2px 6px;font-size:8px;font-weight:700;white-space:nowrap" title="'+tkTitle+' ('+(md.took_ms||0)+'ms)">'+si+' '+md.name+tkStr+'</span>';
     });
     h+='</div>';
   }
@@ -4280,7 +4283,8 @@ async function psRunAIValidation(mode){
           var bg=m.status==='ok'?'#166534':m.status==='error'?'#991b1b':m.status==='skipped'?'#92400e':'#1e3a5f';
           var icon=m.status==='ok'?'✅':m.status==='error'?'❌':m.status==='skipped'?'⏭':'⏳';
           var extra=m.took_ms?' ('+((m.took_ms/1000).toFixed(1))+'s)':'';
-          ph+='<span style="background:'+bg+';color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;white-space:nowrap">'+icon+' '+m.name+extra+'</span>';
+          var tkLive=m.tokens?(' · '+((m.tokens.input||0)+(m.tokens.output||0)).toLocaleString()+'tok'):'';
+          ph+='<span style="background:'+bg+';color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;white-space:nowrap">'+icon+' '+m.name+extra+tkLive+'</span>';
         });
         mp.innerHTML=ph;
       }
