@@ -9470,7 +9470,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 65536, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 64000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
