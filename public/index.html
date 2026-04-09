@@ -4046,6 +4046,13 @@ function psRenderHoldingsTab(){
 }
 
 // ── SIGNALS TAB ──
+function psSignalMeta(type){
+  var m={BUY:{c:'#22c55e',i:'📈'},SELL:{c:'#ef4444',i:'📉'},ADD:{c:'#22d3ee',i:'➕'},
+    SWITCH:{c:'#a855f7',i:'🔄'},FRESH_BUY:{c:'#22c55e',i:'🆕'},SECTOR_WARN:{c:'#f97316',i:'⚠'},
+    DRAWDOWN:{c:'#ef4444',i:'📉'},EXIT:{c:'#ef4444',i:'🚪'},REDUCE:{c:'#f97316',i:'✂'}};
+  return m[type]||{c:'#f59e0b',i:'🔔'};
+}
+
 function psRenderSignalsTab(){
   var h='';
   if(!_psSignals){
@@ -4054,6 +4061,7 @@ function psRenderSignalsTab(){
   }
   h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
   h+='<button onclick="psLoadSignals()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
+  h+='<button onclick="psGenerateSignals()" style="background:rgba(168,85,247,.1);color:#a855f7;border:1px solid rgba(168,85,247,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">⚡ Generate Signals Now</button>';
   h+='</div>';
 
   if(!_psSignals.length){
@@ -4062,47 +4070,115 @@ function psRenderSignalsTab(){
   }
 
   _psSignals.forEach(function(sig){
-    var tc=sig.signal_type==='BUY'?'#22c55e':sig.signal_type==='SELL'?'#ef4444':sig.signal_type==='ADD'?'#22d3ee':'#f59e0b';
-    var icon=sig.signal_type==='BUY'?'📈':sig.signal_type==='SELL'?'📉':sig.signal_type==='ADD'?'➕':'🔔';
-    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px">';
-    h+='<span style="font-size:16px">'+icon+'</span>';
+    var meta=psSignalMeta(sig.signal_type);
+    var urgBorder=sig.urgency==='URGENT'?'border-left:3px solid #ef4444;':sig.urgency==='HIGH'?'border-left:3px solid #f97316;':'';
+    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;gap:10px;'+urgBorder+'">';
+    h+='<span style="font-size:16px">'+meta.i+'</span>';
     h+='<div style="flex:1">';
-    h+='<div><span style="font-weight:700;color:var(--text)">'+sig.sym+'</span> <span style="background:'+tc+'20;color:'+tc+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700">'+sig.signal_type+'</span>';
+    h+='<div><span style="font-weight:700;color:var(--text)">'+sig.sym+'</span> <span style="background:'+meta.c+'20;color:'+meta.c+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700">'+sig.signal_type+'</span>';
+    if(sig.urgency==='URGENT')h+=' <span style="color:#ef4444;font-size:9px;font-weight:800">URGENT</span>';
+    else if(sig.urgency==='HIGH')h+=' <span style="color:#f97316;font-size:9px;font-weight:700">HIGH</span>';
     if(sig.acted)h+=' <span style="color:#22c55e;font-size:9px">✓ Acted</span>';
     h+='</div>';
     h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+(sig.reason||'')+'</div>';
     h+='</div>';
     h+='<div style="text-align:right;min-width:80px">';
-    if(sig.price_at)h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
-    h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+'</div>';
+    if(sig.price_at&&sig.signal_type!=='SECTOR_WARN'&&sig.signal_type!=='DRAWDOWN')h+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+(+sig.price_at).toFixed(0)+'</div>';
+    h+='<div style="font-size:9px;color:var(--text4)">'+new Date(sig.created_at).toLocaleDateString('en-IN')+' '+new Date(sig.created_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})+'</div>';
     h+='</div>';
     h+='</div>';
   });
   return h;
 }
 
-// ── PERFORMANCE TAB ──
+// ── PERFORMANCE + RISK TAB ──
 function psRenderPerformanceTab(){
   var h='';
   if(!_psPerf){
-    h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading performance...</div>';
+    h+='<div style="text-align:center;padding:40px;color:var(--text3)">Loading performance & risk...</div>';
     return h;
   }
   var st=_psPerf.stats||{};
+  var risk=_psPerf.risk||{};
 
-  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
-  function sc(l,v,c){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
-    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
-    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div></div>';}
-  h+=sc('Total Trades',st.totalTrades,'var(--text)');
-  h+=sc('Win Rate',st.winRate+'%',st.winRate>=50?'#22c55e':'#ef4444');
-  h+=sc('Wins / Losses',st.wins+' / '+st.losses,st.wins>st.losses?'#22c55e':'#ef4444');
-  h+=sc('Total P&L',(st.totalRealised>=0?'+':'')+psFmt(st.totalRealised),st.totalRealised>=0?'#22c55e':'#ef4444');
-  h+=sc('Avg Win',psFmt(st.avgWin),'#22c55e');
-  h+=sc('Avg Loss',psFmt(st.avgLoss),'#ef4444');
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+  h+='<button onclick="psLoadPerformance()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
   h+='</div>';
 
-  // Closed trades
+  // ── RISK DASHBOARD ──
+  if(risk.numPositions>0){
+    h+='<div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">📊 Risk Dashboard (Varsity M9)</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+    function sc(l,v,c,sub){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+      +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+      +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div>'
+      +(sub?'<div style="font-size:9px;color:var(--text4);margin-top:1px">'+sub+'</div>':'')+'</div>';}
+    h+=sc('Risk Rating',risk.riskRating,risk.riskColor);
+    h+=sc('Portfolio Vol',risk.portfolioVol+'%',risk.portfolioVol<25?'#22c55e':risk.portfolioVol<35?'#f59e0b':'#ef4444','annualized');
+    h+=sc('Beta',risk.portfolioBeta,risk.portfolioBeta<1?'#22c55e':risk.portfolioBeta<1.3?'#f59e0b':'#ef4444');
+    h+=sc('VaR (1-day)',psFmt(risk.var95_1d),'#ef4444','95% confidence');
+    h+=sc('VaR (1-week)',psFmt(risk.var95_1w),'#ef4444','95% confidence');
+    h+=sc('Diversification',risk.effectiveStocks+' stocks',risk.effectiveStocks>=5?'#22c55e':'#f59e0b','effective positions');
+    h+=sc('Max Sector',risk.maxSector,risk.maxSectorPct>30?'#ef4444':'#22c55e',risk.maxSectorPct+'% allocation');
+    if(risk.maxDrawdown!=null)h+=sc('Max Drawdown',risk.maxDrawdown+'%',risk.maxDrawdown<-10?'#ef4444':risk.maxDrawdown<-5?'#f59e0b':'#22c55e','from peak');
+    h+='</div>';
+
+    // Sector allocation bars
+    if(risk.sectorPcts){
+      h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">';
+      h+='<div style="font-size:11px;font-weight:700;margin-bottom:8px;color:var(--text2)">Sector Exposure</div>';
+      var secs=Object.entries(risk.sectorPcts).sort(function(a,b){return b[1]-a[1];});
+      secs.forEach(function(s){
+        var warn=s[1]>30;
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+        h+='<div style="width:100px;font-size:10px;color:var(--text3);text-align:right">'+s[0]+'</div>';
+        h+='<div style="flex:1;background:var(--bg3);border-radius:3px;height:16px;position:relative">';
+        h+='<div style="width:'+Math.min(s[1],100)+'%;background:'+(warn?'#ef4444':'#22d3ee')+';height:100%;border-radius:3px"></div>';
+        h+='</div>';
+        h+='<div style="width:40px;font-size:10px;font-weight:700;color:'+(warn?'#ef4444':'var(--text)')+'">'+s[1]+'%</div>';
+        if(warn)h+='<span style="font-size:9px;color:#ef4444;font-weight:700">⚠ >30%</span>';
+        h+='</div>';
+      });
+      h+='</div>';
+    }
+  }
+
+  // ── TRADE STATS ──
+  h+='<div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">📈 Trade Performance</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+  function sc2(l,v,c){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div></div>';}
+  h+=sc2('Total Trades',st.totalTrades||0,'var(--text)');
+  h+=sc2('Win Rate',(st.winRate||0)+'%',(st.winRate||0)>=50?'#22c55e':'#ef4444');
+  h+=sc2('Wins / Losses',(st.wins||0)+' / '+(st.losses||0),(st.wins||0)>(st.losses||0)?'#22c55e':'#ef4444');
+  h+=sc2('Total P&L',((st.totalRealised||0)>=0?'+':'')+psFmt(st.totalRealised||0),(st.totalRealised||0)>=0?'#22c55e':'#ef4444');
+  h+=sc2('Avg Win',psFmt(st.avgWin||0),'#22c55e');
+  h+=sc2('Avg Loss',psFmt(st.avgLoss||0),'#ef4444');
+  h+='</div>';
+
+  // ── EQUITY CURVE (simple text-based if we have snapshots) ──
+  var ec=_psPerf.equityCurve||[];
+  if(ec.length>1){
+    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">';
+    h+='<div style="font-size:11px;font-weight:700;margin-bottom:8px;color:var(--text2)">Equity Curve</div>';
+    var maxV=Math.max.apply(null,ec.map(function(s){return s.current_value||0;}));
+    var minV=Math.min.apply(null,ec.map(function(s){return s.current_value||0;}));
+    var range=maxV-minV||1;
+    h+='<div style="display:flex;align-items:flex-end;gap:2px;height:100px">';
+    ec.forEach(function(s){
+      var pct=((s.current_value-minV)/range)*100;
+      var col=(s.total_pnl||0)>=0?'#22c55e':'#ef4444';
+      h+='<div title="'+new Date(s.snap_date).toLocaleDateString('en-IN')+': '+psFmt(s.current_value)+'" style="flex:1;min-width:4px;background:'+col+';border-radius:2px 2px 0 0;height:'+Math.max(pct,2)+'%"></div>';
+    });
+    h+='</div>';
+    h+='<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text4);margin-top:4px">';
+    h+='<span>'+new Date(ec[0].snap_date).toLocaleDateString('en-IN')+'</span>';
+    h+='<span>'+new Date(ec[ec.length-1].snap_date).toLocaleDateString('en-IN')+'</span>';
+    h+='</div></div>';
+  }
+
+  // ── CLOSED TRADES ──
   var ct=_psPerf.closedTrades||[];
   if(ct.length){
     h+='<div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">Closed Trades</div>';
@@ -4125,7 +4201,7 @@ function psRenderPerformanceTab(){
     });
     h+='</tbody></table></div>';
   } else {
-    h+='<div style="text-align:center;padding:30px;color:var(--text3);font-size:12px">No closed trades yet. Sell positions to see performance history.</div>';
+    h+='<div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">No closed trades yet. Sell positions to see performance history.</div>';
   }
   return h;
 }
@@ -4218,8 +4294,25 @@ async function psLoadPerformance(){
   try{
     var r=await fetch('/api/portfolio/performance');
     _psPerf=await r.json();
+    // Also fetch risk data
+    try{
+      var r2=await fetch('/api/portfolio/risk');
+      var riskData=await r2.json();
+      _psPerf.risk=riskData;
+      _psPerf.equityCurve=riskData.equityCurve||_psPerf.equityCurve||[];
+      if(riskData.maxDrawdown!=null)_psPerf.risk.maxDrawdown=riskData.maxDrawdown;
+    }catch(e2){}
     if(_psTab==='performance'){var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderPerformanceTab();}
   }catch(e){console.log('Load performance error:',e.message);}
+}
+
+async function psGenerateSignals(){
+  try{
+    var r=await fetch('/api/portfolio/signals/generate',{method:'POST'});
+    var d=await r.json();
+    alert(d.message||'Signals generated!');
+    psLoadSignals();
+  }catch(e){alert('Error: '+e.message);}
 }
 
 // ── USER ACTIONS ──

@@ -6291,6 +6291,14 @@ app.get('/api/portfolio/signals', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/portfolio/signals/generate — manually trigger signal generation
+app.post('/api/portfolio/signals/generate', async (req, res) => {
+  try {
+    await generatePortfolioSignals();
+    res.json({ message: 'Signal generation complete. Check Signals tab.' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/portfolio/performance — equity curve + performance stats
 app.get('/api/portfolio/performance', async (req, res) => {
   try {
@@ -6326,8 +6334,277 @@ app.get('/api/portfolio/regime', (req, res) => {
 });
 
 // =============================================================================
+// PHASE 3: MODEL vs USER PORTFOLIO DIFF → SWITCH/REPLACE SIGNALS
+// Compares what the model recommends vs what the user holds and generates
+// actionable signals: SWITCH (sell A, buy B), FRESH_BUY, EXIT_REPLACED
+// =============================================================================
+
+async function generatePortfolioSignals() {
+  try {
+    const positions = await loadUserPositions();
+    if (!positions.length) return; // no holdings to compare
+
+    // Rebuild model if stale or missing
+    if (!modelPortfolio || !modelPortfolio.portfolio || (Date.now() - (modelPortfolio.generatedAt||0) > 3600000)) {
+      const result = buildPortfolioSuggestion(100000);
+      if (!result.error) modelPortfolio = { portfolio: result.portfolio, amount: 100000, generatedAt: Date.now() };
+    }
+    if (!modelPortfolio || !modelPortfolio.portfolio) return;
+
+    const modelSyms = new Set(modelPortfolio.portfolio.map(m => m.sym));
+    const heldSyms = new Set(positions.map(p => p.sym));
+
+    // Get model stocks ranked
+    const modelRanked = modelPortfolio.portfolio.slice().sort((a,b) => b.composite - a.composite);
+
+    // 1) Stocks user holds but NOT in model → potential EXIT_REPLACED
+    for (const pos of positions) {
+      if (modelSyms.has(pos.sym)) continue; // still in model, skip
+
+      const f = stockFundamentals[pos.sym];
+      if (!f) continue;
+
+      // Score this held stock
+      let heldScore = 0;
+      try { const s = scoreStockForPortfolio(f); heldScore = s ? s.composite : 0; } catch(e) {}
+
+      // Find best replacement from model not already held
+      const replacement = modelRanked.find(m => !heldSyms.has(m.sym));
+      if (!replacement) continue;
+
+      // Only signal if replacement is significantly better (>15 points)
+      const scoreDiff = replacement.composite - heldScore;
+      if (scoreDiff < 15) continue;
+
+      const px = f.price || livePrices[pos.sym]?.price || global.FUND_EXT?.[pos.sym]?.price || pos.avg_price;
+      const pnlPct = ((px - pos.avg_price) / pos.avg_price) * 100;
+
+      // Don't suggest switching if in deep loss (let exit engine handle that)
+      if (pnlPct < -10) continue;
+
+      const reason = `SWITCH: ${pos.sym} (score ${heldScore.toFixed(0)}, rank dropped out of model) → ${replacement.sym} (score ${replacement.composite}, ${replacement.conviction}). Score gap: +${scoreDiff.toFixed(0)} points.`;
+      const urgency = scoreDiff > 25 ? 'HIGH' : 'NORMAL';
+
+      // Check if we already signalled this today
+      const { rows: existing } = await pool.query(
+        `SELECT id FROM portfolio_signals WHERE sym=$1 AND signal_type='SWITCH' AND created_at > NOW() - INTERVAL '12 hours'`,
+        [pos.sym]
+      );
+      if (existing.length) continue;
+
+      await pool.query(
+        `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at) VALUES($1,'SWITCH',$2,$3,$4)`,
+        [pos.sym, urgency, reason, px]
+      );
+      console.log(`🔄 Signal: SWITCH ${pos.sym} → ${replacement.sym} (gap +${scoreDiff.toFixed(0)})`);
+    }
+
+    // 2) High-conviction model stocks not held → FRESH_BUY signal
+    for (const m of modelRanked) {
+      if (heldSyms.has(m.sym)) continue;
+      if (m.conviction !== 'Strong Buy' && m.conviction !== 'Buy') continue;
+
+      const { rows: existing } = await pool.query(
+        `SELECT id FROM portfolio_signals WHERE sym=$1 AND signal_type='FRESH_BUY' AND created_at > NOW() - INTERVAL '24 hours'`,
+        [m.sym]
+      );
+      if (existing.length) continue;
+
+      await pool.query(
+        `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at,target_at,stop_at)
+         VALUES($1,'FRESH_BUY',$2,$3,$4,$5,$6)`,
+        [m.sym, 'NORMAL',
+         `${m.conviction} — composite ${m.composite} (FA:${m.faScore} TA:${m.taScore}). Not in your portfolio.`,
+         m.price, m.target||null, m.stopLoss||null]
+      );
+    }
+
+    // 3) Sector concentration warnings
+    const sectorValue = {};
+    let totalValue = 0;
+    positions.forEach(p => {
+      const px = livePrices[p.sym]?.price || stockFundamentals[p.sym]?.price || global.FUND_EXT?.[p.sym]?.price || p.avg_price;
+      const val = p.qty * px;
+      sectorValue[p.sector || 'Other'] = (sectorValue[p.sector || 'Other'] || 0) + val;
+      totalValue += val;
+    });
+
+    if (totalValue > 0) {
+      for (const [sector, val] of Object.entries(sectorValue)) {
+        const pct = (val / totalValue) * 100;
+        if (pct > 30) {
+          const { rows: existing } = await pool.query(
+            `SELECT id FROM portfolio_signals WHERE sym=$1 AND signal_type='SECTOR_WARN' AND created_at > NOW() - INTERVAL '24 hours'`,
+            ['SECTOR:' + sector]
+          );
+          if (!existing.length) {
+            await pool.query(
+              `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at) VALUES($1,'SECTOR_WARN','HIGH',$2,$3)`,
+              ['SECTOR:' + sector, `Sector ${sector} is ${pct.toFixed(1)}% of portfolio (Varsity M9: max 30%). Consider reducing exposure.`, pct]
+            );
+            console.log(`⚠ Signal: Sector ${sector} at ${pct.toFixed(1)}% — over 30% limit`);
+          }
+        }
+      }
+    }
+
+    // 4) Drawdown alert
+    if (totalValue > 0) {
+      const { rows: snapshots } = await pool.query('SELECT MAX(current_value) as peak FROM portfolio_snapshots');
+      const peak = snapshots[0]?.peak || totalValue;
+      const drawdown = ((totalValue - peak) / peak) * 100;
+      if (drawdown < -10) {
+        const { rows: existing } = await pool.query(
+          `SELECT id FROM portfolio_signals WHERE sym='PORTFOLIO' AND signal_type='DRAWDOWN' AND created_at > NOW() - INTERVAL '24 hours'`
+        );
+        if (!existing.length) {
+          const urgency = drawdown < -20 ? 'URGENT' : 'HIGH';
+          await pool.query(
+            `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at) VALUES('PORTFOLIO','DRAWDOWN',$1,$2,$3)`,
+            [urgency, `Portfolio drawdown ${drawdown.toFixed(1)}% from peak ₹${(+peak).toFixed(0)}. ${drawdown < -20 ? 'URGENT: Consider reducing exposure.' : 'Monitor closely.'}`, drawdown]
+          );
+          console.log(`⚠ Signal: Portfolio drawdown ${drawdown.toFixed(1)}%`);
+        }
+      }
+    }
+
+    console.log(`📊 Signal generation complete: ${positions.length} positions checked vs model`);
+  } catch(e) { console.error('Signal generation error:', e.message); }
+}
+
+// =============================================================================
+// PHASE 4: PORTFOLIO RISK METRICS (VaR, Sharpe, Max Drawdown)
+// =============================================================================
+
+function computePortfolioRisk(positions) {
+  if (!positions.length) return {};
+
+  let totalValue = 0;
+  const weights = [];
+  const vols = [];
+  const betas = [];
+  const sectors = {};
+
+  positions.forEach(p => {
+    const f = stockFundamentals[p.sym];
+    const px = livePrices[p.sym]?.price || f?.price || global.FUND_EXT?.[p.sym]?.price || p.avg_price;
+    const val = p.qty * px;
+    totalValue += val;
+    weights.push(val);
+    vols.push((f?.annualVol || 30) / 100);
+    betas.push(f?.beta || 1);
+    const sec = p.sector || f?.sector || 'Other';
+    sectors[sec] = (sectors[sec] || 0) + val;
+  });
+
+  if (totalValue <= 0) return {};
+
+  // Normalize weights
+  const w = weights.map(v => v / totalValue);
+
+  // Portfolio volatility (simplified — assumes 0.5 avg correlation between stocks)
+  // Varsity M9 Ch4: σ_p = sqrt(Σ wi² σi² + 2 Σ wi wj ρ σi σj)
+  const avgCorr = 0.5;
+  let varP = 0;
+  for (let i = 0; i < w.length; i++) {
+    varP += w[i] * w[i] * vols[i] * vols[i];
+    for (let j = i + 1; j < w.length; j++) {
+      varP += 2 * w[i] * w[j] * avgCorr * vols[i] * vols[j];
+    }
+  }
+  const portVol = Math.sqrt(varP);
+
+  // VaR (95% confidence, 1-day) — Varsity M9 Ch3: VaR = Portfolio × Z × σ × √t
+  const z95 = 1.645;
+  const dailyVol = portVol / Math.sqrt(252);
+  const var95_1d = totalValue * z95 * dailyVol;
+  const var95_1w = totalValue * z95 * dailyVol * Math.sqrt(5);
+
+  // Weighted beta
+  const portBeta = w.reduce((a, wi, i) => a + wi * betas[i], 0);
+
+  // Concentration risk — Herfindahl index (lower = more diversified)
+  const hhi = w.reduce((a, wi) => a + wi * wi, 0);
+  const effectiveStocks = 1 / Math.max(hhi, 0.01);
+
+  // Sector concentration
+  const sectorPcts = {};
+  let maxSectorPct = 0;
+  let maxSector = '';
+  for (const [sec, val] of Object.entries(sectors)) {
+    const pct = (val / totalValue) * 100;
+    sectorPcts[sec] = +pct.toFixed(1);
+    if (pct > maxSectorPct) { maxSectorPct = pct; maxSector = sec; }
+  }
+
+  // Risk rating
+  let riskRating = 'Moderate';
+  let riskColor = '#f59e0b';
+  if (portVol < 0.20 && portBeta < 1.0 && maxSectorPct < 30) { riskRating = 'Low'; riskColor = '#22c55e'; }
+  else if (portVol > 0.35 || portBeta > 1.5 || maxSectorPct > 40) { riskRating = 'High'; riskColor = '#ef4444'; }
+
+  return {
+    totalValue: +totalValue.toFixed(0),
+    portfolioVol: +(portVol * 100).toFixed(1),
+    portfolioBeta: +portBeta.toFixed(2),
+    var95_1d: +var95_1d.toFixed(0),
+    var95_1w: +var95_1w.toFixed(0),
+    effectiveStocks: +effectiveStocks.toFixed(1),
+    hhi: +hhi.toFixed(3),
+    sectorPcts,
+    maxSector, maxSectorPct: +maxSectorPct.toFixed(1),
+    riskRating, riskColor,
+    numPositions: positions.length,
+  };
+}
+
+// GET /api/portfolio/risk — full risk dashboard
+app.get('/api/portfolio/risk', async (req, res) => {
+  try {
+    const positions = await loadUserPositions();
+    const risk = computePortfolioRisk(positions);
+
+    // Get equity curve for drawdown
+    const { rows: snapshots } = await pool.query('SELECT * FROM portfolio_snapshots ORDER BY snap_date ASC');
+    let peak = 0, maxDrawdown = 0;
+    snapshots.forEach(s => {
+      if (s.current_value > peak) peak = s.current_value;
+      const dd = peak > 0 ? ((s.current_value - peak) / peak) * 100 : 0;
+      if (dd < maxDrawdown) maxDrawdown = dd;
+    });
+
+    res.json({
+      ...risk,
+      maxDrawdown: +maxDrawdown.toFixed(1),
+      equityCurve: snapshots,
+      regime: marketRegime,
+      regimeData: marketRegimeData,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================================================
 // DAILY SCHEDULES — all DB tables updated, memory reloaded after each run
 // =============================================================================
+
+// 6:30AM IST — daily portfolio snapshot (before market opens)
+cron.schedule('30 6 * * 1-5', async () => {
+  console.log('📸 6:30AM: Daily portfolio snapshot...');
+  await savePortfolioSnapshot();
+}, { timezone: 'Asia/Kolkata' });
+
+// 10AM IST — generate portfolio signals (after market settles, Mon-Fri)
+cron.schedule('0 10 * * 1-5', async () => {
+  console.log('🔔 10AM: Generating portfolio signals...');
+  await generatePortfolioSignals();
+}, { timezone: 'Asia/Kolkata' });
+
+// 3:45PM IST — end of day signals + snapshot (after market close)
+cron.schedule('45 15 * * 1-5', async () => {
+  console.log('🔔 3:45PM: End-of-day portfolio review...');
+  await generatePortfolioSignals();
+  await savePortfolioSnapshot();
+}, { timezone: 'Asia/Kolkata' });
 
 // 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
 cron.schedule('0 7 * * *', async () => {
