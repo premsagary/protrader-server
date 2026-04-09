@@ -3707,36 +3707,50 @@ async function refreshAllFundamentals() {
   if (stockFundLoading) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) {
     console.log('📊 Kite not ready - attempting to restore TA from DB cache...');
-    // Fallback: restore TA data from scored_stocks_cache so scores aren't crippled
+    // Fallback: try dedicated TA cache first, then scored_stocks_cache
+    let restored = 0;
     try {
-      const cached = await dbGet('scored_stocks_cache');
-      if (cached) {
-        const { stocks, fetchedAt } = JSON.parse(cached);
-        const count = Object.keys(stocks).length;
-        if (count > 10) {
-          let restored = 0;
-          for (const [sym, cachedStock] of Object.entries(stocks)) {
-            if (!stockFundamentals[sym]) { stockFundamentals[sym] = cachedStock; restored++; continue; }
-            // Merge TA fields from cache into existing entry (don't overwrite newer fundamental data)
+      // Try dedicated TA cache (never overwritten by non-Kite restarts)
+      const taCached = await dbGet('ta_data_cache');
+      if (taCached) {
+        const { ta, fetchedAt } = JSON.parse(taCached);
+        const taCount = Object.keys(ta).length;
+        if (taCount > 10) {
+          for (const [sym, taData] of Object.entries(ta)) {
+            if (!stockFundamentals[sym]) continue;
             const sf = stockFundamentals[sym];
-            const taFields = ['rsi','macdBull','macd','macdHist','goldenCross','dma20','dma50','dma100','dma200',
-              'wk52Hi','wk52Lo','change52w','change6m','change3m','change1m','pctAbove200','pctFromHigh',
-              'adx','adxPdi','adxNdi','bbPct','bbUpper','bbLower','stochK','supertrend','supertrendSig',
-              'obvRising','volRatio','bullishDiv','bearishDiv','annualVol','beta',
-              'price','dma200','dma50'];
-            let merged = false;
-            for (const k of taFields) {
-              if (sf[k] == null && cachedStock[k] != null) { sf[k] = cachedStock[k]; merged = true; }
+            for (const [k, v] of Object.entries(taData)) {
+              if (sf[k] == null && v != null) sf[k] = v;
             }
-            if (merged) restored++;
+            restored++;
           }
-          if (restored > 0) {
-            stockFundReady = true;
-            console.log(`📊 Restored TA data for ${restored} stocks from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
-          }
+          console.log(`📊 Restored TA data for ${restored} stocks from TA cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
         }
       }
-    } catch(e) { console.log('📊 Cache restore failed:', e.message); }
+    } catch(e) {}
+
+    // If TA cache didn't help, try scored_stocks_cache
+    if (restored === 0) {
+      try {
+        const cached = await dbGet('scored_stocks_cache');
+        if (cached) {
+          const { stocks, fetchedAt } = JSON.parse(cached);
+          if (Object.keys(stocks).length > 10) {
+            for (const [sym, cachedStock] of Object.entries(stocks)) {
+              if (!stockFundamentals[sym]) { stockFundamentals[sym] = cachedStock; restored++; continue; }
+              const sf = stockFundamentals[sym];
+              for (const [k, v] of Object.entries(cachedStock)) {
+                if (sf[k] == null && v != null) { sf[k] = v; }
+              }
+              restored++;
+            }
+            console.log(`📊 Restored ${restored} stocks from scored cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
+          }
+        }
+      } catch(e) {}
+    }
+
+    if (restored > 0) stockFundReady = true;
     return;
   }
   stockFundLoading = true;
@@ -3933,6 +3947,24 @@ async function refreshAllFundamentals() {
         stocks: stockFundamentals,
         fetchedAt: stockFundLastFetch,
       }));
+      // Also save TA-only cache separately — never gets overwritten by non-Kite restarts
+      const taCache = {};
+      for (const [sym, f] of Object.entries(stockFundamentals)) {
+        if (f.rsi != null || f.macdBull != null || f.dma200 != null) {
+          taCache[sym] = { rsi:f.rsi, macdBull:f.macdBull, macd:f.macd, macdHist:f.macdHist,
+            goldenCross:f.goldenCross, dma20:f.dma20, dma50:f.dma50, dma100:f.dma100, dma200:f.dma200,
+            wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo, change52w:f.change52w, change6m:f.change6m,
+            change3m:f.change3m, change1m:f.change1m, pctAbove200:f.pctAbove200, pctFromHigh:f.pctFromHigh,
+            adx:f.adx, adxPdi:f.adxPdi, adxNdi:f.adxNdi, bbPct:f.bbPct,
+            supertrend:f.supertrend, supertrendSig:f.supertrendSig,
+            obvRising:f.obvRising, volRatio:f.volRatio, bullishDiv:f.bullishDiv, bearishDiv:f.bearishDiv,
+            annualVol:f.annualVol, beta:f.beta, price:f.price };
+        }
+      }
+      if (Object.keys(taCache).length > 10) {
+        await dbSet('ta_data_cache', JSON.stringify({ ta: taCache, fetchedAt: Date.now() }));
+        console.log(`📊 Saved TA cache: ${Object.keys(taCache).length} stocks with technical data`);
+      }
     } catch(e) {}
 
     // Save individual scores to stock_scores table (queryable, durable)
@@ -8964,7 +8996,6 @@ async function start() {
 
   // STEP 4: Restore last scored stocks from kv cache → instant UI on restart
   // Deep-merge: cache has TA data (RSI, MACD, etc.) that screener doesn't provide
-  // Don't overwrite newer screener fundamental data, but DO fill in TA fields
   try {
     const cached = await dbGet('scored_stocks_cache');
     if (cached) {
@@ -8974,11 +9005,8 @@ async function start() {
         let restored = 0;
         for (const [sym, cachedStock] of Object.entries(stocks)) {
           if (!stockFundamentals[sym]) {
-            // No existing entry — use full cached stock
-            stockFundamentals[sym] = cachedStock;
-            restored++;
+            stockFundamentals[sym] = cachedStock; restored++;
           } else {
-            // Existing entry (from screener) — merge in TA fields that are missing
             const sf = stockFundamentals[sym];
             for (const [k, v] of Object.entries(cachedStock)) {
               if (sf[k] == null && v != null) sf[k] = v;
@@ -8988,10 +9016,28 @@ async function start() {
         }
         stockFundLastFetch = fetchedAt;
         stockFundReady = true;
-        console.log(`📊 ${restored} scored stocks deep-merged from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old) — TA data preserved`);
+        console.log(`📊 ${restored} scored stocks deep-merged from scored cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
       }
     }
-  } catch(e) { console.log('📊 Cache restore error:', e.message); }
+  } catch(e) { console.log('📊 Scored cache restore error:', e.message); }
+
+  // STEP 4b: Also try dedicated TA cache (survives non-Kite restarts)
+  try {
+    const taCached = await dbGet('ta_data_cache');
+    if (taCached) {
+      const { ta, fetchedAt } = JSON.parse(taCached);
+      let taRestored = 0;
+      for (const [sym, taData] of Object.entries(ta)) {
+        if (!stockFundamentals[sym]) continue;
+        const sf = stockFundamentals[sym];
+        for (const [k, v] of Object.entries(taData)) {
+          if (sf[k] == null && v != null) { sf[k] = v; }
+        }
+        taRestored++;
+      }
+      if (taRestored > 0) console.log(`📊 TA cache: restored technical data for ${taRestored} stocks (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
+    }
+  } catch(e) {}
 
   // STEP 5: Kick off background Screener fetch if no data yet
   if (process.env.APIFY_TOKEN && screenerCount === 0) {
