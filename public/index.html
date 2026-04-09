@@ -228,8 +228,25 @@ select option{background:var(--bg3)}
 </head>
 <body>
 
+<!-- LOGIN SCREEN -->
+<div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:40px;width:360px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)">
+    <div style="font-size:40px;margin-bottom:12px">📈</div>
+    <div style="font-weight:800;font-size:22px;margin-bottom:4px;color:var(--text)">ProTrader</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:28px">Sign in to continue</div>
+    <input id="login-username" type="text" placeholder="Username" autocomplete="username"
+      style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px"
+      onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()"/>
+    <input id="login-password" type="password" placeholder="Password" autocomplete="current-password"
+      style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px"
+      onkeydown="if(event.key==='Enter')doLogin()"/>
+    <div id="login-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
+    <button onclick="doLogin()" id="login-btn" style="width:100%;padding:11px;background:var(--blue);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:14px;font-weight:700;margin-bottom:12px">Sign In</button>
+    <div style="font-size:10px;color:var(--text4)">Contact admin for access</div>
+  </div>
+</div>
 
-<div id="app">
+<div id="app" style="display:none">
 <!-- TOP BAR -->
 <div class="topbar">
   <div class="logo"><span class="logo-dot"></span>ProTrader</div>
@@ -237,12 +254,14 @@ select option{background:var(--bg3)}
   <div class="mode-tabs">
     <button class="mode-tab active" onclick="setMode('mf')" id="mode-mf">MF Picks</button>
     <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stock Picks</button>
-    <button class="mode-tab stocks" onclick="checkAccess('stocks')" id="mode-stocks">🔒 Stocks RoboTrade</button>
-    <button class="mode-tab crypto" onclick="checkAccess('crypto')" id="mode-crypto">🔒 Crypto RoboTrade</button>
+    <button class="mode-tab stocks" onclick="setMode('stocks')" id="mode-stocks">Stocks RoboTrade</button>
+    <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">Crypto RoboTrade</button>
     <button class="mode-tab" onclick="setMode('psuggest')" id="mode-psuggest" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#22d3ee;border-color:#22d3ee40">💼 Portfolio</button>
-    <button class="mode-tab" onclick="checkAccess('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
+    <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
   </div>
-  <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
+  <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats">
+    <span id="user-badge" style="font-size:10px;color:var(--text3);cursor:pointer" onclick="doLogout()"></span>
+  </div>
 </div>
 <!-- SUB TABS -->
 <div class="subtabs" id="subtabs"></div>
@@ -5118,6 +5137,31 @@ async function renderAdmin() {
       </div>
     </div>
 
+    <!-- User Management -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div style="font-weight:700;font-size:12px;color:#22d3ee;margin-bottom:2px">👤 User Management</div>
+          <div style="font-size:10px;color:var(--text3)">Create, manage, and remove user accounts</div>
+        </div>
+      </div>
+
+      <!-- Add User Form -->
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <input id="admin-new-user" type="text" placeholder="Username" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:12px;color:var(--text);outline:none;width:140px" />
+        <input id="admin-new-pass" type="password" placeholder="Password" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:12px;color:var(--text);outline:none;width:140px" />
+        <select id="admin-new-role" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:12px;color:var(--text);outline:none">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button onclick="adminCreateUser()" style="background:#22d3ee22;color:#22d3ee;border:1px solid #22d3ee44;border-radius:6px;padding:6px 16px;font-size:11px;font-weight:600;cursor:pointer">+ Add User</button>
+        <span id="admin-user-msg" style="font-size:10px;color:var(--text3)"></span>
+      </div>
+
+      <!-- User List -->
+      <div id="admin-users-list" style="font-size:11px;color:var(--text3)">Loading users...</div>
+    </div>
+
     <!-- Live Server Logs -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border)">
@@ -5133,7 +5177,87 @@ async function renderAdmin() {
   </div>`;
 
   adminLoadStatus();
+  adminLoadUsers();
   adminStartLogPoll();
+}
+
+// ── User Management Functions ─────────────────────────────────────────────────
+async function adminLoadUsers() {
+  var el = document.getElementById('admin-users-list');
+  if (!el) return;
+  try {
+    var r = await fetch('/api/admin/users');
+    var users = await r.json();
+    if (!Array.isArray(users)) { el.innerHTML = '<div style="color:var(--red)">Failed to load users</div>'; return; }
+    if (users.length === 0) { el.innerHTML = 'No users found'; return; }
+    var h = '<table style="width:100%;border-collapse:collapse">';
+    h += '<tr style="border-bottom:1px solid var(--border);font-size:10px;color:var(--text3);text-align:left">';
+    h += '<th style="padding:6px 8px">Username</th><th style="padding:6px 8px">Role</th><th style="padding:6px 8px">Created</th><th style="padding:6px 8px">Last Login</th><th style="padding:6px 8px;text-align:right">Actions</th></tr>';
+    users.forEach(function(u) {
+      var created = u.created_at ? new Date(u.created_at).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'2-digit'}) : '-';
+      var lastLogin = u.last_login ? new Date(u.last_login).toLocaleString('en-IN', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : 'Never';
+      var roleBadge = u.role === 'admin'
+        ? '<span style="background:#f59e0b22;color:#f59e0b;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600">Admin</span>'
+        : '<span style="background:#3b82f622;color:#3b82f6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600">User</span>';
+      h += '<tr style="border-bottom:1px solid var(--border2)">';
+      h += '<td style="padding:8px;font-weight:600;color:var(--text)">' + u.username + '</td>';
+      h += '<td style="padding:8px">' + roleBadge + '</td>';
+      h += '<td style="padding:8px;color:var(--text3)">' + created + '</td>';
+      h += '<td style="padding:8px;color:var(--text3)">' + lastLogin + '</td>';
+      h += '<td style="padding:8px;text-align:right">';
+      h += '<button onclick="adminResetPw(' + u.id + ',\'' + u.username + '\')" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:10px;color:#f59e0b;cursor:pointer;margin-right:4px">Reset PW</button>';
+      if (u.username !== (_authUser && _authUser.username)) {
+        h += '<button onclick="adminDeleteUser(' + u.id + ',\'' + u.username + '\')" style="background:#ef444422;border:1px solid #ef444444;border-radius:4px;padding:3px 8px;font-size:10px;color:#ef4444;cursor:pointer">Delete</button>';
+      }
+      h += '</td></tr>';
+    });
+    h += '</table>';
+    el.innerHTML = h;
+  } catch(e) { el.innerHTML = '<div style="color:var(--red)">' + e.message + '</div>'; }
+}
+
+async function adminCreateUser() {
+  var uEl = document.getElementById('admin-new-user');
+  var pEl = document.getElementById('admin-new-pass');
+  var rEl = document.getElementById('admin-new-role');
+  var msg = document.getElementById('admin-user-msg');
+  if (!uEl.value.trim() || !pEl.value) { msg.textContent = '❌ Fill all fields'; msg.style.color = 'var(--red)'; return; }
+  if (pEl.value.length < 6) { msg.textContent = '❌ Password min 6 chars'; msg.style.color = 'var(--red)'; return; }
+  try {
+    var r = await fetch('/api/admin/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: uEl.value.trim(), password: pEl.value, role: rEl.value })
+    });
+    var d = await r.json();
+    if (!r.ok) { msg.textContent = '❌ ' + (d.error || 'Failed'); msg.style.color = 'var(--red)'; return; }
+    msg.textContent = '✅ User ' + d.username + ' created'; msg.style.color = 'var(--green)';
+    uEl.value = ''; pEl.value = '';
+    adminLoadUsers();
+  } catch(e) { msg.textContent = '❌ ' + e.message; msg.style.color = 'var(--red)'; }
+}
+
+async function adminDeleteUser(id, username) {
+  if (!confirm('Delete user "' + username + '"? This cannot be undone.')) return;
+  try {
+    var r = await fetch('/api/admin/users/' + id, { method: 'DELETE' });
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Failed'); return; }
+    adminLoadUsers();
+  } catch(e) { alert(e.message); }
+}
+
+async function adminResetPw(id, username) {
+  var newPw = prompt('New password for "' + username + '" (min 6 chars):');
+  if (!newPw || newPw.length < 6) { if(newPw !== null) alert('Password must be at least 6 characters'); return; }
+  try {
+    var r = await fetch('/api/admin/users/' + id + '/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: newPw })
+    });
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Failed'); return; }
+    alert('Password reset for ' + username);
+  } catch(e) { alert(e.message); }
 }
 
 var _adminPollTimer = null;
@@ -5265,7 +5389,10 @@ async function adminRunAll() {
 // MiroFish removed — AI Signal Validator replaces it
 async function loadMiroFishLookup() { /* deprecated */ }
 
+var _inited = false;
 function _init() {
+  if(_inited) return;
+  _inited = true;
   // Restore tab from URL hash, or default to MF Recommendation
   var saved = _readHash();
   var validModes = ['mf','stockrec','stocks','crypto','psuggest','admin'];
@@ -5300,83 +5427,105 @@ window.addEventListener('hashchange', function(){
   else if(h.tab) { renderSubTabs(); render(); }
 });
 
-_init();
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTH — Login, logout, session management
+// ══════════════════════════════════════════════════════════════════════════════
+var _authToken = null;
+var _authUser = null;
 
-
-function checkAccess(mode) {
-  if (_unlocked) {
-    setMode(mode);
-    return;
-  }
-  _pendingMode = mode;
-  var modal = document.getElementById('passcode-modal');
-  var input = document.getElementById('passcode-input');
-  var err   = document.getElementById('passcode-error');
-  modal.style.display = 'flex';
-  err.style.display   = 'none';
-  input.value = '';
-  setTimeout(function(){ input.focus(); }, 100);
-}
-
-function submitPasscode() {
-  var input = document.getElementById('passcode-input');
-  var err   = document.getElementById('passcode-error');
-  if (input.value === 'Letmeenter@1') {
-    _unlocked = true;
-    closePasscode();
-    document.getElementById('mode-stocks').textContent = 'Stocks';
-    document.getElementById('mode-crypto').textContent = 'Crypto';
-    document.getElementById('mode-stocks').onclick = function(){ setMode('stocks'); };
-    document.getElementById('mode-crypto').onclick = function(){ setMode('crypto'); };
-    // Unlock admin tab too
-    var adminBtn = document.getElementById('mode-admin');
-    if (adminBtn) {
-      adminBtn.onclick = function(){ setMode('admin'); };
-      adminBtn.style.color = '#f59e0b';
+// Wrap fetch to auto-attach auth token
+var _origFetch = window.fetch;
+window.fetch = function(url, opts) {
+  opts = opts || {};
+  if (_authToken && typeof url === 'string' && url.startsWith('/api') && !url.startsWith('/api/auth/login')) {
+    opts.headers = opts.headers || {};
+    if (typeof opts.headers === 'object' && !Array.isArray(opts.headers)) {
+      opts.headers['Authorization'] = 'Bearer ' + _authToken;
     }
-    if (_pendingMode) setMode(_pendingMode);
-  } else {
-    err.style.display = 'block';
-    input.value = '';
-    input.focus();
-    // Shake animation
-    input.style.border = '1.5px solid var(--red)';
-    setTimeout(function(){ input.style.border = '1px solid var(--border)'; }, 1500);
+  }
+  return _origFetch.call(window, url, opts).then(function(resp){
+    // If 401 on any API call, force re-login
+    if(resp.status === 401 && typeof url === 'string' && url.startsWith('/api') && !url.startsWith('/api/auth')){
+      _authToken = null;
+      _authUser = null;
+      try{ localStorage.removeItem('pt_token'); }catch(e){}
+      showLogin();
+    }
+    return resp;
+  });
+};
+
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  setTimeout(function(){ document.getElementById('login-username').focus(); }, 100);
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  var badge = document.getElementById('user-badge');
+  if(badge && _authUser) badge.textContent = '👤 ' + _authUser.username + (_authUser.role==='admin'?' (admin)':'') + ' · Logout';
+  // Show/hide admin tab based on role
+  var adminBtn = document.getElementById('mode-admin');
+  if(adminBtn) adminBtn.style.display = (_authUser && _authUser.role === 'admin') ? '' : 'none';
+}
+
+async function doLogin() {
+  var btn = document.getElementById('login-btn');
+  var errEl = document.getElementById('login-error');
+  var username = document.getElementById('login-username').value.trim();
+  var password = document.getElementById('login-password').value;
+  if(!username || !password) { errEl.textContent = 'Enter username and password'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in...';
+  try {
+    var r = await _origFetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    });
+    var d = await r.json();
+    if (!r.ok) { errEl.textContent = d.error || 'Login failed'; errEl.style.display = 'block'; return; }
+    _authToken = d.token;
+    _authUser = { username: d.username, role: d.role };
+    try { localStorage.setItem('pt_token', d.token); } catch(e){}
+    showApp();
+    _init();
+  } catch(e) {
+    errEl.textContent = 'Connection error'; errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign In';
   }
 }
 
-function closePasscode() {
-  document.getElementById('passcode-modal').style.display = 'none';
-  _pendingMode = null;
+async function doLogout() {
+  try { await _origFetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + _authToken } }); } catch(e){}
+  _authToken = null;
+  _authUser = null;
+  try { localStorage.removeItem('pt_token'); } catch(e){}
+  showLogin();
 }
 
-// Close on backdrop click - use event delegation since modal is after script
-document.addEventListener('click', function(e){
-  var modal = document.getElementById('passcode-modal');
-  if(modal && e.target === modal) closePasscode();
-});
-
-// -- Passcode gate for Stocks & Crypto -----------------------------------------
-var _unlocked = false;
-var _pendingMode = null;
+// On page load — check for saved session
+(async function checkSession() {
+  var saved = null;
+  try { saved = localStorage.getItem('pt_token'); } catch(e){}
+  if (!saved) { showLogin(); return; }
+  try {
+    var r = await _origFetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + saved } });
+    if (!r.ok) { showLogin(); return; }
+    var d = await r.json();
+    _authToken = saved;
+    _authUser = { username: d.username, role: d.role };
+    showApp();
+    _init();
+  } catch(e) { showLogin(); }
+})();
 </script>
-<!-- Passcode Modal -->
-<div id="passcode-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.75);backdrop-filter:blur(6px);align-items:center;justify-content:center">
-  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:32px;width:320px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)">
-    <div style="font-size:36px;margin-bottom:12px">🔒</div>
-    <div style="font-weight:700;font-size:16px;margin-bottom:6px">Private Section</div>
-    <div style="font-size:12px;color:var(--text3);margin-bottom:24px;line-height:1.6">This section is restricted.<br>Enter passcode to unlock Stocks, Crypto & Admin.</div>
-    <input id="passcode-input" type="password" placeholder="Enter passcode"
-      style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px;text-align:center;letter-spacing:2px"
-      onkeydown="if(event.key==='Enter')submitPasscode()"/>
-    <div id="passcode-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px">❌ Incorrect passcode. Try again.</div>
-    <div style="display:flex;gap:8px;justify-content:center">
-      <button onclick="closePasscode()" style="flex:1;padding:9px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:13px">Cancel</button>
-      <button onclick="submitPasscode()" style="flex:1;padding:9px;background:var(--blue);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:13px;font-weight:600">Unlock</button>
-    </div>
-    <div style="margin-top:16px;font-size:10px;color:var(--text4)">Mutual Funds section is always accessible.</div>
-  </div>
-</div>
+
 
 </div>
 </html>

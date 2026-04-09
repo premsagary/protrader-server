@@ -42,6 +42,7 @@ const { Pool, types: pgTypes }  = require("pg");
 // Convert to JS floats so .toFixed() and arithmetic work everywhere.
 pgTypes.setTypeParser(1700, val => parseFloat(val));
 
+const crypto  = require("crypto");
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
@@ -317,7 +318,40 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_sym ON ai_disagree_log(sym)`).catch(()=>{});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_run ON ai_disagree_log(run_at)`).catch(()=>{});
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review tables included)");
+    // ── Users table for auth ─────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id         SERIAL PRIMARY KEY,
+        username   VARCHAR(50) UNIQUE NOT NULL,
+        password   VARCHAR(255) NOT NULL,
+        role       VARCHAR(20) DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT NOW(),
+        last_login TIMESTAMP
+      )
+    `);
+
+    // ── Session tokens ────────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        token      VARCHAR(64) PRIMARY KEY,
+        user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        username   VARCHAR(50) NOT NULL,
+        role       VARCHAR(20) DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT NOW(),
+        expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days')
+      )
+    `);
+
+    // Seed admin user if not exists
+    const adminExists = await pool.query(`SELECT id FROM users WHERE username='admin'`);
+    if (adminExists.rows.length === 0) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.scryptSync('Letmeenter@1', salt, 64).toString('hex');
+      await pool.query(`INSERT INTO users (username, password, role) VALUES ($1, $2, 'admin')`, ['admin', salt + ':' + hash]);
+      console.log('🔑 Default admin user created');
+    }
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -1790,6 +1824,153 @@ async function scanAndTrade() {
 // -- REST API ------------------------------------------------------------------
 
 const path = require("path");
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTH SYSTEM — password hashing, login, session tokens, middleware
+// ══════════════════════════════════════════════════════════════════════════════
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return salt + ':' + hash;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = stored.split(':');
+  const test = crypto.scryptSync(password, salt, 64).toString('hex');
+  return test === hash;
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+    const result = await pool.query('SELECT id, username, password, role FROM users WHERE username=$1', [username.trim().toLowerCase()]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const user = result.rows[0];
+    if (!verifyPassword(password, user.password)) return res.status(401).json({ error: 'Invalid credentials' });
+
+    // Create session token
+    const token = generateToken();
+    await pool.query(
+      `INSERT INTO sessions (token, user_id, username, role) VALUES ($1, $2, $3, $4)`,
+      [token, user.id, user.username, user.role]
+    );
+
+    // Update last login
+    await pool.query('UPDATE users SET last_login=NOW() WHERE id=$1', [user.id]);
+
+    console.log(`🔑 Login: ${user.username} (${user.role})`);
+    res.json({ token, username: user.username, role: user.role });
+  } catch (e) {
+    console.error('Login error:', e.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', async (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  if (token) await pool.query('DELETE FROM sessions WHERE token=$1', [token]).catch(() => {});
+  res.json({ ok: true });
+});
+
+// Verify session endpoint (frontend calls on load)
+app.get('/api/auth/me', async (req, res) => {
+  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    const result = await pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Session expired' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(401).json({ error: 'Invalid session' }); }
+});
+
+// Auth middleware — protects all /api/* routes (except auth routes themselves)
+function authMiddleware(req, res, next) {
+  // Allow auth routes through
+  if (req.path.startsWith('/api/auth/')) return next();
+  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Authentication required' });
+  pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
+    .then(result => {
+      if (result.rows.length === 0) return res.status(401).json({ error: 'Session expired' });
+      req.user = result.rows[0];
+      next();
+    })
+    .catch(() => res.status(401).json({ error: 'Auth error' }));
+}
+
+// Apply auth middleware to all API routes
+app.use('/api', authMiddleware);
+
+// ── Admin: User Management ───────────────────────────────────────────────────
+
+// List users (admin only)
+app.get('/api/admin/users', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const result = await pool.query('SELECT id, username, role, created_at, last_login FROM users ORDER BY created_at');
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create user (admin only)
+app.post('/api/admin/users', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const { username, password, role } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const uname = username.trim().toLowerCase();
+    const existing = await pool.query('SELECT id FROM users WHERE username=$1', [uname]);
+    if (existing.rows.length > 0) return res.status(409).json({ error: 'Username already exists' });
+    const hashed = hashPassword(password);
+    const userRole = (role === 'admin') ? 'admin' : 'user';
+    await pool.query('INSERT INTO users (username, password, role) VALUES ($1, $2, $3)', [uname, hashed, userRole]);
+    console.log(`👤 User created: ${uname} (${userRole}) by ${req.user.username}`);
+    res.json({ ok: true, username: uname, role: userRole });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete user (admin only, cannot delete self)
+app.delete('/api/admin/users/:id', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const id = parseInt(req.params.id);
+    const target = await pool.query('SELECT username FROM users WHERE id=$1', [id]);
+    if (target.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (target.rows[0].username === req.user.username) return res.status(400).json({ error: 'Cannot delete yourself' });
+    await pool.query('DELETE FROM users WHERE id=$1', [id]);
+    console.log(`🗑️ User deleted: ${target.rows[0].username} by ${req.user.username}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Reset password (admin only)
+app.post('/api/admin/users/:id/reset-password', async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const id = parseInt(req.params.id);
+    const { password } = req.body;
+    if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const hashed = hashPassword(password);
+    await pool.query('UPDATE users SET password=$1 WHERE id=$2', [hashed, id]);
+    // Invalidate all sessions for this user
+    await pool.query('DELETE FROM sessions WHERE user_id=$1', [id]);
+    console.log(`🔑 Password reset for user ID ${id} by ${req.user.username}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 
 app.use(express.static(path.join(__dirname,"public")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
