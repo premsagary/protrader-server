@@ -9468,7 +9468,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
         body: JSON.stringify({ model: modelDef.model, max_tokens: 16384, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9481,7 +9481,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
         body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9494,7 +9494,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
         body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9511,7 +9511,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
           contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: { temperature: 0.3 },
         }),
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
@@ -9951,7 +9951,8 @@ Respond in JSON:
   ],
   "portfolio_flags": ["Any overall portfolio concerns — concentration, correlation, regime mismatch, tax inefficiency"],
   "missed_signals": ["Stocks that SHOULD have a signal but don't — e.g. stock with bearish divergence but no EXIT signal"]
-}`;
+}
+CRITICAL: signal_reviews MUST contain exactly one entry for EVERY stock listed in PORTFOLIO POSITIONS and MODEL PORTFOLIO sections above. Do NOT skip bench/watchlist stocks.`;
 
 let _lastAIValidation = null;
 let _aiValidationRunning = false;
@@ -10246,7 +10247,7 @@ ${modelStocks}
 ════════════════════════════════════════
 TASK:
 ════════════════════════════════════════
-Validate ALL active signals against Varsity principles. For each stock:
+Review EVERY SINGLE ONE of the 15 stocks listed above (both PORTFOLIO POSITIONS and MODEL PORTFOLIO stocks including bench/watchlist). You MUST include ALL 15 stocks in your signal_reviews array — do NOT skip any. For each stock:
 1. Cross-check EVERY indicator — don't just look at one. Check RSI+MACD+Volume+OBV+Delivery% alignment.
 2. Verify fundamentals match the signal (ROE, D/E, EPS growth, promoter holding trends, FII/DII flows).
 3. Check if price is near key levels (200DMA, 52-week high/low, Fibonacci levels).
