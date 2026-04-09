@@ -5650,13 +5650,57 @@ function buildPortfolioSuggestion(amount) {
   detectMarketRegime();
 
   // Score all stocks through the multi-factor model
-  const scored = all.map(f => scoreStockForPortfolio(f)).filter(Boolean);
+  let scored = [];
+  let scoreErrors = 0;
+  for (const f of all) {
+    try {
+      const result = scoreStockForPortfolio(f);
+      if (result) scored.push(result);
+    } catch(e) { scoreErrors++; }
+  }
   scored.sort((a, b) => b.composite - a.composite);
 
   // Debug logging
   const convDist = {};
   scored.forEach(s => { convDist[s.conviction] = (convDist[s.conviction]||0)+1; });
-  console.log(`📊 Portfolio: ${scored.length} pass quality gate. Conviction: ${JSON.stringify(convDist)}. Top: ${scored[0]?.sym}=${scored[0]?.composite}. Regime: ${marketRegime}`);
+  const withPrice = all.filter(f => (f.price || livePrices[f.sym]?.price) > 0).length;
+  console.log(`📊 Portfolio: ${all.length} total, ${withPrice} have price, ${scored.length} pass quality gate, ${scoreErrors} errors. Conviction: ${JSON.stringify(convDist)}. Top: ${scored[0]?.sym}=${scored[0]?.composite}. Regime: ${marketRegime}`);
+
+  // If quality gate filtered everything, fall back to simple FA-score ranking
+  if (!scored.length && withPrice > 0) {
+    console.log('📊 Quality gate too strict — falling back to FA score ranking');
+    const bySector = {};
+    all.forEach(f => { const s = f.sector || 'Other'; bySector[s] = bySector[s] || []; bySector[s].push(f); });
+    scored = all.map(f => {
+      const px = f.price || livePrices[f.sym]?.price;
+      if (!px || px <= 0) return null;
+      const peers = bySector[f.sector || 'Other'] || all;
+      const { score } = scoreOneStock(f, peers);
+      const stopData = computeStopAndTarget({ ...f, price: px });
+      return {
+        sym: f.sym, name: f.name, grp: f.grp, sector: f.sector || 'Other',
+        price: px, faScore: score, valScore: 50, taScore: 50, momScore: 50, riskScore: 50,
+        composite: +score.toFixed(1), conviction: score >= 60 ? 'Buy' : score >= 40 ? 'Accumulate' : 'Watch',
+        convColor: score >= 60 ? '#22c55e' : score >= 40 ? '#f59e0b' : '#94a3b8',
+        checkCount: 0, isFallenAngel: false,
+        stopLoss: stopData?.stopLoss, target: stopData?.target,
+        rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
+        riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
+        stopReason: stopData?.stopReason, targetReason: stopData?.targetReason,
+        roe: f.roe, roce: f.roce, debtToEq: f.debtToEq, pe: f.pe, peg: f.peg,
+        rsi: f.rsi, macdBull: f.macdBull, goldenCross: f.goldenCross, obvRising: f.obvRising,
+        pctFromHigh: f.pctFromHigh, pctAbove200: f.pctAbove200,
+        dma200: f.dma200, dma50: f.dma50, beta: f.beta, annualVol: f.annualVol,
+        change1m: f.change1m, change3m: f.change3m, change6m: f.change6m,
+        opMargin: f.opMargin, earGrowth: f.earGrowth, revGrowth: f.revGrowth,
+        promoter: f.promoter, pledged: f.pledged, mktCap: f.mktCap,
+        volRatio: f.volRatio, adx: f.adx, adxPdi: f.adxPdi, adxNdi: f.adxNdi,
+        bullishDiv: f.bullishDiv, bearishDiv: f.bearishDiv,
+        earningsYield: f.earningsYield, divYield: f.divYield,
+      };
+    }).filter(Boolean);
+    scored.sort((a, b) => b.composite - a.composite);
+  }
 
   // --- PROGRESSIVE SELECTION (Varsity M9: always find investable stocks) ---
   const MAX_STOCKS = Math.min(15, Math.max(5, Math.floor(amount / 10000)));
@@ -5697,7 +5741,12 @@ function buildPortfolioSuggestion(amount) {
     }
   }
 
-  if (!selected.length) return { error: 'Stock data is still loading. Please try again in a minute.' };
+  if (!selected.length) {
+    console.log(`📊 Portfolio: No stocks selected. scored=${scored.length}, eligible=${eligible.length}`);
+    return { error: scored.length === 0
+      ? 'Stock data is still loading (' + all.length + ' stocks, ' + withPrice + ' with price). Please wait and retry.'
+      : 'Could not build portfolio. ' + scored.length + ' stocks scored but diversification filter left 0. Retrying...' };
+  }
 
   // --- CASH ALLOCATION based on regime ---
   const cashPct = (marketRegimeData.cashSuggestion || 10) / 100;
