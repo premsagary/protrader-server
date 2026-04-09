@@ -3431,7 +3431,7 @@ var mfishPolling = null;
 async function renderMiroFish() {
   var cont = document.getElementById('main-content');
   if(!cont) return;
-  cont.innerHTML = '<div style="padding:48px;text-align:center"><div style="font-size:14px;color:var(--text3)">MiroFish has been replaced by the AI Signal Validator.<br>Go to Portfolio Manager → Signals tab to see AI-powered Varsity reviews.</div></div>';
+  cont.innerHTML = '<div style="padding:48px;text-align:center"><div style="font-size:14px;color:var(--text3)">MiroFish has been replaced by the AI Signal Validator.<br>Go to Portfolio Manager → Model Portfolio to see AI-powered Varsity reviews.</div></div>';
   return;
 
   // DEPRECATED — original code below (dead code)
@@ -3751,7 +3751,7 @@ function renderPortfolioSuggestion(){
   h+='</div>';
 
   // Sub-tabs
-  var tabs=[{id:'model',l:'📊 Model Portfolio'},{id:'holdings',l:'📋 My Holdings'},{id:'signals',l:'🔔 Signals'},{id:'performance',l:'📈 Performance'}];
+  var tabs=[{id:'model',l:'📊 Model Portfolio'},{id:'holdings',l:'📋 My Holdings'},{id:'performance',l:'📈 Performance'}];
   h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
   tabs.forEach(function(t){
     var act=_psTab===t.id;
@@ -3763,7 +3763,6 @@ function renderPortfolioSuggestion(){
   h+='<div id="ps-tab-content">';
   if(_psTab==='model') h+=psRenderModelTab();
   else if(_psTab==='holdings') h+=psRenderHoldingsTab();
-  else if(_psTab==='signals') h+=psRenderSignalsTab();
   else if(_psTab==='performance') h+=psRenderPerformanceTab();
   h+='</div>';
 
@@ -3775,8 +3774,6 @@ function renderPortfolioSuggestion(){
   if(_psTab==='model'&&!_psSignals) psLoadSignals(); // needed for FRESH_BUY ideas in model tab
   if(_psTab==='model'&&!_psAIValidation) psLoadAIValidation(); // load AI verdicts for model badges
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
-  if(_psTab==='signals'&&!_psSignals) psLoadSignals();
-  if(_psTab==='holdings'&&!_psAIValidation) psLoadAIValidation();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
 }
 
@@ -4022,14 +4019,6 @@ function psRenderHoldingsTab(){
     return h;
   }
 
-  // AI Deep Review button + panel
-  h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
-  h+='<button onclick="psRunAIValidation(\'deep\')" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
-  h+='<button onclick="psRunAIValidation(\'auto\')" style="background:rgba(34,197,94,.08);color:#22c55e;border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">⚡ Quick Review</button>';
-  h+='<div style="font-size:10px;color:var(--text4);flex:1">AI validates your holdings against all 17 Varsity modules</div>';
-  h+='</div>';
-  h+=psRenderAIValidation();
-
   // Urgent alerts
   if(sm.urgentSignals>0){
     h+='<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 14px;margin-bottom:12px">';
@@ -4203,7 +4192,6 @@ async function psRunAIValidation(mode){
     if(tc){
       if(_psTab==='model') tc.innerHTML=psRenderModelTab();
       else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
-      else if(_psTab==='signals') tc.innerHTML=psRenderSignalsTab();
     }
   }catch(e){alert('AI validation error: '+e.message);}
   finally{btn.disabled=false;btn.textContent=mode==='deep'?'🧠 AI Deep Review':'🤖 AI Quick Review';}
