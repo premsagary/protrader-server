@@ -4005,7 +4005,7 @@ function psRenderModelResults(data){
       var aiR2=_aiStockReview;
       var pm2=aiR2.per_model||aiR2.models||{};
       var pmKeys2=Object.keys(pm2);
-      var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
+      var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
       h+='<tr id="ai-row-'+stk.sym+'" style="display:none;background:var(--bg2)">';
       h+='<td colspan="15" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
       h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">🤖 AI Model Reviews for '+stk.sym+'</div>';
@@ -4273,7 +4273,7 @@ function psRenderAIValidation(){
       if(r.risk_flag)h+='<div style="font-size:10px;color:#f97316;margin-top:2px">⚠ '+r.risk_flag+'</div>';
 
       // Per-model breakdown (always visible)
-      var _aiModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
+      var _aiModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
       if(r.per_model){
         var pmKeys=Object.keys(r.per_model);
         if(pmKeys.length>0){
