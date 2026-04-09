@@ -260,7 +260,8 @@ select option{background:var(--bg3)}
     <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats">
-    <span id="user-badge" style="font-size:10px;color:var(--text3);cursor:pointer" onclick="doLogout()"></span>
+    <span id="user-badge" style="font-size:11px;color:var(--text3)"></span>
+    <button id="logout-btn" onclick="doLogout()" style="font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;font-weight:600;display:none" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='transparent'">Logout</button>
   </div>
 </div>
 <!-- SUB TABS -->
@@ -5412,6 +5413,9 @@ function showLogin() {
   document.getElementById('login-error').style.display = 'none';
   document.getElementById('login-username').value = '';
   document.getElementById('login-password').value = '';
+  var logoutBtn = document.getElementById('logout-btn');
+  if(logoutBtn) logoutBtn.style.display = 'none';
+  _clearInactivityTimer();
   setTimeout(function(){ document.getElementById('login-username').focus(); }, 100);
 }
 
@@ -5419,10 +5423,14 @@ function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = '';
   var badge = document.getElementById('user-badge');
-  if(badge && _authUser) badge.textContent = '👤 ' + _authUser.username + (_authUser.role==='admin'?' (admin)':'') + ' · Logout';
+  if(badge && _authUser) badge.textContent = '👤 ' + _authUser.username + (_authUser.role==='admin'?' (admin)':'');
+  var logoutBtn = document.getElementById('logout-btn');
+  if(logoutBtn) logoutBtn.style.display = '';
   // Show/hide admin tab based on role
   var adminBtn = document.getElementById('mode-admin');
   if(adminBtn) adminBtn.style.display = (_authUser && _authUser.role === 'admin') ? '' : 'none';
+  // Start inactivity timer
+  _resetInactivityTimer();
 }
 
 async function doLogin() {
@@ -5459,6 +5467,30 @@ async function doLogout() {
   try { localStorage.removeItem('pt_token'); } catch(e){}
   showLogin();
 }
+
+// ── 5-minute inactivity auto-logout ──
+var _inactivityTimer = null;
+var INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+function _resetInactivityTimer() {
+  if (_inactivityTimer) clearTimeout(_inactivityTimer);
+  if (!_authToken) return;
+  _inactivityTimer = setTimeout(function() {
+    console.log('⏱ Auto-logout: 5 minutes of inactivity');
+    doLogout();
+  }, INACTIVITY_TIMEOUT);
+}
+
+function _clearInactivityTimer() {
+  if (_inactivityTimer) { clearTimeout(_inactivityTimer); _inactivityTimer = null; }
+}
+
+// Reset timer on any user interaction
+['click','keydown','scroll','mousemove','touchstart'].forEach(function(evt) {
+  document.addEventListener(evt, function() {
+    if (_authToken) _resetInactivityTimer();
+  }, { passive: true });
+});
 
 // On page load — check for saved session
 (async function checkSession() {
