@@ -4391,10 +4391,13 @@ function psRenderAIValidation(){
   if(!_psAIValidation) return '';
   var v=_psAIValidation;
   if(v.error){
-    h+='<div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:10px;padding:10px 14px;margin-bottom:14px">';
+    h+='<div id="ps-ai-validation-panel" style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:10px;padding:10px 14px;margin-bottom:14px">';
     h+='<div style="font-size:11px;color:#ef4444">🤖 AI Error: '+v.error+'</div></div>';
     return h;
   }
+
+  h+='<div id="ps-ai-validation-panel">';
+
   // Overall assessment card — Multi-model consensus
   h+='<div style="background:linear-gradient(135deg,rgba(34,197,94,.06),rgba(34,211,238,.06));border:1px solid rgba(34,197,94,.2);border-radius:12px;padding:14px;margin-bottom:14px">';
   h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
@@ -4425,29 +4428,33 @@ function psRenderAIValidation(){
     h+='<span style="background:'+rc+'15;color:'+rc+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:6px">Regime: '+v.regime+'</span>';
   }
 
-  // Portfolio flags (from all models)
+  // Portfolio flags (from all models) — collapsed by default
   if(v.portfolio_flags&&v.portfolio_flags.length){
     h+='<div style="margin-top:10px">';
-    h+='<div style="font-size:10px;font-weight:700;color:#f97316;margin-bottom:4px">⚠ Portfolio Concerns (aggregated from all models):</div>';
+    h+='<div onclick="var el=document.getElementById(\'ai-concerns-list\');var a=document.getElementById(\'ai-concerns-arr\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';if(a)a.textContent=el.style.display===\'none\'?\'▶\':\'▼\';}" style="font-size:10px;font-weight:700;color:#f97316;margin-bottom:4px;cursor:pointer"><span id="ai-concerns-arr">▶</span> ⚠ Portfolio Concerns ('+v.portfolio_flags.length+' from all models)</div>';
+    h+='<div id="ai-concerns-list" style="display:none">';
     v.portfolio_flags.forEach(function(f){
       h+='<div style="font-size:10px;color:var(--text3);padding:2px 0;padding-left:12px">• '+f+'</div>';
     });
-    h+='</div>';
+    h+='</div></div>';
   }
 
-  // Missed signals
+  // Missed signals — collapsed by default
   if(v.missed_signals&&v.missed_signals.length){
     h+='<div style="margin-top:10px">';
-    h+='<div style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:4px">🔍 Missed Signals:</div>';
+    h+='<div onclick="var el=document.getElementById(\'ai-missed-list\');var a=document.getElementById(\'ai-missed-arr\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';if(a)a.textContent=el.style.display===\'none\'?\'▶\':\'▼\';}" style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:4px;cursor:pointer"><span id="ai-missed-arr">▶</span> 🔍 Missed Signals ('+v.missed_signals.length+')</div>';
+    h+='<div id="ai-missed-list" style="display:none">';
     v.missed_signals.forEach(function(m){
       h+='<div style="font-size:10px;color:#ef4444;padding:2px 0;padding-left:12px">• '+m+'</div>';
     });
-    h+='</div>';
+    h+='</div></div>';
   }
+
+  h+='</div>'; // close consensus card
 
   // Signal reviews — per stock with consensus + per-model breakdown
   if(v.signal_reviews&&v.signal_reviews.length){
-    h+='<div style="margin-top:12px">';
+    h+='<div style="margin-top:12px;margin-bottom:14px">';
     h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">Stock Verdicts — Consensus ('+v.signal_reviews.length+' stocks):</div>';
     v.signal_reviews.forEach(function(r,idx){
       var cv=r.consensus_verdict||r.verdict;
@@ -4473,13 +4480,15 @@ function psRenderAIValidation(){
       if(r.recommendation)h+='<div style="font-size:10px;color:#22d3ee;margin-top:2px">💡 '+r.recommendation+'</div>';
       if(r.risk_flag)h+='<div style="font-size:10px;color:#f97316;margin-top:2px">⚠ '+r.risk_flag+'</div>';
 
-      // Per-model breakdown (always visible)
+      // Per-model breakdown — collapsed by default, click to expand
       var _aiModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','claude-sonnet':'Claude Sonnet 4','gemini-pro':'Gemini 3.1 Pro','mistral':'Mistral Small'};
       if(r.per_model){
         var pmKeys=Object.keys(r.per_model);
         if(pmKeys.length>0){
-          h+='<div style="margin-top:8px;font-size:9px;font-weight:700;color:var(--text4)">📊 Per-Model Verdicts ('+pmKeys.length+' models):</div>';
-          h+='<div style="margin-top:4px;display:grid;gap:3px">';
+          var detId='ai-pm-'+idx;
+          h+='<div onclick="var el=document.getElementById(\''+detId+'\');var a=document.getElementById(\'ai-pm-arr-'+idx+'\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';if(a)a.textContent=el.style.display===\'none\'?\'▶\':\'▼\';}" style="margin-top:8px;font-size:9px;font-weight:700;color:#8b5cf6;cursor:pointer"><span id="ai-pm-arr-'+idx+'">▶</span> 📊 Per-Model Verdicts ('+pmKeys.length+' models)</div>';
+          h+='<div id="'+detId+'" style="display:none;margin-top:4px;display:none">';
+          h+='<div style="display:grid;gap:3px">';
           pmKeys.forEach(function(mid){
             var mv=r.per_model[mid];
             var mvc=mv.verdict==='AGREE'?'#22c55e':mv.verdict==='DISAGREE'?'#ef4444':mv.verdict==='NO_REVIEW'?'#6b7280':'#f59e0b';
@@ -4497,14 +4506,15 @@ function psRenderAIValidation(){
             if(riskNote)h+='<div style="color:#f97316;line-height:1.3;margin-left:0px">'+riskNote+'</div>';
             h+='</div>';
           });
-          h+='</div>';
+          h+='</div></div>';
         }
       }
       h+='</div>';
     });
     h+='</div>';
   }
-  h+='</div>';
+
+  h+='</div>'; // close #ps-ai-validation-panel
   return h;
 }
 
@@ -4534,38 +4544,57 @@ async function psRunAIValidation(mode){
   btn.textContent='🧠 Running...';
   btn.disabled=true;
   _aiLogEntries=[];
-  var log=document.getElementById('ps-ai-log');
-  if(log){log.style.display='block';log.innerHTML='';}
 
-  aiLog('AI Deep Review started — sending 15 stocks to 6 AI models');
+  // Hide any existing AI validation panel and show clean loading state
+  var existingAI=document.getElementById('ps-ai-validation-panel');
+  if(existingAI) existingAI.style.display='none';
+
+  var log=document.getElementById('ps-ai-log');
+  if(log){
+    log.style.display='block';
+    log.innerHTML='<div style="text-align:center;padding:20px">'
+      +'<div style="font-size:24px;margin-bottom:8px">🧠</div>'
+      +'<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px">AI Deep Review in progress...</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">Querying 7 AI models with full portfolio + fundamentals + technicals</div>'
+      +'<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:240px;margin:0 auto">'
+      +'<div style="height:100%;background:linear-gradient(90deg,#22c55e,#22d3ee);width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
+      +'<div id="ps-ai-progress-models" style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-top:12px"></div>'
+      +'<div id="ps-ai-progress-text" style="font-size:10px;color:var(--text4);margin-top:8px">Starting...</div>'
+      +'</div>';
+  }
 
   // Poll /api/ai/status every 2s for real-time model-by-model progress
   var pollSince=Date.now();
+  var completedModels=0;
   var pollTimer=setInterval(async function(){
     try{
       var sr=await fetch('/api/ai/status?since='+pollSince);
       var st=await sr.json();
       if(st.steps&&st.steps.length){
         st.steps.forEach(function(s){
-          var t=s.type==='ok'?'ok':s.type==='err'?'err':s.type==='warn'?'warn':'info';
-          aiLog(s.msg,t);
           if(s.ts>pollSince) pollSince=s.ts;
         });
       }
-      // Live model status pills
+      // Live model status pills in compact progress view
       if(st.models&&Object.keys(st.models).length){
-        var mp=document.getElementById('ps-ai-model-pills');
-        if(!mp){mp=document.createElement('div');mp.id='ps-ai-model-pills';mp.style.cssText='display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;';if(log)log.appendChild(mp);}
-        var ph='';
-        Object.keys(st.models).forEach(function(k){
-          var m=st.models[k];
-          var bg=m.status==='ok'?'#166534':m.status==='error'?'#991b1b':m.status==='skipped'?'#92400e':'#1e3a5f';
-          var icon=m.status==='ok'?'✅':m.status==='error'?'❌':m.status==='skipped'?'⏭':'⏳';
-          var extra=m.took_ms?' ('+((m.took_ms/1000).toFixed(1))+'s)':'';
-          var tkLive=m.tokens?(' · '+((m.tokens.input||0)+(m.tokens.output||0)).toLocaleString()+'tok'):'';
-          ph+='<span style="background:'+bg+';color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;white-space:nowrap">'+icon+' '+m.name+extra+tkLive+'</span>';
-        });
-        mp.innerHTML=ph;
+        var mp=document.getElementById('ps-ai-progress-models');
+        if(mp){
+          var ph='';
+          var done=0,total=0;
+          Object.keys(st.models).forEach(function(k){
+            var m=st.models[k];
+            total++;
+            if(m.status==='ok'||m.status==='error'||m.status==='skipped') done++;
+            var bg=m.status==='ok'?'#166534':m.status==='error'?'#991b1b':m.status==='skipped'?'#92400e':'#1e3a5f';
+            var icon=m.status==='ok'?'✅':m.status==='error'?'❌':m.status==='skipped'?'⏭':'⏳';
+            var extra=m.took_ms?' ('+((m.took_ms/1000).toFixed(1))+'s)':'';
+            ph+='<span style="background:'+bg+';color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;white-space:nowrap">'+icon+' '+m.name+extra+'</span>';
+          });
+          mp.innerHTML=ph;
+          completedModels=done;
+          var ptxt=document.getElementById('ps-ai-progress-text');
+          if(ptxt) ptxt.textContent=done+'/'+total+' models completed...';
+        }
       }
       if(!st.running) clearInterval(pollTimer);
     }catch(e){}
@@ -4577,39 +4606,25 @@ async function psRunAIValidation(mode){
     _psAIValidation=await r.json();
     clearInterval(pollTimer);
 
-    // Final poll to catch any steps that arrived after last interval
-    try{
-      var sr2=await fetch('/api/ai/status?since='+pollSince);
-      var st2=await sr2.json();
-      if(st2.steps&&st2.steps.length){
-        st2.steps.forEach(function(s){
-          var t=s.type==='ok'?'ok':s.type==='err'?'err':s.type==='warn'?'warn':'info';
-          aiLog(s.msg,t);
-        });
-      }
-    }catch(e2){}
-
-    if(_psAIValidation.error){
-      aiLog('Error: '+_psAIValidation.error,'err');
-    } else {
-      var reviews=_psAIValidation.signal_reviews||[];
-      var agrees=reviews.filter(function(r){return r.consensus_verdict==='AGREE';}).length;
-      var disagrees=reviews.filter(function(r){return r.consensus_verdict==='DISAGREE';}).length;
-      var modifies=reviews.filter(function(r){return r.consensus_verdict==='MODIFY';}).length;
-      aiLog('Final consensus: '+reviews.length+' stocks — '+agrees+' AGREE, '+disagrees+' DISAGREE, '+modifies+' MODIFY','ok');
-    }
-
+    // On completion — fully re-render the tab so AI results are baked in
     var tc=document.getElementById('ps-tab-content');
     if(tc){
       if(_psTab==='model') tc.innerHTML=psRenderModelTab();
       else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
     }
-    aiLogRestore();
   }catch(e){
     clearInterval(pollTimer);
-    aiLog('Error: '+e.message,'err');
+    _psAIValidation={error:'AI review failed: '+e.message};
+    var tc=document.getElementById('ps-tab-content');
+    if(tc){
+      if(_psTab==='model') tc.innerHTML=psRenderModelTab();
+      else if(_psTab==='holdings') tc.innerHTML=psRenderHoldingsTab();
+    }
   }
-  finally{btn.disabled=false;btn.textContent='🧠 AI Deep Review';}
+  finally{
+    var btn2=document.getElementById('ps-ai-btn');
+    if(btn2){btn2.disabled=false;btn2.textContent='🧠 AI Deep Review';}
+  }
 }
 
 async function psLoadAIValidation(){
