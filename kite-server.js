@@ -8620,7 +8620,167 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
   }
 });
 
+// ── Single-Stock AI Review endpoint ──────────────────────────────────────────
+// Calls all 7 AI models with the stock's complete data for individual analysis
+// On-demand: frontend calls this when user clicks "Run AI Review" in analyzer
+app.get('/api/stocks/analyze/:sym/ai', async (req, res) => {
+  const sym = req.params.sym.toUpperCase().trim();
+  console.log(`🤖 Single-stock AI review starting for ${sym}...`);
 
+  try {
+    // First get the full analysis data (reuse analyzer logic)
+    const meta   = UNIVERSE.find(u => u.sym === sym) || { sym, n: sym, grp: 'NSE' };
+    const fund   = FUND[sym] || null;
+    const fundExt = global.FUND_EXT?.[sym] || null;
+    const sector = SECTOR_MAP[sym] || 'Other';
+    const px     = livePrices[sym]?.price || null;
+
+    // Build compact data summary for AI prompt
+    const f = fund || fundExt;
+    const roe = f?.[0] ?? fundExt?.roe ?? null;
+    const de = f?.[1] ?? fundExt?.de ?? null;
+    const pe = f?.[2] ?? fundExt?.pe ?? null;
+    const revGr = f?.[3] ?? fundExt?.revGr ?? null;
+    const epsGr = f?.[4] ?? fundExt?.epsGr ?? null;
+    const opMgn = f?.[5] ?? fundExt?.opMgn ?? null;
+    const peg = pe && epsGr && epsGr > 0 ? +(pe / epsGr).toFixed(2) : fundExt?.peg ?? null;
+    const pb = fundExt?.pb ?? null;
+    const roa = fundExt?.roa ?? null;
+    const divYield = fundExt?.divYield ?? null;
+    const mktCap = fundExt?.mktCap ?? null;
+
+    // Get cached TA signals if available
+    const taCache = global._taSignalCache?.[sym] || null;
+    const liveQuote = livePrices[sym] || {};
+
+    // System prompt tailored for single-stock deep analysis
+    const singleStockSystemPrompt = `You are an expert Indian stock market analyst deeply trained on ALL 17 modules of Zerodha Varsity.
+Your task: Perform a comprehensive BUY/HOLD/AVOID analysis of a SINGLE stock.
+
+KEY VARSITY PRINCIPLES TO APPLY:
+- Module 3 (FA): ROE>15% = quality. D/E<1 = safe. EPS growth = wealth engine. PEG<1 = value. Operating margin stability.
+- Module 2 (TA): Price vs 200DMA = long-term health. Golden Cross = bullish. RSI<30 = oversold. MACD alignment. Volume confirms price.
+- Module 9 (Risk): ATR-based stops. Position sizing. Beta assessment. Drawdown limits.
+- Module 13 (Valuation): PE vs sector. Intrinsic value. Margin of safety 20-30%.
+
+RESPOND ONLY IN THIS EXACT JSON FORMAT:
+{
+  "sym": "SYMBOL",
+  "verdict": "BUY" | "HOLD" | "ACCUMULATE" | "AVOID" | "SELL",
+  "confidence": 0-100,
+  "target_price": number_or_null,
+  "stop_loss": number_or_null,
+  "timeframe": "Short-term (1-3 months)" | "Medium-term (3-12 months)" | "Long-term (1-3 years)",
+  "bull_case": "Why this stock could go up — specific catalysts, data points",
+  "bear_case": "What could go wrong — specific risks, red flags",
+  "key_factors": [
+    {"factor": "Factor name", "assessment": "positive|negative|neutral", "detail": "Varsity-grounded explanation"}
+  ],
+  "varsity_modules_applied": ["M2: Technical Analysis", "M3: Fundamental Analysis", ...],
+  "one_line_summary": "One clear sentence: should an investor buy this stock today and why/why not?"
+}`;
+
+    // Build the user prompt with all available data
+    let dataPoints = `STOCK: ${sym} (${meta.n})\nSECTOR: ${sector}\nEXCHANGE: ${meta.grp || 'NSE'}\n`;
+    if (px) dataPoints += `CURRENT PRICE: ₹${px}\n`;
+    if (mktCap) dataPoints += `MARKET CAP: ${mktCap}\n`;
+
+    dataPoints += `\n--- FUNDAMENTALS ---\n`;
+    if (roe != null) dataPoints += `ROE: ${roe}%\n`;
+    if (de != null) dataPoints += `D/E Ratio: ${de}x\n`;
+    if (pe != null) dataPoints += `P/E: ${pe}x\n`;
+    if (peg != null) dataPoints += `PEG: ${peg}\n`;
+    if (pb != null) dataPoints += `P/BV: ${pb}x\n`;
+    if (revGr != null) dataPoints += `Revenue Growth: ${revGr}%\n`;
+    if (epsGr != null) dataPoints += `EPS Growth: ${epsGr}%\n`;
+    if (opMgn != null) dataPoints += `Operating Margin: ${opMgn}%\n`;
+    if (roa != null) dataPoints += `ROA: ${roa}%\n`;
+    if (divYield != null) dataPoints += `Dividend Yield: ${divYield}%\n`;
+
+    dataPoints += `\n--- TECHNICAL INDICATORS ---\n`;
+    if (taCache) {
+      if (taCache.rsi14 != null) dataPoints += `RSI-14: ${taCache.rsi14}\n`;
+      if (taCache.macdHist != null) dataPoints += `MACD Histogram: ${taCache.macdHist}\n`;
+      if (taCache.adx != null) dataPoints += `ADX: ${taCache.adx}\n`;
+      if (taCache.above200 != null) dataPoints += `Above 200 DMA: ${taCache.above200 ? 'Yes' : 'No'}\n`;
+      if (taCache.goldenCross != null) dataPoints += `Golden Cross: ${taCache.goldenCross ? 'Yes (50>200)' : 'No (Death Cross)'}\n`;
+      if (taCache.supertrendSig) dataPoints += `Supertrend: ${taCache.supertrendSig}\n`;
+    }
+    if (liveQuote.change != null) dataPoints += `Day Change: ${liveQuote.change > 0 ? '+' : ''}${liveQuote.change?.toFixed(2)} (${liveQuote.changePct?.toFixed(2)}%)\n`;
+    if (liveQuote.volume) dataPoints += `Volume: ${liveQuote.volume?.toLocaleString()}\n`;
+
+    dataPoints += `\nAnalyze this stock comprehensively using Zerodha Varsity principles. Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
+
+    // Call all 7 models in parallel
+    const modelResults = await Promise.allSettled(
+      AI_MODELS.map(m => callAIModel(m, singleStockSystemPrompt, dataPoints))
+    );
+
+    const results = modelResults.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Failed' });
+
+    // Parse and aggregate
+    const reviews = [];
+    let buyCount = 0, holdCount = 0, accCount = 0, avoidCount = 0, sellCount = 0;
+    let totalConf = 0, confCount = 0;
+
+    results.forEach(r => {
+      if (r.error || r.skipped) {
+        reviews.push({ id: r.id, name: r.name, error: r.error || 'Skipped (no API key)', skipped: !!r.skipped });
+        return;
+      }
+      const d = r.result || {};
+      const verdict = (d.verdict || '').toUpperCase();
+      if (verdict.includes('BUY') && !verdict.includes('AVOID')) buyCount++;
+      else if (verdict.includes('ACCUMULATE')) accCount++;
+      else if (verdict.includes('HOLD')) holdCount++;
+      else if (verdict.includes('SELL')) sellCount++;
+      else if (verdict.includes('AVOID')) avoidCount++;
+
+      if (d.confidence) { totalConf += d.confidence; confCount++; }
+
+      reviews.push({
+        id: r.id, name: r.name,
+        verdict: d.verdict || 'N/A',
+        confidence: d.confidence || null,
+        target_price: d.target_price || null,
+        stop_loss: d.stop_loss || null,
+        timeframe: d.timeframe || null,
+        bull_case: d.bull_case || null,
+        bear_case: d.bear_case || null,
+        key_factors: d.key_factors || [],
+        one_line_summary: d.one_line_summary || null,
+        varsity_modules: d.varsity_modules_applied || [],
+        tokens: r.tokens || {},
+        took_ms: r.took_ms || 0,
+      });
+    });
+
+    const respondedCount = reviews.filter(r => !r.error && !r.skipped).length;
+    const avgConf = confCount > 0 ? Math.round(totalConf / confCount) : null;
+
+    // Overall consensus
+    let consensus = 'MIXED';
+    const total = buyCount + holdCount + accCount + avoidCount + sellCount;
+    if (total > 0) {
+      if ((buyCount + accCount) / total >= 0.6) consensus = 'BUY';
+      else if ((avoidCount + sellCount) / total >= 0.6) consensus = 'AVOID';
+      else if (holdCount / total >= 0.5) consensus = 'HOLD';
+    }
+
+    console.log(`🤖 Single-stock AI review done for ${sym}: ${respondedCount}/${AI_MODELS.length} models, consensus=${consensus}`);
+
+    res.json({
+      sym, name: meta.n, sector,
+      consensus, avgConfidence: avgConf,
+      counts: { buy: buyCount, accumulate: accCount, hold: holdCount, avoid: avoidCount, sell: sellCount },
+      models: reviews,
+      respondedCount, totalModels: AI_MODELS.length,
+    });
+  } catch (e) {
+    console.error(`AI analyze error ${sym}:`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 
 
