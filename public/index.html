@@ -3917,7 +3917,7 @@ function psRenderModelResults(data){
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  ['#','Stock','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Signal','SL','Target','R:R','Track'].forEach(function(hdr){
+  ['#','Stock','AI Reviews','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Signal','SL','Target','R:R','Track'].forEach(function(hdr){
     h+='<th style="padding:7px 5px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -3931,7 +3931,7 @@ function psRenderModelResults(data){
     // Insert divider before first bench stock
     if(isBench&&!printedBenchDivider&&benchStocks.length>0){
       printedBenchDivider=true;
-      h+='<tr><td colspan="15" style="padding:8px 10px;background:rgba(100,116,139,.08);border-top:2px solid rgba(100,116,139,.3);border-bottom:1px solid var(--border)">';
+      h+='<tr><td colspan="16" style="padding:8px 10px;background:rgba(100,116,139,.08);border-top:2px solid rgba(100,116,139,.3);border-bottom:1px solid var(--border)">';
       h+='<span style="font-size:10px;font-weight:800;color:#64748b">📋 BENCH — Watchlist ('+benchStocks.length+') — next in line when capital increases or active stocks get EXIT signal</span>';
       h+='</td></tr>';
     }
@@ -3939,7 +3939,7 @@ function psRenderModelResults(data){
     // Insert divider before first sell-flagged stock
     if(isSellFlagged&&!printedSellDivider&&sellFlagged.length>0){
       printedSellDivider=true;
-      h+='<tr><td colspan="15" style="padding:8px 10px;background:rgba(239,68,68,.08);border-top:2px solid rgba(239,68,68,.3);border-bottom:1px solid var(--border)">';
+      h+='<tr><td colspan="16" style="padding:8px 10px;background:rgba(239,68,68,.08);border-top:2px solid rgba(239,68,68,.3);border-bottom:1px solid var(--border)">';
       h+='<span style="font-size:10px;font-weight:800;color:#ef4444">⚠ CHANGED — AI no longer recommends these ('+sellFlagged.length+')</span>';
       h+='</td></tr>';
     }
@@ -3950,36 +3950,35 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
     if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
-    // AI consensus badge (multi-model)
+    h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
+    if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
+    h+='</td>';
+    // AI Reviews column
     var _aiStockReview=null;
     if(_psAIValidation&&_psAIValidation.signal_reviews){
       _aiStockReview=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
     }
-    // Fallback: check persisted DB reviews
     if(!_aiStockReview&&_psAIReviewsDB&&_psAIReviewsDB[stk.sym]){
       _aiStockReview=_psAIReviewsDB[stk.sym];
     }
-    var _aiAgree=0,_aiDisagree=0,_aiModify=0,_aiTotal=0;
+    h+='<td style="padding:5px;vertical-align:top">';
     if(_aiStockReview){
       var aiR=_aiStockReview;
       var pm=aiR.per_model||aiR.models||{};
       var pmKeys=Object.keys(pm);
-      _aiTotal=pmKeys.length;
+      var _aiAgree=0,_aiDisagree=0,_aiModify=0,_aiTotal=pmKeys.length;
       var _aiAgreeNames=[],_aiModifyNames=[],_aiDisagreeNames=[];
       var _mn={'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','claude-sonnet':'Sonnet','gemini-pro':'Gemini','mistral':'Mistral'};
       pmKeys.forEach(function(mid){var v=pm[mid].verdict;var sn=_mn[mid]||mid;if(v==='AGREE'){_aiAgree++;_aiAgreeNames.push(sn);}else if(v==='DISAGREE'){_aiDisagree++;_aiDisagreeNames.push(sn);}else if(v==='MODIFY'){_aiModify++;_aiModifyNames.push(sn);}});
-    }
-    h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
-    // AI verdict summary — stacked vertically below stock name with model names
-    if(_aiStockReview){
-      h+='<div style="margin-top:2px;font-size:8px;font-weight:700;line-height:1.6">';
+      h+='<div style="font-size:8px;font-weight:700;line-height:1.6">';
       if(_aiAgree>0) h+='<div style="color:#22c55e">✅'+_aiAgree+' Agreed <span style="font-weight:500;opacity:0.8">('+_aiAgreeNames.join(', ')+')</span></div>';
       if(_aiModify>0) h+='<div style="color:#f59e0b">⚠️'+_aiModify+' Caution <span style="font-weight:500;opacity:0.8">('+_aiModifyNames.join(', ')+')</span></div>';
       if(_aiDisagree>0) h+='<div style="color:#ef4444">❌'+_aiDisagree+' Disagree <span style="font-weight:500;opacity:0.8">('+_aiDisagreeNames.join(', ')+')</span></div>';
       h+='<div onclick="psToggleAIRow(\''+stk.sym+'\')" id="ai-toggle-'+stk.sym+'" style="color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-'+stk.sym+'">▶</span> Show AI Reviews ('+_aiTotal+' models)</div>';
       h+='</div>';
+    } else {
+      h+='<span style="font-size:8px;color:var(--text4)">—</span>';
     }
-    if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
     h+='<td style="padding:5px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
     h+='<td style="padding:5px;font-weight:600">₹'+(stk.currentPrice||stk.price).toFixed(0)+'</td>';
@@ -4021,7 +4020,7 @@ function psRenderModelResults(data){
       var pmKeys2=Object.keys(pm2);
       var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','claude-sonnet':'Claude Sonnet 4','gemini-pro':'Gemini 3.1 Pro','mistral':'Mistral Small'};
       h+='<tr id="ai-row-'+stk.sym+'" style="display:none;background:var(--bg2)">';
-      h+='<td colspan="15" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
+      h+='<td colspan="16" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
       h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">🤖 AI Model Reviews for '+stk.sym+'</div>';
       h+='<div style="display:grid;gap:4px">';
       pmKeys2.forEach(function(mid){
