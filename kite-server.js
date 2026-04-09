@@ -5386,6 +5386,9 @@ const portfolioSuggestions = {};
 let modelPortfolio = null;       // current model portfolio
 let marketRegime = 'NEUTRAL';    // BULL / BEAR / NEUTRAL
 let marketRegimeData = {};       // detailed regime info
+let _regimePending = null;       // pending regime change (for hysteresis)
+let _regimePendingSince = 0;     // when the pending regime was first detected
+const REGIME_CONFIRM_MS = 3 * 24 * 3600 * 1000; // 3 days confirmation period
 
 // ── MARKET REGIME DETECTION (Varsity M9 Ch3: adapt to market conditions) ──
 function detectMarketRegime() {
@@ -5431,15 +5434,39 @@ function detectMarketRegime() {
     cashSuggestion = 5;
   }
 
-  marketRegime = regime;
+  // Hysteresis: require regime change to persist for REGIME_CONFIRM_MS before switching
+  // Prevents whipsawing between BULL/BEAR on volatile days
+  if (regime !== marketRegime) {
+    if (_regimePending === regime) {
+      // Same pending regime — check if confirmation period has elapsed
+      if (Date.now() - _regimePendingSince >= REGIME_CONFIRM_MS || confidence >= 80) {
+        // Confirmed or very high confidence — switch now
+        marketRegime = regime;
+        _regimePending = null;
+        _regimePendingSince = 0;
+        console.log(`🏛 Regime CONFIRMED: ${regime} (after ${((Date.now() - _regimePendingSince) / 86400000).toFixed(1)} days or conf ${confidence.toFixed(0)}%)`);
+      }
+    } else {
+      // New pending regime — start the clock
+      _regimePending = regime;
+      _regimePendingSince = Date.now();
+      console.log(`🏛 Regime PENDING change: ${marketRegime} → ${regime} (awaiting confirmation for ${REGIME_CONFIRM_MS/86400000} days)`);
+    }
+  } else {
+    // Current regime reaffirmed — cancel any pending change
+    _regimePending = null;
+    _regimePendingSince = 0;
+  }
+
   marketRegimeData = {
-    regime, confidence: +confidence.toFixed(0), cashSuggestion,
+    regime: marketRegime, detected: regime, pending: _regimePending,
+    confidence: +confidence.toFixed(0), cashSuggestion: marketRegime === 'BEAR' ? 25 : marketRegime === 'BULL' ? 5 : 10,
     breadth: +breadth.toFixed(1), adRatio: +adRatio.toFixed(2),
     nifty: { '52w': +(nifty52w*100).toFixed(1), '6m': +(nifty6m*100).toFixed(1),
              '3m': +(nifty3m*100).toFixed(1), '1m': +(nifty1m*100).toFixed(1) },
     abv200Count, totalStocks: all.length,
   };
-  console.log(`🏛 Market Regime: ${regime} (confidence ${confidence.toFixed(0)}%) | Breadth: ${breadth.toFixed(0)}% above 200DMA | Cash suggestion: ${cashSuggestion}%`);
+  console.log(`🏛 Market Regime: ${marketRegime} (detected: ${regime}, conf ${confidence.toFixed(0)}%) | Breadth: ${breadth.toFixed(0)}% above 200DMA | Cash: ${marketRegimeData.cashSuggestion}%`);
 }
 
 // ── MULTI-FACTOR STOCK SCORING (Varsity M2+M3+M9: Quality×Valuation×Technical×Momentum×Risk) ──
@@ -5490,11 +5517,16 @@ function scoreStockForPortfolio(f) {
     }
   }
   // PEG ratio (Varsity M3: PEG < 1 = undervalued growth)
+  // Improved: smoother penalty gradient in the 1.5-3.0 dead zone
   if (na(f.peg) && f.peg > 0) {
     if (f.peg < 0.8) valScore += 20;
     else if (f.peg < 1.0) valScore += 15;
-    else if (f.peg < 1.5) valScore += 8;
-    else if (f.peg > 3) valScore -= 10;
+    else if (f.peg < 1.3) valScore += 10;
+    else if (f.peg < 1.5) valScore += 5;
+    else if (f.peg < 1.8) valScore += 0;  // neutral zone
+    else if (f.peg < 2.5) valScore -= 5;  // mildly overvalued
+    else if (f.peg < 3.0) valScore -= 8;  // significantly overvalued
+    else valScore -= 12;                    // very expensive growth
   }
   // Earnings yield > bond yield ≈ 7% (Varsity M3: equity risk premium)
   if (na(f.earningsYield)) {
@@ -5541,10 +5573,13 @@ function scoreStockForPortfolio(f) {
   const rs6m  = na(f.change6m)  ? f.change6m  - (niftyBenchmark['6m']||0) : 0;
   const rs3m  = na(f.change3m)  ? f.change3m  - (niftyBenchmark['3m']||0) : 0;
   const rs1m  = na(f.change1m)  ? f.change1m  - (niftyBenchmark['1m']||0) : 0;
-  momScore += rs6m * 30;   // 6M relative strength (highest weight)
-  momScore += rs3m * 25;
-  momScore += rs1m * 20;
-  momScore += rs52w * 15;
+  // Clamp extreme RS values to prevent single outlier from dominating score
+  // (e.g., a stock up 500% in 6m shouldn't get infinite momentum score)
+  const clamp = (v, max) => Math.max(-max, Math.min(max, v));
+  momScore += clamp(rs6m, 1.0) * 30;   // cap at ±100% RS for 6M
+  momScore += clamp(rs3m, 0.6) * 25;   // cap at ±60% RS for 3M
+  momScore += clamp(rs1m, 0.3) * 20;   // cap at ±30% RS for 1M
+  momScore += clamp(rs52w, 1.5) * 15;  // cap at ±150% RS for 52W
   // Absolute momentum bonus
   if (na(f.change6m) && f.change6m > 0 && rs6m > 0) momScore += 5;
   momScore = Math.max(0, Math.min(100, momScore));
@@ -5581,13 +5616,24 @@ function scoreStockForPortfolio(f) {
   if (na(f.pledged) && f.pledged > 20) riskScore -= 10;
   // Golden cross = trend safety
   if (f.goldenCross) riskScore += 5;
+  // Liquidity risk: low market cap or low volume = harder to exit (Varsity M9: position sizing)
+  if (na(f.mktCap)) {
+    if (f.mktCap < 1000) riskScore -= 12;       // < ₹1000 Cr — micro cap illiquid
+    else if (f.mktCap < 5000) riskScore -= 5;   // small cap
+    else if (f.mktCap > 50000) riskScore += 5;  // large cap liquidity bonus
+  }
+  if (na(f.volRatio)) {
+    if (f.volRatio < 0.3) riskScore -= 8;       // very thin trading volume
+    else if (f.volRatio < 0.5) riskScore -= 4;  // below average volume
+  }
   riskScore = Math.max(0, Math.min(100, riskScore));
 
-  // === COMPOSITE SCORE (weighted as per Varsity M10 framework) ===
+  // === COMPOSITE SCORE (Varsity-aligned: FA-heavy for long-term investing) ===
+  // Rebalanced: FA 35% (was 30%), TA 20% (was 25%) — Varsity emphasizes fundamentals for investing
   const composite = +(
-    faRawScore * 0.30 +      // Fundamental quality (30%)
+    faRawScore * 0.35 +      // Fundamental quality (35%) — Varsity M3: investing = fundamentals first
     valScore   * 0.15 +      // Valuation (15%)
-    taScore    * 0.25 +      // Technical health (25%)
+    taScore    * 0.20 +      // Technical health (20%) — entry timing, not primary driver
     momScore   * 0.15 +      // Momentum (15%)
     riskScore  * 0.15         // Risk/Safety (15%)
   ).toFixed(1);
@@ -5611,13 +5657,14 @@ function scoreStockForPortfolio(f) {
   else if (composite >= 35) { conviction = 'Watch'; convColor = '#94a3b8'; }
   else { conviction = 'Avoid'; convColor = '#ef4444'; }
 
-  // Fallen Angel check
+  // Fallen Angel check — require CONFIRMED D/E (missing = not safe, could be hiding debt)
   const isSmall = f.grp === 'SMALLCAP';
   const isMid = f.grp === 'MIDCAP';
+  const hasConfirmedDE = f.debtToEq != null && isFinite(f.debtToEq);
   const isFa = faRawScore >= (isSmall ? 55 : isMid ? 52 : 50)
     && (f.pctFromHigh || 0) <= (isSmall ? -25 : -20)
     && (f.rsi || 50) <= 52
-    && (f.debtToEq == null || f.debtToEq <= (isSmall ? 1.0 : isMid ? 1.5 : 2.0));
+    && hasConfirmedDE && f.debtToEq <= (isSmall ? 1.0 : isMid ? 1.5 : 2.0);
   const faData = isFa ? scoreFallenAngel(f) : {};
 
   return {
@@ -5772,9 +5819,25 @@ function buildPortfolioSuggestion(amount) {
 
   const totalW = rawWeights.reduce((a, b) => a + b, 0);
   const MIN_ALLOC = 0.03, MAX_ALLOC = 0.20;
-  const allocations = rawWeights.map(w => Math.max(MIN_ALLOC, Math.min(MAX_ALLOC, w / totalW)));
+  // First pass: normalize to sum=1 while preserving conviction ratios
+  let allocations = rawWeights.map(w => w / totalW);
+  // Second pass: clamp to min/max — iterate to converge (clamping can redistribute)
+  for (let iter = 0; iter < 5; iter++) {
+    let excess = 0, unfrozen = 0;
+    allocations = allocations.map(a => {
+      if (a < MIN_ALLOC) { excess += MIN_ALLOC - a; return MIN_ALLOC; }
+      if (a > MAX_ALLOC) { excess -= a - MAX_ALLOC; return MAX_ALLOC; }
+      unfrozen++;
+      return a;
+    });
+    if (Math.abs(excess) < 0.001 || unfrozen === 0) break;
+    // Redistribute excess proportionally among unfrozen allocations
+    const adj = excess / unfrozen;
+    allocations = allocations.map(a => (a > MIN_ALLOC && a < MAX_ALLOC) ? a + adj : a);
+  }
+  // Final normalize to ensure exact sum = 1
   const allocSum = allocations.reduce((a, b) => a + b, 0);
-  allocations.forEach((_, i) => { allocations[i] /= allocSum; });
+  allocations = allocations.map(a => a / allocSum);
 
   // Build portfolio
   const portfolio = selected.map((s, i) => {
@@ -5839,7 +5902,10 @@ function evaluateExitSignals(position, f) {
   if (!f) return { action: 'HOLD', actionColor: '#f59e0b', reasons: ['No data — hold'] };
 
   const px = f.price || livePrices[position.sym]?.price || position.price;
-  const entryPx = position.avg_price || position.entryPrice || position.price;
+  const entryPx = parseFloat(position.avg_price) || parseFloat(position.entryPrice) || parseFloat(position.price) || 0;
+  if (!px || px <= 0 || !entryPx || entryPx <= 0) {
+    return { action: 'HOLD', actionColor: '#f59e0b', urgency: 'NORMAL', reasons: ['⚠ Missing price data — cannot evaluate'] };
+  }
   const pnlPct = ((px - entryPx) / entryPx) * 100;
   const reasons = [];
   let action = 'HOLD';
@@ -5848,6 +5914,7 @@ function evaluateExitSignals(position, f) {
 
   // ── SELL SIGNAL 1: Stop Loss / Trailing Stop (Varsity M9 Ch2) ──
   const stopLevel = position.trailing_stop || position.stop_loss || position.stopLoss;
+  // Warn if stop price data is stale (>2 hours during market hours)
   if (stopLevel && px <= stopLevel) {
     action = 'EXIT'; actionColor = '#ef4444'; urgency = 'URGENT';
     reasons.push(`Stop loss ₹${(+stopLevel).toFixed(0)} breached (price ₹${(+px).toFixed(0)})`);
@@ -5862,9 +5929,16 @@ function evaluateExitSignals(position, f) {
   }
 
   // ── SELL SIGNAL 3: FA Deterioration (Varsity M3: thesis broken) ──
+  // Sector-relative thresholds: banks/NBFCs carry high D/E by nature; IT/FMCG have lower ROE norms
+  const sector = (f.sector || position.sector || '').toLowerCase();
+  const isFinancials = sector.includes('bank') || sector.includes('financ') || sector.includes('nbfc') || sector.includes('insurance');
+  const isIT = sector.includes('software') || sector.includes(' it') || sector.includes('technology');
+  const deThreshold = isFinancials ? 8.0 : 2.5;    // banks naturally carry 5-10x leverage
+  const roeThreshold = isFinancials ? 10 : isIT ? 12 : 8; // higher bar for capital-light sectors
+
   let faDeteriorating = 0;
-  if (f.roe != null && f.roe < 8) { faDeteriorating++; reasons.push(`ROE dropped to ${f.roe.toFixed(1)}%`); }
-  if (f.debtToEq != null && f.debtToEq > 2.5) { faDeteriorating++; reasons.push(`D/E spiked to ${f.debtToEq.toFixed(1)}`); }
+  if (f.roe != null && f.roe < roeThreshold) { faDeteriorating++; reasons.push(`ROE dropped to ${f.roe.toFixed(1)}% (threshold ${roeThreshold}% for ${isFinancials?'financials':isIT?'IT':'sector'})`); }
+  if (f.debtToEq != null && f.debtToEq > deThreshold) { faDeteriorating++; reasons.push(`D/E spiked to ${f.debtToEq.toFixed(1)} (threshold ${deThreshold} for ${isFinancials?'financials':'sector'})`); }
   if (f.earGrowth != null && f.earGrowth < -25) { faDeteriorating++; reasons.push(`EPS growth ${f.earGrowth.toFixed(0)}%`); }
   if (f.pledged != null && f.pledged > 30) { faDeteriorating++; reasons.push(`Pledged shares ${f.pledged.toFixed(0)}%`); }
   if (faDeteriorating >= 2) {
@@ -5917,23 +5991,38 @@ function evaluateExitSignals(position, f) {
 }
 
 // ── UPDATE TRAILING STOPS (Varsity M9: ratchet stops up, never down) ──
+// In-memory high-water-mark tracker for trailing stops
+const _posHighWaterMark = {};
+
 function updateTrailingStop(position, currentPrice) {
-  const entryPx = position.avg_price || position.entryPrice || position.price;
-  if (!currentPrice || currentPrice <= 0 || !entryPx) return position.trailing_stop || position.stopLoss;
+  const entryPx = parseFloat(position.avg_price) || parseFloat(position.entryPrice) || parseFloat(position.price) || 0;
+  if (!currentPrice || currentPrice <= 0 || !entryPx || entryPx <= 0) return position.trailing_stop || position.stopLoss || null;
+
+  // Track highest price since entry (not just current price)
+  const posKey = position.id || position.sym;
+  const prevHigh = _posHighWaterMark[posKey] || entryPx;
+  const highestSeen = Math.max(prevHigh, currentPrice);
+  _posHighWaterMark[posKey] = highestSeen;
 
   const f = stockFundamentals[position.sym];
   const vol = f?.annualVol || 30;
   const dailyVol = (vol / 100) / Math.sqrt(252);
-  const atrProxy = currentPrice * dailyVol;
+  // Use highest price seen (not just current) for ATR trailing
+  const atrProxy = highestSeen * dailyVol;
 
-  // Trailing stop = 2.5x ATR below highest price seen
-  // In bear market, tighter stops (2x ATR)
+  // Trailing stop = multiplier × ATR below highest price seen
+  // In bear market, tighter stops (2x ATR); bull/neutral 2.5x
   const multiplier = marketRegime === 'BEAR' ? 2.0 : 2.5;
-  const newStop = +(currentPrice - (multiplier * atrProxy)).toFixed(2);
+  const newStop = +(highestSeen - (multiplier * atrProxy)).toFixed(2);
 
-  const currentStop = position.trailing_stop || position.stop_loss || position.stopLoss || 0;
-  // Never lower a trailing stop — only ratchet up
-  return Math.max(currentStop, newStop);
+  const currentStop = parseFloat(position.trailing_stop) || parseFloat(position.stop_loss) || parseFloat(position.stopLoss) || 0;
+
+  // Floor: never set trailing stop below entry price minus initial risk (prevents giving back all gains)
+  const initialRisk = entryPx * dailyVol * 3; // 3x ATR initial stop buffer
+  const entryFloor = +(entryPx - initialRisk).toFixed(2);
+
+  // Never lower a trailing stop — only ratchet up, with entry floor as minimum
+  return Math.max(currentStop, newStop, entryFloor);
 }
 
 // ── REFRESH PORTFOLIO WITH LIVE DATA + SIGNALS ──
@@ -5943,7 +6032,10 @@ function refreshPortfolioSignals(suggestion) {
   const updated = suggestion.portfolio.map(s => {
     const lp = livePrices[s.sym]?.price;
     const currentPrice = lp || stockFundamentals[s.sym]?.price || s.price || global.FUND_EXT?.[s.sym]?.price;
-    const entryPx = s.avg_price || s.entryPrice || s.price;
+    const entryPx = parseFloat(s.avg_price) || parseFloat(s.entryPrice) || parseFloat(s.price) || 0;
+    if (!entryPx || entryPx <= 0 || !currentPrice || currentPrice <= 0) {
+      return { ...s, currentPrice: currentPrice || 0, pnl: 0, pnlPct: 0, currentValue: 0, action: 'HOLD', actionColor: '#f59e0b', urgency: 'NORMAL', signalReasons: ['⚠ Missing price data'], lastUpdated: Date.now() };
+    }
     const pnl = currentPrice - entryPx;
     const pnlPct = +((pnl / entryPx) * 100).toFixed(2);
     const currentValue = +(s.shares * currentPrice).toFixed(0);
@@ -5972,8 +6064,8 @@ function refreshPortfolioSignals(suggestion) {
     };
   });
 
-  const totalValue = updated.reduce((a, s) => a + s.currentValue, 0);
-  const totalInvested = updated.reduce((a, s) => a + s.allocAmt, 0);
+  const totalValue = updated.reduce((a, s) => a + (s.currentValue || 0), 0);
+  const totalInvested = updated.reduce((a, s) => a + (s.allocAmt || s.invested_amt || (s.shares * (parseFloat(s.entryPrice) || parseFloat(s.price) || 0)) || 0), 0);
   const totalPnl = totalValue - totalInvested;
   const totalPnlPct = totalInvested > 0 ? +((totalPnl / totalInvested) * 100).toFixed(2) : 0;
 
@@ -6029,10 +6121,11 @@ async function savePortfolioSnapshot() {
     const pnlPct = totalInvested > 0 ? (pnl / totalInvested) * 100 : 0;
     const wBeta = totalWeight > 0 ? totalBeta / totalWeight : 1;
 
-    // Get all past snapshots to calc max drawdown
+    // Get all past snapshots to calc max drawdown — include current live value in peak
     const { rows: snapshots } = await pool.query('SELECT current_value FROM portfolio_snapshots ORDER BY snap_date ASC');
-    let peak = currentValue;
-    snapshots.forEach(s => { if (s.current_value > peak) peak = s.current_value; });
+    let peak = 0;
+    snapshots.forEach(s => { if (parseFloat(s.current_value) > peak) peak = parseFloat(s.current_value); });
+    peak = Math.max(peak, currentValue); // live value might be new peak
     const drawdown = peak > 0 ? ((currentValue - peak) / peak) * 100 : 0;
 
     await pool.query(
@@ -6382,7 +6475,19 @@ async function generatePortfolioSignals() {
       // Don't suggest switching if in deep loss (let exit engine handle that)
       if (pnlPct < -10) continue;
 
-      const reason = `SWITCH: ${pos.sym} (score ${heldScore.toFixed(0)}, rank dropped out of model) → ${replacement.sym} (score ${replacement.composite}, ${replacement.conviction}). Score gap: +${scoreDiff.toFixed(0)} points.`;
+      // Transaction cost modeling: STT + brokerage + slippage ≈ 0.5-1% round trip
+      // For STCG (held < 1yr), tax on gains ≈ 15%. Factor this into switch decision.
+      const txCostPct = 0.7; // estimated round-trip cost %
+      const holdDays = pos.buy_date ? (Date.now() - new Date(pos.buy_date).getTime()) / 86400000 : 0;
+      const isSTCG = holdDays < 365;
+      const taxDrag = (pnlPct > 0 && isSTCG) ? pnlPct * 0.15 : 0; // 15% STCG on profits
+      const switchCost = txCostPct + taxDrag;
+      // Only switch if score improvement outweighs the cost of switching
+      // Rough heuristic: each point of composite ≈ 0.3% annual alpha
+      const expectedAlpha = scoreDiff * 0.3;
+      if (expectedAlpha < switchCost * 2) continue; // need 2x alpha vs cost
+
+      const reason = `SWITCH: ${pos.sym} (score ${heldScore.toFixed(0)}) → ${replacement.sym} (score ${replacement.composite}, ${replacement.conviction}). Gap: +${scoreDiff.toFixed(0)}pts. Est. switch cost: ${switchCost.toFixed(1)}%${isSTCG ? ' (incl STCG tax)' : ''}.`;
       const urgency = scoreDiff > 25 ? 'HIGH' : 'NORMAL';
 
       // Check if we already signalled this today
@@ -6432,26 +6537,39 @@ async function generatePortfolioSignals() {
     if (totalValue > 0) {
       for (const [sector, val] of Object.entries(sectorValue)) {
         const pct = (val / totalValue) * 100;
-        if (pct > 30) {
+        // Tiered sector warnings: 25% caution → 30% warning → 40% urgent
+        let sectorUrgency = null, sectorMsg = null;
+        if (pct > 40) {
+          sectorUrgency = 'URGENT';
+          sectorMsg = `Sector ${sector} is ${pct.toFixed(1)}% — CRITICAL concentration (Varsity M9: max 30%). Strongly reduce exposure.`;
+        } else if (pct > 30) {
+          sectorUrgency = 'HIGH';
+          sectorMsg = `Sector ${sector} is ${pct.toFixed(1)}% (Varsity M9: max 30%). Consider reducing exposure.`;
+        } else if (pct > 25) {
+          sectorUrgency = 'NORMAL';
+          sectorMsg = `Sector ${sector} approaching concentration limit at ${pct.toFixed(1)}% (max 30%). Monitor.`;
+        }
+        if (sectorUrgency) {
           const { rows: existing } = await pool.query(
             `SELECT id FROM portfolio_signals WHERE sym=$1 AND signal_type='SECTOR_WARN' AND created_at > NOW() - INTERVAL '24 hours'`,
             ['SECTOR:' + sector]
           );
           if (!existing.length) {
             await pool.query(
-              `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at) VALUES($1,'SECTOR_WARN','HIGH',$2,$3)`,
-              ['SECTOR:' + sector, `Sector ${sector} is ${pct.toFixed(1)}% of portfolio (Varsity M9: max 30%). Consider reducing exposure.`, pct]
+              `INSERT INTO portfolio_signals(sym,signal_type,urgency,reason,price_at) VALUES($1,'SECTOR_WARN',$2,$3,$4)`,
+              ['SECTOR:' + sector, sectorUrgency, sectorMsg, pct]
             );
-            console.log(`⚠ Signal: Sector ${sector} at ${pct.toFixed(1)}% — over 30% limit`);
+            console.log(`⚠ Signal: Sector ${sector} at ${pct.toFixed(1)}% — ${sectorUrgency}`);
           }
         }
       }
     }
 
-    // 4) Drawdown alert
+    // 4) Drawdown alert — include current live value in peak calculation
     if (totalValue > 0) {
       const { rows: snapshots } = await pool.query('SELECT MAX(current_value) as peak FROM portfolio_snapshots');
-      const peak = snapshots[0]?.peak || totalValue;
+      const historicalPeak = parseFloat(snapshots[0]?.peak) || 0;
+      const peak = Math.max(historicalPeak, totalValue); // live value could be the new peak
       const drawdown = ((totalValue - peak) / peak) * 100;
       if (drawdown < -10) {
         const { rows: existing } = await pool.query(
@@ -6502,9 +6620,9 @@ function computePortfolioRisk(positions) {
   // Normalize weights
   const w = weights.map(v => v / totalValue);
 
-  // Portfolio volatility (simplified — assumes 0.5 avg correlation between stocks)
+  // Portfolio volatility — correlation adapts to regime (correlations spike in bear markets)
   // Varsity M9 Ch4: σ_p = sqrt(Σ wi² σi² + 2 Σ wi wj ρ σi σj)
-  const avgCorr = 0.5;
+  const avgCorr = marketRegime === 'BEAR' ? 0.75 : marketRegime === 'BULL' ? 0.4 : 0.5;
   let varP = 0;
   for (let i = 0; i < w.length; i++) {
     varP += w[i] * w[i] * vols[i] * vols[i];
@@ -6564,14 +6682,19 @@ app.get('/api/portfolio/risk', async (req, res) => {
     const positions = await loadUserPositions();
     const risk = computePortfolioRisk(positions);
 
-    // Get equity curve for drawdown
+    // Get equity curve for drawdown — include current live value
     const { rows: snapshots } = await pool.query('SELECT * FROM portfolio_snapshots ORDER BY snap_date ASC');
     let peak = 0, maxDrawdown = 0;
     snapshots.forEach(s => {
-      if (s.current_value > peak) peak = s.current_value;
-      const dd = peak > 0 ? ((s.current_value - peak) / peak) * 100 : 0;
+      const val = parseFloat(s.current_value) || 0;
+      if (val > peak) peak = val;
+      const dd = peak > 0 ? ((val - peak) / peak) * 100 : 0;
       if (dd < maxDrawdown) maxDrawdown = dd;
     });
+    // Include current live portfolio value
+    if (risk.totalValue > peak) peak = risk.totalValue;
+    const liveDd = peak > 0 ? ((risk.totalValue - peak) / peak) * 100 : 0;
+    if (liveDd < maxDrawdown) maxDrawdown = liveDd;
 
     res.json({
       ...risk,
