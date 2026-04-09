@@ -3748,6 +3748,7 @@ var _psPositions  = null;   // user's actual positions from DB
 var _psSignals    = null;   // signal history
 var _psSignalFilter = 'all'; // all | action | buy | sell | alerts
 var _psPerf       = null;   // performance data
+var _psAIValidation = null; // AI validation results
 
 // =============================================================================
 // PORTFOLIO MANAGER — RENDER + LOGIC
@@ -3793,8 +3794,10 @@ function renderPortfolioSuggestion(){
   // Auto-load data for all tabs
   if(_psTab==='model'&&!_psData&&!_psLoading) psAutoLoadModel();
   if(_psTab==='model'&&!_psSignals) psLoadSignals(); // needed for FRESH_BUY ideas in model tab
+  if(_psTab==='model'&&!_psAIValidation) psLoadAIValidation(); // load AI verdicts for model badges
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='signals'&&!_psSignals) psLoadSignals();
+  if(_psTab==='signals'&&!_psAIValidation) psLoadAIValidation();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
 }
 
@@ -3923,6 +3926,15 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
     if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
+    // AI verdict badge
+    if(_psAIValidation&&_psAIValidation.signal_reviews){
+      var aiR=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
+      if(aiR){
+        var aiBg=aiR.verdict==='AGREE'?'#22c55e':aiR.verdict==='DISAGREE'?'#ef4444':'#f59e0b';
+        var aiIcon=aiR.verdict==='AGREE'?'✅':aiR.verdict==='DISAGREE'?'❌':'⚠️';
+        h+=' <span title="AI: '+aiR.varsity_reasoning+'" style="font-size:8px;cursor:help">'+aiIcon+'</span>';
+      }
+    }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
     if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
@@ -4111,6 +4123,102 @@ function psSignalMeta(type){
 
 function psSetSignalFilter(f){_psSignalFilter=f;var tc=document.getElementById('ps-tab-content');if(tc)tc.innerHTML=psRenderSignalsTab();}
 
+// ── AI VALIDATION PANEL ──
+function psRenderAIValidation(){
+  var h='';
+  if(!_psAIValidation) return '';
+  var v=_psAIValidation;
+  if(v.error){
+    h+='<div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:10px;padding:10px 14px;margin-bottom:14px">';
+    h+='<div style="font-size:11px;color:#ef4444">🤖 AI Error: '+v.error+'</div></div>';
+    return h;
+  }
+  // Overall assessment card
+  h+='<div style="background:linear-gradient(135deg,rgba(34,197,94,.06),rgba(34,211,238,.06));border:1px solid rgba(34,197,94,.2);border-radius:12px;padding:14px;margin-bottom:14px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h+='<div style="font-size:12px;font-weight:800;color:#22c55e;display:flex;align-items:center;gap:6px">🤖 AI Varsity Review</div>';
+  var modeLabel=v.mode==='deep'?'🧠 Deep':'⚡ Quick';
+  var modelLabel=v.model_used||'';
+  if(modelLabel.includes('haiku'))modelLabel='Haiku';
+  else if(modelLabel.includes('sonnet'))modelLabel='Sonnet';
+  h+='<div style="font-size:9px;color:var(--text4)">'+modeLabel+' · '+modelLabel+' · '+(v.took_ms?(v.took_ms/1000).toFixed(1)+'s':'')+'</div>';
+  h+='</div>';
+
+  if(v.overall_assessment){
+    h+='<div style="font-size:11px;color:var(--text2);margin-bottom:10px;line-height:1.5">'+v.overall_assessment+'</div>';
+  }
+  if(v.regime){
+    var rc=v.regime==='BULL'?'#22c55e':v.regime==='BEAR'?'#ef4444':'#f59e0b';
+    h+='<span style="background:'+rc+'15;color:'+rc+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:6px">Regime: '+v.regime+'</span>';
+  }
+
+  // Portfolio flags
+  if(v.portfolio_flags&&v.portfolio_flags.length){
+    h+='<div style="margin-top:10px">';
+    h+='<div style="font-size:10px;font-weight:700;color:#f97316;margin-bottom:4px">⚠ Portfolio Concerns:</div>';
+    v.portfolio_flags.forEach(function(f){
+      h+='<div style="font-size:10px;color:var(--text3);padding:2px 0;padding-left:12px">• '+f+'</div>';
+    });
+    h+='</div>';
+  }
+
+  // Missed signals
+  if(v.missed_signals&&v.missed_signals.length){
+    h+='<div style="margin-top:10px">';
+    h+='<div style="font-size:10px;font-weight:700;color:#ef4444;margin-bottom:4px">🔍 Missed Signals (AI found issues your engine didn\'t flag):</div>';
+    v.missed_signals.forEach(function(m){
+      h+='<div style="font-size:10px;color:#ef4444;padding:2px 0;padding-left:12px">• '+m+'</div>';
+    });
+    h+='</div>';
+  }
+
+  // Signal reviews
+  if(v.signal_reviews&&v.signal_reviews.length){
+    h+='<div style="margin-top:12px">';
+    h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">Signal Verdicts ('+v.signal_reviews.length+'):</div>';
+    v.signal_reviews.forEach(function(r){
+      var vc=r.verdict==='AGREE'?'#22c55e':r.verdict==='DISAGREE'?'#ef4444':'#f59e0b';
+      var vi=r.verdict==='AGREE'?'✅':r.verdict==='DISAGREE'?'❌':'⚠️';
+      h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:5px;border-left:3px solid '+vc+'">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center">';
+      h+='<div><span style="font-weight:700;color:var(--text);font-size:11px">'+r.sym+'</span> ';
+      h+='<span style="font-size:9px;font-weight:700;color:var(--text3)">'+r.signal_type+'</span></div>';
+      h+='<div style="display:flex;align-items:center;gap:6px">';
+      h+='<span style="font-size:10px">'+vi+' '+r.verdict+'</span>';
+      if(r.confidence)h+=' <span style="font-size:9px;color:var(--text4)">'+r.confidence+'%</span>';
+      h+='</div></div>';
+      if(r.varsity_reasoning)h+='<div style="font-size:10px;color:var(--text3);margin-top:4px;line-height:1.4">📚 '+r.varsity_reasoning+'</div>';
+      if(r.recommendation)h+='<div style="font-size:10px;color:#22d3ee;margin-top:2px">💡 '+r.recommendation+'</div>';
+      if(r.risk_flag)h+='<div style="font-size:10px;color:#f97316;margin-top:2px">⚠ '+r.risk_flag+'</div>';
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+async function psRunAIValidation(mode){
+  var btn=event.target;
+  btn.textContent=mode==='deep'?'🧠 Running deep review...':'🤖 Running...';
+  btn.disabled=true;
+  try{
+    var r=await fetch('/api/ai/validate?mode='+mode);
+    _psAIValidation=await r.json();
+    var tc=document.getElementById('ps-tab-content');
+    if(tc)tc.innerHTML=psRenderSignalsTab();
+  }catch(e){alert('AI validation error: '+e.message);}
+  finally{btn.disabled=false;btn.textContent=mode==='deep'?'🧠 AI Deep Review':'🤖 AI Quick Review';}
+}
+
+async function psLoadAIValidation(){
+  try{
+    var r=await fetch('/api/ai/validation');
+    var d=await r.json();
+    if(d&&!d.error)_psAIValidation=d;
+  }catch(e){}
+}
+
 function psRenderSignalCard(sig){
   var meta=psSignalMeta(sig.signal_type);
   var urgBorder=sig.urgency==='URGENT'?'border-left:3px solid #ef4444;':sig.urgency==='HIGH'?'border-left:3px solid #f97316;':'';
@@ -4139,10 +4247,15 @@ function psRenderSignalsTab(){
   }
 
   // ── ACTION BUTTONS ──
-  h+='<div style="display:flex;gap:8px;margin-bottom:10px">';
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
   h+='<button onclick="psLoadSignals()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
   h+='<button onclick="psGenerateSignals()" style="background:rgba(168,85,247,.1);color:#a855f7;border:1px solid rgba(168,85,247,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">⚡ Generate Signals</button>';
+  h+='<button onclick="psRunAIValidation(\'auto\')" style="background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🤖 AI Quick Review</button>';
+  h+='<button onclick="psRunAIValidation(\'deep\')" style="background:rgba(251,191,36,.1);color:#fbbf24;border:1px solid rgba(251,191,36,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🧠 AI Deep Review</button>';
   h+='</div>';
+
+  // ── AI VALIDATION PANEL ──
+  h+=psRenderAIValidation();
 
   if(!_psSignals.length){
     h+='<div style="text-align:center;padding:40px;color:var(--text3)">No signals yet. Start tracking positions to see signal history.</div>';

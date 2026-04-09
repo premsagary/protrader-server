@@ -6786,6 +6786,10 @@ cron.schedule('*/30 9-15 * * 1-5', async () => {
   console.log(`🔔 ${now}: Portfolio signal refresh (30-min cycle)...`);
   try {
     await generatePortfolioSignals();
+    // AI validation after signals are generated (every 30 min)
+    if (ANTHROPIC_API_KEY) {
+      validateSignalsWithAI('auto').catch(e => console.error('AI validation cron error:', e.message));
+    }
   } catch(e) { console.error('Signal refresh error:', e.message); }
 }, { timezone: 'Asia/Kolkata' });
 
@@ -6794,6 +6798,10 @@ cron.schedule('45 15 * * 1-5', async () => {
   console.log('🔔 3:45PM: End-of-day portfolio review + snapshot...');
   await generatePortfolioSignals();
   await savePortfolioSnapshot();
+  // Deep AI validation at end of day
+  if (ANTHROPIC_API_KEY) {
+    validateSignalsWithAI('deep').catch(e => console.error('AI EOD validation error:', e.message));
+  }
 }, { timezone: 'Asia/Kolkata' });
 
 // 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
@@ -9087,6 +9095,324 @@ async function start() {
 }
 
 start();
+
+// =============================================================================
+// AI SIGNAL VALIDATOR — Varsity-Trained Portfolio Signal Review Engine
+// Uses Claude API to validate every signal against Zerodha Varsity principles
+// Runs on 30-min cron during market hours + manual /api/ai/validate endpoint
+// =============================================================================
+
+const VARSITY_KNOWLEDGE_PROMPT = `You are an expert Indian stock market analyst deeply trained on Zerodha Varsity's complete curriculum.
+Your job: validate portfolio signals (EXIT, REDUCE, SWITCH, FRESH_BUY, SECTOR_WARN, DRAWDOWN) against Varsity principles.
+
+## ZERODHA VARSITY KNOWLEDGE BASE
+
+### Module 1: Introduction to Stock Markets
+- Stock exchanges: NSE (Nifty50, NiftyNext50, sectoral indices), BSE (Sensex)
+- Market participants: retail investors, FIIs, DIIs, HNIs — FII flows drive short-term sentiment
+- Market hours: 9:15AM-3:30PM IST. Pre-open 9:00-9:15AM. Settlement T+1
+- Circuit limits: 5%, 10%, 20% on individual stocks. Market-wide at 10%, 15%, 20% on Sensex/Nifty
+- Corporate actions: dividends (ex-date matters), bonus, splits, buybacks affect price
+
+### Module 2: Technical Analysis (TA)
+- CANDLESTICKS: Marubozu (strong trend), Doji (indecision), Hammer/Hanging Man (reversal), Engulfing (trend change)
+  * Bullish: Hammer at support + volume confirmation = BUY signal valid
+  * Bearish: Shooting Star at resistance + declining volume = EXIT signal valid
+- SUPPORT & RESISTANCE: Prior swing highs/lows. Broken support becomes resistance. Volume at S/R validates levels.
+  * EXIT near resistance is premature if RSI < 70 and volume expanding (breakout possible)
+  * EXIT at broken support with volume = valid
+- MOVING AVERAGES:
+  * 50DMA: short-term trend. Price > 50DMA = bullish
+  * 200DMA: long-term trend. Price > 200DMA = bull market for that stock
+  * Golden Cross (50 > 200) = bullish. Death Cross (50 < 200) = bearish
+  * Stock below 200DMA for 20+ days with no recovery attempt = structural weakness
+- RSI (Relative Strength Index):
+  * >70 = overbought (not always sell — can stay overbought in strong uptrends)
+  * <30 = oversold (potential bounce, but confirm with volume and fundamentals)
+  * BULLISH DIVERGENCE: price makes lower low but RSI makes higher low = reversal signal (strong BUY indicator)
+  * BEARISH DIVERGENCE: price makes higher high but RSI makes lower high = weakness (valid EXIT pre-signal)
+- MACD:
+  * Signal line crossover + histogram expansion = trend confirmation
+  * MACD above zero line = bullish bias. Below = bearish.
+  * MACD + RSI alignment = high-conviction signal
+- BOLLINGER BANDS:
+  * Squeeze (narrow bands) = volatility expansion imminent
+  * Price at lower band + RSI < 30 = oversold bounce setup
+  * Price at upper band + RSI > 70 = potential reversal
+- VOLUME:
+  * Volume confirms price. Rising price + rising volume = healthy trend
+  * Rising price + falling volume = weak rally, potential reversal
+  * OBV (On-Balance Volume) rising = accumulation. Falling = distribution.
+  * Sudden volume spike on decline = panic selling, potential capitulation bottom
+- SUPERTREND: Above price = bearish, below = bullish. Good for trailing stops.
+- ADX: >25 = trending market (trust momentum signals). <20 = range-bound (trust mean-reversion).
+- FIBONACCI: 38.2%, 50%, 61.8% retracement levels for pullback entries
+- MULTI-TIMEFRAME: Daily signal must align with weekly trend. Weekly trend overrides daily noise.
+
+### Module 3: Fundamental Analysis (FA)
+- EARNINGS PER SHARE (EPS): Must be growing. Declining EPS for 2+ quarters = red flag
+- PRICE TO EARNINGS (PE): Compare to sector average, not market. Low PE alone ≠ cheap. Check PEG ratio.
+  * PEG < 1 = undervalued growth. PEG > 2 = expensive relative to growth.
+- RETURN ON EQUITY (ROE): >15% = good capital allocation. <10% = poor management. Compare to cost of equity.
+  * DuPont ROE = Net Margin × Asset Turnover × Equity Multiplier — tells you WHERE returns come from
+- RETURN ON CAPITAL EMPLOYED (ROCE): >15% = real efficiency. More reliable than ROE for debt-heavy companies.
+- DEBT TO EQUITY (D/E):
+  * General: <1.5 healthy, >2.5 risky
+  * Banks/NBFCs: different framework — use CAR (Capital Adequacy >12%), NIM (>3%), NPA (<3%)
+  * IT companies: often zero debt, so D/E is irrelevant — focus on revenue growth
+- INTEREST COVERAGE: >3x comfortable. <1.5x = debt stress. <1x = cannot service debt (EXIT immediately)
+- OPERATING PROFIT MARGIN (OPM): Stable or expanding = good. Declining = competitive pressure or cost issues.
+- FREE CASH FLOW (FCF): Positive FCF validates earnings are real. Negative FCF with profit = accounting quality issue.
+- PROMOTER HOLDING: >50% = strong alignment. Declining trend = red flag. Pledging >20% = URGENT risk.
+- DIVIDEND HISTORY: Consistent dividends = cash flow confidence. Sudden cut = trouble.
+
+### Module 5: Options Theory (for context)
+- High implied volatility = market expects big move. Relevant for regime detection.
+- Put-Call Ratio (PCR) > 1.2 = bearish sentiment. PCR < 0.8 = bullish sentiment.
+- India VIX > 20 = fear. VIX > 30 = extreme fear (often near bottoms). VIX < 12 = complacency.
+
+### Module 6: Currency & Commodity Impact
+- Weak INR hurts importers (Oil, Gold companies). Benefits IT exporters.
+- Rising crude oil = negative for India market (current account deficit widens)
+- Gold rising = risk-off sentiment, typically negative for equities
+
+### Module 8: Currency, Commodity & Government Securities
+- RBI rate hikes = negative for rate-sensitive sectors (Banking, Real Estate, Auto)
+- RBI rate cuts = positive for growth stocks and rate-sensitive sectors
+- Bond yield rising = "sell equities" pressure (money moves to fixed income)
+
+### Module 9: Risk Management
+- POSITION SIZING: No single stock > 10-15% of portfolio. No single sector > 25%.
+  * Kelly Criterion for optimal sizing: f = (bp - q) / b where b=odds, p=win%, q=loss%
+- VALUE AT RISK (VaR): VaR = Portfolio × Z × σ × √t
+  * 95% confidence Z=1.645. 99% Z=2.326
+  * Regime-adjusted: correlations spike in bear markets (use 0.75 vs 0.4 in bull)
+- STOP LOSS: ATR-based preferred over fixed %. Trail stops with profit. Entry floor protects capital.
+  * 2x ATR trailing stop in bear market, 2.5x in bull (wider in trending markets)
+- DIVERSIFICATION: Minimum 8-12 stocks across 4+ sectors. Herfindahl index < 0.15 = diversified.
+- DRAWDOWN MANAGEMENT: -10% = review. -15% = reduce exposure. -20% = emergency de-risk.
+- RISK-REWARD: Minimum 1:2 risk-reward before entering. 1:3 for small caps.
+- CORRELATION: Avoid holding 3+ stocks in same sector with similar beta profiles.
+
+### Module 11: Personal Finance
+- Asset allocation: Equity % = 100 - age (aggressive). Conservative = 100 - age - 10.
+- Emergency fund: 6 months expenses in liquid assets before investing.
+- Compounding: Even 1% better annual return compounds massively over 10+ years.
+
+### Module 15: Inner Game of Trading (Psychology)
+- Confirmation bias: Don't hold losers hoping for recovery. Cut losses, let winners run.
+- Loss aversion: Selling winners too early, holding losers too long — the #1 retail mistake.
+- Recency bias: Last few trades influence perception more than they should.
+- DISCIPLINE: Follow the system. Emotional overrides lose money over time.
+
+## SIGNAL VALIDATION RULES
+
+For each signal, check:
+
+**EXIT/REDUCE signals:**
+1. Is there ACTUAL technical breakdown? (price < 200DMA for 20+ days, death cross, RSI bearish divergence)
+2. Is there fundamental deterioration? (declining EPS, rising D/E, falling OPM, promoter selling)
+3. Is the stop loss justified by ATR? Not too tight (whipsaw risk) or too loose (excess loss)?
+4. Is this a panic exit in oversold conditions? (RSI < 30 might mean HOLD, not EXIT)
+5. Multi-timeframe check: Is weekly trend also bearish or just daily noise?
+
+**FRESH_BUY signals:**
+1. Does the stock pass fundamental quality gate? (ROE>12%, D/E appropriate for sector, FCF positive)
+2. Is the technical setup valid? (not buying into resistance, volume confirms, trend aligned)
+3. Is the entry at a reasonable valuation? (PE vs sector, PEG<1.5)
+4. Is there sector tailwind or headwind?
+5. Position sizing: Will this create concentration risk?
+
+**SWITCH signals:**
+1. Is the expected alpha > transaction costs (STT + brokerage + STCG tax if <1 year)?
+2. Is the replacement stock genuinely better? (not just higher score — check WHY it scores higher)
+3. Are we switching at a bad time? (selling at 52-week low to buy at 52-week high = value destruction)
+4. Tax impact: If held <1 year, 15% STCG on gains. Factor this into switch decision.
+
+**SECTOR_WARN signals:**
+1. Is the sector decline structural or cyclical? (cyclical dips = opportunities, structural = exit)
+2. Are ALL stocks in the sector declining or just the ones we hold? (stock-specific vs sector-wide)
+
+**DRAWDOWN alerts:**
+1. Is the drawdown market-wide or portfolio-specific? Portfolio-specific = check individual stocks.
+2. At what VaR level are we? If near 1-week VaR, reduce exposure.
+
+Respond in JSON:
+{
+  "validated_at": "ISO timestamp",
+  "regime": "BULL/NEUTRAL/BEAR",
+  "overall_assessment": "1-2 sentence portfolio health summary",
+  "signal_reviews": [
+    {
+      "sym": "SYMBOL",
+      "signal_type": "EXIT/REDUCE/SWITCH/FRESH_BUY/etc",
+      "verdict": "AGREE/DISAGREE/MODIFY",
+      "confidence": 85,
+      "varsity_reasoning": "Which Varsity principle supports/contradicts this signal",
+      "recommendation": "What to actually do",
+      "risk_flag": "Any risk the scoring engine might have missed"
+    }
+  ],
+  "portfolio_flags": ["Any overall portfolio concerns — concentration, correlation, regime mismatch"],
+  "missed_signals": ["Stocks that SHOULD have a signal but don't — e.g. stock with bearish divergence but no EXIT signal"]
+}`;
+
+let _lastAIValidation = null;
+let _aiValidationRunning = false;
+
+async function validateSignalsWithAI(mode = 'auto') {
+  if (_aiValidationRunning) return _lastAIValidation;
+  if (!ANTHROPIC_API_KEY) {
+    console.log('⚠ AI validation skipped — no ANTHROPIC_API_KEY');
+    return null;
+  }
+
+  _aiValidationRunning = true;
+  const startTime = Date.now();
+  console.log(`🤖 AI Signal Validation starting (mode: ${mode})...`);
+
+  try {
+    // 1) Gather current portfolio state
+    const positions = await loadUserPositions();
+    if (!positions.length) {
+      _aiValidationRunning = false;
+      return { error: 'No positions to validate' };
+    }
+
+    // 2) Get recent signals
+    const { rows: signals } = await pool.query(
+      'SELECT * FROM portfolio_signals WHERE created_at > NOW() - INTERVAL \'24 hours\' ORDER BY created_at DESC LIMIT 30'
+    );
+
+    // 3) Get risk metrics
+    const risk = computePortfolioRisk(positions);
+
+    // 4) Build portfolio snapshot for the AI
+    const positionData = positions.map(p => {
+      const f = stockFundamentals[p.sym] || {};
+      const px = livePrices[p.sym]?.price || f.price || p.avg_price;
+      const pnl = px && p.avg_price ? (((px - p.avg_price) / p.avg_price) * 100).toFixed(1) : '?';
+      return `${p.sym}: Qty=${p.qty} Entry=₹${p.avg_price} CMP=₹${px||'?'} P&L=${pnl}% ` +
+        `Score=${f._compositeScore||f.composite||'?'} RSI=${f.rsi||'?'} MACD=${f.macdBull?'Bull':'Bear'} ` +
+        `ROE=${f.roe||'?'}% D/E=${f.debtToEq||'?'} OPM=${f.opMargin||'?'}% PE=${f.pe||'?'} ` +
+        `52wH=${f.high52w||'?'} 52wL=${f.low52w||'?'} Sector=${f.sector||p.sector||'?'} ` +
+        `200DMA=${f.dma200||'?'} Vol=${f.annualVol?f.annualVol.toFixed(0)+'%':'?'} ` +
+        `OBV=${f.obvRising?'Rising':'Falling'} Promoter=${f.promoter||'?'}%`;
+    }).join('\n');
+
+    const signalData = signals.map(s => {
+      return `[${s.signal_type}] ${s.sym} — ${s.urgency||'NORMAL'} — ${s.reason||''} (price: ₹${s.price_at||'?'})`;
+    }).join('\n');
+
+    const riskSummary = risk.totalValue ?
+      `Portfolio: ₹${risk.totalValue} | Vol: ${risk.portfolioVol}% | Beta: ${risk.portfolioBeta} | ` +
+      `VaR-1d: ₹${risk.var95_1d} | VaR-1w: ₹${risk.var95_1w} | Stocks: ${risk.numPositions} | ` +
+      `Concentration(HHI): ${risk.hhi} | MaxSector: ${risk.maxSector}(${risk.maxSectorPct}%) | ` +
+      `Risk: ${risk.riskRating}` : 'Risk data unavailable';
+
+    // 5) Model portfolio top stocks for context
+    const modelStocks = modelPortfolio?.portfolio ?
+      modelPortfolio.portfolio.slice(0, 10).map(m =>
+        `${m.sym}: Score=${m.composite} Alloc=${m.allocPct}% Conviction=${m.conviction||'?'}`
+      ).join('\n') : 'Model portfolio not available';
+
+    const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
+REGIME DATA: ${JSON.stringify(marketRegimeData || {})}
+
+PORTFOLIO POSITIONS (${positions.length} stocks):
+${positionData}
+
+RISK METRICS:
+${riskSummary}
+
+ACTIVE SIGNALS (last 24h):
+${signalData || 'No signals generated'}
+
+MODEL PORTFOLIO (top 10):
+${modelStocks}
+
+Validate ALL active signals against Varsity principles. Also check if any positions SHOULD have signals but don't.
+${mode === 'deep' ? 'This is a DEEP review — be thorough and check multi-timeframe alignment, sector correlations, and macro impact.' : ''}
+Focus on: signal accuracy, missed risks, false alarms, position sizing issues, and portfolio-level concerns.`;
+
+    // Use Haiku for auto (cheap, fast) and Sonnet for manual deep reviews
+    const model = mode === 'deep' ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20241022';
+    const maxTokens = mode === 'deep' ? 3000 : 1500;
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': ANTHROPIC_API_KEY,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        system: VARSITY_KNOWLEDGE_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`Anthropic API ${resp.status}: ${err.slice(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    const raw = data.content?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+
+    let result;
+    try {
+      result = JSON.parse(clean);
+    } catch (parseErr) {
+      // If JSON parsing fails, store raw text
+      result = { raw_response: raw, parse_error: true };
+    }
+
+    result.model_used = model;
+    result.mode = mode;
+    result.took_ms = Date.now() - startTime;
+    result.positions_reviewed = positions.length;
+    result.signals_reviewed = signals.length;
+
+    _lastAIValidation = result;
+
+    // Persist to DB
+    await dbSet('ai_validation_latest', JSON.stringify(result));
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`🤖 AI validation complete in ${elapsed}s — ${result.signal_reviews?.length || 0} signals reviewed, ${result.missed_signals?.length || 0} missed signals found`);
+
+    _aiValidationRunning = false;
+    return result;
+  } catch (e) {
+    _aiValidationRunning = false;
+    console.error('🤖 AI validation error:', e.message);
+    return { error: e.message, took_ms: Date.now() - startTime };
+  }
+}
+
+// API endpoint — manual trigger
+app.get('/api/ai/validate', async (req, res) => {
+  try {
+    const mode = req.query.mode === 'deep' ? 'deep' : 'auto';
+    const result = await validateSignalsWithAI(mode);
+    res.json(result || { error: 'No result' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// API endpoint — get last validation result
+app.get('/api/ai/validation', async (req, res) => {
+  try {
+    if (_lastAIValidation) return res.json(_lastAIValidation);
+    const cached = await dbGet('ai_validation_latest');
+    if (cached) return res.json(JSON.parse(cached));
+    res.json({ error: 'No validation run yet. Trigger one at /api/ai/validate' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // =============================================================================
 // MIROFISH ENGINE — Multi-Agent Fallen Angel Recovery Predictor
