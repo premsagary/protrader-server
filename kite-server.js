@@ -1565,26 +1565,66 @@ const delay = ms => new Promise(r=>setTimeout(r,ms));
 // PHASE 3: RISK MANAGEMENT — Varsity Module 9
 // ===============================================================================
 
-// ATR-based position sizing — Varsity M9 Ch 11-13
-// Position Size = (Account × Risk%) / (ATR × ATR_multiplier)
-function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, kellyRisk=null) {
+// S/R-anchored stop-loss — Varsity M2 Ch 17
+// Finds the nearest swing low (pivot low) from recent candles to anchor SL
+// A swing low = a candle whose low is lower than the 2 candles on each side
+function findSwingLow(candles, entryPrice) {
+  if (!candles || candles.length < 20) return null;
+  const recent = candles.slice(-60); // look back ~5 hours of 5-min candles
+  const swingLows = [];
+  for (let i = 2; i < recent.length - 2; i++) {
+    const c = recent[i];
+    if (c.low < recent[i-1].low && c.low < recent[i-2].low &&
+        c.low < recent[i+1].low && c.low < recent[i+2].low) {
+      swingLows.push(c.low);
+    }
+  }
+  if (swingLows.length === 0) return null;
+  // Find the nearest swing low BELOW entry price within 0.3%-3% range
+  const valid = swingLows
+    .filter(sl => sl < entryPrice)
+    .map(sl => ({ level: sl, dist: (entryPrice - sl) / entryPrice }))
+    .filter(s => s.dist >= 0.003 && s.dist <= 0.03) // between 0.3% and 3%
+    .sort((a, b) => a.dist - b.dist); // closest first
+  return valid.length > 0 ? valid[0].level : null;
+}
+
+// ATR-based position sizing with S/R-anchored SL — Varsity M9 Ch 11-13
+// Position Size = (Account × Risk%) / stopDist
+// Stop-loss prefers swing low (support level) over fixed ATR distance
+function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, kellyRisk=null, candles=null) {
   const equity   = accountEquity || CONFIG.ACCOUNT_SIZE;
   const riskPct  = kellyRisk || CONFIG.RISK_PCT_PER_TRADE;
   const riskAmt  = equity * Math.min(Math.max(riskPct, CONFIG.MIN_RISK_PCT), CONFIG.MAX_RISK_PCT);
   const mult     = CONFIG.ATR_MULT[regime] || CONFIG.ATR_MULT.UNKNOWN;
-  const stopDist = Math.max(atrValue * mult, entryPrice * 0.005); // min 0.5% stop
-  const stopLoss = entryPrice - stopDist;
-  const target   = entryPrice + stopDist * CONFIG.RISK_REWARD;
+  const atrStopDist = Math.max(atrValue * mult, entryPrice * 0.005); // ATR-based fallback
+
+  // Try S/R-anchored SL first — Varsity M2 Ch 17
+  const swingLow = candles ? findSwingLow(candles, entryPrice) : null;
+  let stopLoss, stopDist, slSource;
+  if (swingLow) {
+    // Anchor SL slightly below swing low (0.1% buffer for noise)
+    stopLoss = +(swingLow * 0.999).toFixed(2);
+    stopDist = entryPrice - stopLoss;
+    slSource = 'swing_low';
+  } else {
+    stopDist = atrStopDist;
+    stopLoss = +(entryPrice - stopDist).toFixed(2);
+    slSource = 'atr';
+  }
+
+  const target   = +(entryPrice + stopDist * CONFIG.RISK_REWARD).toFixed(2);
   const shares   = Math.max(1, Math.floor(riskAmt / stopDist));
   const capital  = shares * entryPrice;
   return {
     shares,
     capital:  +capital.toFixed(0),
-    stopLoss: +stopLoss.toFixed(2),
-    target:   +target.toFixed(2),
-    atrStop:  +stopDist.toFixed(2),
+    stopLoss,
+    target,
+    atrStop:  +atrStopDist.toFixed(2),
     riskAmt:  +riskAmt.toFixed(0),
     riskPct:  CONFIG.RISK_PCT_PER_TRADE * 100,
+    slSource, // 'swing_low' or 'atr' — logged in trade detail
   };
 }
 
@@ -1776,12 +1816,14 @@ async function scanAndTrade() {
 
         const hitSL  = cmp <= Math.max(sl, trailSL);
         const hitTgt = cmp >= tgt;
-        const exitSig= result.signal==="SELL"&&result.buyVotes===0;
+        // Exit consensus: 2/3 strategies voting SELL (matches entry consensus)
+        // Previously required buyVotes===0 (all 3 non-BUY) which held losers too long
+        const exitSig = result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
 
         if (hitSL||hitTgt||exitSig) {
           const pnl    = +((cmp-entryPrice)*openPos.quantity).toFixed(2);
           const pnlPct = +((cmp-entryPrice)/entryPrice*100).toFixed(2);
-          const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":"Strategy Exit";
+          const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":`Strategy Exit (${result.sellVotes}/3 SELL)`;
           // Close paper trade
           await pool.query(
             `UPDATE paper_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
@@ -1828,19 +1870,24 @@ async function scanAndTrade() {
           continue;
         }
 
-        // Phase 3: ATR-based position sizing + Kelly
+        // Phase 3: ATR-based position sizing + S/R-anchored SL + Kelly
         const price   = last.close;
         const highs14 = candles.slice(-14).map(c=>c.high);
         const lows14  = candles.slice(-14).map(c=>c.low);
         const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
-        const { shares, stopLoss, target, capital } = computePositionSize(
+        const posSize = computePositionSize(
           price, atrVal, result.regime,
           ddStatus.equity * sizeMult,
-          kellyRisk
+          kellyRisk,
+          candles // pass candles for swing-low SL anchoring
         );
-        const sl  = result.sl  || stopLoss;
-        const tgt = result.tgt || target;
-        const qty = shares;
+        const sl  = posSize.stopLoss; // S/R-anchored or ATR-based (computed inside)
+        const tgt = posSize.target;
+        const qty = posSize.shares;
+        const capital = posSize.capital;
+        if (posSize.slSource === 'swing_low') {
+          result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
+        }
 
         // Always log paper trade
         await pool.query(
@@ -1878,7 +1925,7 @@ async function scanAndTrade() {
 
         openTrades.push({symbol:stock.sym,status:"OPEN"});
         dominantStrategy=result.strategy;
-        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl.toFixed(0)} | TGT:${tgt.toFixed(0)} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
+        console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
         signalCount++;
       }
 
