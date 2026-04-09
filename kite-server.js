@@ -7953,6 +7953,58 @@ async function fetchAllScreenerData() {
   return fetchAllScreenerByStock(token);
 }
 
+// Unified pipeline status — one endpoint for the whole data stream
+app.get('/api/admin/pipeline', async (req, res) => {
+  try {
+    const [univResult, scrResult, scoreData] = await Promise.all([
+      pool.query('SELECT COUNT(*) as total, MAX(updated_at) as last FROM stock_universe').catch(() => ({ rows: [{ total: 0, last: null }] })),
+      pool.query('SELECT COUNT(*) as total, MAX(imported_at) as last FROM screener_fundamentals').catch(() => ({ rows: [{ total: 0, last: null }] })),
+      (async () => {
+        const d = await dbGet('scored_stocks_cache');
+        if (!d) return { count: 0, fetchedAt: null };
+        const p = JSON.parse(d);
+        return { count: Object.keys(p.stocks || {}).length, fetchedAt: p.fetchedAt };
+      })().catch(() => ({ count: 0, fetchedAt: null })),
+    ]);
+
+    const now = Date.now();
+    const univLast = univResult.rows[0]?.last ? new Date(univResult.rows[0].last).getTime() : 0;
+    const scrLast = scrResult.rows[0]?.last ? new Date(scrResult.rows[0].last).getTime() : 0;
+    const scoreLast = scoreData.fetchedAt || 0;
+
+    function ageLabel(ts) {
+      if (!ts) return 'Never';
+      const h = Math.round((now - ts) / 3600000);
+      if (h < 1) return Math.round((now - ts) / 60000) + 'm ago';
+      if (h < 24) return h + 'h ago';
+      return Math.round(h / 24) + 'd ago';
+    }
+
+    res.json({
+      universe:     { count: parseInt(univResult.rows[0].total), lastSync: univLast, age: ageLabel(univLast), schedule: 'Daily 8AM IST' },
+      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: 'Daily 8PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length },
+      scoring:      { count: scoreData.count, lastSync: scoreLast, age: ageLabel(scoreLast), schedule: 'Daily 7AM IST', running: stockFundLoading },
+      mf:           { schedule: 'Every 6 hours' },
+      kite:         { connected: !!kite, tokenValid },
+      uptime:       process.uptime(),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Force refresh endpoint — runs the full pipeline
+app.post('/api/admin/force-refresh', async (req, res) => {
+  const what = req.query.what || 'all'; // all, universe, fundamentals, scoring, mf
+  res.json({ message: `Force refresh started: ${what}` });
+  try {
+    if (what === 'all' || what === 'universe') await refreshUniverseFromNSE();
+    if (what === 'all' || what === 'scoring') refreshAllFundamentals();
+    if (what === 'all' || what === 'mf') buildMFCache();
+    if (what === 'all' || what === 'fundamentals') {
+      if (process.env.APIFY_TOKEN) fetchAllScreenerData().catch(e => console.error('Force screener error:', e.message));
+    }
+  } catch (e) { console.error('Force refresh error:', e.message); }
+});
+
 // Admin: server logs endpoint
 app.get('/api/admin/logs', (req, res) => {
   const since = parseInt(req.query.since || '0');
@@ -9767,10 +9819,22 @@ async function start() {
     }
   } catch(e) {}
 
-  // STEP 5: Kick off background Screener fetch if no data yet
-  if (process.env.APIFY_TOKEN && screenerCount === 0) {
-    console.log('📊 No Screener data — starting background fetch via Apify...');
-    fetchAllScreenerData().catch(e => console.error('Startup Screener fetch error:', e.message));
+  // STEP 5: Auto-fetch Screener fundamentals if missing or stale (>24h old)
+  if (process.env.APIFY_TOKEN) {
+    let screenerStale = screenerCount === 0;
+    if (!screenerStale) {
+      try {
+        const { rows } = await pool.query('SELECT MAX(imported_at) as last FROM screener_fundamentals');
+        const lastImport = rows[0]?.last ? new Date(rows[0].last).getTime() : 0;
+        screenerStale = (Date.now() - lastImport) > 24 * 3600 * 1000; // >24h = stale
+      } catch(e) {}
+    }
+    if (screenerStale) {
+      console.log(`📊 Screener data ${screenerCount === 0 ? 'missing' : 'stale (>24h)'} — auto-fetching via Apify...`);
+      fetchAllScreenerData().catch(e => console.error('Auto Screener fetch error:', e.message));
+    } else {
+      console.log(`📊 Screener data fresh (${screenerCount} stocks) — skipping auto-fetch`);
+    }
   }
 
   initKite(token||null);

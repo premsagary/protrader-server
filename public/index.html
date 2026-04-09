@@ -5078,63 +5078,58 @@ async function renderAdmin() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <div>
         <div style="font-weight:700;font-size:18px">⚙ ProTrader Admin</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Database management · Live logs · All operations</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Real-time data pipeline · Monitoring · User management</div>
       </div>
-      <div style="font-size:10px;color:var(--text4);text-align:right">
-        Schedules: 7AM score · 8AM universe · 9AM tokens · 8PM screener
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="pipeline-uptime" style="font-size:10px;color:var(--text4)"></span>
+        <button onclick="adminForceRefresh('all')" style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">🔄 Force Refresh All</button>
       </div>
     </div>
 
-    <!-- Status Cards -->
+    <!-- Real-time Pipeline Status -->
     <div id="admin-status" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;color:var(--text3);font-size:11px">Loading...</div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;color:var(--text3);font-size:11px">Loading pipeline status...</div>
     </div>
 
-    <!-- Operations -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
-        <div style="font-weight:700;font-size:12px;color:#3b82f6;margin-bottom:4px">1. Refresh Universe</div>
-        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">NSE CSVs → stock_universe DB<br>Nifty50 + Next50 + Midcap + Smallcap</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button onclick="adminRun('universe')" style="background:#3b82f622;color:#3b82f6;border:1px solid #3b82f644;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~10s)</button>
-          <span id="ar-universe" style="font-size:10px;color:var(--text3)"></span>
+    <!-- Auto Pipeline Schedule -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:20px">
+      <div style="font-weight:700;font-size:12px;color:#22d3ee;margin-bottom:10px">🔄 Automated Data Pipeline</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:12px">Everything runs automatically. Data syncs from NSE, Screener.in, and Kite Connect on schedule. No manual imports needed.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#3b82f6">🌐 Stock Universe</div>
+            <div style="font-size:10px;color:var(--text4)">NSE Nifty50 + Next50 + Midcap + Smallcap</div>
+            <div style="font-size:10px;color:var(--text4)">Auto-syncs daily at 8AM IST + on startup</div>
+          </div>
+          <button onclick="adminForceRefresh('universe')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
+        </div>
+        <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#f59e0b">📊 Fundamentals</div>
+            <div style="font-size:10px;color:var(--text4)">ROE · D/E · PE · margins · promoter% via Screener.in</div>
+            <div style="font-size:10px;color:var(--text4)">Auto-syncs daily at 8PM IST + if stale on startup</div>
+          </div>
+          <button onclick="adminForceRefresh('fundamentals')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
+        </div>
+        <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#10b981">⚡ Scoring Engine</div>
+            <div style="font-size:10px;color:var(--text4)">Kite candles → technicals → Varsity composite score</div>
+            <div style="font-size:10px;color:var(--text4)">Auto-scores daily at 7AM IST + on startup</div>
+          </div>
+          <button onclick="adminForceRefresh('scoring')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
+        </div>
+        <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#8b5cf6">💰 MF Recommendations</div>
+            <div style="font-size:10px;color:var(--text4)">Tickertape → Varsity Module 11 scoring</div>
+            <div style="font-size:10px;color:var(--text4)">Auto-refreshes every 6 hours</div>
+          </div>
+          <button onclick="adminForceRefresh('mf')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
         </div>
       </div>
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
-        <div style="font-weight:700;font-size:12px;color:#f59e0b;margin-bottom:4px">2. Fetch Screener Fundamentals</div>
-        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">🚀 Bulk mode · shashwattrivedi/screener-in<br>ROE · D/E · PE · margins · promoter% · pledged%</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button onclick="adminRun('screener')" style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~30min)</button>
-          <span id="ar-screener" style="font-size:10px;color:var(--text3)"></span>
-        </div>
-      </div>
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
-        <div style="font-weight:700;font-size:12px;color:#10b981;margin-bottom:4px">3. Re-score All Stocks</div>
-        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">Kite candles (20yr) → technicals → Varsity score<br>→ stock_scores DB · Fallen Angels updated</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button onclick="adminRun('rescore')" style="background:#10b98122;color:#10b981;border:1px solid #10b98144;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~90s)</button>
-          <span id="ar-rescore" style="font-size:10px;color:var(--text3)"></span>
-        </div>
-      </div>
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px">
-        <div style="font-weight:700;font-size:12px;color:#8b5cf6;margin-bottom:4px">4. Refresh MF Cache</div>
-        <div style="font-size:10px;color:var(--text3);margin-bottom:10px;line-height:1.5">mf_tickertape → Varsity Module 11 scoring<br>Rebuilds MF recommendations</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button onclick="adminRun('mfcache')" style="background:#8b5cf622;color:#8b5cf6;border:1px solid #8b5cf644;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">▶ Run (~30s)</button>
-          <span id="ar-mfcache" style="font-size:10px;color:var(--text3)"></span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Full Reset -->
-    <div style="background:var(--bg2);border:1px solid #ef444444;border-radius:10px;padding:14px;margin-bottom:20px">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-weight:700;font-size:12px;color:#ef4444;margin-bottom:2px">5. Full Reset & Reload</div>
-          <div style="font-size:10px;color:var(--text3)">Runs 1 → 3 → 4 → 2 in sequence. Use on first deploy or after data issues. ~1 hour total.</div>
-        </div>
-        <button onclick="adminRunAll()" style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;border-radius:6px;padding:6px 18px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;margin-left:16px">▶ Full Reset</button>
-      </div>
+      <div id="admin-force-msg" style="font-size:10px;color:var(--text3);margin-top:8px"></div>
     </div>
 
     <!-- User Management -->
@@ -5311,37 +5306,45 @@ async function adminLoadStatus() {
   var el = document.getElementById('admin-status');
   if (!el) return;
   try {
-    var [univ, scr, score] = await Promise.all([
-      fetch('/api/universe/status').then(r=>r.json()).catch(()=>({})),
-      fetch('/api/screener/status').then(r=>r.json()).catch(()=>({})),
-      fetch('/api/stocks/score').then(r=>r.json()).catch(()=>({})),
-    ]);
-    var scrRunning = scr.running;
-    var scrMode    = scr.last_fetch?.mode === 'bulk' ? '🚀 Bulk' : '📡 Per-stock';
-    var scrVal     = scrRunning
-      ? '⏳ '+scr.progress?.done+'/'+scr.progress?.total+' ('+scr.progress?.errors+' err)'
-      : (scr.db_total||0)+' stocks';
-    var scrSub     = scrRunning ? 'Running '+scrMode+'...'
-      : scr.db_last_import ? new Date(scr.db_last_import).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
-      : 'Never run';
-    var scoreCount = score.stocks ? score.stocks.length : 0;
+    var r = await fetch('/api/admin/pipeline');
+    var d = await r.json();
+
+    var anyRunning = d.fundamentals?.running || d.scoring?.running;
+
+    // Build status cards from unified pipeline response
+    var univStatus = d.universe || {};
+    var fundStatus = d.fundamentals || {};
+    var scoreStatus = d.scoring || {};
+    var kiteStatus = d.kite || {};
+
+    var fundVal = fundStatus.running
+      ? '⏳ ' + (fundStatus.progress?.done||0) + '/' + (fundStatus.progress?.total||'?') + ' syncing'
+      : (fundStatus.count||0) + ' stocks';
+    var fundSub = fundStatus.running ? 'Syncing from Screener.in...'
+      : fundStatus.age || 'Never synced';
+
+    var scoreVal = scoreStatus.running ? '⏳ Scoring...' : (scoreStatus.count||0) + ' stocks';
+    var scoreSub = scoreStatus.running ? 'Fetching Kite candles...' : scoreStatus.age || 'Never scored';
 
     el.innerHTML =
-      adminCard('🌐 Universe', (univ.total||0)+' stocks', univ.status||'Not loaded', '#3b82f6') +
-      adminCard('📊 Screener '+scrMode, scrVal, scrSub, scrRunning?'#f59e0b':'#10b981') +
-      adminCard('⚡ Scored', score.loading?'⏳ Scoring...':scoreCount+' stocks', score.loading?'Fetching Kite candles...':score.last_scored||'–', '#10b981') +
-      adminCard('💾 In Memory', (scr.in_memory||0)+' fundamental', 'Loaded from screener_fundamentals', '#8b5cf6');
+      adminCard('🌐 Universe', (univStatus.count||0)+' stocks', univStatus.age||'Never synced', '#3b82f6') +
+      adminCard('📊 Fundamentals', fundVal, fundSub, fundStatus.running?'#f59e0b':'#10b981') +
+      adminCard('⚡ Scored', scoreVal, scoreSub, scoreStatus.running?'#f59e0b':'#10b981') +
+      adminCard('🔗 Kite', kiteStatus.connected ? (kiteStatus.tokenValid ? '● Connected' : '⚠ Token expired') : '○ Disconnected', kiteStatus.connected ? (kiteStatus.tokenValid ? 'Token valid' : 'Re-auth needed') : 'No session', kiteStatus.tokenValid ? '#10b981' : '#ef4444');
+
+    // Show uptime
+    var uptimeEl = document.getElementById('pipeline-uptime');
+    if (uptimeEl && d.uptime) {
+      var h = Math.floor(d.uptime / 3600);
+      var m = Math.floor((d.uptime % 3600) / 60);
+      uptimeEl.textContent = 'Uptime: ' + (h > 0 ? h+'h ' : '') + m + 'm';
+    }
 
     // Auto-poll while anything is running
-    if (scrRunning || score.loading) {
-      if (!_adminPollTimer) {
-        _adminPollTimer = setInterval(adminLoadStatus, 5000);
-      }
+    if (anyRunning) {
+      if (!_adminPollTimer) _adminPollTimer = setInterval(adminLoadStatus, 5000);
     } else {
-      if (_adminPollTimer) {
-        clearInterval(_adminPollTimer);
-        _adminPollTimer = null;
-      }
+      if (_adminPollTimer) { clearInterval(_adminPollTimer); _adminPollTimer = null; }
     }
   } catch(e) {
     el.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:12px">Status load error: '+e.message+'</div>';
@@ -5356,34 +5359,20 @@ function adminCard(title, value, sub, color) {
     +'</div>';
 }
 
-async function adminRun(op) {
-  var tagEl = document.getElementById('ar-'+op);
-  if (tagEl) { tagEl.textContent = '⏳ Starting...'; tagEl.style.color = '#f59e0b'; }
-  var endpoints = {
-    universe: '/api/universe/refresh',
-    screener: '/api/screener/fetch',
-    rescore:  '/api/stocks/rescore',
-    mfcache:  '/api/mf/rebuild-cache',
-  };
+async function adminForceRefresh(what) {
+  var msgEl = document.getElementById('admin-force-msg');
+  if (msgEl) { msgEl.textContent = '⏳ Force refreshing ' + what + '...'; msgEl.style.color = '#f59e0b'; }
   try {
-    var r = await fetch(endpoints[op], {method:'POST'});
+    var r = await fetch('/api/admin/force-refresh?what=' + encodeURIComponent(what), { method: 'POST' });
     var d = await r.json();
-    if (tagEl) { tagEl.textContent = '✓ '+( d.message||'Started').slice(0,40); tagEl.style.color = '#10b981'; }
+    if (msgEl) { msgEl.textContent = '✅ ' + (d.message || 'Started'); msgEl.style.color = '#10b981'; }
+    // Start polling to show progress
     setTimeout(adminLoadStatus, 2000);
-    if (_adminPollTimer) clearInterval(_adminPollTimer);
-    _adminPollTimer = setInterval(adminLoadStatus, 5000);
+    if (!_adminPollTimer) _adminPollTimer = setInterval(adminLoadStatus, 5000);
+    setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 8000);
   } catch(e) {
-    if (tagEl) { tagEl.textContent = '❌ '+e.message.slice(0,40); tagEl.style.color = '#ef4444'; }
+    if (msgEl) { msgEl.textContent = '❌ ' + e.message; msgEl.style.color = '#ef4444'; }
   }
-}
-
-async function adminRunAll() {
-  await adminRun('universe');
-  await new Promise(r=>setTimeout(r,12000));
-  await adminRun('rescore');
-  await adminRun('mfcache');
-  await new Promise(r=>setTimeout(r,2000));
-  await adminRun('screener');
 }
 
 // MiroFish removed — AI Signal Validator replaces it
