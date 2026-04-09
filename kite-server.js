@@ -8944,18 +8944,21 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
 
     dataPoints += `\nAnalyze this stock comprehensively using Zerodha Varsity principles. Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
 
-    // Call analyst models + judge via OpenRouter
-    const { analystResults, judgeResult } = await callWithJudge(singleStockSystemPrompt, dataPoints);
+    // Call all AI models in parallel (direct API calls)
+    const modelResults = await Promise.allSettled(
+      AI_MODELS.map(m => callAIModel(m, singleStockSystemPrompt, dataPoints))
+    );
 
-    // Build reviews from all models (analysts + judge)
-    const allResults = [...analystResults, judgeResult];
+    const results = modelResults.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Failed' });
+
+    // Parse and aggregate
     const reviews = [];
     let buyCount = 0, holdCount = 0, accCount = 0, avoidCount = 0, sellCount = 0;
     let totalConf = 0, confCount = 0;
 
-    allResults.forEach(r => {
+    results.forEach(r => {
       if (r.error || r.skipped) {
-        reviews.push({ id: r.id, name: r.name, error: r.error || 'Skipped', skipped: !!r.skipped });
+        reviews.push({ id: r.id, name: r.name, error: r.error || 'Skipped (no API key)', skipped: !!r.skipped });
         return;
       }
       const d = r.result || {};
@@ -8988,24 +8991,16 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
     const respondedCount = reviews.filter(r => !r.error && !r.skipped).length;
     const avgConf = confCount > 0 ? Math.round(totalConf / confCount) : null;
 
-    // Judge's verdict is the primary consensus; fallback to vote
+    // Overall consensus
     let consensus = 'MIXED';
-    const judgeVerdict = judgeResult?.result?.verdict;
-    if (judgeVerdict) {
-      const jv = judgeVerdict.toUpperCase();
-      if (jv.includes('BUY') && !jv.includes('AVOID')) consensus = 'BUY';
-      else if (jv.includes('HOLD')) consensus = 'HOLD';
-      else if (jv.includes('AVOID') || jv.includes('SELL')) consensus = 'AVOID';
-    } else {
-      const total = buyCount + holdCount + accCount + avoidCount + sellCount;
-      if (total > 0) {
-        if ((buyCount + accCount) / total >= 0.6) consensus = 'BUY';
-        else if ((avoidCount + sellCount) / total >= 0.6) consensus = 'AVOID';
-        else if (holdCount / total >= 0.5) consensus = 'HOLD';
-      }
+    const total = buyCount + holdCount + accCount + avoidCount + sellCount;
+    if (total > 0) {
+      if ((buyCount + accCount) / total >= 0.6) consensus = 'BUY';
+      else if ((avoidCount + sellCount) / total >= 0.6) consensus = 'AVOID';
+      else if (holdCount / total >= 0.5) consensus = 'HOLD';
     }
 
-    console.log(`🤖 Single-stock AI review done for ${sym}: ${respondedCount}/${AI_MODELS.length} models (3 analysts + 1 judge), consensus=${consensus}`);
+    console.log(`🤖 Single-stock AI review done for ${sym}: ${respondedCount}/${AI_MODELS.length} models, consensus=${consensus}`);
 
     res.json({
       sym, name: meta.n, sector,
@@ -9894,47 +9889,116 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 
-// ── OpenRouter: single API for all models ──────────────────────────────────────
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-
-// Analyst models (ultra-cheap via OpenRouter, run in parallel) — raw opinions
-// Mix of dirt-cheap paid models (no rate limits) + free fallbacks
-const AI_ANALYST_MODELS = [
-  { id: 'deepseek', name: 'DeepSeek V3', model: 'deepseek/deepseek-chat-v3-0324' },           // ~$0.27/M in — reliable, smart
-  { id: 'gpt-nano', name: 'GPT-4.1-nano', model: 'openai/gpt-4.1-nano' },                     // ~$0.10/M in — fast, cheap
-  { id: 'gemma-31b', name: 'Gemma 4 31B', model: 'google/gemma-4-31b-it:free' },               // FREE — good quality
-  { id: 'nemotron-120b', name: 'Nemotron 3 Super 120B', model: 'nvidia/nemotron-3-super-120b-a12b:free' }, // FREE — large MoE
+// ── AI MODEL DEFINITIONS (direct API calls to each provider) ──
+const AI_MODELS = [
+  { id: 'groq-llama', name: 'Groq Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
+  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
+  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
+  { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+  { id: 'claude-sonnet', name: 'Claude Sonnet 4', provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+  { id: 'gemini-pro', name: 'Gemini 3.1 Pro', provider: 'google', model: 'gemini-3.1-pro-preview' },
+  { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
 ];
-// Judge model (consolidates analyst opinions into final review)
-const AI_JUDGE_MODEL = { id: 'judge', name: 'Claude Haiku (Judge)', model: 'anthropic/claude-haiku-4.5' };
 
-// Combined list for backward compat (status tracking, UI pills)
-const AI_MODELS = [...AI_ANALYST_MODELS, AI_JUDGE_MODEL];
-
-// ── Call a single AI model via OpenRouter (unified API) ──
+// ── Call a single AI model (no output token limit, captures usage) ──
 async function callAIModel(modelDef, systemPrompt, userPrompt) {
   const start = Date.now();
   try {
-    if (!OPENROUTER_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No OPENROUTER_API_KEY', skipped: true };
+    let raw = '';
+    let tokens = { input: 0, output: 0 };
 
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://protrader.railway.app',
-        'X-Title': 'ProTrader AI Review',
-      },
-      body: JSON.stringify({
-        model: modelDef.model,
-        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-      }),
-      signal: AbortSignal.timeout(180000),
-    });
-    if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-    const data = await resp.json();
-    const raw = data.choices?.[0]?.message?.content || '';
-    const tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+    // ── Provider: Anthropic (requires max_tokens) ──
+    if (modelDef.provider === 'anthropic') {
+      if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 64000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.content?.[0]?.text || '';
+      tokens = { input: data.usage?.input_tokens || 0, output: data.usage?.output_tokens || 0 };
+
+    // ── Provider: OpenAI ──
+    } else if (modelDef.provider === 'openai') {
+      if (!OPENAI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: DeepSeek (OpenAI-compatible) ──
+    } else if (modelDef.provider === 'deepseek') {
+      if (!DEEPSEEK_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Groq (OpenAI-compatible, runs Llama — condensed prompt for 12K TPM) ──
+    } else if (modelDef.provider === 'groq') {
+      if (!GROQ_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const groqSystemPrompt = `You are an expert Indian stock market analyst trained on Zerodha Varsity (all 17 modules).
+Validate portfolio signals against Varsity principles: fundamental analysis (Module 3), technical analysis (Modules 1-2), risk management (Module 9), derivatives hedging (Modules 5-6).
+For each stock, evaluate: Is the current signal (BUY/HOLD/EXIT) justified? Check FA (ROE, PE, PEG, debt), TA (RSI, MACD, moving averages, volume), and risk (position sizing, stop-loss, sector concentration).
+Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGREE|MODIFY","confidence":0-100,"signal_type":"HOLD|FRESH_BUY|EXIT","varsity_module":"Module X+Y","varsity_reasoning":"reason","recommendation":"action","risk_flag":"warning"}]}`;
+      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Mistral (OpenAI-compatible) ──
+    } else if (modelDef.provider === 'mistral') {
+      if (!MISTRAL_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MISTRAL_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Google Gemini ──
+    } else if (modelDef.provider === 'google') {
+      if (!GOOGLE_AI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelDef.model}:generateContent?key=${GOOGLE_AI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userPrompt }] }],
+          generationConfig: { temperature: 0.3 },
+        }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      tokens = { input: data.usageMetadata?.promptTokenCount || 0, output: data.usageMetadata?.candidatesTokenCount || 0 };
+    }
 
     // Parse JSON from response — handle various formats
     let clean = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -9944,7 +10008,6 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
     let result;
     try { result = JSON.parse(clean); }
     catch {
-      // Try to salvage truncated JSON by closing brackets
       let salvaged = clean;
       const openBraces = (salvaged.match(/\{/g) || []).length;
       const closeBraces = (salvaged.match(/\}/g) || []).length;
@@ -9964,50 +10027,6 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
   } catch (e) {
     return { id: modelDef.id, name: modelDef.name, error: e.message, took_ms: Date.now() - start };
   }
-}
-
-// ── Call analyst models + judge model (judge consolidates analyst opinions) ──
-async function callWithJudge(systemPrompt, userPrompt) {
-  // Step 1: Run analyst models in parallel
-  const analystResults = await Promise.all(
-    AI_ANALYST_MODELS.map(m => callAIModel(m, systemPrompt, userPrompt))
-  );
-
-  // Step 2: Build judge prompt with ALL analyst opinions (Haiku has 200K context)
-  const analystSummaries = analystResults.map(r => {
-    if (r.error || r.skipped) return `[${r.name}]: FAILED — ${r.error || 'skipped'}`;
-    return `[${r.name}]:\n${JSON.stringify(r.result, null, 0)}`;
-  }).join('\n\n');
-
-  const judgeSystemPrompt = `You are a senior portfolio judge. You have received raw analysis from ${AI_ANALYST_MODELS.length} AI analyst models analyzing Indian stocks using Zerodha Varsity principles.
-
-Your job: synthesize their opinions into ONE consolidated, high-quality JSON response. You must:
-1. Where analysts AGREE, state the consensus with high confidence
-2. Where they DISAGREE, reason through it using the ACTUAL stock data provided and pick the best-supported view
-3. Flag any analyst claims that seem wrong or unsupported by the data
-4. Add any insights the analysts missed — you have the full raw data
-5. Output the SAME JSON format as the analysts but with better reasoning
-
-The original system instructions for context:
-${systemPrompt}`;
-
-  const judgeUserPrompt = `Here is the FULL original stock data the analysts reviewed (use these numbers to verify analyst claims):
-${userPrompt}
-
-Here are the ${AI_ANALYST_MODELS.length} analyst opinions:
-
-${analystSummaries}
-
-Now synthesize these into ONE consolidated JSON response. Use the same JSON format. For each stock's verdict:
-- Cross-check analyst claims against the ACTUAL data above
-- Note which analysts agreed/disagreed in your reasoning
-- Be specific with numbers (cite RSI, PE, MACD values etc)
-- Be actionable (specific stop-loss, target, position size suggestions)`;
-
-  // Step 3: Call judge model
-  const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt);
-
-  return { analystResults, judgeResult };
 }
 
 // ── Aggregate multi-model results into consensus ──
@@ -10449,7 +10468,7 @@ async function validateSignalsWithAI(mode = 'auto') {
   if (_aiValidationRunning) return _lastAIValidation;
 
   // Check if ANY API key is configured
-  const hasAnyKey = OPENROUTER_API_KEY || ANTHROPIC_API_KEY || OPENAI_API_KEY || GOOGLE_AI_API_KEY || DEEPSEEK_API_KEY;
+  const hasAnyKey = ANTHROPIC_API_KEY || OPENAI_API_KEY || GOOGLE_AI_API_KEY || DEEPSEEK_API_KEY;
   if (!hasAnyKey) {
     console.log('⚠ AI validation skipped — no API keys configured');
     return null;
@@ -10747,20 +10766,18 @@ Review EVERY SINGLE ONE of the 15 stocks listed above (both PORTFOLIO POSITIONS 
 ${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- VIX interpretation: >20=fear(often near bottom), >30=extreme fear, <12=complacency(often near top)\n- FII/DII flow analysis: persistent FII selling = bear pressure, DII buying = support\n- Crude oil impact on sectors: rising crude hurts OMCs, benefits upstream\n- USD/INR impact: weak rupee hurts importers, benefits IT exporters\n- PCR > 1.2 = bearish sentiment, PCR < 0.8 = bullish, Max Pain for near-expiry price target\n- Delivery% analysis: High delivery% (>50%) = institutional interest, Low (<30%) = speculative\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
 Respond ONLY in the JSON format specified in your system prompt.`;
 
-    // ── Call analyst models in parallel, then judge consolidates ──
-    aiStep(`Dispatching to ${AI_ANALYST_MODELS.length} analyst models in parallel...`);
+    // ── Call all AI models in parallel (direct API calls) ──
+    aiStep(`Dispatching to ${AI_MODELS.length} models in parallel...`);
     AI_MODELS.forEach(m => { _aiStatus.models[m.id] = { name: m.name, status: 'pending' }; });
-
-    // Step 1: Run analysts
-    const analystPromises = AI_ANALYST_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt).then(r => {
-      if (r.skipped) { _aiStatus.models[m.id] = { name: m.name, status: 'skipped' }; aiStep(`${m.name}: skipped`, 'warn'); }
+    const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt).then(r => {
+      if (r.skipped) { _aiStatus.models[m.id] = { name: m.name, status: 'skipped' }; aiStep(`${m.name}: skipped (no API key)`, 'warn'); }
       else if (r.error) { _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, error: r.error }; aiStep(`${m.name}: error — ${r.error} (${r.took_ms}ms)`, 'err'); }
       else {
         const tk = r.tokens || { input: 0, output: 0 };
         const reviewCount = r.result?.signal_reviews?.length || 0;
         if (reviewCount === 0) {
-          _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, reviews: 0, tokens: tk, error: '0 reviews returned' };
-          aiStep(`${m.name}: ⚠ 0 reviews (${r.took_ms}ms)`, 'warn');
+          _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, reviews: 0, tokens: tk, error: '0 reviews returned (response parsed but no stock reviews found)' };
+          aiStep(`${m.name}: ⚠ 0 reviews returned — excluding from consensus (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'warn');
           r.error = '0 reviews returned';
         } else {
           _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: reviewCount, tokens: tk };
@@ -10769,45 +10786,11 @@ Respond ONLY in the JSON format specified in your system prompt.`;
       }
       return r;
     }));
-    const analystResults = await Promise.all(analystPromises);
-
-    // Step 2: Build judge prompt with ALL analyst opinions (Haiku has 200K context)
-    aiStep(`Sending analyst opinions to judge (${AI_JUDGE_MODEL.name})...`);
-    const analystSummaries = analystResults.map(r => {
-      if (r.error || r.skipped) return `[${r.name}]: FAILED — ${r.error || 'skipped'}`;
-      return `[${r.name}]:\n${JSON.stringify(r.result, null, 0)}`;
-    }).join('\n\n');
-
-    const judgeSystemPrompt = `You are a senior portfolio judge. You received raw analysis from ${AI_ANALYST_MODELS.length} AI analyst models analyzing Indian stocks using Zerodha Varsity principles.
-
-Your job: synthesize their opinions into ONE consolidated JSON response in the EXACT format specified below. You must:
-1. Where analysts AGREE, state the consensus with high confidence
-2. Where they DISAGREE, reason through it using the ACTUAL stock data and pick the best-supported view
-3. Flag any analyst claims that seem wrong or unsupported by the data
-4. Add insights the analysts missed — you have the full raw data
-5. Output the SAME JSON format as specified in the system prompt
-
-${VARSITY_KNOWLEDGE_PROMPT}`;
-
-    const judgeUserPrompt = `Here is the FULL original stock data (use these numbers to verify analyst claims):\n${userPrompt}\n\nAnalyst opinions:\n${analystSummaries}\n\nSynthesize into ONE consolidated JSON. For each stock: cross-check claims against actual data, note which analysts agreed/disagreed, cite specific numbers (RSI, PE, MACD etc), give actionable recommendations.`;
-
-    const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt);
-    if (judgeResult.error) {
-      _aiStatus.models[AI_JUDGE_MODEL.id] = { name: AI_JUDGE_MODEL.name, status: 'error', took_ms: judgeResult.took_ms, error: judgeResult.error };
-      aiStep(`Judge: error — ${judgeResult.error}`, 'err');
-    } else {
-      const jtk = judgeResult.tokens || { input: 0, output: 0 };
-      const jReviews = judgeResult.result?.signal_reviews?.length || 0;
-      _aiStatus.models[AI_JUDGE_MODEL.id] = { name: AI_JUDGE_MODEL.name, status: 'ok', took_ms: judgeResult.took_ms, reviews: jReviews, tokens: jtk };
-      aiStep(`Judge: ✅ ${jReviews} reviews (${judgeResult.took_ms}ms) — ${jtk.input}+${jtk.output}=${jtk.input+jtk.output} tokens`, 'ok');
-    }
-
-    // Combine all results — judge is primary, analysts are supplementary
-    const modelResults = [...analystResults, judgeResult];
+    const modelResults = await Promise.all(modelPromises);
 
     // ── Build consensus from all model responses ──
     const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
-    aiStep(`Building consensus from ${okCount}/${AI_MODELS.length} models (${AI_ANALYST_MODELS.length} analysts + 1 judge)...`);
+    aiStep(`Building consensus from ${okCount}/${AI_MODELS.length} model responses...`);
     const result = buildConsensus(modelResults, allStockSyms);
     result.mode = mode;
     result.took_ms = Date.now() - startTime;
