@@ -9519,11 +9519,16 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       tokens = { input: data.usageMetadata?.promptTokenCount || 0, output: data.usageMetadata?.candidatesTokenCount || 0 };
     }
 
-    // Parse JSON from response — handle truncated JSON
-    const clean = raw.replace(/```json|```/g, '').trim();
+    // Parse JSON from response — handle various formats
+    let clean = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    // Some models wrap JSON in extra text — extract the JSON object
+    const jsonStart = clean.indexOf('{');
+    const jsonEnd = clean.lastIndexOf('}');
+    if (jsonStart > 0 && jsonEnd > jsonStart) clean = clean.slice(jsonStart, jsonEnd + 1);
     let result;
     try { result = JSON.parse(clean); }
     catch {
+      // Try to salvage truncated JSON by closing brackets
       let salvaged = clean;
       const openBraces = (salvaged.match(/\{/g) || []).length;
       const closeBraces = (salvaged.match(/\}/g) || []).length;
@@ -9534,7 +9539,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       for (let i = 0; i < openBrackets - closeBrackets; i++) salvaged += ']';
       for (let i = 0; i < openBraces - closeBraces; i++) salvaged += '}';
       try { result = JSON.parse(salvaged); console.log(`  🔧 ${modelDef.name}: salvaged truncated JSON`); }
-      catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; console.error(`  ⚠ ${modelDef.name}: JSON parse failed. Raw start: ${raw.slice(0, 200)}`); }
+      catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; console.error(`  ⚠ ${modelDef.name}: JSON parse failed. Raw start: ${raw.slice(0, 300)}`); }
     }
 
     console.log(`  📊 ${modelDef.name}: ${tokens.input} in + ${tokens.output} out = ${tokens.input + tokens.output} tokens`);
@@ -9546,17 +9551,23 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
 }
 
 // ── Aggregate multi-model results into consensus ──
-function buildConsensus(modelResults) {
+function buildConsensus(modelResults, allowedSymbols) {
   const validResults = modelResults.filter(m => m.result && !m.error && !m.result.parse_error);
   const totalModels = modelResults.filter(m => !m.skipped).length;
+  // Set of allowed stock symbols (only model portfolio stocks)
+  const allowedSet = allowedSymbols ? new Set(allowedSymbols.map(s => s.toUpperCase())) : null;
 
   // Build per-stock consensus
   const stockMap = {};
   validResults.forEach(m => {
     if (!m.result.signal_reviews) return;
     m.result.signal_reviews.forEach(rev => {
-      if (!stockMap[rev.sym]) stockMap[rev.sym] = { sym: rev.sym, models: {} };
-      stockMap[rev.sym].models[m.id] = {
+      const sym = (rev.sym || '').toUpperCase();
+      if (!sym) return;
+      // Filter: only include stocks in the allowed set (model portfolio)
+      if (allowedSet && !allowedSet.has(sym)) return;
+      if (!stockMap[sym]) stockMap[sym] = { sym, models: {} };
+      stockMap[sym].models[m.id] = {
         verdict: rev.verdict,
         confidence: rev.confidence,
         varsity_module: rev.varsity_module,
@@ -9567,6 +9578,9 @@ function buildConsensus(modelResults) {
       };
     });
   });
+
+  // Count models that actually contributed at least 1 review
+  const modelsWithReviews = validResults.filter(m => m.result.signal_reviews && m.result.signal_reviews.length > 0).length;
 
   // Calculate consensus per stock
   const signal_reviews = Object.values(stockMap).map(s => {
@@ -9586,7 +9600,7 @@ function buildConsensus(modelResults) {
       consensus_score: `${majority[1]}/${respondedCount}`,
       consensus_pct: Math.round((majority[1] / respondedCount) * 100),
       models_responded: respondedCount,
-      models_total: totalModels,
+      models_total: modelsWithReviews,
       verdict: majority[0],   // backward compat
       confidence: Math.round(Object.values(s.models).reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
       varsity_module: bestModel?.[1]?.varsity_module || '',
@@ -9621,7 +9635,7 @@ function buildConsensus(modelResults) {
       output: modelResults.reduce((a, m) => a + (m.tokens?.output || 0), 0),
       total: modelResults.reduce((a, m) => a + (m.tokens?.input || 0) + (m.tokens?.output || 0), 0),
     },
-    models_used: validResults.length,
+    models_used: modelsWithReviews,
     models_total: totalModels,
   };
 }
@@ -10278,7 +10292,7 @@ Respond ONLY in the JSON format specified in your system prompt.`;
     // ── Build consensus from all model responses ──
     const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
     aiStep(`Building consensus from ${okCount}/${AI_MODELS.length} model responses...`);
-    const result = buildConsensus(modelResults);
+    const result = buildConsensus(modelResults, allStockSyms);
     result.mode = mode;
     result.took_ms = Date.now() - startTime;
     result.positions_reviewed = positions.length;
