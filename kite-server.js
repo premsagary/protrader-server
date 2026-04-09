@@ -280,7 +280,44 @@ async function initDB() {
       )
     `);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio tables included)");
+    // ── AI Review tables ──────────────────────────────────────────────────────
+    // Per-stock, per-model AI verdicts (latest run — survives refresh, updated each run)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_stock_reviews (
+        sym            VARCHAR(20) NOT NULL,
+        model_id       VARCHAR(30) NOT NULL,
+        model_name     VARCHAR(60),
+        verdict        VARCHAR(20) NOT NULL,
+        confidence     INTEGER DEFAULT 0,
+        signal_type    VARCHAR(30),
+        varsity_module VARCHAR(50),
+        varsity_reasoning TEXT,
+        recommendation TEXT,
+        risk_flag      TEXT,
+        reviewed_at    TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (sym, model_id)
+      )
+    `);
+    // Disagree log — accumulates over time for learning and scoring improvements
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_disagree_log (
+        id             SERIAL PRIMARY KEY,
+        sym            VARCHAR(20) NOT NULL,
+        model_id       VARCHAR(30) NOT NULL,
+        model_name     VARCHAR(60),
+        signal_type    VARCHAR(30),
+        verdict        VARCHAR(20) NOT NULL,
+        confidence     INTEGER DEFAULT 0,
+        reason         TEXT,
+        risk_flag      TEXT,
+        run_at         TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    // Create index for fast disagree lookups by stock
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_sym ON ai_disagree_log(sym)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_run ON ai_disagree_log(run_at)`).catch(()=>{});
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -9506,13 +9543,18 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       raw = data.choices?.[0]?.message?.content || '';
       tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
 
-    // ── Provider: Groq (OpenAI-compatible, runs Llama) ──
+    // ── Provider: Groq (OpenAI-compatible, runs Llama — condensed prompt for 12K TPM) ──
     } else if (modelDef.provider === 'groq') {
       if (!GROQ_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      // Groq free tier has 12K TPM limit — use condensed system prompt
+      const groqSystemPrompt = `You are an expert Indian stock market analyst trained on Zerodha Varsity (all 17 modules).
+Validate portfolio signals against Varsity principles: fundamental analysis (Module 3), technical analysis (Modules 1-2), risk management (Module 9), derivatives hedging (Modules 5-6).
+For each stock, evaluate: Is the current signal (BUY/HOLD/EXIT) justified? Check FA (ROE, PE, PEG, debt), TA (RSI, MACD, moving averages, volume), and risk (position sizing, stop-loss, sector concentration).
+Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGREE|MODIFY","confidence":0-100,"signal_type":"HOLD|FRESH_BUY|EXIT","varsity_module":"Module X+Y","varsity_reasoning":"reason","recommendation":"action","risk_flag":"warning"}]}`;
       const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -10329,8 +10371,16 @@ Respond ONLY in the JSON format specified in your system prompt.`;
       else if (r.error) { _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, error: r.error }; aiStep(`${m.name}: error — ${r.error} (${r.took_ms}ms)`, 'err'); }
       else {
         const tk = r.tokens || { input: 0, output: 0 };
-        _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: r.result?.signal_reviews?.length || 0, tokens: tk };
-        aiStep(`${m.name}: ✅ ${r.result?.signal_reviews?.length || 0} reviews (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'ok');
+        const reviewCount = r.result?.signal_reviews?.length || 0;
+        if (reviewCount === 0) {
+          // Model responded but returned 0 reviews — treat as a warning/failure
+          _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, reviews: 0, tokens: tk, error: '0 reviews returned (response parsed but no stock reviews found)' };
+          aiStep(`${m.name}: ⚠ 0 reviews returned — excluding from consensus (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'warn');
+          r.error = '0 reviews returned'; // Mark as error so it's excluded from consensus
+        } else {
+          _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: reviewCount, tokens: tk };
+          aiStep(`${m.name}: ✅ ${reviewCount} reviews (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'ok');
+        }
       }
       return r;
     }));
@@ -10347,8 +10397,47 @@ Respond ONLY in the JSON format specified in your system prompt.`;
 
     _lastAIValidation = result;
 
-    // Persist to DB
+    // Persist to DB (KV store for full result)
     await dbSet('ai_validation_latest', JSON.stringify(result));
+
+    // Persist per-stock, per-model reviews to dedicated tables
+    try {
+      const modelNameMap = {};
+      AI_MODELS.forEach(m => { modelNameMap[m.id] = m.name; });
+      const runAt = new Date();
+
+      // Upsert each stock × model review into ai_stock_reviews
+      for (const rev of (result.signal_reviews || [])) {
+        if (!rev.per_model) continue;
+        for (const [mid, mv] of Object.entries(rev.per_model)) {
+          if (mv.verdict === 'NO_REVIEW') continue;
+          await pool.query(
+            `INSERT INTO ai_stock_reviews(sym, model_id, model_name, verdict, confidence, signal_type, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ON CONFLICT(sym, model_id) DO UPDATE SET
+               model_name=$3, verdict=$4, confidence=$5, signal_type=$6, varsity_module=$7,
+               varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=$11`,
+            [rev.sym, mid, modelNameMap[mid] || mid, mv.verdict, mv.confidence || 0,
+             mv.signal_type || rev.signal_type || '', mv.varsity_module || '', mv.varsity_reasoning || '',
+             mv.recommendation || '', mv.risk_flag || '', runAt]
+          );
+
+          // Log disagrees for learning
+          if (mv.verdict === 'DISAGREE') {
+            await pool.query(
+              `INSERT INTO ai_disagree_log(sym, model_id, model_name, signal_type, verdict, confidence, reason, risk_flag, run_at)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+              [rev.sym, mid, modelNameMap[mid] || mid, mv.signal_type || rev.signal_type || '',
+               mv.verdict, mv.confidence || 0, mv.varsity_reasoning || mv.recommendation || '',
+               mv.risk_flag || '', runAt]
+            );
+          }
+        }
+      }
+      console.log(`💾 Saved ${result.signal_reviews?.length || 0} stock reviews + disagree log to DB`);
+    } catch (dbErr) {
+      console.error('⚠ Failed to save AI reviews to DB:', dbErr.message);
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     aiStep(`Done! ${okCount}/${AI_MODELS.length} models, ${result.signal_reviews?.length || 0} stocks reviewed in ${elapsed}s`, 'ok');
@@ -10384,6 +10473,50 @@ app.get('/api/ai/validate', async (req, res) => {
     const mode = req.query.mode === 'deep' ? 'deep' : 'auto';
     const result = await validateSignalsWithAI(mode);
     res.json(result || { error: 'No result' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// API endpoint — get per-stock AI reviews from DB (persisted, survives restart)
+app.get('/api/ai/reviews', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT sym, model_id, model_name, verdict, confidence, signal_type,
+              varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at
+       FROM ai_stock_reviews ORDER BY sym, model_id`
+    );
+    // Group by stock
+    const byStock = {};
+    rows.forEach(r => {
+      if (!byStock[r.sym]) byStock[r.sym] = { sym: r.sym, models: {}, reviewed_at: r.reviewed_at };
+      byStock[r.sym].models[r.model_id] = {
+        model_name: r.model_name, verdict: r.verdict, confidence: r.confidence,
+        signal_type: r.signal_type, varsity_module: r.varsity_module,
+        varsity_reasoning: r.varsity_reasoning, recommendation: r.recommendation,
+        risk_flag: r.risk_flag
+      };
+      if (r.reviewed_at > byStock[r.sym].reviewed_at) byStock[r.sym].reviewed_at = r.reviewed_at;
+    });
+    // Compute consensus per stock
+    const stocks = Object.values(byStock).map(s => {
+      const models = Object.values(s.models);
+      const agrees = models.filter(m => m.verdict === 'AGREE').length;
+      const disagrees = models.filter(m => m.verdict === 'DISAGREE').length;
+      const total = models.length;
+      return { ...s, agrees, disagrees, total };
+    });
+    res.json({ stocks, count: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// API endpoint — get disagree history for a stock (for learning)
+app.get('/api/ai/disagrees', async (req, res) => {
+  try {
+    const sym = (req.query.sym || '').toUpperCase();
+    const query = sym
+      ? `SELECT * FROM ai_disagree_log WHERE sym=$1 ORDER BY run_at DESC LIMIT 50`
+      : `SELECT * FROM ai_disagree_log ORDER BY run_at DESC LIMIT 200`;
+    const { rows } = await pool.query(query, sym ? [sym] : []);
+    res.json({ disagrees: rows, count: rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

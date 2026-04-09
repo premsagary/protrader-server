@@ -3728,6 +3728,29 @@ var _psSignals    = null;   // signal history
 var _psSignalFilter = 'all'; // all | action | buy | sell | alerts
 var _psPerf       = null;   // performance data
 var _psAIValidation = null; // AI validation results
+var _psAIReviewsDB  = null; // Persisted AI reviews from PostgreSQL (survives refresh)
+
+// Toggle AI review row visibility
+function psToggleAIRow(sym){
+  var row=document.getElementById('ai-row-'+sym);
+  if(row) row.style.display=row.style.display==='none'?'table-row':'none';
+}
+
+// Load AI reviews from DB (persisted — works after refresh/restart)
+async function psLoadAIReviewsDB(){
+  try{
+    var r=await fetch('/api/ai/reviews');
+    var d=await r.json();
+    if(d&&d.stocks){
+      _psAIReviewsDB={};
+      d.stocks.forEach(function(s){
+        // Convert to same format as signal_reviews per_model
+        _psAIReviewsDB[s.sym]={sym:s.sym,per_model:s.models,agrees:s.agrees,disagrees:s.disagrees,models_total:s.total,
+          consensus_verdict:s.agrees>=s.disagrees?'AGREE':'DISAGREE',reviewed_at:s.reviewed_at};
+      });
+    }
+  }catch(e){}
+}
 
 // =============================================================================
 // PORTFOLIO MANAGER — RENDER + LOGIC
@@ -3773,6 +3796,7 @@ function renderPortfolioSuggestion(){
   if(_psTab==='model'&&!_psData&&!_psLoading) psAutoLoadModel();
   if(_psTab==='model'&&!_psSignals) psLoadSignals(); // needed for FRESH_BUY ideas in model tab
   if(_psTab==='model'&&!_psAIValidation) psLoadAIValidation(); // load AI verdicts for model badges
+  if(_psTab==='model'&&!_psAIReviewsDB) psLoadAIReviewsDB(); // load persisted AI reviews from DB
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
 }
@@ -3920,22 +3944,25 @@ function psRenderModelResults(data){
     h+='<td style="padding:5px;color:var(--text3)">'+(i+1)+'</td>';
     h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text);font-size:11px;display:flex;align-items:center;gap:4px">'+stk.sym;
     if(isSellFlagged)h+=' <span style="background:#ef4444;color:#fff;border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;text-transform:uppercase">'+stk.action+'</span>';
-    // AI consensus badge (multi-model)
+    // AI consensus badge (multi-model) — new format: ❌3/✅2/5
+    var _aiStockReview=null;
     if(_psAIValidation&&_psAIValidation.signal_reviews){
-      var aiR=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
-      if(aiR){
-        var cVerdict=aiR.consensus_verdict||aiR.verdict;
-        var cScore=aiR.consensus_score||(cVerdict==='AGREE'?'1/1':'0/1');
-        var cPct=aiR.consensus_pct||0;
-        var cBg=cVerdict==='AGREE'?'rgba(34,197,94,.15)':cVerdict==='DISAGREE'?'rgba(239,68,68,.15)':'rgba(245,158,11,.15)';
-        var cColor=cVerdict==='AGREE'?'#22c55e':cVerdict==='DISAGREE'?'#ef4444':'#f59e0b';
-        var cIcon=cVerdict==='AGREE'?'✅':cVerdict==='DISAGREE'?'❌':'⚠️';
-        // Build tooltip with per-model details
-        var _tipModelNames={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
-        var tipLines=cScore+' '+cVerdict;
-        if(aiR.per_model){Object.keys(aiR.per_model).forEach(function(mid){var mv=aiR.per_model[mid];var mn=_tipModelNames[mid]||mid;tipLines+='\n'+(mv.verdict==='AGREE'?'✅':'❌')+' '+mn+': '+mv.verdict;});}
-        h+=' <span title="'+tipLines.replace(/"/g,'&quot;')+'" style="background:'+cBg+';color:'+cColor+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;cursor:help;white-space:nowrap">'+cIcon+' '+cScore+'</span>';
-      }
+      _aiStockReview=_psAIValidation.signal_reviews.find(function(r){return r.sym===stk.sym;});
+    }
+    // Fallback: check persisted DB reviews
+    if(!_aiStockReview&&_psAIReviewsDB&&_psAIReviewsDB[stk.sym]){
+      _aiStockReview=_psAIReviewsDB[stk.sym];
+    }
+    if(_aiStockReview){
+      var aiR=_aiStockReview;
+      var pm=aiR.per_model||aiR.models||{};
+      var pmKeys=Object.keys(pm);
+      var agreeCount=0,disagreeCount=0,totalCount=pmKeys.length;
+      pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')agreeCount++;else if(v==='DISAGREE')disagreeCount++;});
+      var majorityVerdict=agreeCount>=disagreeCount?'AGREE':'DISAGREE';
+      var cBg=majorityVerdict==='AGREE'?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)';
+      var badgeLabel='❌'+disagreeCount+'/✅'+agreeCount+'/'+totalCount;
+      h+=' <span onclick="psToggleAIRow(\''+stk.sym+'\')" title="Click to see AI model details" style="background:'+cBg+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;cursor:pointer;white-space:nowrap">'+badgeLabel+'</span>';
     }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
     if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
@@ -3972,6 +3999,36 @@ function psRenderModelResults(data){
     }
     h+='</td>';
     h+='</tr>';
+
+    // AI Review expandable row (hidden by default, toggled by badge click)
+    if(_aiStockReview){
+      var aiR2=_aiStockReview;
+      var pm2=aiR2.per_model||aiR2.models||{};
+      var pmKeys2=Object.keys(pm2);
+      var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small','gpt-4.1':'GPT-4.1'};
+      h+='<tr id="ai-row-'+stk.sym+'" style="display:none;background:var(--bg2)">';
+      h+='<td colspan="15" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
+      h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">🤖 AI Model Reviews for '+stk.sym+'</div>';
+      h+='<div style="display:grid;gap:4px">';
+      pmKeys2.forEach(function(mid){
+        var mv2=pm2[mid];
+        var v2c=mv2.verdict==='AGREE'?'#22c55e':mv2.verdict==='DISAGREE'?'#ef4444':mv2.verdict==='NO_REVIEW'?'#6b7280':'#f59e0b';
+        var v2i=mv2.verdict==='AGREE'?'✅':mv2.verdict==='DISAGREE'?'❌':mv2.verdict==='NO_REVIEW'?'⏭':'⚠️';
+        var mName2=_mn2[mid]||mv2.model_name||mid;
+        var reason2=mv2.varsity_reasoning||mv2.recommendation||'';
+        var risk2=mv2.risk_flag||'';
+        h+='<div style="background:var(--bg);border-radius:5px;padding:6px 10px;border-left:3px solid '+v2c+';'+(mv2.verdict==='NO_REVIEW'?'opacity:0.5;':'')+'">';
+        h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
+        h+='<span style="font-size:10px;font-weight:800;color:'+v2c+'">'+v2i+' '+mName2+'</span>';
+        h+='<span style="font-size:8px;font-weight:800;color:'+v2c+';text-transform:uppercase;background:'+v2c+'15;padding:1px 5px;border-radius:3px">'+mv2.verdict.replace('_',' ')+'</span>';
+        if(mv2.confidence&&mv2.verdict!=='NO_REVIEW')h+='<span style="font-size:8px;color:var(--text4)">'+mv2.confidence+'% conf</span>';
+        h+='</div>';
+        if(reason2)h+='<div style="font-size:9px;color:var(--text3);line-height:1.4;margin-top:2px">'+reason2+'</div>';
+        if(risk2&&mv2.verdict!=='NO_REVIEW')h+='<div style="font-size:9px;color:#f97316;margin-top:2px">⚠ '+risk2+'</div>';
+        h+='</div>';
+      });
+      h+='</div></td></tr>';
+    }
   });
   h+='</tbody></table></div>';
 
