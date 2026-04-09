@@ -5445,7 +5445,9 @@ function detectMarketRegime() {
 // ── MULTI-FACTOR STOCK SCORING (Varsity M2+M3+M9: Quality×Valuation×Technical×Momentum×Risk) ──
 function scoreStockForPortfolio(f) {
   const na = v => v != null && isFinite(v);
-  const px = f.price || livePrices[f.sym]?.price;
+  // Price resolution chain: live ticker → cached fundamental → screener DB → FUND_EXT
+  const ext = global.FUND_EXT?.[f.sym];
+  const px = f.price || livePrices[f.sym]?.price || ext?.price || ext?.currentPrice || null;
   if (!px || px <= 0) return null;
 
   const peers = Object.values(stockFundamentals).filter(p => p.sector === f.sector);
@@ -5663,7 +5665,7 @@ function buildPortfolioSuggestion(amount) {
   // Debug logging
   const convDist = {};
   scored.forEach(s => { convDist[s.conviction] = (convDist[s.conviction]||0)+1; });
-  const withPrice = all.filter(f => (f.price || livePrices[f.sym]?.price) > 0).length;
+  const withPrice = all.filter(f => (f.price || livePrices[f.sym]?.price || global.FUND_EXT?.[f.sym]?.price) > 0).length;
   console.log(`📊 Portfolio: ${all.length} total, ${withPrice} have price, ${scored.length} pass quality gate, ${scoreErrors} errors. Conviction: ${JSON.stringify(convDist)}. Top: ${scored[0]?.sym}=${scored[0]?.composite}. Regime: ${marketRegime}`);
 
   // If quality gate filtered everything, fall back to simple FA-score ranking
@@ -5672,7 +5674,8 @@ function buildPortfolioSuggestion(amount) {
     const bySector = {};
     all.forEach(f => { const s = f.sector || 'Other'; bySector[s] = bySector[s] || []; bySector[s].push(f); });
     scored = all.map(f => {
-      const px = f.price || livePrices[f.sym]?.price;
+      const ext2 = global.FUND_EXT?.[f.sym];
+      const px = f.price || livePrices[f.sym]?.price || ext2?.price || ext2?.currentPrice;
       if (!px || px <= 0) return null;
       const peers = bySector[f.sector || 'Other'] || all;
       const { score } = scoreOneStock(f, peers);
