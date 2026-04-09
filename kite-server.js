@@ -4131,51 +4131,60 @@ function computeTechnicals(candles) {
 async function refreshAllFundamentals() {
   if (stockFundLoading) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) {
-    console.log('📊 Kite not ready - attempting to restore TA from DB cache...');
-    // Fallback: try dedicated TA cache first, then scored_stocks_cache
+    console.log('📊 Kite not ready - restoring from DB cache...');
     let restored = 0;
+
+    // Strategy 1: Try full scored_stocks_cache first (has ALL fields including fundamentals + technicals)
     try {
-      // Try dedicated TA cache (never overwritten by non-Kite restarts)
-      const taCached = await dbGet('ta_data_cache');
-      if (taCached) {
-        const { ta, fetchedAt } = JSON.parse(taCached);
-        const taCount = Object.keys(ta).length;
-        if (taCount > 10) {
-          for (const [sym, taData] of Object.entries(ta)) {
-            if (!stockFundamentals[sym]) continue;
-            const sf = stockFundamentals[sym];
-            for (const [k, v] of Object.entries(taData)) {
-              if (sf[k] == null && v != null) sf[k] = v;
+      const cached = await dbGet('scored_stocks_cache');
+      if (cached) {
+        const { stocks, fetchedAt } = JSON.parse(cached);
+        const age = ((Date.now()-fetchedAt)/3600000).toFixed(1);
+        if (stocks && Object.keys(stocks).length > 10) {
+          for (const [sym, cachedStock] of Object.entries(stocks)) {
+            if (!stockFundamentals[sym]) {
+              stockFundamentals[sym] = cachedStock;
+            } else {
+              // Merge: fill any nulls from cache
+              for (const [k, v] of Object.entries(cachedStock)) {
+                if (stockFundamentals[sym][k] == null && v != null) stockFundamentals[sym][k] = v;
+              }
             }
             restored++;
           }
-          console.log(`📊 Restored TA data for ${restored} stocks from TA cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
+          console.log(`📊 Restored ${restored} stocks from scored cache (${age}h old)`);
         }
       }
-    } catch(e) {}
+    } catch(e) { console.log('📊 Scored cache restore failed:', e.message); }
 
-    // If TA cache didn't help, try scored_stocks_cache
-    if (restored === 0) {
-      try {
-        const cached = await dbGet('scored_stocks_cache');
-        if (cached) {
-          const { stocks, fetchedAt } = JSON.parse(cached);
-          if (Object.keys(stocks).length > 10) {
-            for (const [sym, cachedStock] of Object.entries(stocks)) {
-              if (!stockFundamentals[sym]) { stockFundamentals[sym] = cachedStock; restored++; continue; }
-              const sf = stockFundamentals[sym];
-              for (const [k, v] of Object.entries(cachedStock)) {
-                if (sf[k] == null && v != null) { sf[k] = v; }
+    // Strategy 2: Overlay TA-specific cache (may be fresher than scored cache)
+    try {
+      const taCached = await dbGet('ta_data_cache');
+      if (taCached) {
+        const { ta, fetchedAt } = JSON.parse(taCached);
+        const age = ((Date.now()-fetchedAt)/3600000).toFixed(1);
+        let taRestored = 0;
+        if (ta && Object.keys(ta).length > 10) {
+          for (const [sym, taData] of Object.entries(ta)) {
+            if (!stockFundamentals[sym]) {
+              // Create minimal entry from TA data
+              stockFundamentals[sym] = { sym, name: sym, grp: 'Unknown', sector: 'Other', ...taData };
+              taRestored++;
+            } else {
+              // Overlay TA fields (TA cache may be newer than scored cache)
+              for (const [k, v] of Object.entries(taData)) {
+                if (v != null) stockFundamentals[sym][k] = v;
               }
-              restored++;
+              taRestored++;
             }
-            console.log(`📊 Restored ${restored} stocks from scored cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
           }
+          console.log(`📊 Overlaid TA data for ${taRestored} stocks from TA cache (${age}h old)`);
         }
-      } catch(e) {}
-    }
+      }
+    } catch(e) { console.log('📊 TA cache restore failed:', e.message); }
 
-    if (restored > 0) stockFundReady = true;
+    if (restored > 0 || Object.keys(stockFundamentals).length > 10) stockFundReady = true;
+    console.log(`📊 Cache restore complete: ${Object.keys(stockFundamentals).length} stocks with data`);
     return;
   }
   stockFundLoading = true;
@@ -4373,17 +4382,34 @@ async function refreshAllFundamentals() {
         fetchedAt: stockFundLastFetch,
       }));
       // Also save TA-only cache separately — never gets overwritten by non-Kite restarts
+      // IMPORTANT: include ALL technical fields that appear in the UI
       const taCache = {};
       for (const [sym, f] of Object.entries(stockFundamentals)) {
         if (f.rsi != null || f.macdBull != null || f.dma200 != null) {
-          taCache[sym] = { rsi:f.rsi, macdBull:f.macdBull, macd:f.macd, macdHist:f.macdHist,
-            goldenCross:f.goldenCross, dma20:f.dma20, dma50:f.dma50, dma100:f.dma100, dma200:f.dma200,
-            wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo, change52w:f.change52w, change6m:f.change6m,
-            change3m:f.change3m, change1m:f.change1m, pctAbove200:f.pctAbove200, pctFromHigh:f.pctFromHigh,
-            adx:f.adx, adxPdi:f.adxPdi, adxNdi:f.adxNdi, bbPct:f.bbPct,
+          taCache[sym] = {
+            price:f.price,
+            // DMAs
+            dma20:f.dma20, dma50:f.dma50, dma100:f.dma100, dma200:f.dma200,
+            ema50:f.ema50, ema200:f.ema200,
+            // Trend
+            goldenCross:f.goldenCross, dma200Trend:f.dma200Trend, weeklyTrend:f.weeklyTrend,
             supertrend:f.supertrend, supertrendSig:f.supertrendSig,
-            obvRising:f.obvRising, volRatio:f.volRatio, bullishDiv:f.bullishDiv, bearishDiv:f.bearishDiv,
-            annualVol:f.annualVol, beta:f.beta, price:f.price };
+            // Momentum
+            rsi:f.rsi, rsiTrend:f.rsiTrend, macd:f.macd, macdBull:f.macdBull, macdHist:f.macdHist,
+            stochK:f.stochK, adx:f.adx, adxPdi:f.adxPdi, adxNdi:f.adxNdi,
+            // Volatility
+            bbPct:f.bbPct, bbUpper:f.bbUpper, bbLower:f.bbLower,
+            annualVol:f.annualVol, beta:f.beta,
+            // Volume
+            volRatio:f.volRatio, volTrend:f.volTrend, obvRising:f.obvRising, accumDist:f.accumDist,
+            // Returns
+            change52w:f.change52w, change6m:f.change6m, change3m:f.change3m, change1m:f.change1m,
+            // Price levels
+            wk52Hi:f.wk52Hi, wk52Lo:f.wk52Lo,
+            pctFromHigh:f.pctFromHigh, pctAbove200:f.pctAbove200, pctAbove50:f.pctAbove50,
+            // Divergences
+            bullishDiv:f.bullishDiv, bearishDiv:f.bearishDiv,
+          };
         }
       }
       if (Object.keys(taCache).length > 10) {
