@@ -6785,22 +6785,22 @@ cron.schedule('*/30 9-15 * * 1-5', async () => {
   console.log(`🔔 ${now}: Portfolio signal refresh (30-min cycle)...`);
   try {
     await generatePortfolioSignals();
-    // AI validation after signals are generated (every 30 min)
-    if (ANTHROPIC_API_KEY) {
-      validateSignalsWithAI('auto').catch(e => console.error('AI validation cron error:', e.message));
-    }
   } catch(e) { console.error('Signal refresh error:', e.message); }
 }, { timezone: 'Asia/Kolkata' });
 
-// 3:45PM IST — end of day final signals + snapshot (after market close)
+// 3:00PM IST — Multi-model AI consensus review (once daily, Mon-Fri)
+// Calls 6 LLMs in parallel: Gemini Flash, GPT-4.1-nano, DeepSeek V3, Claude Haiku, Gemini Pro, GPT-4.1
+cron.schedule('0 15 * * 1-5', async () => {
+  console.log('🤖 3:00PM: Daily multi-model AI consensus review...');
+  await generatePortfolioSignals();
+  validateSignalsWithAI('deep').catch(e => console.error('AI daily validation error:', e.message));
+}, { timezone: 'Asia/Kolkata' });
+
+// 3:45PM IST — end of day snapshot (after market close)
 cron.schedule('45 15 * * 1-5', async () => {
-  console.log('🔔 3:45PM: End-of-day portfolio review + snapshot...');
+  console.log('🔔 3:45PM: End-of-day portfolio snapshot...');
   await generatePortfolioSignals();
   await savePortfolioSnapshot();
-  // Deep AI validation at end of day
-  if (ANTHROPIC_API_KEY) {
-    validateSignalsWithAI('deep').catch(e => console.error('AI EOD validation error:', e.message));
-  }
 }, { timezone: 'Asia/Kolkata' });
 
 // 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
@@ -9096,12 +9096,172 @@ async function start() {
 start();
 
 // =============================================================================
-// AI SIGNAL VALIDATOR — Varsity-Trained Portfolio Signal Review Engine
-// Uses Claude API to validate every signal against Zerodha Varsity principles
-// Runs on 30-min cron during market hours + manual /api/ai/validate endpoint
+// AI SIGNAL VALIDATOR — Multi-Model Varsity-Trained Portfolio Review Engine
+// Calls 6 LLMs in parallel for consensus validation against Zerodha Varsity
+// Runs once daily at 3:00PM IST + manual /api/ai/validate endpoint
 // =============================================================================
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+
+// ── AI MODEL DEFINITIONS ──
+const AI_MODELS = [
+  { id: 'gemini-flash', name: 'Gemini 2.0 Flash', provider: 'google', model: 'gemini-2.0-flash', maxTokens: 2000 },
+  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano', maxTokens: 2000 },
+  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat', maxTokens: 2000 },
+  { id: 'claude-haiku', name: 'Claude Haiku 3.5', provider: 'anthropic', model: 'claude-haiku-4-5-20241022', maxTokens: 2000 },
+  { id: 'gemini-pro', name: 'Gemini 2.5 Pro', provider: 'google', model: 'gemini-2.5-pro-preview-05-06', maxTokens: 2000 },
+  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai', model: 'gpt-4.1', maxTokens: 2000 },
+];
+
+// ── Call a single AI model ──
+async function callAIModel(modelDef, systemPrompt, userPrompt) {
+  const start = Date.now();
+  try {
+    let raw = '';
+
+    if (modelDef.provider === 'anthropic') {
+      if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
+        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.content?.[0]?.text || '';
+
+    } else if (modelDef.provider === 'openai') {
+      if (!OPENAI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+
+    } else if (modelDef.provider === 'deepseek') {
+      if (!DEEPSEEK_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+        body: JSON.stringify({ model: modelDef.model, max_tokens: modelDef.maxTokens, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+
+    } else if (modelDef.provider === 'google') {
+      if (!GOOGLE_AI_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelDef.model}:generateContent?key=${GOOGLE_AI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userPrompt }] }],
+          generationConfig: { maxOutputTokens: modelDef.maxTokens, temperature: 0.3 },
+        }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
+
+    // Parse JSON from response
+    const clean = raw.replace(/```json|```/g, '').trim();
+    let result;
+    try { result = JSON.parse(clean); }
+    catch { result = { raw_response: raw.slice(0, 500), parse_error: true }; }
+
+    return { id: modelDef.id, name: modelDef.name, result, took_ms: Date.now() - start };
+
+  } catch (e) {
+    return { id: modelDef.id, name: modelDef.name, error: e.message, took_ms: Date.now() - start };
+  }
+}
+
+// ── Aggregate multi-model results into consensus ──
+function buildConsensus(modelResults) {
+  const validResults = modelResults.filter(m => m.result && !m.error && !m.result.parse_error);
+  const totalModels = modelResults.filter(m => !m.skipped).length;
+
+  // Build per-stock consensus
+  const stockMap = {};
+  validResults.forEach(m => {
+    if (!m.result.signal_reviews) return;
+    m.result.signal_reviews.forEach(rev => {
+      if (!stockMap[rev.sym]) stockMap[rev.sym] = { sym: rev.sym, models: {} };
+      stockMap[rev.sym].models[m.id] = {
+        verdict: rev.verdict,
+        confidence: rev.confidence,
+        varsity_module: rev.varsity_module,
+        varsity_reasoning: rev.varsity_reasoning,
+        recommendation: rev.recommendation,
+        risk_flag: rev.risk_flag,
+        signal_type: rev.signal_type,
+      };
+    });
+  });
+
+  // Calculate consensus per stock
+  const signal_reviews = Object.values(stockMap).map(s => {
+    const verdicts = Object.values(s.models).map(m => m.verdict);
+    const counts = { AGREE: 0, DISAGREE: 0, MODIFY: 0 };
+    verdicts.forEach(v => { if (counts[v] !== undefined) counts[v]++; });
+    const majority = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    const respondedCount = verdicts.length;
+
+    // Pick the best reasoning (from the model with highest confidence)
+    const bestModel = Object.entries(s.models).sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
+
+    return {
+      sym: s.sym,
+      signal_type: bestModel?.[1]?.signal_type || '?',
+      consensus_verdict: majority[0],
+      consensus_score: `${majority[1]}/${respondedCount}`,
+      consensus_pct: Math.round((majority[1] / respondedCount) * 100),
+      models_responded: respondedCount,
+      models_total: totalModels,
+      verdict: majority[0],   // backward compat
+      confidence: Math.round(Object.values(s.models).reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
+      varsity_module: bestModel?.[1]?.varsity_module || '',
+      varsity_reasoning: bestModel?.[1]?.varsity_reasoning || '',
+      recommendation: bestModel?.[1]?.recommendation || '',
+      risk_flag: bestModel?.[1]?.risk_flag || '',
+      per_model: s.models,
+    };
+  });
+
+  // Aggregate portfolio flags and missed signals
+  const allFlags = [];
+  const allMissed = [];
+  validResults.forEach(m => {
+    if (m.result.portfolio_flags) allFlags.push(...m.result.portfolio_flags.map(f => `[${m.id}] ${f}`));
+    if (m.result.missed_signals) allMissed.push(...m.result.missed_signals.map(f => `[${m.id}] ${f}`));
+  });
+
+  return {
+    signal_reviews,
+    portfolio_flags: [...new Set(allFlags)],
+    missed_signals: [...new Set(allMissed)],
+    model_details: modelResults.map(m => ({
+      id: m.id, name: m.name, took_ms: m.took_ms,
+      status: m.skipped ? 'skipped' : m.error ? 'error' : 'ok',
+      error: m.error || null,
+      signals_count: m.result?.signal_reviews?.length || 0,
+    })),
+    models_used: validResults.length,
+    models_total: totalModels,
+  };
+}
 
 const VARSITY_KNOWLEDGE_PROMPT = `You are an expert Indian stock market analyst deeply trained on ALL 17 modules of Zerodha Varsity.
 Your job: validate portfolio signals (EXIT, REDUCE, SWITCH, FRESH_BUY, SECTOR_WARN, DRAWDOWN) against Varsity principles.
@@ -9435,14 +9595,17 @@ let _aiValidationRunning = false;
 
 async function validateSignalsWithAI(mode = 'auto') {
   if (_aiValidationRunning) return _lastAIValidation;
-  if (!ANTHROPIC_API_KEY) {
-    console.log('⚠ AI validation skipped — no ANTHROPIC_API_KEY');
+
+  // Check if ANY API key is configured
+  const hasAnyKey = ANTHROPIC_API_KEY || OPENAI_API_KEY || GOOGLE_AI_API_KEY || DEEPSEEK_API_KEY;
+  if (!hasAnyKey) {
+    console.log('⚠ AI validation skipped — no API keys configured');
     return null;
   }
 
   _aiValidationRunning = true;
   const startTime = Date.now();
-  console.log(`🤖 AI Signal Validation starting (mode: ${mode})...`);
+  console.log(`🤖 Multi-Model AI Validation starting (mode: ${mode}, ${AI_MODELS.length} models)...`);
 
   try {
     // 1) Gather current portfolio state
@@ -9622,44 +9785,20 @@ Validate ALL active signals against Varsity principles. For each stock:
 ${mode === 'deep' ? '\nDEEP REVIEW MODE — Also check:\n- Multi-timeframe alignment (is daily signal confirmed on weekly?)\n- Sector correlations (are multiple holdings in the same falling sector?)\n- Macro impact (regime, VIX level, FII/DII flows)\n- Portfolio-level: concentration risk, correlation clustering, VaR breach risk\n- Check each trailing stop: is it too tight (whipsaw) or too loose (excess drawdown)?' : ''}
 Respond ONLY in the JSON format specified in your system prompt.`;
 
-    // Use Haiku for auto (cheap, fast) and Sonnet for manual deep reviews
-    const model = mode === 'deep' ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20241022';
-    const maxTokens = mode === 'deep' ? 3000 : 1500;
+    // ── Call ALL 6 models in parallel ──
+    console.log(`🤖 Dispatching to ${AI_MODELS.length} models in parallel...`);
+    const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt));
+    const modelResults = await Promise.all(modelPromises);
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': ANTHROPIC_API_KEY,
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system: VARSITY_KNOWLEDGE_PROMPT,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-      signal: AbortSignal.timeout(60000),
+    // Log per-model status
+    modelResults.forEach(m => {
+      if (m.skipped) console.log(`  ⏭ ${m.name}: skipped (no API key)`);
+      else if (m.error) console.log(`  ❌ ${m.name}: ${m.error} (${m.took_ms}ms)`);
+      else console.log(`  ✅ ${m.name}: ${m.result?.signal_reviews?.length || 0} reviews (${m.took_ms}ms)`);
     });
 
-    if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Anthropic API ${resp.status}: ${err.slice(0, 200)}`);
-    }
-
-    const data = await resp.json();
-    const raw = data.content?.[0]?.text || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-
-    let result;
-    try {
-      result = JSON.parse(clean);
-    } catch (parseErr) {
-      // If JSON parsing fails, store raw text
-      result = { raw_response: raw, parse_error: true };
-    }
-
-    result.model_used = model;
+    // ── Build consensus from all model responses ──
+    const result = buildConsensus(modelResults);
     result.mode = mode;
     result.took_ms = Date.now() - startTime;
     result.positions_reviewed = positions.length;
@@ -9671,7 +9810,8 @@ Respond ONLY in the JSON format specified in your system prompt.`;
     await dbSet('ai_validation_latest', JSON.stringify(result));
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`🤖 AI validation complete in ${elapsed}s — ${result.signal_reviews?.length || 0} signals reviewed, ${result.missed_signals?.length || 0} missed signals found`);
+    const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+    console.log(`🤖 Multi-model validation complete in ${elapsed}s — ${okCount}/${AI_MODELS.length} models responded, ${result.signal_reviews?.length || 0} stocks reviewed`);
 
     _aiValidationRunning = false;
     return result;
