@@ -9897,13 +9897,14 @@ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
 // ── OpenRouter: single API for all models ──────────────────────────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 
-// Analyst models (cheap, fast, run in parallel) — raw opinions
+// Analyst models (ALL FREE via OpenRouter, run in parallel) — raw opinions
 const AI_ANALYST_MODELS = [
-  { id: 'llama-70b', name: 'Llama 3.3 70B', model: 'meta-llama/llama-3.3-70b-instruct' },
-  { id: 'deepseek', name: 'DeepSeek V3', model: 'deepseek/deepseek-chat-v3-0324' },
-  { id: 'gpt-nano', name: 'GPT-4.1-nano', model: 'openai/gpt-4.1-nano' },
+  { id: 'gemma-31b', name: 'Gemma 4 31B', model: 'google/gemma-4-31b-it:free' },
+  { id: 'nemotron-120b', name: 'Nemotron 3 Super 120B', model: 'nvidia/nemotron-3-super-120b-a12b:free' },
+  { id: 'gemma-26b', name: 'Gemma 4 26B', model: 'google/gemma-4-26b-a4b-it:free' },
+  { id: 'minimax', name: 'MiniMax M2.5', model: 'minimax/minimax-m2.5:free' },
 ];
-// Judge model (smarter, consolidates analyst opinions into final review)
+// Judge model (paid, consolidates analyst opinions into final review)
 const AI_JUDGE_MODEL = { id: 'judge', name: 'Claude Haiku (Judge)', model: 'anthropic/claude-haiku-4-5-20251001' };
 
 // Combined list for backward compat (status tracking, UI pills)
