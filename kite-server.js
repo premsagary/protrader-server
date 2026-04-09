@@ -6779,15 +6779,19 @@ cron.schedule('30 6 * * 1-5', async () => {
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
 
-// 10AM IST — generate portfolio signals (after market settles, Mon-Fri)
-cron.schedule('0 10 * * 1-5', async () => {
-  console.log('🔔 10AM: Generating portfolio signals...');
-  await generatePortfolioSignals();
+// Every 30 min during market hours (9:30AM - 3:30PM IST, Mon-Fri)
+// Refreshes exit signals, trailing stops, drawdown alerts using live prices
+cron.schedule('*/30 9-15 * * 1-5', async () => {
+  const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  console.log(`🔔 ${now}: Portfolio signal refresh (30-min cycle)...`);
+  try {
+    await generatePortfolioSignals();
+  } catch(e) { console.error('Signal refresh error:', e.message); }
 }, { timezone: 'Asia/Kolkata' });
 
-// 3:45PM IST — end of day signals + snapshot (after market close)
+// 3:45PM IST — end of day final signals + snapshot (after market close)
 cron.schedule('45 15 * * 1-5', async () => {
-  console.log('🔔 3:45PM: End-of-day portfolio review...');
+  console.log('🔔 3:45PM: End-of-day portfolio review + snapshot...');
   await generatePortfolioSignals();
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
