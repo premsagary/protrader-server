@@ -3968,17 +3968,16 @@ function psRenderModelResults(data){
       pmKeys.forEach(function(mid){var v=pm[mid].verdict;if(v==='AGREE')_aiAgree++;else if(v==='DISAGREE')_aiDisagree++;else if(v==='MODIFY')_aiModify++;});
       var majorityVerdict=_aiAgree>=_aiDisagree?'AGREE':'DISAGREE';
       var cBg=majorityVerdict==='AGREE'?'rgba(34,197,94,.12)':'rgba(239,68,68,.12)';
-      // Labeled colored pills next to stock: ✅3 Agreed  ⚠️1 Caution  ❌3 Disagree
-      var badgeParts=[];
-      if(_aiAgree>0) badgeParts.push('<span style="color:#22c55e">✅'+_aiAgree+' Agreed</span>');
-      if(_aiModify>0) badgeParts.push('<span style="color:#f59e0b">⚠️'+_aiModify+' Caution</span>');
-      if(_aiDisagree>0) badgeParts.push('<span style="color:#ef4444">❌'+_aiDisagree+' Disagree</span>');
-      h+=' <span style="display:inline-flex;gap:6px;font-size:8px;font-weight:700;white-space:nowrap">'+badgeParts.join('')+'</span>';
     }
     h+='</div><div style="font-size:9px;color:var(--text4)">'+stk.name+'</div>';
-    // "Show More" link below stock name — only if AI review exists
+    // AI verdict summary — stacked vertically below stock name
     if(_aiStockReview){
-      h+='<div onclick="psToggleAIRow(\''+stk.sym+'\')" id="ai-toggle-'+stk.sym+'" style="font-size:8px;color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-'+stk.sym+'">▶</span> Show AI Reviews ('+_aiTotal+' models)</div>';
+      h+='<div style="margin-top:2px;font-size:8px;font-weight:700;line-height:1.5">';
+      if(_aiAgree>0) h+='<div style="color:#22c55e">✅'+_aiAgree+' Agreed</div>';
+      if(_aiModify>0) h+='<div style="color:#f59e0b">⚠️'+_aiModify+' Caution</div>';
+      if(_aiDisagree>0) h+='<div style="color:#ef4444">❌'+_aiDisagree+' Disagree</div>';
+      h+='<div onclick="psToggleAIRow(\''+stk.sym+'\')" id="ai-toggle-'+stk.sym+'" style="color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-'+stk.sym+'">▶</span> Show AI Reviews ('+_aiTotal+' models)</div>';
+      h+='</div>';
     }
     if(stk.isFallenAngel)h+='<span style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:3px;padding:1px 4px;font-size:8px;font-weight:700">Angel</span>';
     h+='</td>';
