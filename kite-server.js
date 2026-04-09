@@ -3706,7 +3706,38 @@ function computeTechnicals(candles) {
 async function refreshAllFundamentals() {
   if (stockFundLoading) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) {
-    console.log('📊 Kite not ready - skipping stock refresh'); return;
+    console.log('📊 Kite not ready - attempting to restore TA from DB cache...');
+    // Fallback: restore TA data from scored_stocks_cache so scores aren't crippled
+    try {
+      const cached = await dbGet('scored_stocks_cache');
+      if (cached) {
+        const { stocks, fetchedAt } = JSON.parse(cached);
+        const count = Object.keys(stocks).length;
+        if (count > 10) {
+          let restored = 0;
+          for (const [sym, cachedStock] of Object.entries(stocks)) {
+            if (!stockFundamentals[sym]) { stockFundamentals[sym] = cachedStock; restored++; continue; }
+            // Merge TA fields from cache into existing entry (don't overwrite newer fundamental data)
+            const sf = stockFundamentals[sym];
+            const taFields = ['rsi','macdBull','macd','macdHist','goldenCross','dma20','dma50','dma100','dma200',
+              'wk52Hi','wk52Lo','change52w','change6m','change3m','change1m','pctAbove200','pctFromHigh',
+              'adx','adxPdi','adxNdi','bbPct','bbUpper','bbLower','stochK','supertrend','supertrendSig',
+              'obvRising','volRatio','bullishDiv','bearishDiv','annualVol','beta',
+              'price','dma200','dma50'];
+            let merged = false;
+            for (const k of taFields) {
+              if (sf[k] == null && cachedStock[k] != null) { sf[k] = cachedStock[k]; merged = true; }
+            }
+            if (merged) restored++;
+          }
+          if (restored > 0) {
+            stockFundReady = true;
+            console.log(`📊 Restored TA data for ${restored} stocks from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
+          }
+        }
+      }
+    } catch(e) { console.log('📊 Cache restore failed:', e.message); }
+    return;
   }
   stockFundLoading = true;
   console.log('📊 Stock scoring: fetching Kite daily candles in parallel batches...');
@@ -7335,6 +7366,12 @@ app.post('/api/stocks/rescore', (req, res) => {
   res.json({ message: 'Re-scoring started in background' });
   refreshAllFundamentals();
 });
+// GET trigger for rescore (usable from browser)
+app.get('/api/stocks/rescore', (req, res) => {
+  if (stockFundLoading) return res.json({ message: 'Already scoring...' });
+  res.json({ message: 'Re-scoring started in background (will restore TA from cache if Kite unavailable)' });
+  refreshAllFundamentals();
+});
 
 // MF cache rebuild trigger
 app.post('/api/mf/rebuild-cache', (req, res) => {
@@ -8926,40 +8963,41 @@ async function start() {
   const screenerCount = await loadScreenerFundamentals(); // Screener.in data (overrides)
 
   // STEP 4: Restore last scored stocks from kv cache → instant UI on restart
+  // Deep-merge: cache has TA data (RSI, MACD, etc.) that screener doesn't provide
+  // Don't overwrite newer screener fundamental data, but DO fill in TA fields
   try {
     const cached = await dbGet('scored_stocks_cache');
     if (cached) {
       const { stocks, fetchedAt } = JSON.parse(cached);
       const count = Object.keys(stocks).length;
       if (count > 10) {
-        Object.assign(stockFundamentals, stocks);
+        let restored = 0;
+        for (const [sym, cachedStock] of Object.entries(stocks)) {
+          if (!stockFundamentals[sym]) {
+            // No existing entry — use full cached stock
+            stockFundamentals[sym] = cachedStock;
+            restored++;
+          } else {
+            // Existing entry (from screener) — merge in TA fields that are missing
+            const sf = stockFundamentals[sym];
+            for (const [k, v] of Object.entries(cachedStock)) {
+              if (sf[k] == null && v != null) sf[k] = v;
+            }
+            restored++;
+          }
+        }
         stockFundLastFetch = fetchedAt;
         stockFundReady = true;
-        console.log(`📊 ${count} scored stocks restored from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old)`);
+        console.log(`📊 ${restored} scored stocks deep-merged from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old) — TA data preserved`);
       }
     }
-  } catch(e) {}
+  } catch(e) { console.log('📊 Cache restore error:', e.message); }
 
   // STEP 5: Kick off background Screener fetch if no data yet
   if (process.env.APIFY_TOKEN && screenerCount === 0) {
     console.log('📊 No Screener data — starting background fetch via Apify...');
     fetchAllScreenerData().catch(e => console.error('Startup Screener fetch error:', e.message));
   }
-
-  // Load previously scored stocks from DB cache — makes Stocks tab instant on restart
-  try {
-    const cached = await dbGet('scored_stocks_cache');
-    if (cached) {
-      const { stocks, fetchedAt } = JSON.parse(cached);
-      const count = Object.keys(stocks).length;
-      if (count > 10) {
-        Object.assign(stockFundamentals, stocks);
-        stockFundLastFetch = fetchedAt;
-        stockFundReady = true;
-        console.log(`📊 ${count} scored stocks from cache (${((Date.now()-fetchedAt)/3600000).toFixed(1)}h old) — Stocks tab ready`);
-      }
-    }
-  } catch(e) { console.log('📊 No score cache — will fetch fresh'); }
 
   initKite(token||null);
   if (token) {
