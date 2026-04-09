@@ -9467,7 +9467,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 16384, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 32768, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9480,7 +9480,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_completion_tokens: 16384, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9493,7 +9493,7 @@ async function callAIModel(modelDef, systemPrompt, userPrompt) {
       const resp = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 16384, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -9966,7 +9966,10 @@ Respond in JSON:
   "portfolio_flags": ["Any overall portfolio concerns — concentration, correlation, regime mismatch, tax inefficiency"],
   "missed_signals": ["Stocks that SHOULD have a signal but don't — e.g. stock with bearish divergence but no EXIT signal"]
 }
-CRITICAL: signal_reviews MUST contain exactly one entry for EVERY stock listed in PORTFOLIO POSITIONS and MODEL PORTFOLIO sections above. Do NOT skip bench/watchlist stocks.`;
+CRITICAL RULES:
+1. signal_reviews MUST contain exactly one entry for EVERY stock listed in PORTFOLIO POSITIONS and MODEL PORTFOLIO sections above (all 15). Do NOT skip bench/watchlist stocks.
+2. Be CONCISE: varsity_reasoning max 2 sentences, recommendation max 1 sentence, risk_flag max 1 sentence. Do NOT write paragraphs.
+3. portfolio_flags max 5 items, missed_signals max 5 items.`;
 
 let _lastAIValidation = null;
 let _aiValidationRunning = false;
