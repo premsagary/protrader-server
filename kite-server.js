@@ -3938,6 +3938,52 @@ app.post("/api/trading-mode", express.json(), async (req,res) => {
   });
 });
 
+// ── Test buy endpoint — buy 1 share of a stock to verify Kite order placement works ──
+app.post("/api/test-buy", express.json(), async (req, res) => {
+  try {
+    if (!kite) return res.status(400).json({ error: 'Kite not connected. Login first.' });
+    const sym = (req.body.symbol || 'YESBANK').toUpperCase(); // default: cheap stock
+    const qty = req.body.quantity || 1;
+
+    // Get current price from live prices or Kite LTP
+    let price;
+    try {
+      const ltp = await kite.getLTP([`NSE:${sym}`]);
+      price = ltp[`NSE:${sym}`]?.last_price;
+    } catch(e) { price = livePrices[sym]?.price; }
+
+    if (!price) return res.status(400).json({ error: `Cannot get price for ${sym}` });
+
+    console.log(`🧪 TEST BUY: ${qty} x ${sym} @ ₹${price} (LIMIT, CNC)`);
+
+    const order = await kite.placeOrder('regular', {
+      exchange: 'NSE',
+      tradingsymbol: sym,
+      transaction_type: 'BUY',
+      quantity: qty,
+      product: 'CNC',
+      order_type: 'LIMIT',
+      price: price,
+      validity: 'DAY',
+    });
+
+    const orderId = order.order_id || order.orderId || order;
+    console.log(`🧪 TEST BUY SUCCESS: ${sym} Order ID: ${orderId}`);
+    res.json({
+      success: true,
+      symbol: sym,
+      quantity: qty,
+      price: price,
+      capital: +(qty * price).toFixed(2),
+      orderId: orderId,
+      message: `Test buy order placed: ${qty} x ${sym} @ ₹${price}`
+    });
+  } catch(e) {
+    console.error(`🧪 TEST BUY FAILED: ${e.message}`);
+    res.status(500).json({ error: e.message, hint: 'Check Kite IP whitelist or market hours' });
+  }
+});
+
 // ── Live trades endpoints (mirror paper-trades structure) ──
 app.get("/live-trades", async(req,res)=>{
   try{const{rows}=await pool.query("SELECT * FROM live_trades ORDER BY entry_time DESC LIMIT 500");res.json(rows);}catch(e){res.status(500).json({error:e.message});}
