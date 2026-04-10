@@ -11586,12 +11586,43 @@ async function validateSignalsWithAI(mode = 'auto') {
   console.log(`🤖 Multi-Model AI Validation starting (mode: ${mode}, ${AI_MODELS.length} models)...`);
 
   try {
-    // 1) Gather current portfolio state
-    const positions = await loadUserPositions();
+    // 1) Gather stocks from Model Portfolio + My Holdings (DB positions only, NOT Kite API)
+    let positions = [];
+    let sources = [];
+
+    // a) My Holdings — from portfolio_positions table (app-tracked, not Kite)
+    const dbPositions = await loadUserPositions();
+    if (dbPositions.length) {
+      positions.push(...dbPositions);
+      sources.push(`${dbPositions.length} holdings`);
+    }
+
+    // b) Model Portfolio — generated stocks
+    if (modelPortfolio?.portfolio?.length) {
+      const modelSyms = new Set(positions.map(p => p.sym)); // avoid duplicates
+      const modelPos = modelPortfolio.portfolio.slice(0, 15)
+        .filter(m => !modelSyms.has(m.sym))
+        .map(m => {
+          const px = livePrices[m.sym]?.price || stockFundamentals[m.sym]?.price || 0;
+          const shares = m.shares || (m.allocPct && px > 0 ? Math.floor((modelPortfolio.amount || 100000) * (m.allocPct/100) / px) : 1);
+          return {
+            sym: m.sym, qty: shares, avg_price: px,
+            invested_amt: +(shares * px).toFixed(2),
+            sector: stockFundamentals[m.sym]?.sector || m.sector || 'Other',
+            bought_at: new Date().toISOString(),
+            status: 'MODEL',
+            conviction: m.conviction || 'Buy',
+          };
+        });
+      positions.push(...modelPos);
+      sources.push(`${modelPos.length} model portfolio`);
+    }
+
     if (!positions.length) {
       _aiValidationRunning = false;
-      return { error: 'No positions to validate' };
+      return { error: 'No model portfolio or holdings to validate. Generate a portfolio first.' };
     }
+    aiStep(`Reviewing ${positions.length} stocks (${sources.join(' + ')})`);
 
     // 2) Get recent signals
     const { rows: signals } = await pool.query(
