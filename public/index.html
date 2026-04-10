@@ -408,6 +408,29 @@ async function toggleTradingMode(){
 }
 
 // =======================================================
+// TEST BUY — verify Kite order placement works
+// =======================================================
+async function testBuyOrder(){
+  const sym = prompt('Enter stock symbol to test buy (1 share):', 'YESBANK');
+  if(!sym) return;
+  const ok = confirm(`⚠️ TEST BUY ORDER\n\nThis will buy 1 share of ${sym.toUpperCase()} with REAL money on Kite.\nEstimated cost: ₹10-50 depending on stock.\n\nProceed?`);
+  if(!ok) return;
+  try {
+    const r = await fetch('/api/test-buy', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ symbol: sym.toUpperCase(), quantity: 1 })
+    });
+    const d = await r.json();
+    if(r.ok && d.success){
+      alert(`✅ TEST BUY SUCCESS!\n\nSymbol: ${d.symbol}\nQty: ${d.quantity}\nPrice: ₹${d.price}\nOrder ID: ${d.orderId}\n\nKite order placement is working!`);
+    } else {
+      alert(`❌ TEST BUY FAILED\n\n${d.error || 'Unknown error'}\n${d.hint || ''}`);
+    }
+  } catch(e){ alert('❌ Network error: ' + e.message); }
+}
+
+// =======================================================
 // FETCH
 // =======================================================
 async function fetchAll(){
@@ -579,8 +602,9 @@ function renderTopBar(){
     var modeToggle=isLive
       ?'<button onclick="toggleTradingMode()" style="background:#ef4444;color:#fff;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #dc2626;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#dc2626\'" onmouseout="this.style.background=\'#ef4444\'"><span style="font-size:7px">&#9679;</span> LIVE</button>'
       :'<button onclick="toggleTradingMode()" style="background:#1e3a5f;color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #3b82f6;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#2d4a6f\'" onmouseout="this.style.background=\'#1e3a5f\'"><span style="font-size:7px">&#9679;</span> PAPER</button>';
+    var testBuyBtn='<button onclick="testBuyOrder()" style="background:#0d9488;color:#fff;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #14b8a6;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s;margin-left:6px" onmouseover="this.style.background=\'#14b8a6\'" onmouseout="this.style.background=\'#0d9488\'">🧪 Test Buy</button>';
     el.innerHTML=[
-      '<div class="hstat">'+modeToggle+'</div>',
+      '<div class="hstat" style="display:flex;gap:4px">'+modeToggle+testBuyBtn+'</div>',
       S.liveTrades.length>0?stat("Live P&L",(livePnL>=0?"+":"")+INR(livePnL.toFixed(0)),clr(livePnL)):"",
       S.liveTrades.length>0?stat("Live Open",liveOpen,""):"",
       stat("Paper P&L",(nsePnL>=0?"+":"")+INR(nsePnL.toFixed(0)),clr(nsePnL)),
