@@ -415,6 +415,123 @@ async function initDB() {
     await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN signal_type TYPE VARCHAR(60)`).catch(()=>{});
     await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN verdict TYPE VARCHAR(30)`).catch(()=>{});
 
+    // ── Long-Term Picker v2 (Score v2 + forward-return calibration) ──────────
+    // Additive columns on stock_scores (keep existing rows intact)
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS score_version INTEGER DEFAULT 1`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS score_v2 DECIMAL(6,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS subscores_jsonb JSONB`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS expected_return DECIMAL(10,4)`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS confidence DECIMAL(6,3)`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS risk_level VARCHAR(10)`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS valuation_label VARCHAR(15)`).catch(()=>{});
+    await pool.query(`ALTER TABLE stock_scores ADD COLUMN IF NOT EXISTS data_completeness DECIMAL(6,3)`).catch(()=>{});
+
+    // Daily immutable snapshots for forward-return calibration & auditing
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS stock_score_snapshots (
+        snapshot_id        BIGSERIAL PRIMARY KEY,
+        snapshot_date      DATE NOT NULL,
+        sym                VARCHAR(20) NOT NULL,
+        sector             VARCHAR(100),
+        grp                VARCHAR(20),
+        score_version      INTEGER NOT NULL DEFAULT 2,
+        score_v2           DECIMAL(6,2),
+        subscores          JSONB,
+        valuation_label    VARCHAR(15),
+        risk_level         VARCHAR(10),
+        risk_score         DECIMAL(6,3),
+        confidence         DECIMAL(6,3),
+        expected_return    DECIMAL(10,4),
+        expected_return_horizon VARCHAR(5),
+        price              DECIMAL(18,2),
+        fundamentals       JSONB,
+        technical_overlay  JSONB,
+        data_completeness  DECIMAL(6,3),
+        score_bucket       VARCHAR(10),
+        created_at         TIMESTAMP DEFAULT NOW(),
+        UNIQUE(snapshot_date, sym, score_version)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_snapshot_sym_date ON stock_score_snapshots(sym, snapshot_date)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_snapshot_date_version ON stock_score_snapshots(snapshot_date, score_version)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_snapshot_bucket ON stock_score_snapshots(score_bucket, snapshot_date)`).catch(()=>{});
+
+    // Forward returns — filled by a horizon-fill cron as target dates pass
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS stock_forward_returns (
+        snapshot_id  BIGINT PRIMARY KEY REFERENCES stock_score_snapshots(snapshot_id) ON DELETE CASCADE,
+        r_1m         DECIMAL(10,4),
+        r_3m         DECIMAL(10,4),
+        r_6m         DECIMAL(10,4),
+        r_12m        DECIMAL(10,4),
+        filled_at    TIMESTAMP
+      )
+    `);
+
+    // Bucket calibration stats — recomputed nightly
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS score_bucket_stats (
+        stats_id       BIGSERIAL PRIMARY KEY,
+        as_of_date     DATE NOT NULL,
+        score_version  INTEGER NOT NULL,
+        horizon        VARCHAR(5) NOT NULL,
+        bucket         VARCHAR(15) NOT NULL,
+        sector         VARCHAR(100) DEFAULT 'ALL',
+        n              INTEGER NOT NULL,
+        avg_return     DECIMAL(10,4),
+        median_return  DECIMAL(10,4),
+        hit_rate       DECIMAL(6,3),
+        std_return     DECIMAL(10,4),
+        sharpe_like    DECIMAL(10,4),
+        updated_at     TIMESTAMP DEFAULT NOW(),
+        UNIQUE(as_of_date, score_version, horizon, bucket, sector)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bucket_lookup ON score_bucket_stats(score_version, horizon, sector, bucket)`).catch(()=>{});
+
+    // Daily market context — lets us reproduce scores/expected returns point-in-time
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS daily_market_context (
+        snapshot_date  DATE PRIMARY KEY,
+        market_regime  VARCHAR(20),
+        regime_data    JSONB,
+        nifty_benchmark JSONB,
+        universe_size  INTEGER,
+        created_at     TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // LLM cost counter — persists across server restarts
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS llm_cost_counter (
+        as_of_date  DATE NOT NULL,
+        endpoint    VARCHAR(50) NOT NULL,
+        model_id    VARCHAR(80) NOT NULL,
+        calls       INTEGER NOT NULL DEFAULT 0,
+        updated_at  TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (as_of_date, endpoint, model_id)
+      )
+    `);
+
+    // Fallen Angel AI classifier cache (Varsity M3 Ch15)
+    // Stores one LLM verdict per (sym) with 7-day TTL. Hourly rate limit is
+    // enforced in-memory (ok to reset on restart since daily cap still holds).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS fallen_angel_ai_cache (
+        sym          VARCHAR(20) PRIMARY KEY,
+        reason       VARCHAR(20),     -- MARKET|SECTOR|TEMPORARY|STRUCTURAL
+        verdict      VARCHAR(20),     -- BUY|AVOID|WAIT
+        confidence   DECIMAL(5,2),
+        explanation  TEXT,
+        model_id     VARCHAR(50),
+        computed_at  TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_fa_ai_cache_computed_at
+        ON fallen_angel_ai_cache(computed_at)
+    `);
+
     // ── Users table for auth ─────────────────────────────────────────────────
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -8836,6 +8953,402 @@ function pctRankStk(val, arr, hb=true) {
   return Math.round(valid.filter(v=>hb?v<val:v>val).length/valid.length*100);
 }
 
+// =============================================================================
+// SECTOR TEMPLATES — config-driven overrides for Score v2
+// Extracted from the hardcoded isBanking/isIT/isCement branches in scoreOneStock
+// to make sector-specific tuning explicit and testable.
+// Each template can bias pillar weights and tweak metric thresholds.
+// =============================================================================
+const SECTOR_TEMPLATES = {
+  BANKING: {
+    match: /bank|nbfc|finance|financi|insurance/i,
+    pillarMul: { quality: 1.0, growth: 0.9, valuation: 1.1, business: 1.0 }, // P/BV matters more
+    ignoreDebtPenalty: true,    // banks run on leverage by design
+    preferPBoverPE: true,       // use P/B for valuation
+    boostROA: true,             // ROA is the banking quality proxy
+    reduceCCCWeight: true,      // cash conversion cycle n/a for banks
+  },
+  IT_SERVICES: {
+    match: /software|information tech| it |tcs|infosys|wipro|hcl|tech mahindra|mindtree|mphasis|persistent|coforge/i,
+    pillarMul: { quality: 1.05, growth: 1.0, valuation: 1.0, business: 1.0 },
+    boostFCF: true,             // IT = asset-light, cash flow matters
+    softenDebtPenalty: 0.7,     // IT typically low-debt; small debt shouldn't dominate
+  },
+  PHARMA: {
+    match: /pharma|drug|health|hospital|biotech|lifescience/i,
+    pillarMul: { quality: 1.1, growth: 1.05, valuation: 0.95, business: 1.0 },
+    softenPEPenalty: 0.85,      // Pharma trades at sector premium; absolute PE less meaningful
+    useIndustryPE: true,        // use peRelative = pe/industryPE
+  },
+  METALS: {
+    match: /metal|steel|iron|copper|zinc|aluminium|mining/i,
+    pillarMul: { quality: 0.95, growth: 0.9, valuation: 1.1, business: 1.05 },
+    cyclical: true,             // dampen 1Y spike bonuses
+    boostEVEBITDA: true,        // EV/EBITDA is the cyclical valuation metric
+    higherRiskFloor: true,
+    spikePenaltyAggressive: true,
+  },
+  CEMENT: {
+    match: /cement/i,
+    pillarMul: { quality: 1.0, growth: 0.95, valuation: 1.05, business: 1.05 },
+    boostOpMargin: true,
+    boostCCC: true,             // working capital discipline matters
+    cyclical: true,
+  },
+  FMCG: {
+    match: /fmcg|consumer|staples|personal care|household|tobacco|dairy|beverage/i,
+    pillarMul: { quality: 1.1, growth: 0.95, valuation: 0.95, business: 1.0 },
+    boostROEConsistency: true,  // long-term ROE consistency is the hallmark
+    allowPremiumValuation: true, // FMCG earns a premium multiple
+  },
+  AUTO: {
+    match: /auto|motor|vehicle|tyre|bearing/i,
+    pillarMul: { quality: 1.0, growth: 1.0, valuation: 1.0, business: 1.0 },
+    cyclical: true,
+  },
+  ENERGY: {
+    match: /oil|gas|petroleum|refiner|power|utility|energy/i,
+    pillarMul: { quality: 1.0, growth: 0.9, valuation: 1.05, business: 1.0 },
+    cyclical: true,
+    boostEVEBITDA: true,
+  },
+  DEFAULT: {
+    match: /.*/,
+    pillarMul: { quality: 1.0, growth: 1.0, valuation: 1.0, business: 1.0 },
+  },
+};
+
+function getSectorTemplate(sector, name) {
+  const hay = (sector || '') + ' ' + (name || '');
+  for (const [id, tpl] of Object.entries(SECTOR_TEMPLATES)) {
+    if (id === 'DEFAULT') continue;
+    if (tpl.match.test(hay)) return { id, ...tpl };
+  }
+  return { id: 'DEFAULT', ...SECTOR_TEMPLATES.DEFAULT };
+}
+
+// =============================================================================
+// SCORE V2 — fundamentals-first long-term picker (FA-led, TA overlay-only)
+// Pillars (0-100 total):
+//   Quality    40 pts  — ROE, ROCE, margins, leverage, interest cov, liquidity, consistency
+//   Growth     25 pts  — Revenue + EPS CAGR (1Y, 5Y, qtrly), spike penalty
+//   Valuation  20 pts  — sector-relative percentiles on PE, PB, EV/EBITDA, P/FCF
+//   Business   15 pts  — promoter, pledged, institutional, working capital, CCC
+// TA is NOT part of scoreV2. TimingScore is computed separately as an overlay.
+// =============================================================================
+const _clampNum = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const _norm = (x, lo, hi) => {
+  if (x == null || !isFinite(x)) return null;
+  return _clampNum((x - lo) / (hi - lo), 0, 1);
+};
+const _sweet = (x, a, b, c, d) => {
+  if (x == null || !isFinite(x)) return null;
+  if (x < a) return 0;
+  if (x < b) return (x - a) / (b - a);
+  if (x <= c) return 1;
+  if (x < d) return (d - x) / (d - c);
+  return 0;
+};
+
+// Sector-relative percentile: 1 = cheapest / best, 0 = most expensive / worst
+function _sectorPct(val, peerField, peers, lowerIsBetter = true) {
+  if (val == null || !isFinite(val) || !peers.length) return null;
+  const vals = peers.map(p => p[peerField]).filter(v => v != null && isFinite(v) && v > 0);
+  if (vals.length < 4) return null;
+  const rank = vals.filter(v => lowerIsBetter ? v >= val : v <= val).length;
+  return rank / vals.length;
+}
+
+// Core fields used for dataCompleteness calculation (Score v2 inputs)
+const _V2_CORE_FIELDS = [
+  'roe','roce','roa','opMargin','debtToEq','intCov','currentRatio','quickRatio',
+  'roe3yAvg','roe5yAvg','dupontEquityMultiplier','dupontNetMargin',
+  'revGrowth','salesGr1y','salesGr5y','earGrowth','epsGr1y','epsGr5y','salesQtrYoy','patQtrYoy',
+  'pe','pb','peg','evEbitda','earningsYield','priceToFCF',
+  'promoter','pledged','promoterChg','fiiHolding','diiHolding',
+  'workingCapitalHealth','cashConversionCycle',
+];
+
+function computeDataCompleteness(f) {
+  let present = 0;
+  for (const k of _V2_CORE_FIELDS) {
+    if (f[k] != null && f[k] !== '' && isFinite(Number(f[k]))) present++;
+    else if (k === 'workingCapitalHealth' && f[k] != null && f[k] !== '') present++;
+  }
+  return +(present / _V2_CORE_FIELDS.length).toFixed(3);
+}
+
+// =============================================================================
+// scoreOneStockV2 — Varsity long-term, fundamentals-first scoring
+//
+// DB-column naming note: the snapshot table stores `subscores`,
+// `fundamentals`, `technical_overlay`. The plan used `sub_scores`,
+// `fundamentals_json`, `timing_overlay_json`. These are aliases. We keep the
+// shorter names in DB to avoid migration churn; JSON response uses the
+// plan's contract shape (subScores + timingOverlay top-level).
+//
+// All technical signals feed ONLY into the separate `timingOverlay` return
+// field. They do NOT contribute to `scoreV2`. This boundary is load-bearing.
+// =============================================================================
+function scoreOneStockV2(f, peers) {
+  const tpl = getSectorTemplate(f.sector, f.name);
+  const mul = tpl.pillarMul;
+  const isBanking = tpl.id === 'BANKING';
+  const isCyclical = !!tpl.cyclical;
+
+  // ── PILLAR 1: QUALITY (0-40) ────────────────────────────────────────────
+  // Varsity M3 Ch8 DuPont: ROE = NetMargin × AssetTurnover × EquityMultiplier.
+  // Margin-led and turnover-led ROE are high quality; leverage-led is fragile.
+  const roeQ   = _norm(f.roe, 8, 22) ?? 0;
+  const roceRaw = f.roce ?? (f.roe != null && f.debtToEq != null ? f.roe * (1 + f.debtToEq) : null);
+  const roceQ  = _norm(roceRaw, 10, 22) ?? 0;
+  const roaQ   = _norm(f.roa, 1, 4.5) ?? 0;
+
+  // Margin stack: blend op/gross/profit — use whatever's available
+  const opMgnQ = _norm(f.opMargin, 6, 22);
+  const grMgnQ = _norm(f.grossMgn, 25, 50);
+  const pfMgnQ = _norm(f.profMgn, 4, 15);
+  const mgnParts = [opMgnQ, grMgnQ, pfMgnQ].filter(v => v != null);
+  const mgnQ   = mgnParts.length ? mgnParts.reduce((a, b) => a + b, 0) / mgnParts.length : 0;
+
+  const deRaw  = isBanking || tpl.ignoreDebtPenalty ? 0.5 : f.debtToEq;
+  const deQ    = 1 - (_norm(deRaw, 0.5, 2.5) ?? 0.5);
+  const intCovQ = _norm(f.intCov, 1.5, 8) ?? 0;
+  const liqQ   = 0.5 * (_norm(f.currentRatio, 1, 2.2) ?? 0) + 0.5 * (_norm(f.quickRatio, 0.6, 1.5) ?? 0);
+  const consQ  = 0.6 * (_norm(f.roe3yAvg, 10, 20) ?? 0) + 0.4 * (_norm(f.roe5yAvg, 10, 20) ?? 0);
+
+  // DuPont decomposition — expressed as (0-1) quality signals
+  const dupNmQ  = _norm(f.dupontNetMargin, 4, 15) ?? 0;
+  const dupAtQ  = _norm(f.dupontAssetTurnover, 0.4, 1.5) ?? 0;
+  const dupRoeQ = _norm(f.dupontROE, 10, 25) ?? 0;
+  const dupEmPen = _norm(f.dupontEquityMultiplier, 1.5, 4.0) ?? 0;  // higher = penalty
+  const dupQ = _clampNum(0.35 * dupNmQ + 0.30 * dupAtQ + 0.35 * dupRoeQ - 0.25 * dupEmPen, 0, 1);
+
+  // Working-capital health + CCC — moved from Business to Quality (plan §3A)
+  const cccQ = (isBanking || tpl.reduceCCCWeight)
+    ? 0.6
+    : 1 - (_norm(f.cashConversionCycle, 60, 120) ?? 0.5);
+  const wcMap = { strong: 0.9, adequate: 0.6, weak: 0.2 };
+  const wcQ   = wcMap[f.workingCapitalHealth] ?? 0.5;
+
+  // ROA gets higher weight for banks (NIM proxy); softer for non-banks
+  const roaWeight = tpl.boostROA ? 0.12 : 0.05;
+  const remainW = 1 - roaWeight;
+
+  // Weights sum to 1 within remainW:
+  //   ROE 0.15, ROCE 0.12, margins 0.12, D/E 0.12, intCov 0.08, liq 0.08,
+  //   consistency 0.10, DuPont 0.13, CCC 0.05, WC 0.05  = 1.00
+  const qualityRaw = 40 * (
+    0.15 * remainW * roeQ +
+    0.12 * remainW * roceQ +
+    roaWeight * roaQ +
+    0.12 * remainW * mgnQ +
+    0.12 * remainW * deQ +
+    0.08 * remainW * intCovQ +
+    0.08 * remainW * liqQ +
+    0.10 * remainW * consQ +
+    0.13 * remainW * dupQ +
+    0.05 * remainW * cccQ +
+    0.05 * remainW * wcQ
+  );
+  let qualityScore = _clampNum(qualityRaw * mul.quality, 0, 40);
+
+  // ── PILLAR 2: GROWTH (0-25) ─────────────────────────────────────────────
+  const rev1 = _norm(f.revGrowth ?? f.salesGr1y, 0, 18) ?? 0;
+  const rev5 = _norm(f.salesGr5y, 3, 15) ?? 0;
+  const eps1 = _norm(f.earGrowth ?? f.epsGr1y, 0, 20) ?? 0;
+  const eps5 = _norm(f.epsGr5y, 5, 18) ?? 0;
+  const qoq  = 0.5 * (_norm(f.salesQtrYoy, 0, 20) ?? 0) + 0.5 * (_norm(f.patQtrYoy, 0, 25) ?? 0);
+
+  // Absolute profitability sanity: profitable-and-growing beats
+  // growing-from-losses. patAnnual>0 is a hard floor signal.
+  const profitable = (f.patAnnual != null)
+    ? (f.patAnnual > 0 ? 1 : 0)
+    : 0.5;
+
+  // Spike penalty: 1Y soars while 5Y stagnant — cyclical noise
+  const spikeThresh = tpl.spikePenaltyAggressive ? 20 : 30;
+  const spikePenalty = (f.epsGr1y != null && f.epsGr5y != null &&
+                       f.epsGr1y > spikeThresh && f.epsGr5y < 5) ? 0.18 : 0;
+  const cyclicalDamp = isCyclical ? 0.9 : 1.0;
+
+  const growthRaw = 25 * cyclicalDamp * (
+    0.22 * rev1 + 0.18 * rev5 + 0.22 * eps1 + 0.18 * eps5 +
+    0.10 * qoq + 0.10 * profitable
+  ) * (1 - spikePenalty);
+  let growthScore = _clampNum(growthRaw * mul.growth, 0, 25);
+
+  // ── PILLAR 3: VALUATION (0-20) ──────────────────────────────────────────
+  // Use industry-relative PE when sector template asks for it (pharma)
+  let peForRank = f.pe;
+  if (tpl.useIndustryPE && f.pe != null && f.industryPE != null && f.industryPE > 0) {
+    peForRank = f.pe / f.industryPE;
+  }
+  const pePct   = tpl.preferPBoverPE ? null : _sectorPct(peForRank, tpl.useIndustryPE ? null : 'pe', peers, true);
+  const pbPct   = _sectorPct(f.pb, 'pb', peers, true);
+  const evPct   = _sectorPct(f.evEbitda, 'evEbitda', peers, true);
+  const pfcfPct = _sectorPct(f.priceToFCF, 'priceToFCF', peers, true);
+  const psPct   = _sectorPct(f.priceToSales, 'priceToSales', peers, true);
+  const fwdPct  = _sectorPct(f.fwdPE, 'fwdPE', peers, true);
+  const pegV    = f.peg != null ? 1 - (_norm(f.peg, 0.6, 2.5) ?? 0) : null;
+  const eyV     = _norm(f.earningsYield, 2, 10);
+
+  const pePenSoften = (tpl.softenPEPenalty ?? 1);
+  const wPe   = tpl.preferPBoverPE ? 0.05 : (0.22 * pePenSoften);
+  const wPb   = tpl.preferPBoverPE ? 0.38 : 0.17;
+  const wPeg  = 0.12;
+  const wEv   = tpl.boostEVEBITDA ? 0.18 : 0.12;
+  const wEy   = 0.08;
+  const wPfcf = tpl.boostFCF ? 0.18 : 0.10;
+  const wPs   = 0.08;
+  const wFwd  = 0.10;
+
+  const partsSum =
+    (pePct   != null ? wPe   * pePct   : 0) +
+    (pbPct   != null ? wPb   * pbPct   : 0) +
+    (pegV    != null ? wPeg  * pegV    : 0) +
+    (evPct   != null ? wEv   * evPct   : 0) +
+    (eyV     != null ? wEy   * eyV     : 0) +
+    (pfcfPct != null ? wPfcf * pfcfPct : 0) +
+    (psPct   != null ? wPs   * psPct   : 0) +
+    (fwdPct  != null ? wFwd  * fwdPct  : 0);
+  const partsCoverage =
+    (pePct   != null ? wPe   : 0) +
+    (pbPct   != null ? wPb   : 0) +
+    (pegV    != null ? wPeg  : 0) +
+    (evPct   != null ? wEv   : 0) +
+    (eyV     != null ? wEy   : 0) +
+    (pfcfPct != null ? wPfcf : 0) +
+    (psPct   != null ? wPs   : 0) +
+    (fwdPct  != null ? wFwd  : 0);
+  const valuationRaw = partsCoverage > 0.2
+    ? 20 * (partsSum / partsCoverage)   // renormalize by what was actually measured
+    : 10;                                // no valuation data → neutral 50/100
+  let valuationScore = _clampNum(valuationRaw * mul.valuation, 0, 20);
+
+  // Valuation label for UI
+  let valuationLabel = 'UNKNOWN';
+  const pePctForLabel = pePct ?? pbPct;
+  const pbPctForLabel = pbPct;
+  if (pePctForLabel != null && pbPctForLabel != null) {
+    if (pePctForLabel > 0.75 && pbPctForLabel > 0.75) valuationLabel = 'UNDERVALUED';
+    else if (pePctForLabel < 0.25 && pbPctForLabel < 0.25) valuationLabel = 'OVERVALUED';
+    else valuationLabel = 'FAIR';
+  } else if (pePctForLabel != null) {
+    valuationLabel = pePctForLabel > 0.7 ? 'UNDERVALUED' : pePctForLabel < 0.3 ? 'OVERVALUED' : 'FAIR';
+  }
+
+  // ── PILLAR 4: BUSINESS QUALITY (0-15) ───────────────────────────────────
+  // CCC + WC moved out to Quality. This pillar is now pure ownership +
+  // governance: promoter, pledge, institutional holding, shareholder base.
+  const promQ     = _norm(f.promoter, 40, 65) ?? 0;
+  const pledgeP   = _norm(f.pledged, 0, 30) ?? 0;
+  const promChgPen = (f.promoterChg != null && f.promoterChg < -2) ? 0.2 : 0;
+
+  const fiiDii    = (f.fiiHolding ?? 0) + (f.diiHolding ?? 0);
+  const fiiDiiQ   = _norm(fiiDii, 5, 35) ?? 0;
+  const instHeldQ = _norm(f.instHeld, 20, 70);  // global institutional % (Yahoo)
+  // When instHeld is present we blend it with FII+DII; otherwise use FII+DII alone
+  const ownQ = (instHeldQ != null) ? (0.5 * fiiDiiQ + 0.5 * instHeldQ) : fiiDiiQ;
+
+  // numShareholders — log-scale health: tiny=illiquid, huge=retail-dominated
+  const shCount = f.numShareholders;
+  const shQ = shCount == null ? 0.5
+            : shCount < 5000 ? 0.2           // illiquid
+            : shCount > 1000000 ? 0.45       // retail-heavy, volatile
+            : _norm(Math.log10(shCount), 4, 6) ?? 0.5;
+
+  const businessRaw = 15 * (
+    0.28 * promQ +
+    0.22 * ownQ +
+    0.20 * shQ +
+    0.30 * _clampNum(1 - 0.6 * pledgeP - promChgPen, 0, 1)
+  );
+  let businessScore = _clampNum(businessRaw * mul.business, 0, 15);
+
+  // ── FINAL SCORE V2 (0-100) — zero technical contribution ───────────────
+  const scoreV2 = +(qualityScore + growthScore + valuationScore + businessScore).toFixed(1);
+
+  // ── TIMING OVERLAY (separate top-level field, plan §5) ─────────────────
+  // Allowed inputs: pctAbove200, goldenCross, weeklyTrendConfirmed, pctFromHigh
+  const tTrend  = _norm(f.pctAbove200, 0, 25) ?? 0.5;
+  const tGolden = f.goldenCross ? 1 : 0;
+  const tWeekly = f.weeklyTrendConfirmed ? 1 : (f.weeklyTrend === 'up' ? 0.7 : 0.3);
+  // pctFromHigh zones: -5..0 extended; -15..-5 healthy; -25..-15 deeper pullback;
+  // -35..-25 wait-for-dip; below -35 weak
+  const pfh = f.pctFromHigh;
+  const tPfh = pfh == null ? 0.5
+             : pfh >= -5   ? 0.5
+             : pfh >= -15  ? 1.0
+             : pfh >= -25  ? 0.7
+             : pfh >= -35  ? 0.4
+             :               0.2;
+  const timingScore = Math.round(100 * (0.35 * tTrend + 0.20 * tGolden + 0.20 * tWeekly + 0.25 * tPfh));
+  const timingLabel = timingScore >= 70 ? 'GOOD'
+                    : timingScore >= 55 ? 'EXTENDED'
+                    : timingScore >= 35 ? 'WAIT_FOR_DIP'
+                    :                      'WEAK';
+
+  // ── RISK LEVEL (independent from scoreV2) ──────────────────────────────
+  const volR  = _norm(f.annualVol, 18, 45) ?? 0.4;
+  const betaR = _norm(f.beta, 0.8, 1.6) ?? 0.4;
+  const levR  = isBanking ? 0 : (_norm(f.debtToEq, 0.8, 2.5) ?? 0.3);
+  const pledR = _norm(f.pledged, 0, 30) ?? 0;
+  // Earnings instability: wide swings between 1Y and 5Y growth = elevated risk
+  const instabR = (f.epsGr1y != null && f.epsGr5y != null)
+    ? _clampNum(Math.abs(f.epsGr1y - f.epsGr5y) / 50, 0, 1)
+    : 0.3;
+  let riskScore = _clampNum(0.30 * volR + 0.20 * betaR + 0.20 * levR + 0.15 * pledR + 0.15 * instabR, 0, 1);
+  if (tpl.higherRiskFloor) riskScore = Math.max(riskScore, 0.4);
+  const riskLevel = riskScore < 0.33 ? 'LOW' : riskScore < 0.66 ? 'MEDIUM' : 'HIGH';
+
+  const dataCompleteness = computeDataCompleteness(f);
+
+  // ── "Why this stock?" deterministic explainer (plan §12) ───────────────
+  // Strengths: pillars scoring >= 60% of their max, top 3.
+  // Risks: hard-coded red flags the user always wants surfaced.
+  const contributions = [
+    { label: 'Quality (ROE/ROCE/DuPont/margins)', value: qualityScore,   max: 40 },
+    { label: 'Growth (Rev/EPS 1Y+5Y)',            value: growthScore,    max: 25 },
+    { label: 'Valuation (vs sector peers)',       value: valuationScore, max: 20 },
+    { label: 'Business (ownership/governance)',   value: businessScore,  max: 15 },
+  ];
+  const whyStrengths = contributions
+    .map(c => ({ ...c, ratio: c.value / c.max }))
+    .filter(c => c.ratio >= 0.60)
+    .sort((a, b) => b.ratio - a.ratio)
+    .slice(0, 3)
+    .map(c => c.label);
+  const risks = [];
+  if (valuationLabel === 'OVERVALUED') risks.push('Valuation stretched vs sector peers');
+  if (riskLevel === 'HIGH') risks.push(`Risk level HIGH (vol/beta/leverage)`);
+  if (f.pledged != null && f.pledged > 20) risks.push(`Promoter pledge ${f.pledged.toFixed(0)}%`);
+  if (f.debtToEq != null && !isBanking && f.debtToEq > 1.5) risks.push(`D/E ${f.debtToEq.toFixed(1)}x`);
+  if (spikePenalty > 0) risks.push('Growth is a 1Y spike, not structural');
+  const whyRisks = risks.slice(0, 2);
+
+  return {
+    scoreV2,
+    subScores: {
+      quality:   +qualityScore.toFixed(1),
+      growth:    +growthScore.toFixed(1),
+      valuation: +valuationScore.toFixed(1),
+      business:  +businessScore.toFixed(1),
+    },
+    timingOverlay: {
+      label: timingLabel,
+      timingScore,
+    },
+    valuationLabel,
+    riskScore: +riskScore.toFixed(3),
+    riskLevel,
+    dataCompleteness,
+    sectorTemplate: tpl.id,
+    whyStrengths,
+    whyRisks,
+  };
+}
+
 function scoreOneStock(f, peers) {
   let s=0; const hits={};
   const na = v => v!=null&&isFinite(v);
@@ -9410,6 +9923,11 @@ function scoreFallenAngel(f) {
 
 app.get('/api/stocks/score', async(req,res)=>{
   try {
+    // FEATURE FLAG: ?scoreVersion=2 opts into Varsity-aligned long-term
+    // fundamentals-first scoring (sub-score breakout + sector template).
+    // Default remains v1 so existing clients are unaffected.
+    const scoreVersion = (parseInt(req.query.scoreVersion, 10) === 2) ? 2 : 1;
+
     const empty = Object.keys(stockFundamentals).length === 0;
     const stale = Date.now()-stockFundLastFetch > 23*3600*1000;
 
@@ -9422,6 +9940,16 @@ app.get('/api/stocks/score', async(req,res)=>{
     // This lets the UI render progressively instead of blocking
 
     const all = Object.values(stockFundamentals);
+
+    // For scoreVersion=2 we fetch the latest bucket-stats calibration ONCE
+    // (cached 5m in getLatestBucketStats) and reuse for every stock below.
+    // This keeps request latency in-line with v1 — the only cost is one
+    // Postgres query every 5 minutes regardless of payload size.
+    let bucketStatsMap = null;
+    if (scoreVersion === 2) {
+      try { bucketStatsMap = await getLatestBucketStats(); }
+      catch (e) { bucketStatsMap = null; }
+    }
 
     // Pre-compute derived fields for peer percentile ranking
     all.forEach(f=>{
@@ -9436,6 +9964,13 @@ app.get('/api/stocks/score', async(req,res)=>{
     const scored = all.map(f=>{
       const peers = bySector[f.sector||'Other'] || all;
       const {score,hits} = scoreOneStock(f, peers);
+      // Score v2 (Varsity long-term, fundamentals-first, sub-score breakout).
+      // Only computed when ?scoreVersion=2 is requested to keep default
+      // request latency unchanged. Snapshot cron computes v2 independently.
+      let _v2 = null;
+      if (scoreVersion === 2) {
+        try { _v2 = scoreOneStockV2(f, peers); } catch(e) { _v2 = null; }
+      }
       const px = f.price || livePrices[f.sym]?.price || null;
       // Varsity Fallen Angel filter:
       // 1. Score >= 50 (business quality screen — only quality businesses can be Fallen Angels)
@@ -9597,10 +10132,55 @@ app.get('/api/stocks/score', async(req,res)=>{
         cashConversionCycle:f.cashConversionCycle, inventoryDays:f.inventoryDays,
         sharpeRatio:f.sharpeRatio, workingCapitalHealth:f.workingCapitalHealth,
         fetchedAt:f.fetchedAt,
+        // ── Score v2 (opt-in via ?scoreVersion=2) ─────────────────────────
+        // Additive fields — never overwrite existing `score`/`hits`.
+        // Expected return is computed per-stock using the cached bucket
+        // calibration map (Varsity M3 Ch15: long-run return expectations
+        // by quality bucket, risk-adjusted per M9).
+        ...(_v2 ? (() => {
+          const bucket = scoreV2Bucket(_v2.scoreV2);
+          const er = computeExpectedReturn({
+            scoreBucket: bucket,
+            sector: f.sector,
+            riskLevel: _v2.riskLevel,
+            dataCompleteness: _v2.dataCompleteness,
+          }, bucketStatsMap, 'r_6m');
+          return {
+            scoreV2:         _v2.scoreV2 != null ? +_v2.scoreV2.toFixed(2) : null,
+            subScores:       _v2.subScores || null,
+            timingOverlay:   _v2.timingOverlay || null,
+            valuationLabel:  _v2.valuationLabel || null,
+            riskScore:       _v2.riskScore != null ? +_v2.riskScore.toFixed(2) : null,
+            riskLevel:       _v2.riskLevel || null,
+            dataCompleteness:_v2.dataCompleteness != null ? +_v2.dataCompleteness.toFixed(3) : null,
+            sectorTemplate:  _v2.sectorTemplate || null,
+            scoreBucket:     bucket,
+            expectedReturn:  er.expectedReturn,
+            expectedReturnHorizon: er.expectedReturnHorizon,
+            confidence:      er.confidence,
+            usingPrior:      er.usingPrior,
+            whyStrengths:    _v2.whyStrengths || [],
+            whyRisks:        _v2.whyRisks || [],
+          };
+        })() : {}),
       };
     });
 
-    scored.sort((a,b)=>b.score-a.score);
+    // When scoreVersion=2 is requested, sort by expectedReturn DESC with
+    // confidence and scoreV2 as tiebreakers (plan §8). In cold-start mode
+    // (no calibration history), expectedReturn derives from the Bayesian
+    // prior and sorting falls back to pure scoreV2 ordering naturally.
+    if (scoreVersion === 2) {
+      scored.sort((a, b) => {
+        const er = (b.expectedReturn || 0) - (a.expectedReturn || 0);
+        if (Math.abs(er) > 1e-6) return er;
+        const cf = (b.confidence || 0) - (a.confidence || 0);
+        if (Math.abs(cf) > 1e-6) return cf;
+        return (b.scoreV2 || 0) - (a.scoreV2 || 0);
+      });
+    } else {
+      scored.sort((a,b)=>b.score-a.score);
+    }
     scored.forEach((s,i)=>{s.rank=i+1;});
 
     // Fire Telegram alerts for new Fallen Angels (async, non-blocking)
@@ -9608,6 +10188,7 @@ app.get('/api/stocks/score', async(req,res)=>{
 
     res.json({
       stocks:scored, total:scored.length,
+      score_version: scoreVersion,
       loading:stockFundLoading,
       loadingMsg:stockFundLoading?'Refreshing in background...':null,
       last_refresh: stockFundLastFetch
@@ -10542,6 +11123,333 @@ app.post('/api/portfolio/suggest/regenerate', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// =============================================================================
+// PORTFOLIO SUGGESTION — V2 (Varsity long-term, score-v2 aligned)  — plan §9
+//
+// Ranks the universe by:
+//   rankScore = expectedReturn(12M) × confidence(12M)
+// riskAdj is already baked into expectedReturn by computeExpectedReturn, so
+// we do NOT multiply it again here — doing so would double-penalise HIGH-risk
+// names. The allocator then applies the plan's 15/25/5/3 constraints:
+//   MAX_STOCKS = 15          (Varsity M9 Ch5 diversification sweet spot)
+//   MAX_ALLOC  = 25% / stock (Varsity M9 Ch3 single-name concentration cap)
+//   MIN_ALLOC  = 5% / stock  (M9 conviction floor — below this is noise)
+//   SECTOR_CAP = 3 stocks    (Varsity M15 sector diversification)
+//
+// Horizon: r_12m for ranking. The Long-Term tab already shows r_6m for each
+// stock; we use r_12m here to bias the allocator toward genuine compounders
+// rather than short-term momentum. Both numbers are surfaced in the response
+// so the UI can reconcile picks with the tab view.
+// =============================================================================
+let portfolioSuggestionsV2 = {};
+
+async function buildPortfolioSuggestionV2(amount) {
+  const all = Object.values(stockFundamentals);
+  if (!all.length) {
+    return { error: 'Stock data not loaded yet. Please wait for scoring to complete.' };
+  }
+
+  // One bucket-stats fetch for the whole build (5-min TTL cached internally).
+  let bucketStatsMap = null;
+  try { bucketStatsMap = await getLatestBucketStats(); }
+  catch (e) { console.warn('[v2-portfolio] bucket stats unavailable, using priors:', e.message); }
+
+  // Group by sector once for peer lookups.
+  const bySector = {};
+  all.forEach(f => {
+    const sec = f.sector || 'Other';
+    (bySector[sec] = bySector[sec] || []).push(f);
+  });
+
+  // Score every stock through v2 + compute expected returns.
+  const scored = [];
+  let scoreErrs = 0;
+  for (const f of all) {
+    try {
+      const ext = global.FUND_EXT?.[f.sym];
+      const px = f.price || livePrices[f.sym]?.price || ext?.price || ext?.currentPrice;
+      if (!px || px <= 0) continue;
+
+      const peers = bySector[f.sector || 'Other'] || all;
+      const v2 = scoreOneStockV2(f, peers);
+      if (!v2 || v2.scoreV2 == null) continue;
+
+      const bucket = scoreV2Bucket(v2.scoreV2);
+      const stockInfo = {
+        scoreBucket: bucket,
+        sector: f.sector,
+        riskLevel: v2.riskLevel,
+        dataCompleteness: v2.dataCompleteness,
+      };
+      const er12 = computeExpectedReturn(stockInfo, bucketStatsMap, 'r_12m');
+      const er6  = computeExpectedReturn(stockInfo, bucketStatsMap, 'r_6m');
+
+      // rankScore is expectedReturn × confidence. Negative expected returns
+      // (D-bucket, high-risk outliers) survive into scored[] so the caller
+      // can see them in diagnostics, but the allocator will filter them out.
+      const rankScore = (er12.expectedReturn || 0) * (er12.confidence || 0);
+
+      scored.push({
+        sym: f.sym, name: f.name, grp: f.grp, sector: f.sector || 'Other',
+        price: px,
+        scoreV2: +v2.scoreV2.toFixed(2),
+        scoreBucket: bucket,
+        subScores: v2.subScores || null,
+        riskLevel: v2.riskLevel || null,
+        riskScore: v2.riskScore != null ? +v2.riskScore.toFixed(2) : null,
+        valuationLabel: v2.valuationLabel || null,
+        sectorTemplate: v2.sectorTemplate || null,
+        dataCompleteness: v2.dataCompleteness != null ? +v2.dataCompleteness.toFixed(3) : null,
+        timingOverlay: v2.timingOverlay || null,
+        whyStrengths: v2.whyStrengths || [],
+        whyRisks: v2.whyRisks || [],
+        expectedReturn12m: er12.expectedReturn,
+        confidence12m: er12.confidence,
+        usingPrior12m: er12.usingPrior,
+        basedOnObservations12m: er12.basedOnObservations,
+        expectedReturn6m: er6.expectedReturn,
+        confidence6m: er6.confidence,
+        rankScore: +rankScore.toFixed(6),
+        // Carry selected raw fundamentals for the UI's long-term columns.
+        roe: f.roe, roce: f.roce, pe: f.pe, debtToEq: f.debtToEq, peg: f.peg,
+      });
+    } catch (e) { scoreErrs++; }
+  }
+
+  if (!scored.length) {
+    return { error: `No stocks scored through v2 (errors: ${scoreErrs}). Check /api/health/stockrec.` };
+  }
+
+  // Sort by rankScore desc, scoreV2 as tiebreaker. On day-1 every stock in a
+  // bucket gets the same prior expectedReturn, so the scoreV2 tiebreaker keeps
+  // output deterministic instead of falling back to insertion order.
+  scored.sort((a, b) => {
+    const r = b.rankScore - a.rankScore;
+    if (Math.abs(r) > 1e-9) return r;
+    return (b.scoreV2 || 0) - (a.scoreV2 || 0);
+  });
+
+  // ── Constraints (plan §9: 15/25/5/3) ──
+  const MAX_STOCKS = 15;
+  const MIN_STOCKS = 5;
+  const SECTOR_CAP = 3;
+  const MIN_ALLOC  = 0.05;
+  const MAX_ALLOC  = 0.25;
+
+  // Only allocate to stocks with a positive rankScore — negative expected
+  // return means we have no edge, so those belong in diagnostics not the book.
+  const candidates = scored.filter(s => s.rankScore > 0).slice(0, MAX_STOCKS * 4);
+  if (candidates.length < MIN_STOCKS) {
+    // Cold-start fallback: the prior is positive across all buckets, so
+    // hitting this branch means the scored universe itself is thin.
+    candidates.push(...scored.filter(s => !candidates.includes(s)).slice(0, MIN_STOCKS * 2));
+  }
+
+  // Greedy sector-capped selection.
+  const selected = [];
+  const sectorCnt = {};
+  for (const s of candidates) {
+    const sec = s.sector || 'Other';
+    sectorCnt[sec] = (sectorCnt[sec] || 0) + 1;
+    if (sectorCnt[sec] <= SECTOR_CAP) {
+      selected.push(s);
+      if (selected.length >= MAX_STOCKS) break;
+    }
+  }
+  // Relax sector cap only if we can't hit MIN_STOCKS.
+  if (selected.length < MIN_STOCKS) {
+    for (const s of scored) {
+      if (selected.length >= MIN_STOCKS) break;
+      if (!selected.find(x => x.sym === s.sym)) selected.push(s);
+    }
+  }
+
+  if (!selected.length) {
+    return { error: 'Portfolio v2 build left 0 after sector diversification.' };
+  }
+
+  // ── Cash reserve from regime (reuse v1 market regime — no re-detection) ──
+  try { if (typeof detectMarketRegime === 'function') detectMarketRegime(); } catch (e) {}
+  const cashPct = (marketRegimeData?.cashSuggestion || 10) / 100;
+  const investable = Math.round(amount * (1 - cashPct));
+
+  // ── Weight derivation ──
+  // Base = rankScore, with a bucket multiplier so A-bucket gets concentrated
+  // and D-bucket gets a penalty rather than elimination (Varsity M3 Ch15:
+  // quality deserves conviction, junk gets a smaller seat).
+  const bucketMul = { A: 1.15, B: 1.05, C: 1.00, D: 0.85 };
+  const raw = selected.map(s => {
+    const base = Math.max(s.rankScore, 1e-4);
+    const mul = bucketMul[s.scoreBucket] || 1.0;
+    return base * mul;
+  });
+  const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
+  let allocs = raw.map(w => w / rawSum);
+
+  // Clamp [MIN_ALLOC, MAX_ALLOC] with iterative redistribution. Feasibility
+  // check: n × MIN + k × (MAX - MIN) must cover 1 with n = count. For n=15
+  // the feasible band is [0.75, 3.75] so 1.0 is always reachable; for n=4 the
+  // band is [0.20, 1.00] and clamping collapses every stock to 25%.
+  for (let iter = 0; iter < 8; iter++) {
+    let excess = 0, unfrozen = 0;
+    allocs = allocs.map(a => {
+      if (a < MIN_ALLOC) { excess += MIN_ALLOC - a; return MIN_ALLOC; }
+      if (a > MAX_ALLOC) { excess -= a - MAX_ALLOC; return MAX_ALLOC; }
+      unfrozen++;
+      return a;
+    });
+    if (Math.abs(excess) < 1e-4 || unfrozen === 0) break;
+    const adj = excess / unfrozen;
+    allocs = allocs.map(a => (a > MIN_ALLOC && a < MAX_ALLOC) ? a + adj : a);
+  }
+  // Final re-normalize so the row sums to exactly 1.0 after clamping drift.
+  const allocSum = allocs.reduce((a, b) => a + b, 0) || 1;
+  allocs = allocs.map(a => a / allocSum);
+
+  // ── Build positions ──
+  const positions = selected.map((s, i) => {
+    const allocPct = +(allocs[i] * 100).toFixed(2);
+    const allocAmt = Math.round(investable * allocs[i]);
+    const shares = Math.max(1, Math.floor(allocAmt / s.price));
+    const investedAmt = +(shares * s.price).toFixed(0);
+    const expReturn12m = s.expectedReturn12m || 0;
+    const expReturnAmt = Math.round(investedAmt * expReturn12m);
+
+    const reason =
+      `Bucket ${s.scoreBucket} · scoreV2 ${s.scoreV2} · ` +
+      `Exp 12M ${(expReturn12m * 100).toFixed(1)}% @ ${((s.confidence12m || 0) * 100).toFixed(0)}% conf · ` +
+      `Risk ${s.riskLevel || 'MED'} · ${s.valuationLabel || 'N/A'}` +
+      (s.usingPrior12m ? ' (cold-start prior)' : '');
+
+    return {
+      sym: s.sym, name: s.name, grp: s.grp, sector: s.sector,
+      price: s.price, shares, allocPct, allocAmt: investedAmt,
+      action: 'BUY', actionColor: '#22c55e', reason,
+      scoreV2: s.scoreV2,
+      scoreBucket: s.scoreBucket,
+      subScores: s.subScores,
+      riskLevel: s.riskLevel,
+      riskScore: s.riskScore,
+      valuationLabel: s.valuationLabel,
+      sectorTemplate: s.sectorTemplate,
+      dataCompleteness: s.dataCompleteness,
+      timingOverlay: s.timingOverlay,
+      expectedReturn12m: s.expectedReturn12m,
+      confidence12m: s.confidence12m,
+      usingPrior12m: s.usingPrior12m,
+      basedOnObservations12m: s.basedOnObservations12m,
+      expectedReturn6m: s.expectedReturn6m,
+      confidence6m: s.confidence6m,
+      rankScore: s.rankScore,
+      expectedReturnAmt: expReturnAmt,
+      whyStrengths: s.whyStrengths,
+      whyRisks: s.whyRisks,
+      entryPrice: s.price,
+      entryTime: Date.now(),
+      // Carry raw fundamentals so the long-term tab columns render.
+      roe: s.roe, roce: s.roce, pe: s.pe, debtToEq: s.debtToEq, peg: s.peg,
+    };
+  });
+
+  // ── Summary ──
+  const investedSum = positions.reduce((a, p) => a + p.allocAmt, 0);
+  const weightedExpRupees = positions.reduce((a, p) => a + p.allocAmt * (p.expectedReturn12m || 0), 0);
+  const portfolioExpPct = investedSum > 0 ? weightedExpRupees / investedSum : 0;
+  const weightedConf = positions.reduce((a, p) => a + (p.allocPct / 100) * (p.confidence12m || 0), 0);
+
+  const sectorBreakdown = {};
+  positions.forEach(p => {
+    sectorBreakdown[p.sector] = +(((sectorBreakdown[p.sector] || 0) + p.allocPct)).toFixed(2);
+  });
+  const bucketBreakdown = { A: 0, B: 0, C: 0, D: 0 };
+  positions.forEach(p => {
+    bucketBreakdown[p.scoreBucket] = +((bucketBreakdown[p.scoreBucket] || 0) + p.allocPct).toFixed(2);
+  });
+
+  const usingPrior = positions.some(p => p.usingPrior12m);
+
+  return {
+    scoreVersion: 2,
+    amount,
+    investableAmount: investedSum,
+    cashReserve: Math.max(0, amount - investedSum),
+    cashPct: +((1 - investedSum / amount) * 100).toFixed(1),
+    marketRegime: (typeof marketRegime !== 'undefined' ? marketRegime : null),
+    horizon: '12M',
+    stocks: positions,
+    summary: {
+      count: positions.length,
+      sectors: Object.keys(sectorBreakdown).length,
+      portfolioExpReturn: +portfolioExpPct.toFixed(4),
+      portfolioExpReturnAmt: Math.round(weightedExpRupees),
+      weightedConfidence: +weightedConf.toFixed(3),
+      usingPrior,
+      generatedAt: Date.now(),
+      scoredUniverse: scored.length,
+      scoreErrors: scoreErrs,
+    },
+    constraints: {
+      maxStocks: MAX_STOCKS,
+      minStocks: MIN_STOCKS,
+      sectorCap: SECTOR_CAP,
+      minAllocPct: MIN_ALLOC * 100,
+      maxAllocPct: MAX_ALLOC * 100,
+    },
+    diagnostics: {
+      sectorBreakdown,
+      bucketBreakdown,
+    },
+  };
+}
+
+// POST /api/portfolio/suggest/v2 — generate a Varsity long-term model portfolio
+app.post('/api/portfolio/suggest/v2', async (req, res) => {
+  try {
+    const amount = parseFloat(req.body.amount);
+    if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
+    if (amount > 100000000) return res.status(400).json({ error: 'Maximum ₹10 Cr' });
+    const result = await buildPortfolioSuggestionV2(amount);
+    if (result.error) return res.status(503).json(result);
+    portfolioSuggestionsV2[Math.round(amount)] = result;
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/portfolio/suggest/v2 — same as POST but query-param friendly.
+// Caches for 1 hour so the Long-Term tab can poll cheaply; regenerate via
+// POST /api/portfolio/suggest/v2 (or /regenerate below) to force a rebuild.
+app.get('/api/portfolio/suggest/v2', async (req, res) => {
+  try {
+    const amount = parseFloat(req.query.amount) || 100000;
+    const key = Math.round(amount);
+    let cached = portfolioSuggestionsV2[key];
+    const isStale = cached && cached.summary?.generatedAt
+      && (Date.now() - cached.summary.generatedAt > 3600000);
+    if (!cached || isStale) {
+      const result = await buildPortfolioSuggestionV2(amount);
+      if (result.error) {
+        if (cached) return res.json({ ...cached, warning: 'Using cached data: ' + result.error });
+        return res.status(503).json(result);
+      }
+      portfolioSuggestionsV2[key] = result;
+      cached = result;
+    }
+    res.json(cached);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portfolio/suggest/v2/regenerate — force a fresh build
+app.post('/api/portfolio/suggest/v2/regenerate', async (req, res) => {
+  try {
+    const amount = parseFloat(req.body.amount);
+    if (!amount || amount < 5000) return res.status(400).json({ error: 'Minimum investment ₹5,000' });
+    const result = await buildPortfolioSuggestionV2(amount);
+    if (result.error) return res.status(503).json(result);
+    portfolioSuggestionsV2[Math.round(amount)] = result;
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── USER PORTFOLIO TRACKING APIs ──
 
 // POST /api/portfolio/buy — mark a stock as bought (user tracking)
@@ -11097,6 +12005,1051 @@ cron.schedule('0 20 * * *', () => {
   console.log('📊 8PM: Daily Screener fundamentals refresh starting...');
   fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
 }, { timezone: 'Asia/Kolkata' });
+
+// =============================================================================
+// SCORE V2 DAILY SNAPSHOT WRITER
+// After the 8PM Screener refresh lands fresh fundamentals, snapshot the entire
+// universe at 10PM IST into `stock_score_snapshots`. Each row freezes (sym,
+// sectorTemplate, subScores, valuationLabel, riskLevel, score_v2, price,
+// dataCompleteness, market_regime). This is the substrate for forward-return
+// calibration — at t+1m / t+3m / t+6m / t+12m we join this snapshot against
+// actual prices to learn which sub-score profile actually earns money.
+// =============================================================================
+async function writeDailySnapshots(reason = 'cron') {
+  const t0 = Date.now();
+  if (!pool) {
+    console.log('⚠ Snapshot writer: no DB pool, skipping');
+    return { written: 0, skipped: 'no-pool' };
+  }
+  const all = Object.values(stockFundamentals);
+  if (!all.length) {
+    console.log('⚠ Snapshot writer: stockFundamentals empty, skipping');
+    return { written: 0, skipped: 'no-fundamentals' };
+  }
+
+  const today = _llmTodayISO();
+
+  // 1) Freeze the market regime / context for reproducibility (plan review §3.5)
+  try {
+    await pool.query(
+      `INSERT INTO daily_market_context(snapshot_date, market_regime, regime_data, nifty_benchmark, universe_size)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (snapshot_date) DO UPDATE SET
+         market_regime = EXCLUDED.market_regime,
+         regime_data   = EXCLUDED.regime_data,
+         nifty_benchmark = EXCLUDED.nifty_benchmark,
+         universe_size = EXCLUDED.universe_size`,
+      [today, marketRegime || 'NEUTRAL', marketRegimeData || {}, niftyBenchmark || {}, all.length]
+    );
+  } catch (e) { console.error('snapshot: daily_market_context upsert failed:', e.message); }
+
+  // 2) Group by sector for peer percentile inputs (matches /api/stocks/score)
+  const bySector = {};
+  all.forEach(f => { const s = f.sector || 'Other'; (bySector[s] = bySector[s] || []).push(f); });
+
+  let written = 0;
+  let errors = 0;
+
+  for (const f of all) {
+    if (!f.sym) continue;
+    const peers = bySector[f.sector || 'Other'] || all;
+    let v2 = null;
+    try { v2 = scoreOneStockV2(f, peers); } catch (e) { v2 = null; }
+    if (!v2) continue;
+
+    const bucket = v2.scoreV2 >= 80 ? 'A' : v2.scoreV2 >= 65 ? 'B' : v2.scoreV2 >= 50 ? 'C' : 'D';
+    const px = f.price || livePrices[f.sym]?.price || null;
+    const fundamentalsPayload = {
+      roe: f.roe, roce: f.roce, roa: f.roa, opMargin: f.opMargin,
+      pe: f.pe, pb: f.pb, peg: f.peg, evEbitda: f.evEbitda,
+      debtToEq: f.debtToEq, intCov: f.intCov,
+      revGrowth: f.revGrowth, earGrowth: f.earGrowth,
+      epsGr1y: f.epsGr1y, epsGr5y: f.epsGr5y,
+      salesGr1y: f.salesGr1y, salesGr5y: f.salesGr5y,
+      promoter: f.promoter, pledged: f.pledged, promoterChg: f.promoterChg,
+      fiiHolding: f.fiiHolding, diiHolding: f.diiHolding,
+      workingCapitalHealth: f.workingCapitalHealth,
+      cashConversionCycle: f.cashConversionCycle,
+    };
+    // Timing overlay is its own field on the v2 return — persist separately
+    // so forward-return calibration can ask "did GOOD timing help scoreV2
+    // earn more than WAIT_FOR_DIP?" directly. (Varsity M2: timing != thesis.)
+    const overlayPayload = {
+      rsi: f.rsi, adx: f.adx, macdBull: f.macdBull,
+      pctFromHigh: f.pctFromHigh, pctAbove200: f.pctAbove200,
+      goldenCross: f.goldenCross, dma200Trend: f.dma200Trend,
+      weeklyTrendConfirmed: f.weeklyTrendConfirmed,
+      timingScore: v2.timingOverlay?.timingScore ?? null,
+      timingLabel: v2.timingOverlay?.label ?? null,
+    };
+
+    try {
+      await pool.query(
+        `INSERT INTO stock_score_snapshots
+           (snapshot_date, sym, sector, grp, score_version, score_v2, subscores,
+            valuation_label, risk_level, risk_score, confidence, expected_return,
+            expected_return_horizon, price, fundamentals, technical_overlay,
+            data_completeness, score_bucket)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         ON CONFLICT (snapshot_date, sym, score_version) DO UPDATE SET
+           score_v2 = EXCLUDED.score_v2,
+           subscores = EXCLUDED.subscores,
+           valuation_label = EXCLUDED.valuation_label,
+           risk_level = EXCLUDED.risk_level,
+           risk_score = EXCLUDED.risk_score,
+           price = EXCLUDED.price,
+           fundamentals = EXCLUDED.fundamentals,
+           technical_overlay = EXCLUDED.technical_overlay,
+           data_completeness = EXCLUDED.data_completeness,
+           score_bucket = EXCLUDED.score_bucket`,
+        [
+          today, f.sym, f.sector || null, f.grp || null, 2,
+          v2.scoreV2 || null, v2.subScores || null,
+          v2.valuationLabel || null, v2.riskLevel || null, v2.riskScore || null,
+          null, null, null,                   // confidence / expectedReturn filled later
+          px, fundamentalsPayload, overlayPayload,
+          v2.dataCompleteness || null, bucket,
+        ]
+      );
+      written++;
+    } catch (e) {
+      errors++;
+      if (errors < 5) console.error(`snapshot upsert failed ${f.sym}:`, e.message);
+    }
+  }
+
+  console.log(`📸 Snapshots written (${reason}): ${written}/${all.length} — ${errors} errors — ${Date.now() - t0}ms`);
+  return { written, errors, total: all.length, tookMs: Date.now() - t0 };
+}
+
+// 10PM IST daily — snapshot writer (runs after 8PM Screener + 7:30PM fundamentals)
+cron.schedule('0 22 * * *', async () => {
+  console.log('📸 10PM: Daily score v2 snapshot starting...');
+  try { await writeDailySnapshots('cron-10pm'); }
+  catch (e) { console.error('Snapshot cron error:', e.message); }
+}, { timezone: 'Asia/Kolkata' });
+
+// Manual trigger endpoint (admin/debug)
+app.post('/api/admin/snapshot/run', async (req, res) => {
+  try {
+    const result = await writeDailySnapshots('manual');
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// FORWARD-RETURN FILL JOB
+// Walks `stock_score_snapshots` looking for rows whose snapshot_date is now
+// ~30/90/180/365 calendar days in the past AND whose corresponding horizon
+// column in `stock_forward_returns` is still NULL. For each, computes
+// (currentPrice / snapshotPrice - 1) and writes it. This is what converts
+// score_v2 from theory into evidence — over time, bucket_stats tables then
+// tell us which (bucket, horizon, sector) triples actually pay.
+//
+// Horizon tolerance: ±3 calendar days so weekend/holiday snapshots still land.
+// =============================================================================
+const _HORIZONS = [
+  { key: 'r_1m',  days: 30  },
+  { key: 'r_3m',  days: 90  },
+  { key: 'r_6m',  days: 180 },
+  { key: 'r_12m', days: 365 },
+];
+
+async function fillForwardReturns(reason = 'cron') {
+  const t0 = Date.now();
+  if (!pool) return { filled: 0, skipped: 'no-pool' };
+
+  const todayMs = Date.now();
+  let filled = 0;
+  let errors = 0;
+
+  for (const h of _HORIZONS) {
+    const target = new Date(todayMs - h.days * 24 * 3600 * 1000);
+    const lo = new Date(target.getTime() - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const hi = new Date(target.getTime() + 3 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+    // Find eligible snapshots where this horizon hasn't been filled yet.
+    // LEFT JOIN so snapshots without any forward_returns row are included.
+    let rows;
+    try {
+      const r = await pool.query(
+        `SELECT s.snapshot_id, s.sym, s.price
+           FROM stock_score_snapshots s
+           LEFT JOIN stock_forward_returns f ON f.snapshot_id = s.snapshot_id
+          WHERE s.snapshot_date BETWEEN $1 AND $2
+            AND s.score_version = 2
+            AND s.price IS NOT NULL
+            AND (f.${h.key} IS NULL)
+          LIMIT 5000`,
+        [lo, hi]
+      );
+      rows = r.rows || [];
+    } catch (e) {
+      console.error(`forward-return query failed (${h.key}):`, e.message);
+      continue;
+    }
+
+    for (const row of rows) {
+      const snapPrice = Number(row.price);
+      if (!Number.isFinite(snapPrice) || snapPrice <= 0) continue;
+      const f = stockFundamentals[row.sym];
+      const nowPx = (f && f.price) || livePrices[row.sym]?.price || null;
+      if (!nowPx || !Number.isFinite(nowPx) || nowPx <= 0) continue;
+      const ret = +((nowPx / snapPrice - 1).toFixed(6));
+
+      try {
+        await pool.query(
+          `INSERT INTO stock_forward_returns(snapshot_id, ${h.key}, filled_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (snapshot_id) DO UPDATE SET
+             ${h.key} = COALESCE(stock_forward_returns.${h.key}, EXCLUDED.${h.key}),
+             filled_at = NOW()`,
+          [row.snapshot_id, ret]
+        );
+        filled++;
+      } catch (e) {
+        errors++;
+        if (errors < 5) console.error(`forward-return upsert failed ${row.sym} ${h.key}:`, e.message);
+      }
+    }
+  }
+
+  console.log(`📈 Forward returns filled (${reason}): ${filled} rows — ${errors} errors — ${Date.now() - t0}ms`);
+  return { filled, errors, tookMs: Date.now() - t0 };
+}
+
+// 10:30PM IST daily — fill forward returns after the snapshot writer (10PM)
+cron.schedule('30 22 * * *', async () => {
+  console.log('📈 10:30PM: Forward-return fill starting...');
+  try { await fillForwardReturns('cron-1030pm'); }
+  catch (e) { console.error('Forward-return cron error:', e.message); }
+}, { timezone: 'Asia/Kolkata' });
+
+// Manual trigger
+app.post('/api/admin/forward-returns/run', async (req, res) => {
+  try {
+    const result = await fillForwardReturns('manual');
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// BUCKET STATS — calibration layer
+// Aggregates observed forward returns per (score_version, horizon, bucket, sector)
+// so expectedReturn / confidence can be derived empirically. Written daily to
+// `score_bucket_stats` keyed by as_of_date so we can see the calibration drift.
+//
+// Day-1 bootstrap: when an empty DB can't yet power expectedReturn, we fall
+// back to a conservative prior — sourced from Varsity-aligned long-term CAGR
+// literature — baked into DEFAULT_BUCKET_PRIORS. As real samples accumulate,
+// prior weight decays via a Bayesian posterior: mu = (n*obs + k*prior)/(n+k).
+// =============================================================================
+const DEFAULT_BUCKET_PRIORS = {
+  // Conservative priors based on long-term NIFTY 500 CAGR (~11%) decomposed
+  // by quality bucket. Format: [r_1m, r_3m, r_6m, r_12m] expected return.
+  A: [0.012, 0.035, 0.075, 0.160],  // top quintile: ~16% p.a.
+  B: [0.009, 0.025, 0.055, 0.115],  // above avg:   ~11.5% p.a.
+  C: [0.005, 0.015, 0.035, 0.070],  // average:     ~7% p.a.
+  D: [0.000, 0.005, 0.010, 0.020],  // below avg:   ~2% p.a.
+};
+const _PRIOR_K = 20;                // pseudo-sample weight for prior
+const _HORIZON_KEYS = ['r_1m', 'r_3m', 'r_6m', 'r_12m'];
+
+function _quantile(sorted, q) {
+  if (!sorted.length) return null;
+  const i = (sorted.length - 1) * q;
+  const lo = Math.floor(i), hi = Math.ceil(i);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+
+async function computeBucketStats(reason = 'cron') {
+  const t0 = Date.now();
+  if (!pool) return { rows: 0, skipped: 'no-pool' };
+
+  const today = _llmTodayISO();
+  let written = 0;
+
+  for (const horizonCol of _HORIZON_KEYS) {
+    // Pull non-null observations joined with snapshot metadata
+    let rows;
+    try {
+      const r = await pool.query(
+        `SELECT s.score_bucket AS bucket, s.sector, f.${horizonCol} AS ret
+           FROM stock_forward_returns f
+           JOIN stock_score_snapshots s ON s.snapshot_id = f.snapshot_id
+          WHERE s.score_version = 2
+            AND f.${horizonCol} IS NOT NULL`
+      );
+      rows = r.rows || [];
+    } catch (e) {
+      console.error(`bucket-stats query failed (${horizonCol}):`, e.message);
+      continue;
+    }
+
+    // Group in memory — typical size is small (buckets × sectors ≈ 50-200)
+    const groups = {};        // key -> [ret, ret, ...]
+    const globals = {};       // bucket -> [ret, ret, ...]  (sector = ALL)
+    for (const row of rows) {
+      const b = row.bucket || 'D';
+      const sec = row.sector || 'Other';
+      const ret = Number(row.ret);
+      if (!Number.isFinite(ret)) continue;
+      const k1 = `${b}|${sec}`;
+      (groups[k1] = groups[k1] || []).push(ret);
+      (globals[b] = globals[b] || []).push(ret);
+    }
+
+    const writeRow = async (bucket, sector, arr) => {
+      const n = arr.length;
+      const obs = arr.reduce((a, b) => a + b, 0) / Math.max(1, n);
+      const sorted = [...arr].sort((a, b) => a - b);
+      const median = _quantile(sorted, 0.5);
+      const hits = arr.filter(x => x > 0).length;
+      const hitRate = n ? hits / n : null;
+      const variance = n > 1 ? arr.reduce((a, b) => a + (b - obs) ** 2, 0) / (n - 1) : 0;
+      const std = Math.sqrt(variance);
+
+      // Bayesian blend with prior (only applied to per-sector rows; global
+      // aggregates report raw observation so we can see the data directly).
+      const horizonIdx = _HORIZON_KEYS.indexOf(horizonCol);
+      const prior = (DEFAULT_BUCKET_PRIORS[bucket] || DEFAULT_BUCKET_PRIORS.C)[horizonIdx];
+      const blended = sector === 'ALL' ? obs : (n * obs + _PRIOR_K * prior) / (n + _PRIOR_K);
+      const sharpe = std > 0 ? blended / std : null;
+
+      try {
+        await pool.query(
+          `INSERT INTO score_bucket_stats
+             (as_of_date, score_version, horizon, bucket, sector,
+              n, avg_return, median_return, hit_rate, std_return, sharpe_like)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           ON CONFLICT (as_of_date, score_version, horizon, bucket, sector) DO UPDATE SET
+             n = EXCLUDED.n,
+             avg_return = EXCLUDED.avg_return,
+             median_return = EXCLUDED.median_return,
+             hit_rate = EXCLUDED.hit_rate,
+             std_return = EXCLUDED.std_return,
+             sharpe_like = EXCLUDED.sharpe_like`,
+          [today, 2, horizonCol, bucket, sector, n, +blended.toFixed(6),
+           median != null ? +median.toFixed(6) : null,
+           hitRate != null ? +hitRate.toFixed(4) : null,
+           +std.toFixed(6), sharpe != null ? +sharpe.toFixed(4) : null]
+        );
+        written++;
+      } catch (e) {
+        console.error(`bucket-stats upsert failed ${bucket}|${sector}|${horizonCol}:`, e.message);
+      }
+    };
+
+    for (const [k1, arr] of Object.entries(groups)) {
+      const [bucket, sector] = k1.split('|');
+      await writeRow(bucket, sector, arr);
+    }
+    for (const [bucket, arr] of Object.entries(globals)) {
+      await writeRow(bucket, 'ALL', arr);
+    }
+  }
+
+  console.log(`📊 Bucket stats written (${reason}): ${written} rows — ${Date.now() - t0}ms`);
+  return { rows: written, tookMs: Date.now() - t0 };
+}
+
+// 11PM IST daily — recompute bucket stats after forward returns land
+cron.schedule('0 23 * * *', async () => {
+  console.log('📊 11PM: Bucket stats recompute starting...');
+  try { await computeBucketStats('cron-11pm'); }
+  catch (e) { console.error('Bucket-stats cron error:', e.message); }
+}, { timezone: 'Asia/Kolkata' });
+
+// Expose read endpoint for UI diagnostics + manual recompute
+app.get('/api/stocks/bucket-stats', async (req, res) => {
+  try {
+    if (!pool) return res.json({ ok: false, error: 'no-pool', rows: [] });
+    const { horizon, sector } = req.query;
+    const params = [2];
+    let where = 'score_version = $1';
+    if (horizon) { params.push(horizon); where += ` AND horizon = $${params.length}`; }
+    if (sector)  { params.push(sector);  where += ` AND sector = $${params.length}`;  }
+    const r = await pool.query(
+      `SELECT as_of_date, horizon, bucket, sector, n, avg_return, median_return,
+              hit_rate, std_return, sharpe_like
+         FROM score_bucket_stats
+        WHERE ${where}
+          AND as_of_date = (SELECT MAX(as_of_date) FROM score_bucket_stats WHERE score_version = 2)
+        ORDER BY horizon, bucket, sector`,
+      params
+    );
+    res.json({ ok: true, rows: r.rows || [] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/admin/bucket-stats/run', async (req, res) => {
+  try {
+    const result = await computeBucketStats('manual');
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Alias endpoint per plan §13 naming (/api/stocks/bucket-stats stays for
+// backward compatibility with any existing client). Prefer the analytics path
+// going forward — it's not per-stock, it's aggregate calibration data.
+app.get('/api/analytics/score-buckets', async (req, res) => {
+  try {
+    if (!pool) return res.json({ ok: false, error: 'no-pool', rows: [] });
+    const { horizon, sector } = req.query;
+    const params = [2];
+    let where = 'score_version = $1';
+    if (horizon) { params.push(horizon); where += ` AND horizon = $${params.length}`; }
+    if (sector)  { params.push(sector);  where += ` AND sector = $${params.length}`;  }
+    const r = await pool.query(
+      `SELECT as_of_date, horizon, bucket, sector, n, avg_return, median_return,
+              hit_rate, std_return, sharpe_like
+         FROM score_bucket_stats
+        WHERE ${where}
+          AND as_of_date = (SELECT MAX(as_of_date) FROM score_bucket_stats WHERE score_version = 2)
+        ORDER BY horizon, bucket, sector`,
+      params
+    );
+    res.json({ ok: true, rows: r.rows || [] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// EXPECTED RETURN ENGINE — Varsity M3 Ch15 (portfolio) + M9 (risk discount)
+//
+// Formula (unit convention locked here — violations will break everything):
+//     expectedReturn = bucketAvgReturn_H * sectorAdj * riskAdj
+//
+//   • bucketAvgReturn_H  — mean observed return over horizon H from
+//     score_bucket_stats (or the Bayesian-blended prior if sample too small).
+//     UNIT: decimal (0.11 = 11%).
+//   • sectorAdj          — dimensionless multiplier in [0.5, 1.5].
+//     Computed as sector_bucket_return / all_bucket_return for the same
+//     (horizon, bucket). Clamped to avoid spurious 3x amplifications on
+//     thin sector samples.
+//   • riskAdj            — dimensionless multiplier, inversely proportional
+//     to riskLevel. LOW=1.00, MEDIUM=0.85, HIGH=0.70. (Varsity M9: higher
+//     volatility compresses realizable returns because rebalancing at peak
+//     is statistically rare.)
+//
+// Result is clamped to [-0.5, +1.0] per horizon — beyond that we're
+// advertising unattainable returns and should surface a "low confidence"
+// warning instead.
+//
+// Confidence (plan §8): blend of (n observations, return dispersion, data
+// completeness). Returns [0, 1]. Day-1 bootstrap floor is 0.35.
+// =============================================================================
+let _bucketStatsCache = null;
+let _bucketStatsCacheTs = 0;
+const BUCKET_STATS_TTL_MS = 5 * 60 * 1000;      // 5 minutes
+
+async function getLatestBucketStats(forceRefresh = false) {
+  if (!forceRefresh && _bucketStatsCache && Date.now() - _bucketStatsCacheTs < BUCKET_STATS_TTL_MS) {
+    return _bucketStatsCache;
+  }
+  if (!pool) return null;
+  try {
+    const r = await pool.query(
+      `SELECT horizon, bucket, sector, n, avg_return, std_return, hit_rate
+         FROM score_bucket_stats
+        WHERE score_version = 2
+          AND as_of_date = (SELECT MAX(as_of_date) FROM score_bucket_stats WHERE score_version = 2)`
+    );
+    const map = {};
+    for (const row of (r.rows || [])) {
+      map[`${row.horizon}|${row.bucket}|${row.sector}`] = row;
+    }
+    _bucketStatsCache = map;
+    _bucketStatsCacheTs = Date.now();
+    return map;
+  } catch (e) {
+    console.error('getLatestBucketStats failed:', e.message);
+    return null;
+  }
+}
+
+// Horizon column -> index into DEFAULT_BUCKET_PRIORS array
+const _HORIZON_TO_PRIOR_IDX = { r_1m: 0, r_3m: 1, r_6m: 2, r_12m: 3 };
+const _HORIZON_LABEL = { r_1m: '1M', r_3m: '3M', r_6m: '6M', r_12m: '12M' };
+
+// Varsity M3 Ch15 / M9 Ch3: per-horizon clamps. Short windows can't compound
+// fast enough to produce the long-run upper tails, and promising anything
+// wider is a "greed trap" we should refuse to advertise.
+const _HORIZON_CLAMP = {
+  r_1m:  { lo: -0.20, hi: 0.25 },
+  r_3m:  { lo: -0.30, hi: 0.40 },
+  r_6m:  { lo: -0.40, hi: 0.60 },
+  r_12m: { lo: -0.50, hi: 1.00 },
+};
+
+function computeExpectedReturn(stockInfo, bucketStatsMap, horizon = 'r_6m') {
+  // stockInfo contains: { scoreBucket, sector, riskLevel, dataCompleteness }
+  const bucket = stockInfo.scoreBucket || 'C';
+  const sector = stockInfo.sector || 'Other';
+  const horizonIdx = _HORIZON_TO_PRIOR_IDX[horizon] ?? 2;
+  const prior = (DEFAULT_BUCKET_PRIORS[bucket] || DEFAULT_BUCKET_PRIORS.C)[horizonIdx];
+
+  // ── base return from bucket stats (with Bayesian prior blend) ──
+  let baseReturn = prior;
+  let n = 0;
+  let std = 0.18;   // default dispersion if nothing observed
+  let nSecKey = 0;
+
+  if (bucketStatsMap) {
+    const secRow = bucketStatsMap[`${horizon}|${bucket}|${sector}`];
+    const allRow = bucketStatsMap[`${horizon}|${bucket}|ALL`];
+    const row = secRow || allRow;
+    if (row) {
+      baseReturn = Number(row.avg_return);     // already Bayesian-blended in computeBucketStats
+      n = Number(row.n) || 0;
+      std = Number(row.std_return) || 0.18;
+    }
+    nSecKey = secRow ? (Number(secRow.n) || 0) : 0;
+  }
+
+  // ── sector adjustment ── (dimensionless, clamped to 0.5..1.5)
+  let sectorAdj = 1.0;
+  if (bucketStatsMap && nSecKey >= 10) {
+    const secRow = bucketStatsMap[`${horizon}|${bucket}|${sector}`];
+    const allRow = bucketStatsMap[`${horizon}|${bucket}|ALL`];
+    if (secRow && allRow && Number(allRow.avg_return) !== 0) {
+      const raw = Number(secRow.avg_return) / Number(allRow.avg_return);
+      if (Number.isFinite(raw)) sectorAdj = _clampNum(raw, 0.5, 1.5);
+    }
+  }
+
+  // ── risk adjustment ── Varsity M9: HIGH risk compresses realizable return
+  const riskAdj = stockInfo.riskLevel === 'LOW'    ? 1.00
+               : stockInfo.riskLevel === 'HIGH'   ? 0.70
+               :                                     0.85;   // MEDIUM or unknown
+
+  const clamp = _HORIZON_CLAMP[horizon] || _HORIZON_CLAMP.r_6m;
+  const expectedReturn = _clampNum(baseReturn * sectorAdj * riskAdj, clamp.lo, clamp.hi);
+
+  // ── confidence blend (n / dispersion / dataCompleteness) ──
+  // n shapes the "do we trust the base return" piece:
+  //   n=0    → 0 (pure prior)
+  //   n=30   → 0.5
+  //   n=100+ → ~1
+  const nConf = Math.min(1, Math.log10(Math.max(1, n)) / 2);
+  const spreadConf = std > 0 ? Math.min(1, 0.12 / std) : 0.5;
+  const dcConf = stockInfo.dataCompleteness ?? 0.5;
+  let confidence = _clampNum(0.35 + 0.30 * nConf + 0.20 * spreadConf + 0.15 * dcConf, 0, 1);
+
+  return {
+    expectedReturn: +expectedReturn.toFixed(4),
+    expectedReturnHorizon: _HORIZON_LABEL[horizon] || '6M',
+    confidence: +confidence.toFixed(3),
+    sectorAdj: +sectorAdj.toFixed(3),
+    riskAdj: +riskAdj.toFixed(3),
+    basedOnObservations: n,
+    usingPrior: n === 0,
+  };
+}
+
+// Helper: map scoreV2 → bucket letter (same thresholds as snapshot writer)
+function scoreV2Bucket(scoreV2) {
+  if (scoreV2 == null) return 'D';
+  return scoreV2 >= 80 ? 'A'
+       : scoreV2 >= 65 ? 'B'
+       : scoreV2 >= 50 ? 'C'
+       :                 'D';
+}
+
+// =============================================================================
+// TEST HOOKS — gated by V2_TEST_HOOKS=1 (plan §14)
+//
+// These endpoints expose just enough internal state to let the invariant
+// test suite drive deterministic scenarios:
+//   1. /api/test/scorev2           — score a symbol with overridden technical
+//      signals so the test can flip TA flags and prove scoreV2 stays flat
+//      (the FA/TA regression invariant).
+//   2. /api/test/snapshot-count    — COUNT(*) from stock_score_snapshots for
+//      today's date; the idempotency test hits snapshot/run twice and
+//      asserts this count didn't double.
+//   3. /api/test/llm-budget/*      — read / force-cap / reset the in-memory
+//      LLM cost counter so the cap short-circuit test can guarantee the
+//      next callAIModel returns skipped:true.
+//
+// Every handler short-circuits with 404 unless V2_TEST_HOOKS=1 is explicitly
+// set in env, and also logs a loud warning on startup so these never survive
+// a prod deploy by accident.
+// =============================================================================
+const V2_TEST_HOOKS_ENABLED = process.env.V2_TEST_HOOKS === '1';
+if (V2_TEST_HOOKS_ENABLED) {
+  console.log('⚠  V2_TEST_HOOKS=1 — /api/test/* endpoints enabled (DO NOT USE IN PRODUCTION)');
+}
+function _v2TestGate(req, res) {
+  if (!V2_TEST_HOOKS_ENABLED) {
+    res.status(404).json({ error: 'not found' });
+    return false;
+  }
+  return true;
+}
+
+// 1. Score v2 with overridden technical signals. The test calls this twice
+//    with opposite TA flags and asserts scoreV2 + subScores are identical.
+app.get('/api/test/scorev2', (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  try {
+    const sym = String(req.query.sym || '').toUpperCase();
+    if (!sym) return res.status(400).json({ error: 'sym required' });
+    const f = stockFundamentals[sym];
+    if (!f) return res.status(404).json({ error: `no fundamentals for ${sym}` });
+
+    // Only the technical-overlay inputs are allowed as overrides. Any attempt
+    // to override a fundamental field (roe, pe, etc) is silently ignored so
+    // the test can't accidentally prove invariance by mutating fundamentals.
+    const TA_FIELDS = [
+      'pctAbove200', 'pctFromHigh', 'goldenCross', 'weeklyTrendConfirmed',
+      'weeklyTrend', 'rsi', 'macdBull', 'adx', 'dma200Trend', 'ichimokuSignal',
+      'dowTheoryTrend', 'bullishDiv', 'bearishDiv', 'change1m', 'change3m',
+      'change6m', 'annualVol', 'beta',
+    ];
+    const clone = { ...f };
+    for (const k of TA_FIELDS) {
+      const qk = 'tech_' + k;
+      if (qk in req.query) {
+        const v = req.query[qk];
+        if (v === 'null') clone[k] = null;
+        else if (v === 'true') clone[k] = true;
+        else if (v === 'false') clone[k] = false;
+        else if (!isNaN(parseFloat(v))) clone[k] = parseFloat(v);
+        else clone[k] = v;
+      }
+    }
+    const bySector = {};
+    Object.values(stockFundamentals).forEach(x => {
+      const s = x.sector || 'Other';
+      (bySector[s] = bySector[s] || []).push(x);
+    });
+    const peers = bySector[clone.sector || 'Other'] || Object.values(stockFundamentals);
+    const v2 = scoreOneStockV2(clone, peers);
+    res.json({
+      ok: true,
+      sym,
+      scoreV2: v2 ? v2.scoreV2 : null,
+      subScores: v2 ? v2.subScores : null,
+      timingOverlay: v2 ? v2.timingOverlay : null,
+      riskLevel: v2 ? v2.riskLevel : null,
+      valuationLabel: v2 ? v2.valuationLabel : null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 2. Snapshot row count for today — used to verify idempotency.
+app.get('/api/test/snapshot-count', async (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  try {
+    if (!pool) return res.json({ ok: true, count: 0, note: 'no-pool' });
+    const r = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM stock_score_snapshots WHERE snapshot_date = CURRENT_DATE AND score_version = 2'
+    );
+    res.json({ ok: true, count: r.rows[0].n });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 3. LLM budget peek / force-cap / reset.
+app.get('/api/test/llm-budget', (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  const endpoint = String(req.query.endpoint || 'default');
+  const modelId = String(req.query.modelId || 'gpt-nano');
+  const today = _llmTodayISO();
+  const key = `${today}|${endpoint}|${modelId}`;
+  res.json({
+    ok: true,
+    today,
+    endpoint,
+    modelId,
+    cap: _llmCapFor(endpoint),
+    used: _llmCostMem[key] || 0,
+  });
+});
+
+app.post('/api/test/llm-budget/force-cap', (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  const endpoint = String(req.query.endpoint || 'default');
+  const modelId = String(req.query.modelId || 'gpt-nano');
+  const today = _llmTodayISO();
+  if (_llmCostMemDate !== today) {
+    for (const k in _llmCostMem) delete _llmCostMem[k];
+    _llmCostMemDate = today;
+  }
+  const key = `${today}|${endpoint}|${modelId}`;
+  _llmCostMem[key] = _llmCapFor(endpoint) + 1;  // one over the cap
+  res.json({ ok: true, endpoint, modelId, cap: _llmCapFor(endpoint), used: _llmCostMem[key] });
+});
+
+app.post('/api/test/llm-budget/reset', (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  for (const k in _llmCostMem) delete _llmCostMem[k];
+  res.json({ ok: true, cleared: true });
+});
+
+// 4. Direct callAIModel probe — feeds a dummy prompt through callAIModel and
+//    returns whatever callAIModel returned so the test can assert skipped:true.
+app.post('/api/test/llm-call', async (req, res) => {
+  if (!_v2TestGate(req, res)) return;
+  try {
+    const endpoint = String(req.query.endpoint || 'default');
+    // Use the cheapest model in the registry so a forgotten test doesn't burn
+    // budget even if it somehow slips past the force-cap.
+    const model = (typeof AI_MODELS !== 'undefined' && AI_MODELS.length)
+      ? (AI_MODELS.find(m => m.id === 'gpt-nano') || AI_MODELS[0])
+      : { id: 'dummy', name: 'dummy', provider: 'none' };
+    const result = await callAIModel(model, 'test', 'test', endpoint);
+    res.json({ ok: true, endpoint, result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================================================
+// HEALTH ENDPOINT — /api/health/stockrec  (plan §13)
+//
+// Surfaces the four things that can silently break the Stock Picks v2 pipeline:
+//   1. Fundamentals freshness (was refreshAllFundamentals recently successful?)
+//   2. Snapshot writer freshness (did the 10PM cron actually land last night?)
+//   3. Forward-return coverage (is calibration still growing or stuck?)
+//   4. LLM daily budget usage (are we about to hit the cap?)
+//
+// Also returns data-completeness histogram so we can see if a given day's
+// universe went sparse (e.g. screener scrape failed).
+// Returns 200 with {status:'ok'|'degraded'|'failing'}. `degraded` is still
+// 200 so uptime monitors don't flap on transient issues; `failing` is 503.
+// =============================================================================
+app.get('/api/health/stockrec', async (req, res) => {
+  const checks = {};
+  let degraded = 0;
+  let failing = 0;
+
+  // 1) Fundamentals freshness
+  const fundAgeMs = stockFundLastFetch ? Date.now() - stockFundLastFetch : null;
+  checks.fundamentals = {
+    loaded: Object.keys(stockFundamentals).length,
+    lastFetchAgeMinutes: fundAgeMs != null ? Math.round(fundAgeMs / 60000) : null,
+    loading: !!stockFundLoading,
+  };
+  if (Object.keys(stockFundamentals).length === 0) failing++;
+  else if (fundAgeMs == null || fundAgeMs > 30 * 3600 * 1000) degraded++;  // >30h stale
+
+  // 2) Snapshot writer freshness
+  if (pool) {
+    try {
+      const r = await pool.query(
+        `SELECT snapshot_date, COUNT(*)::int AS n,
+                AVG(data_completeness)::float AS avg_dc,
+                COUNT(*) FILTER (WHERE data_completeness < 0.5)::int AS n_sparse
+           FROM stock_score_snapshots
+          WHERE score_version = 2
+          GROUP BY snapshot_date
+          ORDER BY snapshot_date DESC
+          LIMIT 1`
+      );
+      if (r.rows.length) {
+        const row = r.rows[0];
+        const snapDate = new Date(row.snapshot_date);
+        const ageDays = Math.floor((Date.now() - snapDate.getTime()) / (24 * 3600 * 1000));
+        checks.snapshots = {
+          latestDate: row.snapshot_date,
+          rowCount: row.n,
+          ageDays,
+          avgDataCompleteness: row.avg_dc != null ? +row.avg_dc.toFixed(3) : null,
+          sparseRowCount: row.n_sparse,
+        };
+        if (ageDays > 2) degraded++;
+        if (ageDays > 5) failing++;
+        if (row.avg_dc != null && row.avg_dc < 0.4) degraded++;
+      } else {
+        checks.snapshots = { latestDate: null, note: 'no snapshots yet (cold start)' };
+        degraded++;  // expected on day 1 but flag it
+      }
+    } catch (e) {
+      checks.snapshots = { error: e.message };
+      failing++;
+    }
+
+    // 3) Forward-return coverage
+    try {
+      const r = await pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE r_1m  IS NOT NULL)::int AS filled_1m,
+           COUNT(*) FILTER (WHERE r_3m  IS NOT NULL)::int AS filled_3m,
+           COUNT(*) FILTER (WHERE r_6m  IS NOT NULL)::int AS filled_6m,
+           COUNT(*) FILTER (WHERE r_12m IS NOT NULL)::int AS filled_12m,
+           COUNT(*)::int AS total
+         FROM stock_forward_returns`
+      );
+      const row = r.rows[0] || {};
+      checks.forwardReturns = {
+        totalRows: row.total || 0,
+        filled1m:  row.filled_1m  || 0,
+        filled3m:  row.filled_3m  || 0,
+        filled6m:  row.filled_6m  || 0,
+        filled12m: row.filled_12m || 0,
+      };
+      // Not an error when empty — just means no snapshots have aged out yet
+    } catch (e) {
+      checks.forwardReturns = { error: e.message };
+      degraded++;
+    }
+
+    // 4) LLM daily budget usage
+    try {
+      const today = _llmTodayISO();
+      const r = await pool.query(
+        `SELECT endpoint, model_id, calls
+           FROM llm_cost_counter
+          WHERE as_of_date = $1
+          ORDER BY calls DESC
+          LIMIT 20`,
+        [today]
+      );
+      checks.llmBudget = {
+        today,
+        rows: r.rows.map(row => ({
+          endpoint: row.endpoint,
+          modelId: row.model_id,
+          calls: Number(row.calls),
+          cap: _llmCapFor(row.endpoint),
+          pctUsed: +((Number(row.calls) / _llmCapFor(row.endpoint)) * 100).toFixed(1),
+        })),
+      };
+      // Warn if any (endpoint, model) is above 80% of cap
+      if (checks.llmBudget.rows.some(r => r.pctUsed > 80)) degraded++;
+      if (checks.llmBudget.rows.some(r => r.pctUsed >= 100)) failing++;
+    } catch (e) {
+      checks.llmBudget = { error: e.message };
+      degraded++;
+    }
+
+    // 5) Bucket stats freshness (Varsity M3 Ch15: calibration is the whole point)
+    try {
+      const r = await pool.query(
+        `SELECT MAX(as_of_date) AS latest, COUNT(*)::int AS n
+           FROM score_bucket_stats
+          WHERE score_version = 2`
+      );
+      const row = r.rows[0] || {};
+      checks.bucketStats = {
+        latestDate: row.latest,
+        rowCount: row.n || 0,
+      };
+      if ((row.n || 0) === 0) degraded++;  // no calibration yet → using priors
+    } catch (e) {
+      checks.bucketStats = { error: e.message };
+      degraded++;
+    }
+  } else {
+    checks.db = { status: 'no pool' };
+    failing++;
+  }
+
+  const status = failing > 0 ? 'failing' : degraded > 0 ? 'degraded' : 'ok';
+  const httpCode = failing > 0 ? 503 : 200;
+  res.status(httpCode).json({
+    status,
+    degradedCount: degraded,
+    failingCount: failing,
+    checks,
+    generatedAt: new Date().toISOString(),
+  });
+});
+
+// =============================================================================
+// FALLEN ANGEL AI CLASSIFIER — Varsity M3 Ch15
+//
+// The classification is deliberately parsimonious (Varsity: simplest tool
+// that works). ONE cheap model, one label — reason ∈
+// {MARKET, SECTOR, TEMPORARY, STRUCTURAL} — plus a BUY/WAIT/AVOID verdict.
+// The expensive 5-model consensus stays reserved for portfolio-level
+// decisions in /api/stocks/analyze/:sym/ai.
+//
+// Limits (plan §10):
+//   - 7-day cache per symbol (stops duplicate calls within a week)
+//   - 20 calls/day across all symbols (enforced via LLM cost cap tagged
+//     endpoint='fallenangel')
+//   - 3 calls/hour (enforced in-memory here — rolling 60-minute window)
+//
+// Deterministic trap guards run FIRST and short-circuit the AI call when
+// they fire. If the stock is already structurally broken by fundamentals
+// alone, no AI is needed to tell us that.
+// =============================================================================
+// Lazy getter for the FA model — AI_MODELS is declared further down in the
+// file (next to callAIModel), so resolving it at top-level would TDZ.
+// Calling this at use time guarantees the registry is initialised.
+function _getFAModel() {
+  if (typeof AI_MODELS === 'undefined' || !AI_MODELS.length) return null;
+  return AI_MODELS.find(m => m.id === 'gpt-nano') || AI_MODELS[0];
+}
+const FA_CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
+const FA_HOURLY_CAP = 3;
+const _faHourlyWindow = [];  // in-memory sliding window of recent call timestamps
+
+function _faHourlyAllowed() {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  while (_faHourlyWindow.length && _faHourlyWindow[0] < cutoff) _faHourlyWindow.shift();
+  return _faHourlyWindow.length < FA_HOURLY_CAP;
+}
+function _faHourlyRecord() { _faHourlyWindow.push(Date.now()); }
+
+// Deterministic trap guards — run BEFORE any LLM call. If any fires, the
+// stock is not a fallen angel, it's a falling knife. Return values align
+// with the AI output shape so callers can treat them identically.
+function fallenAngelTrapGuard(f) {
+  const traps = [];
+  if (f.epsGr1y != null && f.epsGr5y != null && f.epsGr1y < -30 && f.epsGr5y < 0) {
+    traps.push('EPS collapsed both 1Y and 5Y — structural earnings break');
+  }
+  if (f.debtToEq != null && f.debtToEq > 3 && f.intCov != null && f.intCov < 1) {
+    traps.push('Debt-to-equity >3x AND interest coverage <1x — solvency risk');
+  }
+  if (f.pledged != null && f.pledged > 50) {
+    traps.push(`Promoter pledge ${f.pledged.toFixed(0)}% — governance red flag`);
+  }
+  if (f.promoterChg != null && f.promoterChg < -5) {
+    traps.push(`Promoter stake dropped ${Math.abs(f.promoterChg).toFixed(1)}% — insider exit`);
+  }
+  if (f.opMargin != null && f.opMargin < -5) {
+    traps.push('Operating margin deeply negative — unit economics broken');
+  }
+  if (traps.length) {
+    return {
+      reason: 'STRUCTURAL',
+      verdict: 'AVOID',
+      confidence: 95,
+      explanation: traps.join('. '),
+      source: 'deterministic',
+    };
+  }
+  return null;
+}
+
+async function classifyFallenAngelReason(sym) {
+  const f = stockFundamentals[sym];
+  if (!f) return { error: 'symbol not in fundamentals universe', sym };
+
+  // 1) Deterministic trap guards first (Varsity: free signal)
+  const trap = fallenAngelTrapGuard(f);
+  if (trap) return { sym, ...trap };
+
+  // 2) Cache hit?
+  if (pool) {
+    try {
+      const r = await pool.query(
+        `SELECT reason, verdict, confidence, explanation, model_id, computed_at
+           FROM fallen_angel_ai_cache
+          WHERE sym = $1`,
+        [sym]
+      );
+      if (r.rows.length) {
+        const row = r.rows[0];
+        const ageMs = Date.now() - new Date(row.computed_at).getTime();
+        if (ageMs < FA_CACHE_TTL_MS) {
+          return {
+            sym,
+            reason: row.reason,
+            verdict: row.verdict,
+            confidence: Number(row.confidence),
+            explanation: row.explanation,
+            source: 'cache',
+            modelId: row.model_id,
+            ageDays: +(ageMs / (24 * 3600 * 1000)).toFixed(1),
+          };
+        }
+      }
+    } catch (e) { /* non-fatal, proceed to LLM */ }
+  }
+
+  // 3) Hourly rate limit (in-memory)
+  if (!_faHourlyAllowed()) {
+    return { sym, error: 'hourly-cap', message: `FA AI hourly cap (${FA_HOURLY_CAP}/hr) reached — try again later` };
+  }
+
+  // 4) LLM call — endpoint tag lets the daily cost cap enforce 20/day
+  const systemPrompt = [
+    'You are a Varsity-trained Indian equity analyst classifying Fallen Angels.',
+    'A Fallen Angel is a fundamentally strong business temporarily out of favor.',
+    'Classify WHY the price has fallen using ONE of these reason labels:',
+    '- MARKET: broad market correction, company fundamentals intact',
+    '- SECTOR: sector rotation / macro headwind, company relatively better',
+    '- TEMPORARY: one-off issue (regulation, lawsuit, FX) with clear resolution',
+    '- STRUCTURAL: broken thesis (competition, unit economics, management)',
+    'Then give a verdict: BUY (fundamentals intact, buy the dip), WAIT (wait for stabilization), AVOID (structural break).',
+    'Respond ONLY with JSON: {"reason":"...","verdict":"...","confidence":0-100,"explanation":"1-2 sentences"}.',
+  ].join('\n');
+
+  const userPrompt = [
+    `Symbol: ${sym} (${f.name || ''})`,
+    `Sector: ${f.sector || 'Unknown'}`,
+    `Price down from 52W high: ${f.pctFromHigh != null ? f.pctFromHigh.toFixed(1) + '%' : 'n/a'}`,
+    `ROE: ${f.roe ?? 'n/a'}, ROCE: ${f.roce ?? 'n/a'}, D/E: ${f.debtToEq ?? 'n/a'}, Int Cov: ${f.intCov ?? 'n/a'}`,
+    `EPS 1Y: ${f.earGrowth ?? f.epsGr1y ?? 'n/a'}%, EPS 5Y: ${f.epsGr5y ?? 'n/a'}%`,
+    `Revenue 1Y: ${f.revGrowth ?? f.salesGr1y ?? 'n/a'}%, 5Y: ${f.salesGr5y ?? 'n/a'}%`,
+    `Op Margin: ${f.opMargin ?? 'n/a'}%, Promoter: ${f.promoter ?? 'n/a'}%, Pledged: ${f.pledged ?? 'n/a'}%`,
+    `RSI: ${f.rsi ?? 'n/a'}, ADX: ${f.adx ?? 'n/a'}`,
+  ].join('\n');
+
+  const faModel = _getFAModel();
+  if (!faModel) {
+    return { sym, error: 'no-model', message: 'No AI model registry available' };
+  }
+
+  _faHourlyRecord();
+  const llmResult = await callAIModel(faModel, systemPrompt, userPrompt, 'fallenangel');
+
+  if (llmResult.skipped || llmResult.error) {
+    return {
+      sym,
+      error: llmResult.error || 'llm-skipped',
+      message: llmResult.error === 'llm-cap-exceeded'
+        ? 'Daily FA AI cap (20/day) reached — try again tomorrow'
+        : llmResult.error,
+    };
+  }
+
+  const parsed = llmResult.result || {};
+  const out = {
+    sym,
+    reason: (parsed.reason || 'TEMPORARY').toUpperCase(),
+    verdict: (parsed.verdict || 'WAIT').toUpperCase(),
+    confidence: Number(parsed.confidence) || 50,
+    explanation: String(parsed.explanation || '').slice(0, 500),
+    source: 'llm',
+    modelId: faModel.id,
+  };
+
+  // 5) Write-back to cache
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO fallen_angel_ai_cache
+           (sym, reason, verdict, confidence, explanation, model_id, computed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (sym) DO UPDATE SET
+           reason = EXCLUDED.reason,
+           verdict = EXCLUDED.verdict,
+           confidence = EXCLUDED.confidence,
+           explanation = EXCLUDED.explanation,
+           model_id = EXCLUDED.model_id,
+           computed_at = NOW()`,
+        [sym, out.reason, out.verdict, out.confidence, out.explanation, out.modelId]
+      );
+    } catch (e) { /* non-fatal */ }
+  }
+
+  return out;
+}
+
+// Endpoint per plan §13
+app.get('/api/stocks/fallen-ai/:sym', async (req, res) => {
+  try {
+    const sym = String(req.params.sym || '').toUpperCase();
+    if (!sym) return res.status(400).json({ error: 'sym required' });
+    const result = await classifyFallenAngelReason(sym);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // =============================================================================
 // SCREENER.IN FUNDAMENTALS — bulk mode via shashwattrivedi/screener-in
@@ -13914,9 +15867,91 @@ const AI_MODELS = [
   { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
 ];
 
+// =============================================================================
+// LLM COST CAP — daily budget discipline (Varsity M9: risk management applied
+// to API spend). Each LLM call is counted against a (date, endpoint, model)
+// triplet persisted in `llm_cost_counter`. In-process cache avoids hitting
+// Postgres on every call; Postgres is source of truth across restarts.
+//
+// Configuration:
+//   LLM_DAILY_CAP_GLOBAL          — default cap per (endpoint, model) per day
+//   LLM_DAILY_CAP_<ENDPOINT_TAG>  — per-endpoint override (e.g. LLM_DAILY_CAP_STOCKREC)
+//
+// Behavior when cap is hit: callAIModel returns skipped:true so callers fall
+// back to their deterministic path (no hard error, no user-visible breakage).
+// =============================================================================
+const LLM_DAILY_CAP_GLOBAL = parseInt(process.env.LLM_DAILY_CAP_GLOBAL || '1000', 10);
+const _llmCostMem = {};          // {date|endpoint|modelId -> count}
+let   _llmCostMemDate = null;    // YYYY-MM-DD of current cache window
+
+function _llmTodayISO() { return new Date().toISOString().slice(0, 10); }
+
+function _llmCapFor(endpoint) {
+  const envKey = `LLM_DAILY_CAP_${(endpoint || 'UNKNOWN').toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const specific = parseInt(process.env[envKey] || '', 10);
+  return Number.isFinite(specific) && specific > 0 ? specific : LLM_DAILY_CAP_GLOBAL;
+}
+
+async function checkLLMBudget(endpoint, modelId) {
+  const today = _llmTodayISO();
+  // Roll the in-process cache at day boundary
+  if (_llmCostMemDate !== today) {
+    for (const k in _llmCostMem) delete _llmCostMem[k];
+    _llmCostMemDate = today;
+  }
+  const key = `${today}|${endpoint}|${modelId}`;
+  // First miss today — hydrate from Postgres so we don't lose history on restart
+  if (_llmCostMem[key] == null) {
+    let hydrated = 0;
+    try {
+      if (pool) {
+        const r = await pool.query(
+          'SELECT calls FROM llm_cost_counter WHERE as_of_date=$1 AND endpoint=$2 AND model_id=$3',
+          [today, endpoint, modelId]
+        );
+        hydrated = r.rows?.[0]?.calls || 0;
+      }
+    } catch { /* fail-open: assume 0 */ }
+    _llmCostMem[key] = hydrated;
+  }
+  return (_llmCostMem[key] || 0) < _llmCapFor(endpoint);
+}
+
+async function recordLLMCall(endpoint, modelId) {
+  const today = _llmTodayISO();
+  const key = `${today}|${endpoint}|${modelId}`;
+  _llmCostMem[key] = (_llmCostMem[key] || 0) + 1;
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO llm_cost_counter(as_of_date, endpoint, model_id, calls)
+         VALUES ($1, $2, $3, 1)
+         ON CONFLICT (as_of_date, endpoint, model_id)
+         DO UPDATE SET calls = llm_cost_counter.calls + 1`,
+        [today, endpoint, modelId]
+      );
+    } catch (e) { /* non-fatal: in-memory count still protects for this session */ }
+  }
+}
+
 // ── Call a single AI model (no output token limit, captures usage) ──
-async function callAIModel(modelDef, systemPrompt, userPrompt) {
+// `endpoint` is a short tag ('stockrec', 'portfolio', 'fallenangel', ...)
+// used to partition the daily cost cap. Defaults to 'default' to keep
+// legacy call sites working unchanged.
+async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'default') {
   const start = Date.now();
+  // Daily budget check — skip the call if we've exceeded the cap.
+  // Fail-open on infrastructure errors so a broken DB never blocks AI.
+  try {
+    const allowed = await checkLLMBudget(endpoint, modelDef.id);
+    if (!allowed) {
+      console.log(`  💰 LLM cap hit: ${endpoint}/${modelDef.id} — skipping (cap=${_llmCapFor(endpoint)})`);
+      return { id: modelDef.id, name: modelDef.name, error: 'llm-cap-exceeded', skipped: true, took_ms: 0 };
+    }
+  } catch { /* fail-open */ }
+  // Record attempt immediately — providers charge for failed/timed-out requests
+  // too, so we want failures to count against the daily budget.
+  recordLLMCall(endpoint, modelDef.id).catch(() => {});
   try {
     let raw = '';
     let tokens = { input: 0, output: 0 };

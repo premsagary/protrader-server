@@ -3094,6 +3094,121 @@ var stockRecShowAll = false;
 var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
+// ── Long-Term portfolio v2 state ──
+var ltPortfolioAmount = 100000;   // default ₹1L
+var ltPortfolioData = null;       // cached response from /api/portfolio/suggest/v2
+var ltPortfolioLoading = false;
+var ltPortfolioError = null;
+
+async function loadLongTermPortfolio(force) {
+  if (ltPortfolioLoading) return;
+  ltPortfolioLoading = true;
+  ltPortfolioError = null;
+  try { renderStockRec(); } catch(e) {}
+  try {
+    var url = '/api/portfolio/suggest/v2' + (force ? '/regenerate' : '?amount=' + ltPortfolioAmount);
+    var opts = force ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({amount: ltPortfolioAmount}) } : { method:'GET' };
+    var r = await fetch(url, opts);
+    var d = await r.json();
+    if (d.error) { ltPortfolioError = d.error; ltPortfolioData = null; }
+    else         { ltPortfolioData = d; }
+  } catch(e) {
+    ltPortfolioError = e.message || 'Portfolio fetch failed';
+    ltPortfolioData = null;
+  } finally {
+    ltPortfolioLoading = false;
+    try { renderStockRec(); } catch(e) {}
+  }
+}
+
+function setLongTermPortfolioAmount(v) {
+  var n = parseFloat(v);
+  if (!isFinite(n) || n < 5000) return;
+  ltPortfolioAmount = Math.round(n);
+}
+
+function renderLongTermPortfolioPanel() {
+  var h = '';
+  h += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--bg2)">';
+  h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  h += '<span style="font-weight:700;color:#f59e0b;font-size:12px">🏛️ Long-Term Model Portfolio (Varsity v2)</span>';
+  h += '<input type="number" id="lt-amt" value="'+ltPortfolioAmount+'" min="5000" step="5000" '
+    + 'onchange="setLongTermPortfolioAmount(this.value)" '
+    + 'style="width:110px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11px">';
+  h += '<button onclick="loadLongTermPortfolio(false)" '
+    + 'style="padding:5px 12px;border-radius:6px;border:1px solid #10b981;background:rgba(16,185,129,0.15);color:#10b981;font-size:11px;cursor:pointer;font-weight:600">'
+    + (ltPortfolioLoading ? '⟳ Building…' : (ltPortfolioData ? '↻ Refresh' : '▶ Build Portfolio')) + '</button>';
+  if (ltPortfolioData) {
+    h += '<button onclick="loadLongTermPortfolio(true)" '
+      + 'style="padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text2);font-size:11px;cursor:pointer">Force Regenerate</button>';
+  }
+  h += '</div>';
+
+  if (ltPortfolioError) {
+    h += '<div style="margin-top:8px;color:var(--red);font-size:11px">⚠ '+ltPortfolioError+'</div>';
+  }
+
+  if (ltPortfolioData) {
+    var d = ltPortfolioData;
+    var s = d.summary || {};
+    var expPct = (s.portfolioExpReturn || 0) * 100;
+    var expCol = expPct >= 15 ? 'var(--green)' : expPct >= 5 ? '#10b981' : 'var(--text2)';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:10px;font-size:11px">';
+    h += '<div><div style="color:var(--text3)">Invested</div><div style="font-weight:700">₹'+(d.investableAmount||0).toLocaleString('en-IN')+'</div></div>';
+    h += '<div><div style="color:var(--text3)">Cash Reserve</div><div style="font-weight:700">₹'+(d.cashReserve||0).toLocaleString('en-IN')+' ('+d.cashPct+'%)</div></div>';
+    h += '<div><div style="color:var(--text3)">Exp Return (12M)</div><div style="font-weight:700;color:'+expCol+'">'+(expPct>=0?'+':'')+expPct.toFixed(1)+'%'+(s.usingPrior?' *':'')+'</div></div>';
+    h += '<div><div style="color:var(--text3)">Portfolio Value</div><div style="font-weight:700;color:'+expCol+'">₹'+((d.investableAmount||0) + (s.portfolioExpReturnAmt||0)).toLocaleString('en-IN')+'</div></div>';
+    h += '<div><div style="color:var(--text3)">Confidence</div><div style="font-weight:700">'+((s.weightedConfidence||0)*100).toFixed(0)+'%</div></div>';
+    h += '<div><div style="color:var(--text3)">Picks</div><div style="font-weight:700">'+(s.count||0)+' stocks · '+(s.sectors||0)+' sectors</div></div>';
+    h += '<div><div style="color:var(--text3)">Regime</div><div style="font-weight:700">'+(d.marketRegime||'N/A')+'</div></div>';
+    h += '</div>';
+
+    // Bucket breakdown mini bar
+    var bb = (d.diagnostics && d.diagnostics.bucketBreakdown) || {};
+    h += '<div style="margin-top:8px;font-size:10px;color:var(--text3)">Bucket mix: ';
+    ['A','B','C','D'].forEach(function(k){
+      if (bb[k]) {
+        var col = k==='A'?'var(--green)':k==='B'?'#10b981':k==='C'?'#f59e0b':'var(--red)';
+        h += '<span style="color:'+col+';font-weight:700;margin-right:8px">'+k+': '+bb[k].toFixed(0)+'%</span>';
+      }
+    });
+    h += '</div>';
+
+    // Compact picks list
+    h += '<div style="margin-top:10px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">';
+    h += '<thead><tr style="color:var(--text3);text-align:right"><th style="text-align:left;padding:3px 6px">Stock</th>'
+      + '<th>Bucket</th><th>ScoreV2</th><th>Alloc %</th><th>Shares</th><th>Invested</th><th>Exp 12M</th><th>Risk</th><th>Value</th></tr></thead><tbody>';
+    (d.stocks || []).forEach(function(p) {
+      var er = (p.expectedReturn12m || 0) * 100;
+      var erCol = er >= 15 ? 'var(--green)' : er >= 5 ? '#10b981' : er >= 0 ? 'var(--text)' : 'var(--red)';
+      var bCol = p.scoreBucket==='A'?'var(--green)':p.scoreBucket==='B'?'#10b981':p.scoreBucket==='C'?'#f59e0b':'var(--red)';
+      var rCol = p.riskLevel==='LOW'?'var(--green)':p.riskLevel==='HIGH'?'var(--red)':'#f59e0b';
+      var vCol = p.valuationLabel==='UNDERVALUED'?'var(--green)':p.valuationLabel==='OVERVALUED'?'var(--red)':'var(--text2)';
+      h += '<tr style="border-top:1px solid var(--border2);text-align:right">'
+        + '<td style="text-align:left;padding:3px 6px"><b>'+p.sym+'</b> <span style="color:var(--text3);font-size:9px">'+(p.sector||'')+'</span></td>'
+        + '<td style="color:'+bCol+';font-weight:700">'+p.scoreBucket+'</td>'
+        + '<td>'+(p.scoreV2!=null?p.scoreV2.toFixed(1):'-')+'</td>'
+        + '<td style="font-weight:700">'+p.allocPct.toFixed(1)+'%</td>'
+        + '<td>'+p.shares+'</td>'
+        + '<td>₹'+(p.allocAmt||0).toLocaleString('en-IN')+'</td>'
+        + '<td style="color:'+erCol+';font-weight:700">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>'
+        + '<td style="color:'+rCol+'">'+(p.riskLevel||'-')+'</td>'
+        + '<td style="color:'+vCol+';font-size:9px">'+(p.valuationLabel||'-')+'</td>'
+        + '</tr>';
+    });
+    h += '</tbody></table></div>';
+
+    if (s.usingPrior) {
+      h += '<div style="margin-top:6px;font-size:10px;color:var(--text3)">* Using cold-start Bayesian prior — expected returns will sharpen as forward-return history accumulates.</div>';
+    }
+  } else if (!ltPortfolioLoading && !ltPortfolioError) {
+    h += '<div style="margin-top:8px;color:var(--text3);font-size:11px">Click "Build Portfolio" to generate a Varsity long-term model with 12M expected returns. Constraints: max 15 stocks · max 3 per sector · 5–25% per position.</div>';
+  }
+
+  h += '</div>';
+  return h;
+}
+
 async function renderStockRec(forceRefresh){
   var cont = document.getElementById('main-content');
   if(!cont) return;
@@ -3137,7 +3252,10 @@ async function pollStockRec(){
   var cont = document.getElementById('main-content');
   if(!cont || window._currentMode !== 'stockrec') return;
   try {
-    var r = await fetch('/api/stocks/score');
+    // Long-Term tab uses the v2 endpoint (Varsity long-term scoring);
+    // every other tab keeps the v1 contract for backward compatibility.
+    var url = stockRecTab === 'longterm' ? '/api/stocks/score?scoreVersion=2' : '/api/stocks/score';
+    var r = await fetch(url);
     var d = await r.json();
     var msgEl = document.getElementById('srec-loading-msg');
     var subEl = document.getElementById('srec-loading-sub');
@@ -4034,6 +4152,7 @@ function renderStockRecPage(){
   // ── Tab definitions: each tab has groups of columns ──
   var TAB_DEFS = [
     { id:'overview', label:'Overview', icon:'📊' },
+    { id:'longterm', label:'Long-Term', icon:'🏛️' },
     { id:'quality',  label:'Quality',  icon:'⭐' },
     { id:'value',    label:'Value',    icon:'💰' },
     { id:'momentum', label:'Momentum', icon:'🚀' },
@@ -4101,6 +4220,78 @@ function renderStockRecPage(){
       // Target
       {k:'target',l:'Target',hc:'var(--text3)',r:function(s){return _price(s.target);}},
       {k:'rewardPct',l:'Upside',hc:'var(--text3)',r:function(s){return _pct(s.rewardPct);}},
+    ],
+    // ── Long-Term tab (Varsity M3 fundamentals-first picker) ──
+    // Rendered only when the server returns score_version=2. Shows the
+    // Varsity-aligned long-term view: score_v2 decomposition + expected
+    // return + risk + why-this-stock rationale. Technicals deliberately
+    // excluded — they live in the Technical tab.
+    longterm: [
+      {k:'scoreV2',l:'Score v2',hc:'#f59e0b',r:function(s){
+        if(s.scoreV2==null) return '<span style="color:var(--text4)">-</span>';
+        var v=parseFloat(s.scoreV2);
+        var c=v>=80?'var(--green)':v>=65?'#10b981':v>=50?'#f59e0b':'var(--red)';
+        return '<span style="color:'+c+';font-weight:700">'+v.toFixed(1)+'</span>';
+      }},
+      {k:'scoreBucket',l:'Bucket',hc:'#f59e0b',r:function(s){
+        if(!s.scoreBucket) return '-';
+        var c=s.scoreBucket==='A'?'var(--green)':s.scoreBucket==='B'?'#10b981':s.scoreBucket==='C'?'#f59e0b':'var(--red)';
+        return '<span style="color:'+c+';font-weight:700">'+s.scoreBucket+'</span>';
+      }},
+      {k:'expectedReturn',l:'Exp Ret',hc:'#10b981',r:function(s){
+        if(s.expectedReturn==null) return '-';
+        var v=parseFloat(s.expectedReturn)*100;
+        var c=v>15?'var(--green)':v>5?'#10b981':v>0?'var(--text)':'var(--red)';
+        return '<span style="color:'+c+'">'+(v>0?'+':'')+v.toFixed(1)+'%</span>';
+      }},
+      {k:'expectedReturnHorizon',l:'Horizon',hc:'#10b981',r:function(s){return s.expectedReturnHorizon||'-';}},
+      {k:'confidence',l:'Conf',hc:'#10b981',r:function(s){
+        if(s.confidence==null) return '-';
+        var v=parseFloat(s.confidence);
+        var c=v>=0.7?'var(--green)':v>=0.5?'#f59e0b':'var(--red)';
+        var note=s.usingPrior?' *':'';
+        return '<span style="color:'+c+'">'+(v*100).toFixed(0)+'%'+note+'</span>';
+      },br:true},
+      // Sub-score breakout
+      {k:'subQuality',l:'Q/40',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.quality,1):'-';}},
+      {k:'subGrowth',l:'G/25',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.growth,1):'-';}},
+      {k:'subValuation',l:'V/20',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.valuation,1):'-';}},
+      {k:'subBusiness',l:'B/15',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.business,1):'-';},br:true},
+      // Risk + valuation label
+      {k:'riskLevel',l:'Risk',hc:'var(--red)',r:function(s){
+        if(!s.riskLevel) return '-';
+        var c=s.riskLevel==='LOW'?'var(--green)':s.riskLevel==='MEDIUM'?'#f59e0b':'var(--red)';
+        return '<span style="color:'+c+'">'+s.riskLevel+'</span>';
+      }},
+      {k:'valuationLabel',l:'Value',hc:'var(--red)',r:function(s){
+        if(!s.valuationLabel||s.valuationLabel==='UNKNOWN') return '-';
+        var c=s.valuationLabel==='UNDERVALUED'?'var(--green)':s.valuationLabel==='FAIR'?'var(--text)':'var(--red)';
+        return '<span style="color:'+c+'">'+s.valuationLabel+'</span>';
+      }},
+      {k:'sectorTemplate',l:'Template',hc:'var(--red)',r:function(s){return s.sectorTemplate?'<span style="color:var(--text3)">'+s.sectorTemplate+'</span>':'-';}},
+      {k:'dataCompleteness',l:'Data',hc:'var(--red)',r:function(s){
+        if(s.dataCompleteness==null) return '-';
+        var v=parseFloat(s.dataCompleteness);
+        var c=v>=0.75?'var(--green)':v>=0.5?'#f59e0b':'var(--red)';
+        return '<span style="color:'+c+'">'+(v*100).toFixed(0)+'%</span>';
+      },br:true},
+      // Timing overlay (NOT part of scoreV2 — shown separately)
+      {k:'timingLabel',l:'Timing',hc:'var(--blue)',r:function(s){
+        if(!s.timingOverlay) return '-';
+        var lbl=s.timingOverlay.label;
+        var c=lbl==='GOOD'?'var(--green)':lbl==='EXTENDED'?'#f59e0b':lbl==='WAIT_FOR_DIP'?'#f59e0b':'var(--red)';
+        return '<span style="color:'+c+'">'+lbl+'</span>';
+      }},
+      {k:'timingScore',l:'TimScr',hc:'var(--blue)',r:function(s){return s.timingOverlay?_num(s.timingOverlay.timingScore,0):'-';},br:true},
+      // Why this stock? deterministic explainer
+      {k:'whyStrengths',l:'Strengths',hc:'var(--green)',r:function(s){
+        if(!s.whyStrengths||!s.whyStrengths.length) return '<span style="color:var(--text4)">-</span>';
+        return '<span style="color:var(--green);font-size:0.85em">'+s.whyStrengths.join('<br>')+'</span>';
+      }},
+      {k:'whyRisks',l:'Risks',hc:'var(--red)',r:function(s){
+        if(!s.whyRisks||!s.whyRisks.length) return '<span style="color:var(--text4)">-</span>';
+        return '<span style="color:var(--red);font-size:0.85em">'+s.whyRisks.join('<br>')+'</span>';
+      }},
     ],
     quality: [
       {k:'roe',l:'ROE%',hc:'#f59e0b',r:function(s){return _roe(s.roe);}},
@@ -4247,13 +4438,22 @@ function renderStockRecPage(){
   TAB_DEFS.forEach(function(t){
     var isActive = stockRecTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button onclick="stockRecTab=\''+t.id+'\';renderStockRec()" style="padding:5px 12px;border-radius:8px;border:1px solid '
+    // Tab switch now re-fetches because Long-Term hits /api/stocks/score?scoreVersion=2
+    // (v2 payload) while every other tab uses the v1 payload. We need fresh data
+    // when crossing the v1/v2 boundary in either direction.
+    var onClick = "stockRecTab='"+t.id+"';renderStockRec();pollStockRec()";
+    html += '<button onclick="'+onClick+'" style="padding:5px 12px;border-radius:8px;border:1px solid '
       +(isActive?'#f59e0b':'var(--border)')+';background:'+(isActive?'rgba(245,158,11,0.15)':'var(--bg2)')
       +';color:'+(isActive?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'400')
       +';transition:all .15s;white-space:nowrap">'
       +t.icon+' '+t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
   });
   html += '</div>';
+
+  // ── Long-Term portfolio v2 panel (only on Long-Term tab) ──
+  if (stockRecTab === 'longterm') {
+    html += renderLongTermPortfolioPanel();
+  }
 
   // ── Table ──
   html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
