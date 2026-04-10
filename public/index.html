@@ -3104,9 +3104,13 @@ var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
 // ── Stock Picks table sort state (Swing + Long Term columns) ──
-var srSwingSortKey = 'fallenScore';  // default: rank by fallen-angel score
+// Both tables default to sorting by the visible composite Score (desc) so
+// the top-25 slice is the 25 highest-scored rows, matching what the user
+// sees in the Score column. Users can re-sort by FA / FrHi / RSI / etc.
+// by clicking the column headers.
+var srSwingSortKey = 'score';
 var srSwingSortDir = 'desc';
-var srLongSortKey  = 'score';        // default: rank by composite score
+var srLongSortKey  = 'score';
 var srLongSortDir  = 'desc';
 
 // ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
