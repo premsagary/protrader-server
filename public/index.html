@@ -5510,10 +5510,12 @@ function psRenderLongTermResults(d){
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','AI Reviews','Track'];
+  // AI Reviews sits as the 2nd column (directly after Stock) to match the
+  // Swing Trade Portfolio table layout.
+  var hdrs=['Stock','AI Reviews','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','Track'];
   hdrs.forEach(function(hdr,i){
-    // Right-align numeric cols (index 3..9), left-align Stock/Bucket/AI Reviews/Track
-    var align=(i===0)?'left':(i>=3&&i<=9)?'right':'left';
+    // Right-align numeric cols (index 4..10: Alloc%..Timing), left-align the rest
+    var align=(i>=4&&i<=10)?'right':'left';
     h+='<th style="padding:7px 8px;text-align:'+align+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -5533,23 +5535,8 @@ function psRenderLongTermResults(d){
       :('Kijun dist: '+(kDist>=0?'+':'')+(kDist!=null?kDist.toFixed(1):'?')+'%'
           +(tov.tkBull===true?' · TK bullish (T>K)':tov.tkBull===false?' · TK bearish (T<K)':''));
     var rowBg=(i%2===0)?'var(--bg2)':'var(--bg)';
-    h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2)">';
-    h+='<td style="padding:6px 8px"><div style="font-weight:700;color:var(--text);font-size:11px">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.sector||'')+'</div></td>';
-    h+='<td style="padding:6px 8px"><span style="color:'+bCol+';font-weight:800;font-size:11px">'+(p.scoreBucket||'—')+'</span></td>';
-    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+bCol+'">'+(p.scoreV2!=null?p.scoreV2.toFixed(1):'-')+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;font-weight:700">'+(p.allocPct!=null?p.allocPct.toFixed(1):'-')+'%</td>';
-    h+='<td style="padding:6px 8px;text-align:right">'+(p.shares||0)+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right">'+psFmt(p.allocAmt||0)+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+erCol+'">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>';
-    h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
-
-    // ── AI REVIEWS column ─────────────────────────────────────────────
-    // Prefer the fresh in-memory result from the latest Deep Review run, then
-    // fall back to persisted per-stock reviews from the DB so badges survive
-    // page refresh. Same layout and verdict colors as the Swing Trade table
-    // so users can learn it once.
+    // ── AI REVIEWS lookup (must happen before the <tr> so the cell can be
+    // rendered in the 2nd column position, matching the Swing Trade layout) ──
     var _ltAIStockReview=null;
     if(_ltAIValidation&&_ltAIValidation.signal_reviews){
       _ltAIStockReview=_ltAIValidation.signal_reviews.find(function(r){return r.sym===p.sym;});
@@ -5557,6 +5544,11 @@ function psRenderLongTermResults(d){
     if(!_ltAIStockReview&&_ltAIReviewsDB&&_ltAIReviewsDB[p.sym]){
       _ltAIStockReview=_ltAIReviewsDB[p.sym];
     }
+
+    h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2)">';
+    h+='<td style="padding:6px 8px"><div style="font-weight:700;color:var(--text);font-size:11px">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.sector||'')+'</div></td>';
+
+    // AI Reviews column (2nd column — matches Swing Trade Portfolio layout)
     h+='<td style="padding:5px;vertical-align:top">';
     if(_ltAIStockReview){
       var ltAiR=_ltAIStockReview;
@@ -5583,6 +5575,16 @@ function psRenderLongTermResults(d){
       h+='<span style="font-size:8px;color:var(--text4)">—</span>';
     }
     h+='</td>';
+
+    h+='<td style="padding:6px 8px"><span style="color:'+bCol+';font-weight:800;font-size:11px">'+(p.scoreBucket||'—')+'</span></td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+bCol+'">'+(p.scoreV2!=null?p.scoreV2.toFixed(1):'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700">'+(p.allocPct!=null?p.allocPct.toFixed(1):'-')+'%</td>';
+    h+='<td style="padding:6px 8px;text-align:right">'+(p.shares||0)+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right">'+psFmt(p.allocAmt||0)+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+erCol+'">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
 
     // Track column — "I Bought" marks the pick as a LONGTERM holding
     var ltPrice=(p.currentPrice||p.price||0);
