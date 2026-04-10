@@ -9266,6 +9266,19 @@ function scoreOneStockV2(f, peers) {
   );
   let businessScore = _clampNum(businessRaw * mul.business, 0, 15);
 
+  // Governance hard ceiling on promoter pledge (plan review 2026-04-10).
+  // The smooth formula above uses _norm(pledged, 0, 30) which clamps at 30%,
+  // so 30%-pledge and 100%-pledge land on the same penalty — wrong for
+  // structural risk. A 100%-pledged promoter can trigger a margin-call
+  // cascade that wipes the equity independent of operational quality.
+  // THYROCARE slipped through at businessScore 7/15 with 100% pledge on the
+  // first Railway long-term portfolio run. These hard caps sit on top of
+  // the smooth formula so they strictly lower businessScore, never raise it.
+  if (f.pledged != null) {
+    if (f.pledged >= 80)      businessScore = Math.min(businessScore, 3);  // extreme — 20% max
+    else if (f.pledged >= 50) businessScore = Math.min(businessScore, 6);  // severe — 40% max
+  }
+
   // ── FINAL SCORE V2 (0-100) — zero technical contribution ───────────────
   const scoreV2 = +(qualityScore + growthScore + valuationScore + businessScore).toFixed(1);
 
@@ -11238,9 +11251,29 @@ async function buildPortfolioSuggestionV2(amount) {
 
   // Only allocate to stocks with a positive rankScore — negative expected
   // return means we have no edge, so those belong in diagnostics not the book.
-  const candidates = scored.filter(s => s.rankScore > 0).slice(0, MAX_STOCKS * 4);
+  // Also enforce a data-completeness floor (plan review 2026-04-10): a long-
+  // term pick needs enough fundamentals coverage to be trustworthy. On the
+  // first Railway run, 27/567 stocks had dataCompleteness < 0.5; letting
+  // those into a long-term book risks picking names whose ROE/growth are
+  // blanks filled by neutral priors.
+  const DC_FLOOR = 0.6;
+  const candidates = scored
+    .filter(s => s.rankScore > 0 && (s.dataCompleteness ?? 0) >= DC_FLOOR)
+    .slice(0, MAX_STOCKS * 4);
+  const dcFiltered = scored.filter(
+    s => s.rankScore > 0 && (s.dataCompleteness ?? 0) < DC_FLOOR
+  ).length;
   if (candidates.length < MIN_STOCKS) {
-    // Cold-start fallback: the prior is positive across all buckets, so
+    // Fallback 1: relax the DC floor but keep the positive-rank requirement.
+    // Thin sectors or Screener-coverage gaps can leave the primary filter
+    // starved; better to pick a sparse-data name than fail to build a book.
+    const fallback = scored.filter(
+      s => s.rankScore > 0 && !candidates.includes(s)
+    ).slice(0, MIN_STOCKS * 2);
+    candidates.push(...fallback);
+  }
+  if (candidates.length < MIN_STOCKS) {
+    // Fallback 2 (cold-start): the prior is positive across all buckets, so
     // hitting this branch means the scored universe itself is thin.
     candidates.push(...scored.filter(s => !candidates.includes(s)).slice(0, MIN_STOCKS * 2));
   }
@@ -11398,6 +11431,8 @@ async function buildPortfolioSuggestionV2(amount) {
     diagnostics: {
       sectorBreakdown,
       bucketBreakdown,
+      dataCompletenessFloor: DC_FLOOR,
+      dcFilteredCount: dcFiltered,
     },
   };
 }
