@@ -3103,6 +3103,12 @@ var stockRecShowAll = false;
 var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
+// ── Stock Picks table sort state (Swing + Long Term columns) ──
+var srSwingSortKey = 'fallenScore';  // default: rank by fallen-angel score
+var srSwingSortDir = 'desc';
+var srLongSortKey  = 'score';        // default: rank by composite score
+var srLongSortDir  = 'desc';
+
 // ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
 var stockDataTab      = 'overview';
 var stockDataSearch   = '';
@@ -4053,25 +4059,67 @@ function renderStockRecPage(){
     return true; // unknown filter value → don't drop rows
   });
 
+  // Generic sort helper for both picks tables. Null/undefined values are
+  // always pushed to the end regardless of direction so "-" rows don't
+  // dominate the top when sorting ascending. String keys (sym, grp) fall
+  // through to locale compare.
+  function _srSortBy(arr, key, dir){
+    var mult = dir==='asc' ? 1 : -1;
+    return arr.slice().sort(function(a,b){
+      var av=a[key], bv=b[key];
+      var aNull=(av==null), bNull=(bv==null);
+      if(aNull && bNull) return 0;
+      if(aNull) return 1;
+      if(bNull) return -1;
+      if(typeof av==='string' || typeof bv==='string'){
+        av=String(av).toUpperCase(); bv=String(bv).toUpperCase();
+        if(av<bv) return -1*mult;
+        if(av>bv) return  1*mult;
+        return 0;
+      }
+      return (av-bv)*mult;
+    });
+  }
+
   // Swing Trades column = fallen angels (quality on sale) in the selected slice.
-  var swingPicks = filtered
-    .filter(function(s){ return s.isFallenAngel; })
-    .sort(function(a,b){ return (b.fallenScore||0)-(a.fallenScore||0); });
+  var swingPicks = _srSortBy(
+    filtered.filter(function(s){ return s.isFallenAngel; }),
+    srSwingSortKey,
+    srSwingSortDir
+  );
 
   // Long-Term Trades column = quality stocks not collapsing. Use v1 signals
   // (score, ROE, D/E, earnings growth, not deeply fallen) to pre-rank until
   // Deep Review / Portfolio Manager v2 provides scoreV2. This keeps the screen
   // useful without an extra fetch — the authoritative long-term builder lives
   // in Portfolio Manager → Long Term Portfolio.
-  var longTermPicks = filtered
-    .filter(function(s){
+  var longTermPicks = _srSortBy(
+    filtered.filter(function(s){
       var roeOk = (s.roe==null) || s.roe>=12;
       var deOk  = (s.debtToEq==null) || s.debtToEq<=2;
       var grOk  = (s.earGrowth==null) || s.earGrowth>=0;
       var notCollapsing = (s.pctFromHigh==null) || s.pctFromHigh>=-35;
       return (s.score||0)>=60 && roeOk && deOk && grOk && notCollapsing;
-    })
-    .sort(function(a,b){ return (b.score||0)-(a.score||0); });
+    }),
+    srLongSortKey,
+    srLongSortDir
+  );
+
+  // Sortable header builder: clicking a header toggles asc/desc on that col.
+  // `group` is 'swing' or 'long' so each table has independent sort state.
+  function _srHdr(group, key, label, align, titleAttr){
+    var curKey = group==='swing' ? srSwingSortKey : srLongSortKey;
+    var curDir = group==='swing' ? srSwingSortDir : srLongSortDir;
+    var active = curKey===key;
+    var arrow = active ? (curDir==='asc'?' ▲':' ▼') : '';
+    var col = active ? '#f59e0b' : 'var(--text3)';
+    var setK = group==='swing' ? 'srSwingSortKey' : 'srLongSortKey';
+    var setD = group==='swing' ? 'srSwingSortDir' : 'srLongSortDir';
+    var onclick = 'if('+setK+'===\''+key+'\'){'+setD+'='+setD+'===\'asc\'?\'desc\':\'asc\';}else{'+setK+'=\''+key+'\';'+setD+'=\'desc\';}renderStockRec()';
+    var t = titleAttr?' title="'+titleAttr+'"':'';
+    return '<th onclick="'+onclick+'"'+t+' style="text-align:'+(align||'right')+';padding:6px 8px;color:'+col+';cursor:pointer;user-select:none;white-space:nowrap">'
+      + label+arrow+'</th>';
+  }
 
   var top3 = (filtered.slice(0,3));
 
@@ -4097,23 +4145,9 @@ function renderStockRecPage(){
     +'})">📡 Refresh Data</button>';
   html += '</div></div>';
 
-  // Phase 4: Conviction tier summary
-  var convCounts = {sb:0,b:0,acc:0,w:0,av:0};
-  allStocks.forEach(function(s){
-    var c=(s.conviction||s.recKey||'watch').toLowerCase();
-    if(c.includes('strong')) convCounts.sb++;
-    else if(c==='buy') convCounts.b++;
-    else if(c.includes('accum')) convCounts.acc++;
-    else if(c.includes('avoid')) convCounts.av++;
-    else convCounts.w++;
-  });
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">';
-  html += '<span class="conviction-pill strong-buy">Strong Buy: '+convCounts.sb+'</span>';
-  html += '<span class="conviction-pill buy">Buy: '+convCounts.b+'</span>';
-  html += '<span class="conviction-pill accumulate">Accumulate: '+convCounts.acc+'</span>';
-  html += '<span class="conviction-pill watch">Watch: '+convCounts.w+'</span>';
-  html += '<span class="conviction-pill avoid">Avoid: '+convCounts.av+'</span>';
-  html += '</div>';
+  // Conviction tier summary removed — was always stuck on Watch:567 during v1
+  // scoring pass and added no signal. Market-cap pills + Swing/Long Term
+  // tables below convey the same information more usefully.
 
   var buys = allStocks.filter(function(s){ return s.recKey==='buy'||s.recKey==='strong_buy'; }).length;
   var golden = allStocks.filter(function(s){ return s.goldenCross; }).length;
@@ -4171,14 +4205,15 @@ function renderStockRecPage(){
   html += '</div>';
   if(swingPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
-    html += '<thead><tr style="color:var(--text3);text-align:right;background:var(--bg3)">'
-      + '<th style="text-align:left;padding:6px 8px">#</th>'
-      + '<th style="text-align:left;padding:6px 8px">Stock</th>'
-      + '<th style="padding:6px 8px">Score</th>'
-      + '<th style="padding:6px 8px">Price</th>'
-      + '<th style="padding:6px 8px" title="% from 52-week high">FrHi%</th>'
-      + '<th style="padding:6px 8px">RSI</th>'
-      + '<th style="padding:6px 8px">ROE%</th>'
+    html += '<thead><tr style="background:var(--bg3)">'
+      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
+      + _srHdr('swing','sym',        'Stock', 'left')
+      + _srHdr('swing','score',      'Score')
+      + _srHdr('swing','fallenScore','FA',   'right','Fallen Angel Score (quality-on-sale ranking)')
+      + _srHdr('swing','price',      'Price')
+      + _srHdr('swing','pctFromHigh','FrHi%','right','% from 52-week high')
+      + _srHdr('swing','rsi',        'RSI')
+      + _srHdr('swing','roe',        'ROE%')
       + '</tr></thead><tbody>';
     swingPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
@@ -4192,7 +4227,8 @@ function renderStockRecPage(){
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+s.score+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+(s.score!=null?s.score:'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:#f59e0b;font-weight:600">'+(s.fallenScore!=null?s.fallenScore:'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+fhCol+';font-weight:600">'+(fh!=null?fh.toFixed(1)+'%':'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
@@ -4213,20 +4249,18 @@ function renderStockRecPage(){
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
   html += '<div><div style="font-weight:800;font-size:14px;color:#22d3ee">🏛 Long Term Trades <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth · Not down >35%</div></div>';
-  html += '<div style="display:flex;gap:6px;align-items:center">';
   html += '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+longTermPicks.length+'</span>';
-  html += '<button onclick="_psTab=\'longterm\';setMode(\'psuggest\')" style="padding:4px 10px;border-radius:6px;border:1px solid #22d3ee;background:rgba(34,211,238,.12);color:#22d3ee;font-size:10px;cursor:pointer;font-weight:700;white-space:nowrap">Build Portfolio →</button>';
-  html += '</div></div>';
+  html += '</div>';
   if(longTermPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
-    html += '<thead><tr style="color:var(--text3);text-align:right;background:var(--bg3)">'
-      + '<th style="text-align:left;padding:6px 8px">#</th>'
-      + '<th style="text-align:left;padding:6px 8px">Stock</th>'
-      + '<th style="padding:6px 8px">Score</th>'
-      + '<th style="padding:6px 8px">Price</th>'
-      + '<th style="padding:6px 8px">ROE%</th>'
-      + '<th style="padding:6px 8px">D/E</th>'
-      + '<th style="padding:6px 8px" title="Revenue growth YoY">RevGr%</th>'
+    html += '<thead><tr style="background:var(--bg3)">'
+      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
+      + _srHdr('long','sym',        'Stock', 'left')
+      + _srHdr('long','score',      'Score')
+      + _srHdr('long','price',      'Price')
+      + _srHdr('long','roe',        'ROE%')
+      + _srHdr('long','debtToEq',   'D/E')
+      + _srHdr('long','revGrowth',  'RevGr%', 'right','Revenue growth YoY')
       + '</tr></thead><tbody>';
     longTermPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
@@ -4577,11 +4611,12 @@ async function renderStockDataPage(){
   });
   html += '</div>';
 
-  // Result count
+  // Result count — pretty-print the internal sort key for the user
+  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'Swing Score',score:'LtTerm Score',price:'Price'}[sk] || sk;
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
-    + ' · sorted by <b>'+sk+'</b> ('+stockDataSortDir+')</div>';
+    + ' · sorted by <b>'+_sortLabel+'</b> ('+stockDataSortDir+')</div>';
 
   // ── Sortable header helper ──
   function sortableHeader(key, label, align, extraStyle){
@@ -4599,12 +4634,16 @@ async function renderStockDataPage(){
     + '<table style="width:100%;border-collapse:collapse;font-size:11px">';
 
   // Header row
+  // Two separate score columns:
+  //   · Swing  = fallenScore (quality-on-sale ranking, only for fallen angels)
+  //   · LtTerm = score       (100-pt composite, used for Long Term ranking)
   html += '<thead><tr style="background:var(--bg2)">';
   html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>';
-  html += sortableHeader('sym',   'Stock', 'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
-  html += sortableHeader('grp',   'Grp',   'center');
-  html += sortableHeader('score', 'Score', 'right');
-  html += sortableHeader('price', 'Price', 'right', 'border-right:2px solid var(--border3)');
+  html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
+  html += sortableHeader('grp',         'Grp',     'center');
+  html += sortableHeader('fallenScore', 'Swing',   'right');
+  html += sortableHeader('score',       'LtTerm',  'right');
+  html += sortableHeader('price',       'Price',   'right', 'border-right:2px solid var(--border3)');
   activeCols.forEach(function(col){
     var isSorted = stockDataSortKey===col.k;
     var arrow = isSorted ? (stockDataSortDir==='asc'?' ▲':' ▼') : '';
@@ -4620,12 +4659,16 @@ async function renderStockDataPage(){
   html += '<tbody>';
   var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'};
   if(filtered.length===0){
-    html += '<tr><td colspan="'+(5+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
+    html += '<tr><td colspan="'+(6+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
   }
   filtered.forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
     var gc = grpCol[s.grp]||'var(--text3)';
-    var scoreCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+    // Long-term composite score color
+    var ltCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+    // Swing (fallen-angel) score — amber when present, dim dash when not
+    var fs = s.fallenScore;
+    var swCol = fs==null?'var(--text4)':fs>=75?'var(--green)':fs>=55?'#f59e0b':'var(--red)';
     html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
       + '<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(idx+1)+'</td>'
       + '<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3">'
@@ -4633,7 +4676,8 @@ async function renderStockDataPage(){
         + '<div style="font-size:10px;color:var(--text3)">'+(s.sector||'')+'</div>'
       + '</td>'
       + '<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
-      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+scoreCol+'">'+(s.score!=null?s.score:'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(s.score!=null?s.score:'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
     activeCols.forEach(function(col){
       html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
