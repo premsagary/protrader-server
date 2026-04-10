@@ -2245,6 +2245,7 @@ async function fetchCryptoNews(){
 function render(){
   if(S.mode==="mf") return;        // don't wipe MF tab on auto-refresh
   if(S.mode==="stockrec") return;  // don't wipe StockRec tab on auto-refresh
+  if(S.mode==="stockdata") return; // don't wipe Stock Data tab on auto-refresh
   if(S.mode==="psuggest") return;  // don't wipe Portfolio Suggestion on auto-refresh
   if(S.mode==="admin") return;     // don't wipe Admin tab on auto-refresh
   renderTopBar();
