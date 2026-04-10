@@ -17105,6 +17105,425 @@ app.get('/api/ai/validate', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// =============================================================================
+// LONG-TERM PORTFOLIO AI VALIDATION (Varsity v2 — buy & hold)
+// =============================================================================
+// Parallel to validateSignalsWithAI but scoped to the Varsity v2 long-term
+// portfolio: sends the 4-pillar Varsity scoring (Quality 40 + Growth 25 +
+// Valuation 20 + Business 15), the raw fundamentals the score is built on,
+// expected return + confidence from the bucket-stats calibration, riskLevel,
+// sector/template context, and timingOverlay (purely advisory). Reuses the
+// existing AI_MODELS fan-out, Varsity knowledge prompt, consensus builder,
+// and per-stock review persistence so the Long Term tab gets the same
+// 5-model review experience swing users see — but framed as a long-horizon
+// thesis/moat/risk review, not short-term signal validation.
+// FA/TA separation: timing fields are sent for context only, the user prompt
+// explicitly instructs models to judge the THESIS on fundamentals and only
+// comment on timing as a separate concern.
+// =============================================================================
+let _lastLTAIValidation = null;
+
+async function validateLongTermPortfolioWithAI(amount = 100000, mode = 'deep') {
+  if (_aiValidationRunning) return _lastLTAIValidation || { error: 'Another AI validation is in progress' };
+
+  const hasAnyKey = ANTHROPIC_API_KEY || OPENAI_API_KEY || GOOGLE_AI_API_KEY || DEEPSEEK_API_KEY;
+  if (!hasAnyKey) {
+    console.log('⚠ LT AI validation skipped — no API keys configured');
+    return { error: 'No LLM API keys configured on server' };
+  }
+
+  _aiValidationRunning = true;
+  _aiStatus = { running: true, steps: [], startedAt: Date.now(), models: {}, kind: 'longterm' };
+  const aiStep = (msg, type = 'info') => { _aiStatus.steps.push({ msg, type, ts: Date.now() }); console.log(`🏛 [LT-status] ${msg}`); };
+  const startTime = Date.now();
+  aiStep(`Long Term Varsity v2 AI review started (amount: ₹${amount}, ${AI_MODELS.length} models)`, 'info');
+
+  try {
+    // 1) Load (or build) the long-term portfolio for the requested amount.
+    const key = Math.round(amount);
+    let lt = portfolioSuggestionsV2[key];
+    const isStale = lt && lt.summary?.generatedAt && (Date.now() - lt.summary.generatedAt > 3600000);
+    if (!lt || isStale) {
+      aiStep('Building Long Term portfolio (Varsity v2) — this may take a few seconds');
+      lt = await buildPortfolioSuggestionV2(amount);
+      if (lt?.error) {
+        _aiValidationRunning = false;
+        _aiStatus.running = false;
+        return { error: lt.error };
+      }
+      portfolioSuggestionsV2[key] = lt;
+    }
+    const ltStocks = lt?.stocks || [];
+    if (!ltStocks.length) {
+      _aiValidationRunning = false;
+      _aiStatus.running = false;
+      return { error: 'Long Term portfolio is empty — generate one first.' };
+    }
+    aiStep(`Reviewing ${ltStocks.length} Long Term picks across ${lt.summary?.sectors || '?'} sectors`);
+
+    // 2) Refresh market data (VIX, FII/DII, delivery%, options, crude, USD/INR).
+    const allSyms = ltStocks.map(s => s.sym);
+    aiStep(`Fetching market/macro context for ${allSyms.length} stocks...`);
+    await fetchAIMarketData(allSyms).catch(e => aiStep(`Market data fetch warning: ${e.message}`, 'warn'));
+    aiStep('Market data fetched', 'ok');
+
+    // 3) Build RICH per-stock Varsity v2 data blocks for the LLMs. This block
+    //    is the contract between our scoring engine and the AI reviewers — it
+    //    exposes everything the Varsity knowledge can reason about.
+    const positionBlocks = ltStocks.map(s => {
+      const f = stockFundamentals[s.sym] || {};
+      const ext = global.FUND_EXT?.[s.sym] || {};
+      const px = livePrices[s.sym]?.price || f.price || ext.price || s.price || 0;
+      const pctFrom52H = f.high52w && px ? (((px - f.high52w) / f.high52w) * 100).toFixed(1) : '?';
+      const pctFrom52L = f.low52w  && px ? (((px - f.low52w)  / f.low52w)  * 100).toFixed(1) : '?';
+
+      // ── VARSITY v2 SCORE BREAKDOWN (4 pillars, fundamentals-only) ──
+      const sub = s.subScores || {};
+      const scores = [
+        `ScoreV2=${s.scoreV2}/100 [Bucket ${s.scoreBucket}]`,
+        `Quality=${sub.quality ?? '?'}/40`,
+        `Growth=${sub.growth ?? '?'}/25`,
+        `Valuation=${sub.valuation ?? '?'}/20 [${s.valuationLabel || '?'}]`,
+        `Business=${sub.business ?? '?'}/15`,
+        `SectorTemplate=${s.sectorTemplate || '?'}`,
+        `DataCompleteness=${s.dataCompleteness != null ? (s.dataCompleteness*100).toFixed(0)+'%' : '?'}`,
+      ].join(' ');
+
+      // ── EXPECTED RETURN (bucket-stats calibration) ──
+      const er = [
+        `ExpReturn12M=${s.expectedReturn12m != null ? (s.expectedReturn12m*100).toFixed(1)+'%' : '?'}`,
+        `Conf12M=${s.confidence12m != null ? (s.confidence12m*100).toFixed(0)+'%' : '?'}`,
+        `UsingPrior=${s.usingPrior12m ? 'YES (cold-start)' : 'no'}`,
+        `BasedOnObs=${s.basedOnObservations12m || 0}`,
+        `RankScore=${s.rankScore != null ? s.rankScore.toFixed(4) : '?'}`,
+        `RiskLevel=${s.riskLevel || '?'}`,
+        `RiskScore=${s.riskScore != null ? s.riskScore : '?'}`,
+      ].join(' ');
+
+      // ── PILLAR 1: QUALITY (Varsity M3 Ch6-10: ROE/ROCE/DuPont/margins) ──
+      const quality = [
+        `ROE=${f.roe ?? '?'}%`, `ROCE=${f.roce ?? '?'}%`, `ROA=${f.roa ?? '?'}%`,
+        `OPM=${f.opMargin ?? '?'}%`, `GrossMgn=${f.grossMgn ?? '?'}%`, `NetMgn=${f.profMgn ?? f.netMargin ?? '?'}%`,
+        `D/E=${f.debtToEq ?? '?'}`, `IntCov=${f.intCov ?? '?'}x`,
+        `CurrentRatio=${f.currentRatio ?? '?'}`, `QuickRatio=${f.quickRatio ?? '?'}`,
+        `ROE3yAvg=${f.roe3yAvg ?? '?'}%`, `ROE5yAvg=${f.roe5yAvg ?? '?'}%`,
+        `DuPontNM=${f.dupontNetMargin ?? '?'}%`,
+        `DuPontAT=${f.dupontAssetTurnover ?? '?'}x`,
+        `DuPontEM=${f.dupontEquityMultiplier ?? '?'}x`,
+        `DuPontROE=${f.dupontROE ?? '?'}%`,
+        `CCC=${f.cashConversionCycle ?? '?'}days`,
+        `InvDays=${f.inventoryDays ?? '?'}`,
+        `WCHealth=${f.workingCapitalHealth ?? '?'}`,
+      ].join(' ');
+
+      // ── PILLAR 2: GROWTH (Varsity M3 Ch10-12: EPS/Sales trends) ──
+      const growth = [
+        `RevGrowth1Y=${f.revGrowth ?? f.salesGr1y ?? '?'}%`,
+        `SalesGr5Y=${f.salesGr5y ?? '?'}%`,
+        `EPSGr1Y=${f.earGrowth ?? f.epsGr1y ?? '?'}%`,
+        `EPSGr5Y=${f.epsGr5y ?? '?'}%`,
+        `SalesQtrYoY=${f.salesQtrYoy ?? '?'}%`,
+        `PATQtrYoY=${f.patQtrYoy ?? '?'}%`,
+        `PATAnnual=${f.patAnnual != null ? f.patAnnual + 'Cr' : '?'}`,
+        `FCF=${f.fcf != null ? f.fcf + 'Cr' : '?'}`,
+      ].join(' ');
+
+      // ── PILLAR 3: VALUATION (Varsity M3 Ch14 + M13 intrinsic value) ──
+      const val = [
+        `PE=${f.pe ?? '?'}`, `FwdPE=${f.fwdPE ?? '?'}`, `IndustryPE=${f.industryPE ?? '?'}`,
+        `PB=${f.pb ?? '?'}`, `EV/EBITDA=${f.evEbitda ?? '?'}`,
+        `P/FCF=${f.priceToFCF ?? '?'}`, `P/Sales=${f.priceToSales ?? '?'}`,
+        `PEG=${f.peg != null ? f.peg : (f.pe && f.earGrowth > 0 ? (f.pe/f.earGrowth).toFixed(2) : '?')}`,
+        `EarningsYield=${f.earningsYield ?? '?'}%`,
+        `BookValue=₹${f.bookValue ?? '?'}`, `DivYield=${f.divYield ?? '?'}%`,
+        `EPS=${f.eps ?? '?'}`,
+      ].join(' ');
+
+      // ── PILLAR 4: BUSINESS QUALITY (ownership + governance) ──
+      const biz = [
+        `Promoter=${f.promoter ?? '?'}%`, `PromoterChg=${f.promoterChg ?? '?'}%`,
+        `Pledged=${f.pledged ?? '?'}%`,
+        `FII=${f.fiiHolding ?? '?'}%`, `DII=${f.diiHolding ?? '?'}%`,
+        `Inst=${f.instHeld ?? '?'}%`,
+        `NumShareholders=${f.numShareholders ?? '?'}`,
+        `MktCap=${f.mktCap ? Math.round(f.mktCap)+'Cr' : '?'}`,
+      ].join(' ');
+
+      // ── TIMING OVERLAY (context only — NOT part of fundamental thesis) ──
+      const tov = s.timingOverlay || {};
+      const timing = [
+        `TimingLabel=${tov.label || '?'}`, `TimingScore=${tov.timingScore ?? '?'}/100`,
+        `Ichimoku=${tov.ichimokuSignal || '?'}`,
+        `Tenkan=${tov.tenkan ?? '?'}`, `Kijun=${tov.kijun ?? '?'}`,
+        `KijunDist=${tov.kijunDistPct != null ? (tov.kijunDistPct>=0?'+':'')+tov.kijunDistPct+'%' : '?'}`,
+        `KijunBuyZone=${tov.kijunBuyZone || '?'}`,
+        `TKBull=${tov.tkBull == null ? '?' : tov.tkBull}`,
+        `DMA200=${f.dma200 ?? '?'}`, `%Above200DMA=${f.pctAbove200 ?? '?'}%`,
+        `GoldenCross=${f.goldenCross ? 'YES' : 'no'}`,
+        `WeeklyTrendConfirmed=${f.weeklyTrendConfirmed ? 'YES' : 'no'}`,
+      ].join(' ');
+
+      // ── PRICE CONTEXT ──
+      const price = [
+        `CMP=₹${px}`, `52wH=₹${f.high52w ?? '?'}`, `52wL=₹${f.low52w ?? '?'}`,
+        `%From52wH=${pctFrom52H}%`, `%From52wL=${pctFrom52L}%`,
+        `Change1m=${f.change1m ?? '?'}%`, `Change3m=${f.change3m ?? '?'}%`,
+        `AnnualVol=${f.annualVol != null ? f.annualVol.toFixed(0)+'%' : '?'}`,
+        `Beta=${f.beta ?? '?'}`, `Sharpe=${f.sharpeRatio ?? '?'}`,
+      ].join(' ');
+
+      // ── SECTOR-SPECIFIC (Varsity M15) ──
+      const secLow = (s.sector || '').toLowerCase();
+      let sectorSpecific = '';
+      if (secLow.includes('bank') || secLow.includes('nbfc') || secLow.includes('financ')) {
+        sectorSpecific = `NIM=${f.nim ?? '?'} NPA=${f.npa ?? f.gnpa ?? '?'} CAR=${f.car ?? '?'} CASA=${f.casa ?? '?'}`;
+      } else if (secLow.includes('it') || secLow.includes('software') || secLow.includes('tech')) {
+        sectorSpecific = `CCRevGrowth=${f.ccRevGrowth ?? f.revGrowth ?? '?'}% Attrition=${f.attrition ?? '?'}%`;
+      } else if (secLow.includes('pharma') || secLow.includes('health')) {
+        sectorSpecific = `ANDA=${f.andaFilings ?? '?'} FDAStatus=${f.fdaStatus ?? '?'}`;
+      } else if (secLow.includes('auto')) {
+        sectorSpecific = `MonthlySales=${f.monthlySales ?? '?'} EVRisk=${f.evTransition ?? '?'}`;
+      }
+
+      // ── DELIVERY / OPTIONS (for institutional interest read) ──
+      const delData = _marketDataCache.deliveryData?.[s.sym];
+      const optData = _marketDataCache.optionData?.[s.sym];
+      const delivery = delData ? `Delivery%=${delData.deliveryPct ?? '?'}%` : 'Delivery=N/A';
+      const options  = optData ? `PCR=${optData.pcr} MaxPain=₹${optData.maxPain || '?'} IVRank=${optData.ivRank != null ? optData.ivRank+'%' : '?'}` : 'Options=N/A';
+
+      // ── PEER COMPARISON (Varsity M13 Ch5) ──
+      const peerData = buildPeerComparison(s.sym);
+      const peerStr = peerData
+        ? `SectorAvgPE=${peerData.sectorAvgPE} SectorAvgROE=${peerData.sectorAvgROE} Peers=[${peerData.peers.map(p2=>`${p2.sym}:PE=${p2.pe},ROE=${p2.roe}`).join(' ')}]`
+        : 'Peers=N/A';
+
+      // ── OUR DETERMINISTIC WHY-THIS-STOCK EXPLAINER ──
+      const whyStr = (s.whyStrengths || []).join(' | ') || 'none flagged';
+      const riskStr = (s.whyRisks || []).join(' | ') || 'none flagged';
+
+      return `━━ ${s.sym} (${f.name || s.name || s.sym}) [${s.sector || '?'}] alloc=${s.allocPct}% shares=${s.shares} invested=₹${s.allocAmt} ━━\n`
+        + `  VARSITY_V2_SCORE: ${scores}\n`
+        + `  EXPECTED_RETURN: ${er}\n`
+        + `  PILLAR1_QUALITY (M3 Ch6-10): ${quality}\n`
+        + `  PILLAR2_GROWTH (M3 Ch10-12): ${growth}\n`
+        + `  PILLAR3_VALUATION (M3 Ch14 + M13): ${val}\n`
+        + `  PILLAR4_BUSINESS (ownership/governance): ${biz}\n`
+        + `  PRICE_CONTEXT: ${price}\n`
+        + `  TIMING_OVERLAY_ADVISORY_ONLY: ${timing}\n`
+        + `  DELIVERY: ${delivery}\n`
+        + `  OPTIONS_OI: ${options}\n`
+        + `  PEERS: ${peerStr}\n`
+        + (sectorSpecific ? `  SECTOR_SPECIFIC (M15): ${sectorSpecific}\n` : '')
+        + `  OUR_STRENGTHS: ${whyStr}\n`
+        + `  OUR_RISKS: ${riskStr}\n`;
+    }).join('\n');
+
+    // 4) Portfolio-level context.
+    const bucketMix = Object.entries(lt.summary?.bucketBreakdown || {}).filter(([,v])=>v>0).map(([k,v])=>`${k}:${v}%`).join(' ');
+    const sectorMix = Object.entries(lt.summary?.sectorBreakdown || {}).map(([k,v])=>`${k}:${v}%`).join(' ');
+    const portfolioSummary = [
+      `Amount=₹${lt.amount}`,
+      `Invested=₹${lt.investableAmount}`,
+      `Cash=₹${lt.cashReserve} (${lt.cashPct}%)`,
+      `Horizon=${lt.horizon || '12M'}`,
+      `Count=${ltStocks.length}`,
+      `Regime=${lt.marketRegime || marketRegime || 'NEUTRAL'}`,
+      `PortfolioExpReturn=${((lt.summary?.portfolioExpReturn || 0) * 100).toFixed(1)}%`,
+      `AvgConfidence=${((lt.summary?.weightedConfidence || 0) * 100).toFixed(0)}%`,
+      `BucketMix=${bucketMix || 'N/A'}`,
+      `UsingPrior=${lt.summary?.usingPrior ? 'YES (cold-start)' : 'no'}`,
+    ].join(' | ');
+
+    // 5) Macro / breadth context — same knobs the swing validator uses.
+    const vix = _marketDataCache.vix;
+    const fiiDii = _marketDataCache.fiiDii;
+    const macroSummary = [
+      `India VIX: ${vix ? vix.value + ' (' + (vix.change>0?'+':'') + vix.change + '%)' : '?'}`,
+      `RBI Repo: ${_marketDataCache.rbiRepoRate || '?'}%`,
+      `Crude: $${_marketDataCache.crude || '?'}/bbl`,
+      `USD/INR: ₹${_marketDataCache.usdInr || '?'}`,
+      fiiDii ? `FII net: ₹${fiiDii.fii_net}Cr` : 'FII: N/A',
+      fiiDii ? `DII net: ₹${fiiDii.dii_net}Cr` : 'DII: N/A',
+    ].filter(Boolean).join(' | ');
+
+    const breadthSummary = marketRegimeData ? [
+      `Breadth: ${marketRegimeData.breadth || '?'}% stocks above 200DMA`,
+      `Nifty 1y: ${marketRegimeData.nifty?.['52w'] || '?'}%`,
+    ].join(' | ') : 'breadth N/A';
+
+    // 6) Build the LT-specific user prompt.
+    const userPrompt = `LONG-TERM PORTFOLIO REVIEW — VARSITY v2 (BUY-AND-HOLD, 12-MONTH HORIZON)
+
+This is NOT a short-term trading signal validation. You are reviewing a fundamentally-driven,
+long-horizon book. Judge each stock's THESIS on the Quality / Growth / Valuation / Business
+pillars from Varsity Module 3, 11, 13, 15. TECHNICAL SIGNALS are provided under
+TIMING_OVERLAY_ADVISORY_ONLY — use them only to comment on WHEN to buy; never let them override
+a fundamentally-sound buy-and-hold thesis (FA/TA separation is load-bearing in our scoring).
+
+═══════════════════════════════════════
+OUR SCORING MODEL (so you can cross-check each pillar value we report):
+═══════════════════════════════════════
+scoreV2 = Quality(0-40) + Growth(0-25) + Valuation(0-20) + Business(0-15)   [max 100]
+
+- Quality (40): ROE, ROCE, ROA, margin stack (op/gross/profit), D/E, Int Coverage,
+  Current/Quick Ratio, 3Y/5Y ROE consistency, DuPont decomposition, Cash Conversion
+  Cycle, Working Capital health. Sector templates re-weight (banks boost ROA for NIM).
+- Growth (25): Rev 1Y+5Y, EPS 1Y+5Y, Sales/PAT QoQ, profitable-and-growing floor,
+  1Y-spike penalty when 5Y is stagnant, cyclical dampener.
+- Valuation (20): sector-peer percentile ranks of PE/PB/EV-EBITDA/P-FCF/P-Sales/fwdPE,
+  plus PEG and Earnings Yield. Industry-relative PE for pharma. Banks lean on PB.
+- Business (15): promoter + promoter change, pledged, FII+DII + global institutional,
+  shareholder-count log shape. Hard caps at pledge≥50% (6/15 max) and pledge≥80% (3/15 max).
+- Bucket mapping: A≥80, B 65-80, C 50-65, D<50.
+- Expected Return is bucket-stats calibrated on our own forward-return observations (or a
+  cold-start prior when we have <30 observations for that bucket+regime cell).
+
+═══════════════════════════════════════
+MARKET CONTEXT
+═══════════════════════════════════════
+${macroSummary}
+${breadthSummary}
+RegimePending=${_regimePending ? _regimePending + ' (since '+new Date(_regimePendingSince).toISOString()+')' : 'None'}
+
+═══════════════════════════════════════
+PORTFOLIO SUMMARY
+═══════════════════════════════════════
+${portfolioSummary}
+SectorMix: ${sectorMix || 'N/A'}
+
+═══════════════════════════════════════
+LONG TERM PICKS — FULL DATA (${ltStocks.length} stocks):
+═══════════════════════════════════════
+${positionBlocks}
+
+═══════════════════════════════════════
+TASK
+═══════════════════════════════════════
+For EVERY stock above (do not skip any; signal_reviews MUST contain exactly ${ltStocks.length} entries, one per ticker), judge it as a 12-month buy-and-hold position and answer:
+
+1. THESIS CHECK — does the 4-pillar score faithfully represent the stock? Is the Quality pillar earned through ROE/ROCE + DuPont (margin or turnover led) or through leverage (fragile)? Is Growth structural (multi-year) or a 1-year spike?
+2. MOAT (Varsity M3 Ch15) — is there durable competitive advantage (pricing power, brand, switching costs, network effects, regulatory/scale moat)? Short one-line moat call.
+3. VALUATION DISCIPLINE (M13 Ch1-5) — do the sector-relative multiples + PEG justify entry at CMP? Is there a margin of safety vs intrinsic value? Call out overpaid names even if the pillar score is high.
+4. GOVERNANCE RED FLAGS — promoter trajectory, pledge level (>20% always flag, >50% severe), ownership shifts, auditor changes. Module 3.
+5. CAPITAL ALLOCATION — is FCF being deployed well (reinvestment, buybacks, dividends) or diluted in unrelated businesses?
+6. SECTOR TAILWIND/HEADWIND (M15) — is the sector in secular growth, cyclical peak, or structural decline? Sector-specific metric check (NIM/NPA for banks, attrition/cc-growth for IT, ANDA/FDA for pharma, monthly-sales for auto).
+7. RISK FLAGS — concentration, D/E, interest coverage, cash cycle stress, earnings volatility.
+8. TIMING (advisory) — given TIMING_OVERLAY (Kijun buy-zone, 200DMA, golden cross, weekly confirmation), is now a fair entry, or should the user stagger into the position? This MUST be separate from the thesis judgment.
+9. PORTFOLIO-LEVEL — sector concentration, bucket mix, expected return realism, whether the cash reserve fits the regime.
+
+${mode === 'deep' ? '\nDEEP MODE — also check:\n- Multi-year ROE consistency vs single-year snapshot\n- Whether earnings are backed by FCF or inflated by accruals\n- Peer-group dominance (is this the #1 in its sector, or an also-ran?)\n- Downturn resilience: how did the company do in FY20 / FY22 shocks?\n- Allocation sizing sanity: 5-25% per position, sector cap ≤25%, max 3 per sector\n- Cold-start prior vs observed stats: if usingPrior=YES, our 12M expected return is an assumption, not evidence — ding confidence\n- Data completeness: any stock <70% is a thin-data call — downgrade confidence accordingly\n' : ''}
+Respond ONLY in the JSON format specified in your system prompt. Use signal_type="LONG_TERM_HOLD" unless you explicitly disagree with including this stock, in which case use "EXIT". For MODIFY, prefer actionable wording ("stagger entry over 3 tranches", "wait for Kijun pullback", "trim to 10% allocation").`;
+
+    // 7) Dispatch to all AI models in parallel.
+    aiStep(`Dispatching to ${AI_MODELS.length} models in parallel (endpoint=longterm)...`);
+    AI_MODELS.forEach(m => { _aiStatus.models[m.id] = { name: m.name, status: 'pending' }; });
+    const modelPromises = AI_MODELS.map(m => callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt, 'longterm').then(r => {
+      if (r.skipped) { _aiStatus.models[m.id] = { name: m.name, status: 'skipped' }; aiStep(`${m.name}: skipped (no key or cap)`, 'warn'); }
+      else if (r.error) { _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, error: r.error }; aiStep(`${m.name}: error — ${r.error} (${r.took_ms}ms)`, 'err'); }
+      else {
+        const tk = r.tokens || { input: 0, output: 0 };
+        const reviewCount = r.result?.signal_reviews?.length || 0;
+        if (reviewCount === 0) {
+          _aiStatus.models[m.id] = { name: m.name, status: 'error', took_ms: r.took_ms, reviews: 0, tokens: tk, error: '0 reviews returned' };
+          aiStep(`${m.name}: ⚠ 0 reviews — excluded (${r.took_ms}ms)`, 'warn');
+          r.error = '0 reviews returned';
+        } else {
+          _aiStatus.models[m.id] = { name: m.name, status: 'ok', took_ms: r.took_ms, reviews: reviewCount, tokens: tk };
+          aiStep(`${m.name}: ✅ ${reviewCount} reviews (${r.took_ms}ms) — ${tk.input}+${tk.output}=${tk.input+tk.output} tokens`, 'ok');
+        }
+      }
+      return r;
+    }));
+    const modelResults = await Promise.all(modelPromises);
+
+    // 8) Build consensus — restrict allowed set to LT picks only.
+    const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+    aiStep(`Building consensus from ${okCount}/${AI_MODELS.length} models...`);
+    const result = buildConsensus(modelResults, allSyms);
+    result.mode = mode;
+    result.kind = 'longterm';
+    result.amount = amount;
+    result.horizon = lt.horizon || '12M';
+    result.portfolio_summary = {
+      invested: lt.investableAmount,
+      cashReserve: lt.cashReserve,
+      cashPct: lt.cashPct,
+      regime: lt.marketRegime || marketRegime || null,
+      portfolioExpReturn: lt.summary?.portfolioExpReturn || 0,
+      bucketBreakdown: lt.summary?.bucketBreakdown || {},
+      sectorBreakdown: lt.summary?.sectorBreakdown || {},
+      usingPrior: !!lt.summary?.usingPrior,
+    };
+    result.took_ms = Date.now() - startTime;
+    result.positions_reviewed = ltStocks.length;
+
+    _lastLTAIValidation = result;
+    try { await dbSet('ai_lt_validation_latest', JSON.stringify(result)); } catch {}
+
+    // 9) Persist per-stock, per-model reviews (reuse ai_stock_reviews table).
+    //    We tag signal_type='LONG_TERM_HOLD' so it doesn't collide with swing
+    //    reviews on upsert conflict (the table key is sym+model_id; swing runs
+    //    will still overwrite — that's fine since the latest review wins).
+    try {
+      const modelNameMap = {};
+      AI_MODELS.forEach(m => { modelNameMap[m.id] = m.name; });
+      const runAt = new Date();
+      for (const rev of (result.signal_reviews || [])) {
+        if (!rev.per_model) continue;
+        for (const [mid, mv] of Object.entries(rev.per_model)) {
+          if (mv.verdict === 'NO_REVIEW') continue;
+          await pool.query(
+            `INSERT INTO ai_stock_reviews(sym, model_id, model_name, verdict, confidence, signal_type, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ON CONFLICT(sym, model_id) DO UPDATE SET
+               model_name=$3, verdict=$4, confidence=$5, signal_type=$6, varsity_module=$7,
+               varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=$11`,
+            [rev.sym, mid, modelNameMap[mid] || mid, mv.verdict, mv.confidence || 0,
+             mv.signal_type || 'LONG_TERM_HOLD', mv.varsity_module || '', mv.varsity_reasoning || '',
+             mv.recommendation || '', mv.risk_flag || '', runAt]
+          );
+        }
+      }
+      console.log(`💾 Saved ${result.signal_reviews?.length || 0} LT stock reviews to DB`);
+    } catch (dbErr) {
+      console.error('⚠ Failed to save LT AI reviews to DB:', dbErr.message);
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    aiStep(`Done! ${okCount}/${AI_MODELS.length} models, ${result.signal_reviews?.length || 0} LT picks reviewed in ${elapsed}s`, 'ok');
+    _aiStatus.running = false;
+    _aiValidationRunning = false;
+    console.log(`🏛 LT AI validation complete in ${elapsed}s — ${okCount}/${AI_MODELS.length} models`);
+    return result;
+  } catch (e) {
+    _aiValidationRunning = false;
+    _aiStatus.running = false;
+    _aiStatus.steps.push({ msg: `Error: ${e.message}`, type: 'err', ts: Date.now() });
+    console.error('🏛 LT AI validation error:', e.message);
+    return { error: e.message, took_ms: Date.now() - startTime };
+  }
+}
+
+// GET /api/ai/validate-longterm?amount=100000&mode=deep
+app.get('/api/ai/validate-longterm', async (req, res) => {
+  try {
+    const amount = parseFloat(req.query.amount) || 100000;
+    const mode = req.query.mode === 'auto' ? 'auto' : 'deep';
+    const result = await validateLongTermPortfolioWithAI(amount, mode);
+    res.json(result || { error: 'No result' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/ai/validation-longterm — last cached LT result
+app.get('/api/ai/validation-longterm', async (req, res) => {
+  try {
+    if (_lastLTAIValidation) return res.json(_lastLTAIValidation);
+    const cached = await dbGet('ai_lt_validation_latest');
+    if (cached) return res.json(JSON.parse(cached));
+    res.json({ error: 'No LT AI validation yet. Trigger /api/ai/validate-longterm' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // API endpoint — get per-stock AI reviews from DB (persisted, survives restart)
 app.get('/api/ai/reviews', async (req, res) => {
   try {
