@@ -570,7 +570,74 @@ async function initDB() {
       console.log('🔑 Default admin user created');
     }
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth tables included)");
+    // ── Holdings (personal portfolio tracker) ───────────────────────────────
+    // Each user can track what they actually own. Holdings are keyed by
+    // username (auth middleware populates req.user.username) so we don't
+    // need a separate user_id lookup.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_holdings (
+        id         SERIAL PRIMARY KEY,
+        username   VARCHAR(50) NOT NULL,
+        symbol     VARCHAR(32) NOT NULL,
+        quantity   NUMERIC NOT NULL,
+        avg_price  NUMERIC NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(username, symbol)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_holdings_username ON user_holdings(username)`);
+
+    // ── Holdings AI reviews (cached latest per user × symbol × model) ───────
+    // Overwritten on each Deep AI Review run. Shown on login so users see
+    // the last verdict without having to re-run the fan-out.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS holdings_ai_reviews (
+        id                SERIAL PRIMARY KEY,
+        username          VARCHAR(50) NOT NULL,
+        symbol            VARCHAR(32) NOT NULL,
+        model_id          VARCHAR(40) NOT NULL,
+        model_name        VARCHAR(80),
+        verdict           VARCHAR(32),    -- AGREE / CAUTION / DISAGREE / NO_REVIEW / ERROR
+        confidence        INTEGER,
+        varsity_module    VARCHAR(80),
+        varsity_reasoning TEXT,
+        recommendation    TEXT,
+        risk_flag         VARCHAR(32),
+        reviewed_at       TIMESTAMP DEFAULT NOW(),
+        UNIQUE(username, symbol, model_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_holdings_ai_reviews_username ON holdings_ai_reviews(username)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_holdings_ai_reviews_username_symbol ON holdings_ai_reviews(username, symbol)`);
+
+    // ── Picks AI reviews ── Caches per-model verdicts for the top-10 of each
+    // Stock Picks category (rebound / momentum / longterm). Shared across all
+    // users (picks are global, not per-user), so keyed on (category, symbol,
+    // model_id). The REVIEWS column on the Stock Picks page reads from this
+    // table and shows the cached verdict badges; re-running "Deep AI Review"
+    // for a category overwrites the rows for that category.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS picks_ai_reviews (
+        id                SERIAL PRIMARY KEY,
+        category          VARCHAR(20) NOT NULL,   -- rebound / momentum / longterm
+        symbol            VARCHAR(32) NOT NULL,
+        model_id          VARCHAR(40) NOT NULL,
+        model_name        VARCHAR(80),
+        verdict           VARCHAR(32),            -- AGREE / CAUTION / DISAGREE / NO_REVIEW
+        confidence        INTEGER,
+        varsity_module    VARCHAR(80),
+        varsity_reasoning TEXT,
+        recommendation    TEXT,
+        risk_flag         VARCHAR(32),
+        reviewed_at       TIMESTAMP DEFAULT NOW(),
+        UNIQUE(category, symbol, model_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category ON picks_ai_reviews(category)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category_symbol ON picks_ai_reviews(category, symbol)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -17134,6 +17201,530 @@ app.get('/api/ai/validate', async (req, res) => {
     const result = await validateSignalsWithAI(mode);
     res.json(result || { error: 'No result' });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================================================
+// HOLDINGS — personal portfolio tracker
+// =============================================================================
+// A per-user list of {symbol, quantity, avg_price} that the user manually
+// curates ("what I actually own"). The Holdings tab replaces the old Portfolio
+// tab in the UI. Storage is keyed on username (populated by authMiddleware).
+//
+// The Deep AI Review flow sends every holding's full fundamentals + technicals
+// payload to the same 5 LLMs used by validateSignalsWithAI, but framed as a
+// per-holding "should I still hold this?" review, not a portfolio-builder
+// signal validation. The verdicts are cached in holdings_ai_reviews and shown
+// on the next login so the user doesn't have to re-run the fan-out to see the
+// last results.
+// =============================================================================
+
+// GET — list user's holdings + latest cached AI reviews (aggregated per model)
+app.get('/api/holdings', async (req, res) => {
+  try {
+    const username = req.user.username;
+    const { rows: holdings } = await pool.query(
+      `SELECT symbol, quantity::float AS quantity, avg_price::float AS avg_price, created_at, updated_at
+       FROM user_holdings WHERE username=$1 ORDER BY symbol`,
+      [username]
+    );
+    const { rows: reviews } = await pool.query(
+      `SELECT symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at
+       FROM holdings_ai_reviews WHERE username=$1`,
+      [username]
+    );
+    // Group reviews by symbol
+    const reviewMap = {};
+    for (const r of reviews) {
+      if (!reviewMap[r.symbol]) reviewMap[r.symbol] = [];
+      reviewMap[r.symbol].push(r);
+    }
+    // Merge with live CMP for P&L
+    const enriched = holdings.map(h => {
+      const sf = stockFundamentals[h.symbol] || {};
+      const cmp = (livePrices && livePrices[h.symbol]?.price) || sf.price || sf.ltp || 0;
+      const invested = +(h.quantity * h.avg_price).toFixed(2);
+      const current = +(h.quantity * cmp).toFixed(2);
+      const pnl = +(current - invested).toFixed(2);
+      const pnlPct = invested > 0 ? +(((current - invested) / invested) * 100).toFixed(2) : 0;
+      return {
+        symbol: h.symbol,
+        name: sf.name || h.symbol,
+        sector: sf.sector || '',
+        quantity: h.quantity,
+        avg_price: h.avg_price,
+        cmp,
+        invested,
+        current,
+        pnl,
+        pnl_pct: pnlPct,
+        created_at: h.created_at,
+        updated_at: h.updated_at,
+        ai_reviews: reviewMap[h.symbol] || [],
+      };
+    });
+    const totalInvested = enriched.reduce((a, h) => a + h.invested, 0);
+    const totalCurrent  = enriched.reduce((a, h) => a + h.current,  0);
+    const totalPnl      = +(totalCurrent - totalInvested).toFixed(2);
+    const totalPnlPct   = totalInvested > 0 ? +(((totalCurrent - totalInvested) / totalInvested) * 100).toFixed(2) : 0;
+    res.json({
+      holdings: enriched,
+      totals: {
+        count: enriched.length,
+        invested: +totalInvested.toFixed(2),
+        current: +totalCurrent.toFixed(2),
+        pnl: totalPnl,
+        pnl_pct: totalPnlPct,
+      },
+    });
+  } catch (e) {
+    console.error('GET /api/holdings error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST — add or update a holding (upsert on (username, symbol))
+app.post('/api/holdings', async (req, res) => {
+  try {
+    const username = req.user.username;
+    const { symbol, quantity, avg_price } = req.body || {};
+    if (!symbol || typeof symbol !== 'string') return res.status(400).json({ error: 'symbol required' });
+    const sym = symbol.trim().toUpperCase();
+    const q = Number(quantity);
+    const p = Number(avg_price);
+    if (!Number.isFinite(q) || q <= 0) return res.status(400).json({ error: 'quantity must be > 0' });
+    if (!Number.isFinite(p) || p <= 0) return res.status(400).json({ error: 'avg_price must be > 0' });
+    // Validate symbol is in the known universe (prevent typos)
+    const known = UNIVERSE.some(s => s.sym === sym);
+    if (!known) return res.status(400).json({ error: `Unknown symbol ${sym} — not in NSE universe` });
+    await pool.query(
+      `INSERT INTO user_holdings (username, symbol, quantity, avg_price, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (username, symbol) DO UPDATE SET
+         quantity  = EXCLUDED.quantity,
+         avg_price = EXCLUDED.avg_price,
+         updated_at = NOW()`,
+      [username, sym, q, p]
+    );
+    res.json({ ok: true, symbol: sym, quantity: q, avg_price: p });
+  } catch (e) {
+    console.error('POST /api/holdings error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE — remove a holding (also removes its cached AI reviews)
+app.delete('/api/holdings/:symbol', async (req, res) => {
+  try {
+    const username = req.user.username;
+    const sym = (req.params.symbol || '').trim().toUpperCase();
+    if (!sym) return res.status(400).json({ error: 'symbol required' });
+    const r = await pool.query(
+      `DELETE FROM user_holdings WHERE username=$1 AND symbol=$2`,
+      [username, sym]
+    );
+    await pool.query(
+      `DELETE FROM holdings_ai_reviews WHERE username=$1 AND symbol=$2`,
+      [username, sym]
+    );
+    res.json({ ok: true, deleted: r.rowCount });
+  } catch (e) {
+    console.error('DELETE /api/holdings error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST — run Deep AI Review on all holdings (fans out to 5 LLMs with full
+// Varsity payload, persists per-(user, symbol, model) verdict, returns both
+// aggregated and per-model results).
+app.post('/api/holdings/ai-review', async (req, res) => {
+  try {
+    const username = req.user.username;
+    const hasAnyKey = ANTHROPIC_API_KEY || OPENAI_API_KEY || DEEPSEEK_API_KEY;
+    if (!hasAnyKey) return res.status(503).json({ error: 'No LLM API keys configured on server' });
+    const { rows: holdings } = await pool.query(
+      `SELECT symbol, quantity::float AS quantity, avg_price::float AS avg_price
+       FROM user_holdings WHERE username=$1 ORDER BY symbol`,
+      [username]
+    );
+    if (!holdings.length) return res.status(400).json({ error: 'No holdings to review — add stocks first' });
+    const result = await runHoldingsAIReview(username, holdings);
+    res.json(result);
+  } catch (e) {
+    console.error('POST /api/holdings/ai-review error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Build the "stock block" portion of the prompt used by runHoldingsAIReview.
+// Format matches the one validateSignalsWithAI uses for PM Model Portfolio
+// rows, so the models see the same depth of data they're trained on.
+function _buildHoldingStockBlock(h) {
+  const mf = stockFundamentals[h.symbol] || {};
+  const ext = (global.FUND_EXT && global.FUND_EXT[h.symbol]) || {};
+  const px = (livePrices && livePrices[h.symbol]?.price) || mf.price || ext.price || 0;
+  const invested = h.quantity * h.avg_price;
+  const current = h.quantity * px;
+  const pnl = current - invested;
+  const pnlPct = invested > 0 ? ((pnl / invested) * 100).toFixed(2) : '0';
+  return `━━ ${h.symbol} (${mf.name||h.symbol}) [${mf.sector||'?'}] ━━\n` +
+    `  HOLDING: Qty=${h.quantity} AvgBuy=₹${h.avg_price} Invested=₹${invested.toFixed(2)} CMP=₹${px} Current=₹${current.toFixed(2)} P&L=₹${pnl.toFixed(2)} (${pnlPct}%)\n` +
+    `  PRICE: 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}%\n` +
+    `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}%\n` +
+    `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
+    `  TECHNICALS: RSI=${mf.rsi!=null?(mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi):'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'} Ichimoku=${mf.ichimokuSignal||'?'}\n` +
+    `  RISK: Beta=${mf.beta||'?'} AnnualVol=${mf.annualVol||'?'}% Sharpe=${mf.sharpeRatio||'?'}\n` +
+    `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
+    `  SCORES: ReboundScore=${mf.fallenScore||'-'} MomentumScore=${mf.composite||'-'} InvestmentScore=${mf.scoreV2||'-'}`;
+}
+
+// Map the raw model verdict (BUY_CONFIRM / HOLD / MODIFY / EXIT / etc.) to
+// the Holdings-tab vocabulary (AGREE / CAUTION / DISAGREE / NO_REVIEW) that
+// renders as ✓ Agreed / ⚠ Caution / ✗ Disagree in the UI.
+function _normalizeHoldingsVerdict(raw) {
+  if (!raw) return 'NO_REVIEW';
+  const v = String(raw).toUpperCase();
+  if (v === 'NO_REVIEW') return 'NO_REVIEW';
+  if (v === 'BUY_CONFIRM' || v === 'BUY' || v === 'HOLD' || v === 'AGREE') return 'AGREE';
+  if (v === 'CAUTION' || v === 'HOLD_WITH_CONCERNS' || v === 'MODIFY' || v === 'REDUCE') return 'CAUTION';
+  if (v === 'EXIT' || v === 'SELL' || v === 'AVOID' || v === 'DISAGREE') return 'DISAGREE';
+  return 'CAUTION'; // unknown verdict — treat as advisory caution
+}
+
+async function runHoldingsAIReview(username, holdings) {
+  const startTime = Date.now();
+  const stockBlocks = holdings.map(_buildHoldingStockBlock).join('\n');
+  const allowedSyms = holdings.map(h => h.symbol);
+
+  // Macro + breadth context — same as validateSignalsWithAI
+  const vix = _marketDataCache.vix;
+  const fiiDii = _marketDataCache.fiiDii;
+  const macroSummary = [
+    `India VIX: ${vix ? vix.value + ' (' + (vix.change>0?'+':'') + vix.change + '%)' : '?'}`,
+    `RBI Repo Rate: ${_marketDataCache.rbiRepoRate || '?'}%`,
+    `Crude Oil: $${_marketDataCache.crude || '?'}/barrel`,
+    `USD/INR: ₹${_marketDataCache.usdInr || '?'}`,
+    fiiDii ? `FII Net: ₹${fiiDii.fii_net}Cr  DII Net: ₹${fiiDii.dii_net}Cr` : 'FII/DII: N/A',
+  ].join('\n');
+  const breadthSummary = marketRegimeData ? [
+    `Breadth: ${marketRegimeData.breadth||'?'}% above 200DMA`,
+    `Nifty: 1m=${marketRegimeData.nifty?.['1m']||'?'}% 6m=${marketRegimeData.nifty?.['6m']||'?'}% 1y=${marketRegimeData.nifty?.['52w']||'?'}%`,
+  ].join('\n') : 'Market breadth: N/A';
+
+  const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
+
+════════════════════════════════════════
+MACRO DATA (Module 1, 8):
+════════════════════════════════════════
+${macroSummary}
+
+════════════════════════════════════════
+MARKET BREADTH (Module 9):
+════════════════════════════════════════
+${breadthSummary}
+
+════════════════════════════════════════
+USER HOLDINGS — FULL DATA (${holdings.length} stocks):
+════════════════════════════════════════
+${stockBlocks}
+
+════════════════════════════════════════
+TASK — Holdings review (Varsity-grounded):
+════════════════════════════════════════
+This is a user's PERSONAL PORTFOLIO. For each of the ${holdings.length} holdings listed above you must answer: should the user CONTINUE to hold this, HOLD WITH CAUTION, or EXIT? Evaluate each holding independently:
+
+1. Cross-check fundamentals vs current valuation (Varsity M3, M13).
+2. Check technical health — 200DMA, RSI, MACD, Supertrend, Ichimoku (M2).
+3. Check ownership signals — promoter pledge, FII/DII flows (M3).
+4. Check the holding's P&L vs the broader market (was the buy thesis valid? Is it still valid now?).
+5. Apply sector-specific rules from Module 15.
+6. Flag any governance or solvency red flags.
+
+Respond in JSON with a "signal_reviews" array where each element has:
+  - sym: the stock symbol (exactly as given)
+  - verdict: one of "BUY_CONFIRM" (keep holding, thesis intact), "HOLD" (neutral — no action needed), "MODIFY" (hold with caution — reduce, tighten stop, or watch closely), "EXIT" (sell, thesis broken or better opportunities)
+  - confidence: 0-100
+  - varsity_module: which Varsity module(s) drove this call
+  - varsity_reasoning: 1-2 sentence rationale grounded in Varsity principles
+  - recommendation: a concrete action ("Hold", "Reduce 25%", "Exit on rally to ₹X", etc.)
+  - risk_flag: short red-flag tag if any (e.g. "HIGH_PLEDGE", "VALUATION_STRETCHED", "EARNINGS_DECAY"), or empty string
+
+You MUST return a review for EVERY symbol above. Do not skip any.`;
+
+  // Fan out to all 5 models in parallel (same pattern as validateSignalsWithAI).
+  const modelPromises = AI_MODELS.map(m =>
+    callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt, 'holdings')
+      .then(r => ({ ...r, id: m.id, name: m.name }))
+      .catch(err => ({ id: m.id, name: m.name, error: err.message || 'unknown' }))
+  );
+  const modelResults = await Promise.all(modelPromises);
+
+  // Reuse buildConsensus — it already handles per-model aggregation, NO_REVIEW
+  // fill-in, and the per_model breakdown that the Holdings UI expects.
+  const consensus = buildConsensus(modelResults, allowedSyms);
+
+  // Persist per-(user, symbol, model) — overwrite on re-run.
+  try {
+    for (const rev of (consensus.signal_reviews || [])) {
+      if (!rev.per_model) continue;
+      for (const [mid, mv] of Object.entries(rev.per_model)) {
+        const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+        const modelName = (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        await pool.query(
+          `INSERT INTO holdings_ai_reviews
+             (username, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+           ON CONFLICT (username, symbol, model_id) DO UPDATE SET
+             model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
+             varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=NOW()`,
+          [username, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
+           mv.varsity_module || '', mv.varsity_reasoning || '',
+           mv.recommendation || '', mv.risk_flag || '']
+        );
+      }
+    }
+  } catch (dbErr) {
+    console.error('⚠ Failed to save holdings AI reviews to DB:', dbErr.message);
+  }
+
+  const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+  console.log(`🤖 Holdings AI review for ${username}: ${okCount}/${AI_MODELS.length} models, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+
+  return {
+    ok: true,
+    username,
+    holdings_count: holdings.length,
+    models_responded: okCount,
+    models_total: AI_MODELS.length,
+    took_ms: Date.now() - startTime,
+    signal_reviews: consensus.signal_reviews || [],
+    model_details: consensus.model_details || [],
+  };
+}
+
+// =============================================================================
+// STOCK PICKS AI REVIEW — top-10 per category (rebound / momentum / longterm)
+// =============================================================================
+// Powers the "🧠 Deep AI Review" button on each column of the Stock Picks page.
+// For the requested category:
+//   1. Server computes the top 10 using the SAME filter/sort the client shows
+//      (fallenScore for Rebound, composite for Momentum, scoreV2 for Long Term).
+//   2. Sends the full Varsity payload (fundamentals + technicals + ownership +
+//      risk + macro + breadth) for those 10 stocks to ALL 5 AI models in
+//      parallel, reusing VARSITY_KNOWLEDGE_PROMPT + callAIModel + buildConsensus.
+//   3. Persists per-model verdicts in picks_ai_reviews (upsert on
+//      (category, symbol, model_id)) so the REVIEWS column next to each stock
+//      name on the Stock Picks page shows the cached badges.
+// Verdict vocabulary is the same AGREE / CAUTION / DISAGREE / NO_REVIEW set
+// used by Holdings — `_normalizeHoldingsVerdict` is reused.
+
+// Build a full-data stock block for the AI prompt — same shape Holdings uses
+// but WITHOUT the personal P&L block (picks are global, not per-user).
+function _buildPickStockBlock(sym) {
+  const mf = stockFundamentals[sym] || {};
+  const ext = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
+  const px = (livePrices && livePrices[sym]?.price) || mf.price || ext.price || 0;
+  return `━━ ${sym} (${mf.name||sym}) [${mf.sector||'?'}] ━━\n` +
+    `  PRICE: CMP=₹${px} 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}% %FromHigh=${mf.pctFromHigh||'?'}%\n` +
+    `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}%\n` +
+    `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
+    `  TECHNICALS: RSI=${mf.rsi!=null?(mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi):'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Change6m=${mf.change6m||'?'}%\n` +
+    `  RISK: Beta=${mf.beta||'?'} AnnualVol=${mf.annualVol||'?'}% Sharpe=${mf.sharpeRatio||'?'}\n` +
+    `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
+    `  SCORES: ReboundScore=${mf.fallenScore||'-'} MomentumScore=${mf.composite||'-'} InvestmentScore=${mf.scoreV2||'-'}`;
+}
+
+// Pick the top-10 symbols for a category using the SAME filters the client
+// applies on the Stock Picks page, so the server review matches what the user
+// sees. Operates on the in-memory scored universe (stockFundamentals map).
+function _getTop10ForCategory(category) {
+  const all = Object.values(stockFundamentals || {}).filter(s => s && s.sym);
+  let filtered;
+  if (category === 'rebound') {
+    filtered = all
+      .filter(s => s.isFallenAngel && s.fallenScore != null)
+      .sort((a, b) => (b.fallenScore || 0) - (a.fallenScore || 0));
+  } else if (category === 'momentum') {
+    filtered = all
+      .filter(s => s.composite != null && s.composite >= 55)
+      .sort((a, b) => (b.composite || 0) - (a.composite || 0));
+  } else if (category === 'longterm') {
+    filtered = all
+      .filter(s => {
+        const roeOk = s.roe == null || s.roe >= 12;
+        const deOk = s.debtToEq == null || s.debtToEq <= 2;
+        const grOk = s.earGrowth == null || s.earGrowth >= 0;
+        const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
+        return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
+      })
+      .sort((a, b) => (b.scoreV2 || 0) - (a.scoreV2 || 0));
+  } else {
+    return [];
+  }
+  return filtered.slice(0, 10).map(s => s.sym);
+}
+
+async function runPicksAIReview(category) {
+  const startTime = Date.now();
+  const categoryLabels = {
+    rebound: 'Rebound Picks (quality-on-sale fallen angels)',
+    momentum: 'Momentum Picks (5-factor composite ≥55)',
+    longterm: 'Long-Term Investments (Varsity v2 4-pillar ≥60)',
+  };
+  const categoryFraming = {
+    rebound: 'These are fallen-angel candidates — quality stocks down ≥20% from their 52-week high, RSI ≤50, D/E ≤2. The thesis is PULLBACK ENTRY on high-quality names. For each stock answer: is this a valid rebound setup? Is the fundamental thesis intact? Is the technical picture bottoming or still collapsing? Decide CONFIRM (buy the dip), CAUTION (wait for confirmation), or AVOID (falling knife / broken thesis).',
+    momentum: 'These are Momentum Picks with a 5-factor composite ≥55 (FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15). The thesis is 1-3 MONTH SWING TRADE on strong momentum. For each stock answer: is the momentum trend durable or extended? Is valuation stretched? Are technicals overbought? Decide CONFIRM (enter on momentum), CAUTION (watch/trim/tight stop), or AVOID (late cycle / blow-off top).',
+    longterm: 'These are Long-Term Investments with Varsity v2 4-pillar score ≥60 (Quality 40 + Growth 25 + Valuation 20 + Business 15). The thesis is BUY AND HOLD (3-10 years). For each stock answer: is the business quality real, is growth sustainable, is valuation reasonable given growth, and does the moat/business model hold for 5+ years? Decide CONFIRM (long-term compounder), CAUTION (thesis has risks), or AVOID (quality trap / better opportunities).',
+  };
+  const label = categoryLabels[category];
+  if (!label) throw new Error('Invalid category: ' + category);
+
+  const top10 = _getTop10ForCategory(category);
+  if (!top10.length) {
+    return { ok: false, error: 'No stocks matched the filter for this category right now.', category };
+  }
+
+  const stockBlocks = top10.map(_buildPickStockBlock).join('\n');
+
+  // Macro + breadth context — same as Holdings/signals validation
+  const vix = _marketDataCache.vix;
+  const fiiDii = _marketDataCache.fiiDii;
+  const macroSummary = [
+    `India VIX: ${vix ? vix.value + ' (' + (vix.change>0?'+':'') + vix.change + '%)' : '?'}`,
+    `RBI Repo Rate: ${_marketDataCache.rbiRepoRate || '?'}%`,
+    `Crude Oil: $${_marketDataCache.crude || '?'}/barrel`,
+    `USD/INR: ₹${_marketDataCache.usdInr || '?'}`,
+    fiiDii ? `FII Net: ₹${fiiDii.fii_net}Cr  DII Net: ₹${fiiDii.dii_net}Cr` : 'FII/DII: N/A',
+  ].join('\n');
+  const breadthSummary = marketRegimeData ? [
+    `Breadth: ${marketRegimeData.breadth||'?'}% above 200DMA`,
+    `Nifty: 1m=${marketRegimeData.nifty?.['1m']||'?'}% 6m=${marketRegimeData.nifty?.['6m']||'?'}% 1y=${marketRegimeData.nifty?.['52w']||'?'}%`,
+  ].join('\n') : 'Market breadth: N/A';
+
+  const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
+
+════════════════════════════════════════
+MACRO DATA (Module 1, 8):
+════════════════════════════════════════
+${macroSummary}
+
+════════════════════════════════════════
+MARKET BREADTH (Module 9):
+════════════════════════════════════════
+${breadthSummary}
+
+════════════════════════════════════════
+TOP 10 ${label.toUpperCase()} — FULL DATA:
+════════════════════════════════════════
+${stockBlocks}
+
+════════════════════════════════════════
+TASK — Pick review (Varsity-grounded):
+════════════════════════════════════════
+${categoryFraming[category]}
+
+Respond in JSON with a "signal_reviews" array where each element has:
+  - sym: the stock symbol (exactly as given)
+  - verdict: one of "BUY_CONFIRM" (confirm the pick), "HOLD" (neutral), "MODIFY" (caution — wait / tighten / trim), "EXIT" (avoid / broken thesis)
+  - confidence: 0-100
+  - varsity_module: which Varsity module(s) drove this call
+  - varsity_reasoning: 1-2 sentence rationale grounded in Varsity principles
+  - recommendation: a concrete action sentence
+  - risk_flag: short red-flag tag if any (e.g. "HIGH_PE", "VALUATION_STRETCHED", "EARNINGS_DECAY"), or empty string
+
+You MUST return a review for EVERY symbol above. Do not skip any.`;
+
+  // Fan out to all 5 models in parallel with a category-tagged endpoint so the
+  // per-endpoint LLM cost cap applies separately to each picks category.
+  const modelPromises = AI_MODELS.map(m =>
+    callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt, 'picks_' + category)
+      .then(r => ({ ...r, id: m.id, name: m.name }))
+      .catch(err => ({ id: m.id, name: m.name, error: err.message || 'unknown' }))
+  );
+  const modelResults = await Promise.all(modelPromises);
+
+  const consensus = buildConsensus(modelResults, top10);
+
+  // Persist per-model reviews. Clear old rows for the symbols we just scored
+  // in this category so stale picks (e.g. a stock that used to be top 10 but
+  // dropped out) don't linger — then upsert the fresh ones.
+  try {
+    for (const rev of (consensus.signal_reviews || [])) {
+      if (!rev.per_model) continue;
+      for (const [mid, mv] of Object.entries(rev.per_model)) {
+        const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+        const modelName = (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        await pool.query(
+          `INSERT INTO picks_ai_reviews
+             (category, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+           ON CONFLICT (category, symbol, model_id) DO UPDATE SET
+             model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
+             varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=NOW()`,
+          [category, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
+           mv.varsity_module || '', mv.varsity_reasoning || '',
+           mv.recommendation || '', mv.risk_flag || '']
+        );
+      }
+    }
+  } catch (dbErr) {
+    console.error('⚠ Failed to save picks AI reviews to DB:', dbErr.message);
+  }
+
+  const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+  console.log(`🤖 Picks AI review [${category}]: ${okCount}/${AI_MODELS.length} models, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+
+  return {
+    ok: true,
+    category,
+    symbols: top10,
+    models_responded: okCount,
+    models_total: AI_MODELS.length,
+    took_ms: Date.now() - startTime,
+    signal_reviews: consensus.signal_reviews || [],
+    model_details: consensus.model_details || [],
+  };
+}
+
+// POST /api/picks/ai-review?category=rebound|momentum|longterm
+app.post('/api/picks/ai-review', async (req, res) => {
+  try {
+    const category = (req.query.category || req.body?.category || '').toLowerCase();
+    if (!['rebound', 'momentum', 'longterm'].includes(category)) {
+      return res.status(400).json({ error: 'category must be rebound, momentum, or longterm' });
+    }
+    const result = await runPicksAIReview(category);
+    res.json(result);
+  } catch (e) {
+    console.error('POST /api/picks/ai-review error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/picks/ai-review?category=... — read cached reviews from picks_ai_reviews
+// so the Stock Picks page can show the badges on load without re-running the
+// models. Returns { category, reviews: { SYM: [ {model_id, verdict, ...}, ... ] } }.
+app.get('/api/picks/ai-review', async (req, res) => {
+  try {
+    const category = (req.query.category || '').toLowerCase();
+    if (!['rebound', 'momentum', 'longterm'].includes(category)) {
+      return res.status(400).json({ error: 'category must be rebound, momentum, or longterm' });
+    }
+    const rows = (await pool.query(
+      `SELECT symbol, model_id, model_name, verdict, confidence, varsity_module,
+              varsity_reasoning, recommendation, risk_flag, reviewed_at
+         FROM picks_ai_reviews WHERE category=$1 ORDER BY symbol, model_id`,
+      [category]
+    )).rows;
+    const bySym = {};
+    rows.forEach(r => {
+      if (!bySym[r.symbol]) bySym[r.symbol] = [];
+      bySym[r.symbol].push(r);
+    });
+    res.json({ category, reviews: bySym });
+  } catch (e) {
+    console.error('GET /api/picks/ai-review error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // =============================================================================
