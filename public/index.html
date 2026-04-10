@@ -5477,7 +5477,9 @@ async function adminUploadScreenerCSV(inputEl) {
     });
     var d = await r.json();
     if (d.error) throw new Error(d.error);
-    if (msgEl) { msgEl.innerHTML = '✅ Imported <b>' + d.imported + '</b> stocks from CSV (' + d.skipped + ' skipped). Re-scoring started.'; msgEl.style.color = '#10b981'; }
+    var msg = '✅ Imported <b>' + d.imported + '</b> stocks (' + (d.matchedCols||'?') + ' columns matched)';
+    if (d.unmatchedCols && d.unmatchedCols.length > 0) msg += '<br><span style="color:#f59e0b;font-size:9px">⚠ Unmatched: ' + d.unmatchedCols.slice(0,10).join(', ') + '</span>';
+    if (msgEl) { msgEl.innerHTML = msg; msgEl.style.color = '#10b981'; }
     setTimeout(adminLoadStatus, 3000);
     setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 15000);
   } catch(e) {

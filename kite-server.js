@@ -3132,9 +3132,28 @@ async function importScreenerCSV(csvText) {
   const lines = csvText.split('\n').filter(l => l.trim());
   if (lines.length < 2) throw new Error('CSV too short');
 
-  // Parse header
-  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
-  const col = (name) => headers.indexOf(name.toLowerCase());
+  // Parse header — normalize: lowercase, strip units like "rs.cr.", "%", "(rs cr)", etc.
+  const rawHeaders = parseCSVLine(lines[0]);
+  const headers = rawHeaders.map(h => h.toLowerCase().trim()
+    .replace(/\s*rs\.?\s*cr\.?/g, '')    // remove "Rs.Cr." / "Rs Cr"
+    .replace(/\s*rs\.?/g, '')            // remove "Rs."
+    .replace(/\s*%\s*/g, '')             // remove "%"
+    .replace(/\s*\(.*?\)\s*/g, '')       // remove parenthetical like "(in cr)"
+    .replace(/\s*cr\.?\s*$/g, '')        // remove trailing "Cr" / "Cr."
+    .replace(/\s+/g, ' ')               // collapse multiple spaces
+    .trim()
+  );
+  console.log(`📊 CSV headers (${rawHeaders.length} cols): ${rawHeaders.slice(0, 15).join(' | ')}${rawHeaders.length > 15 ? ' ...' : ''}`);
+
+  // Flexible column finder: exact match first, then fuzzy (contains / starts-with)
+  const col = (name) => {
+    const n = name.toLowerCase().replace(/%/g, '').trim();
+    let idx = headers.indexOf(n);
+    if (idx >= 0) return idx;
+    // Try partial match: header contains the name or name contains the header
+    idx = headers.findIndex(h => h.length > 2 && (h.includes(n) || n.includes(h)));
+    return idx >= 0 ? idx : -1;
+  };
 
   // Column indices — maps Screener.in CSV headers to internal names
   // Uses first-match: col() returns -1 if not found, get() returns null for -1
@@ -3447,8 +3466,16 @@ async function importScreenerCSV(csvText) {
     }
   }
 
+  // Log which columns were matched and which weren't
+  const matched = [], unmatched = [];
+  for (const [name, idx] of Object.entries(C)) {
+    if (idx >= 0) matched.push(`${name}→${idx}:${rawHeaders[idx]}`);
+    else unmatched.push(name);
+  }
   console.log(`✅ Screener import: ${imported} stocks imported, ${skipped} skipped`);
-  return { imported, skipped, total: lines.length - 1 };
+  console.log(`📊 Matched columns (${matched.length}): ${matched.join(', ')}`);
+  if (unmatched.length) console.log(`📊 Unmatched columns (${unmatched.length}): ${unmatched.join(', ')}`);
+  return { imported, skipped, total: lines.length - 1, matchedCols: matched.length, unmatchedCols: unmatched, headers: rawHeaders.slice(0, 50) };
 }
 
 // Patch one stock from screener data into FUND + FUND_EXT memory (live update)
@@ -3590,7 +3617,10 @@ app.post('/api/fundamentals/import', async (req, res) => {
       imported: result.imported,
       skipped:  result.skipped,
       total:    result.total,
-      message:  `${result.imported} stocks imported. Re-scoring started in background.`,
+      matchedCols: result.matchedCols,
+      unmatchedCols: result.unmatchedCols,
+      headers: result.headers,
+      message:  `${result.imported} stocks imported (${result.matchedCols} columns matched). Re-scoring started.`,
     });
   } catch(e) {
     console.error('Screener import error:', e.message);
