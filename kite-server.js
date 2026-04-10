@@ -10224,6 +10224,30 @@ app.get('/api/stocks/score', async(req,res)=>{
       };
     });
 
+    // ── Momentum composite (0-100) — the number used to rank the PM
+    // Momentum Picks and the Stock Picks → Momentum Picks column. We call
+    // the SAME scoreStockForPortfolio() that the Portfolio Manager uses so
+    // the Momentum Score is identical across every tab (no drift between
+    // screens). Stocks that fail the portfolio quality gate (penny stocks,
+    // catastrophic debt, extreme overbought, etc.) get composite=null and
+    // are excluded from the Momentum Picks list client-side.
+    scored.forEach(row => {
+      const src = stockFundamentals[row.sym];
+      if (!src) { row.composite = null; return; }
+      try {
+        const pm = scoreStockForPortfolio(src);
+        if (pm && pm.composite != null) {
+          row.composite = +pm.composite;
+          row.momConviction = pm.conviction || null;
+          row.momConvColor  = pm.convColor  || null;
+        } else {
+          row.composite = null;
+        }
+      } catch (e) {
+        row.composite = null;
+      }
+    });
+
     // When scoreVersion=2 is requested, sort by expectedReturn DESC with
     // confidence and scoreV2 as tiebreakers (plan §8). In cold-start mode
     // (no calibration history), expectedReturn derives from the Bayesian

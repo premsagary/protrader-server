@@ -254,6 +254,7 @@ select option{background:var(--bg3)}
   <div class="mode-tabs">
     <button class="mode-tab active" onclick="setMode('mf')" id="mode-mf">MF Picks</button>
     <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stock Picks</button>
+    <button class="mode-tab" onclick="setMode('stockanalyzer')" id="mode-stockanalyzer" style="color:#f59e0b">🔍 Deep Analyzer</button>
     <button class="mode-tab stocks" onclick="setMode('stocks')" id="mode-stocks">Stocks RoboTrade</button>
     <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">Crypto RoboTrade</button>
     <button class="mode-tab" onclick="setMode('psuggest')" id="mode-psuggest" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#22d3ee;border-color:#22d3ee40">💼 Portfolio</button>
@@ -536,6 +537,7 @@ function setMode(mode){
   try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-stockanalyzer").className="mode-tab"   +(mode==="stockanalyzer"?" active":""); }catch(e){}
   try{ document.getElementById("mode-psuggest").className ="mode-tab"      +(mode==="psuggest"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab"   +(mode==="architecture"?" active":""); }catch(e){}
@@ -550,6 +552,12 @@ function setMode(mode){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){ console.log("renderTopBar error:", e.message); }
     renderStockRec();
+    return;
+  }
+  if(mode==="stockanalyzer"){
+    try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
+    try{ renderTopBar(); }catch(e){}
+    renderStockAnalyzerPage();
     return;
   }
   if(mode==="psuggest"){
@@ -3112,15 +3120,17 @@ var stockRecShowAll = false;
 var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
-// ── Stock Picks table sort state (Swing + Long Term columns) ──
-// Swing table defaults to SWING SCORE (fallenScore — the quality-on-sale
-// Fallen Angel ranking); Long Term table defaults to LONG TERM SCORE
-// (scoreV2 — the fundamentals-only Varsity 4-pillar composite). These
-// two keys are the canonical scores used EVERYWHERE in the app — Stock
-// Picks, Stock Data, and both Portfolio Manager tabs all read the same
-// fallenScore / scoreV2 fields.
+// ── Stock Picks table sort state (Rebound + Momentum + Long Term columns) ──
+// Rebound table defaults to REBOUND SCORE (fallenScore — quality-on-sale),
+// Momentum table defaults to MOMENTUM SCORE (composite — the PM 5-factor
+// blend: FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15), Long Term table
+// defaults to INVESTMENT SCORE (scoreV2 — Varsity 4-pillar fundamentals).
+// These three keys are the canonical scores used EVERYWHERE in the app
+// so every tab reads the same fallenScore / composite / scoreV2 fields.
 var srSwingSortKey = 'fallenScore';
 var srSwingSortDir = 'desc';
+var srMomSortKey   = 'composite';
+var srMomSortDir   = 'desc';
 var srLongSortKey  = 'scoreV2';
 var srLongSortDir  = 'desc';
 
@@ -3349,6 +3359,67 @@ async function pollStockRec(){
 
 // -- Deep Stock Analyzer -------------------------------------------------------
 var analyzerChart=null,analyzerData=null,analyzerTab='3Y';
+
+// ── DEEP ANALYZER PAGE (standalone top-level tab) ──
+// Lives next to Stock Picks in the topbar. Self-contained: seeds the search
+// dropdown from stockRecData if present, otherwise calls /api/universe/list
+// so the analyzer is usable even when Stock Picks hasn't been opened yet.
+function renderStockAnalyzerPage(){
+  var cont = document.getElementById('main-content');
+  if(!cont) return;
+
+  // Seed the azBuild dropdown — try the scored stockRecData first (richer,
+  // has score for the dropdown color chip), fall back to /api/universe/list.
+  var seedStocks = (stockRecData && stockRecData.stocks) ? stockRecData.stocks : [];
+  if (seedStocks.length) azBuild(seedStocks);
+  // Always refresh from universe list on mount so the dropdown reflects the
+  // full NSE universe, not just whatever was scored when Stock Picks loaded.
+  fetch('/api/universe/list').then(function(r){ return r.json(); }).then(function(d){
+    if (d.stocks && d.stocks.length) {
+      azBuild(d.stocks);
+      // Update the status chip with the final count.
+      var chip = document.getElementById('az-status-chip');
+      if (chip) chip.textContent = d.stocks.length + ' stocks · Kite candles + fundamentals + news';
+    }
+  }).catch(function(){});
+
+  var seedCount = seedStocks.length;
+
+  var h = '<div style="padding:20px;max-width:1400px;margin:0 auto">';
+
+  // Header
+  h += '<div style="margin-bottom:20px">';
+  h += '<div style="font-weight:800;font-size:20px;letter-spacing:-.3px">🔍 Deep Stock Analyzer</div>';
+  h += '<div style="font-size:12px;color:var(--text3);margin-top:4px">Kite fetches 1Y/3Y/5Y/MAX candles, computes 15+ indicators, support/resistance, buy zones + live news sentiment. Pick any NSE stock from the searchable dropdown.</div>';
+  h += '</div>';
+
+  // Search card
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:18px">';
+  h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:relative">';
+
+  // Searchable dropdown wrapper
+  h += '<div style="position:relative;width:360px" id="az-wrap">';
+  h += '<input id="stock-analyzer-input" type="text" placeholder="Search stock... e.g. Reliance, TCS" maxlength="40"'
+    +' autocomplete="off"'
+    +' style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:11px 16px;font-size:14px;box-sizing:border-box"'
+    +' oninput="azFilter(this.value)" onkeydown="azKey(event)" onfocus="azFilter(this.value)" onblur="setTimeout(azHide,200)"/>';
+  h += '<input type="hidden" id="az-sym"/>';
+  h += '<div id="az-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a2235;border:1px solid var(--border);border-radius:8px;max-height:320px;overflow-y:auto;z-index:999;margin-top:3px;box-shadow:0 8px 32px rgba(0,0,0,0.5)"></div>';
+  h += '</div>';
+
+  h += '<button onclick="analyzeStock()" style="background:#f59e0b;color:#000;border:none;border-radius:8px;padding:11px 24px;font-weight:700;font-size:14px;cursor:pointer">Analyze →</button>';
+  h += '<span id="az-status-chip" style="font-size:11px;color:var(--text4);margin-left:auto">'+seedCount+' stocks · Kite candles + fundamentals + news</span>';
+  h += '</div>';
+  h += '</div>';
+
+  // Result area — this is where analyzeStock() writes the per-stock deep dive.
+  h += '<div id="stock-analyzer-result" style="margin-top:0"></div>';
+
+  h += '</div>';
+  cont.innerHTML = h;
+}
+
+
 
 // -- Stock Analyzer Dropdown --------------------------------------------------
 var _azStocks = []; // populated from allStocks when Stocks tab loads
@@ -4033,8 +4104,10 @@ function renderStockRecPage(){
   if(!cont) return;
   var data = stockRecData;
   var allStocks = data.stocks || [];
-  if (allStocks.length) azBuild(allStocks); // populate analyzer dropdown with scored stocks
-  // Also fetch full universe (all stocks) in background to fill unscored ones
+  // Analyzer dropdown data (used by the Deep Analyzer tab) — populate from
+  // whatever stocks we have here as a best-effort seed; the Deep Analyzer
+  // tab will also refresh from /api/universe/list on its own mount.
+  if (allStocks.length) azBuild(allStocks);
   if (!window._azUniverseLoaded) {
     window._azUniverseLoaded = true;
     fetch('/api/universe/list').then(function(r){ return r.json(); }).then(function(d){
@@ -4042,29 +4115,6 @@ function renderStockRecPage(){
     }).catch(function(){});
   }
   var marketOpen = data.market_open;
-
-  var analyzerHtml = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:24px">';
-  analyzerHtml += '<div style="font-weight:700;font-size:14px;margin-bottom:4px">🔍 Deep Stock Analyzer</div>';
-  analyzerHtml += '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Kite fetches 1Y/3Y/5Y/MAX candles, computes 15+ indicators, support/resistance, buy zones + live news sentiment.</div>';
-  analyzerHtml += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;position:relative">';
-
-  // Searchable dropdown wrapper
-  analyzerHtml += '<div style="position:relative;width:300px" id="az-wrap">';
-  analyzerHtml += '<input id="stock-analyzer-input" type="text" placeholder="Search stock... e.g. Reliance, TCS" maxlength="40"'
-    +' autocomplete="off"'
-    +' style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:13px;box-sizing:border-box"'
-    +' oninput="azFilter(this.value)" onkeydown="azKey(event)" onfocus="azFilter(this.value)" onblur="setTimeout(azHide,200)"/>';
-  // Hidden sym field
-  analyzerHtml += '<input type="hidden" id="az-sym"/>';
-  // Dropdown list
-  analyzerHtml += '<div id="az-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a2235;border:1px solid var(--border);border-radius:8px;max-height:260px;overflow-y:auto;z-index:999;margin-top:3px;box-shadow:0 8px 32px rgba(0,0,0,0.5)"></div>';
-  analyzerHtml += '</div>';
-
-  analyzerHtml += '<button onclick="analyzeStock()" style="background:#f59e0b;color:#000;border:none;border-radius:8px;padding:9px 20px;font-weight:700;font-size:13px;cursor:pointer">Analyze →</button>';
-  analyzerHtml += '<span style="font-size:10px;color:var(--text4)">' + allStocks.length + ' stocks · Kite candles + fundamentals + news</span>';
-  analyzerHtml += '</div>';
-  analyzerHtml += '<div id="stock-analyzer-result" style="margin-top:0;max-height:85vh;overflow-y:auto;overflow-x:hidden"></div>';
-  analyzerHtml += '</div>';
 
   // Universe slice for the currently selected market cap (ALL / NIFTY50 / NEXT50 /
   // MIDCAP / SMALLCAP). The FALLEN filter was removed because "Fallen Angels" is
@@ -4101,11 +4151,24 @@ function renderStockRecPage(){
     });
   }
 
-  // Swing Trades column = fallen angels (quality on sale) in the selected slice.
+  // Rebound Picks column = fallen angels (quality on sale) in the selected slice.
   var swingPicks = _srSortBy(
     filtered.filter(function(s){ return s.isFallenAngel; }),
     srSwingSortKey,
     srSwingSortDir
+  );
+
+  // Momentum Picks column = the highest-conviction PM Momentum Picks
+  // (composite ≥ 55 = Buy tier or better from scoreStockForPortfolio).
+  // This is the SAME composite that the Portfolio Manager → Momentum
+  // Picks tab uses — server-side scoreStockForPortfolio() is called
+  // per-stock in /api/stocks/score so the numbers match everywhere.
+  // Stocks that fail the portfolio quality gate (penny stocks,
+  // catastrophic debt, etc.) have composite=null and are excluded.
+  var momentumPicks = _srSortBy(
+    filtered.filter(function(s){ return s.composite!=null && s.composite>=55; }),
+    srMomSortKey,
+    srMomSortDir
   );
 
   // Long-Term Trades column = quality stocks worth buying-and-holding. Now
@@ -4128,10 +4191,10 @@ function renderStockRecPage(){
   );
 
   // Sortable header builder: clicking a header toggles asc/desc on that col.
-  // `group` is 'swing' or 'long' so each table has independent sort state.
+  // `group` is 'swing', 'mom', or 'long' so each table has independent sort state.
   function _srHdr(group, key, label, align, titleAttr){
-    var curKey = group==='swing' ? srSwingSortKey : srLongSortKey;
-    var curDir = group==='swing' ? srSwingSortDir : srLongSortDir;
+    var curKey = group==='swing' ? srSwingSortKey : group==='mom' ? srMomSortKey : srLongSortKey;
+    var curDir = group==='swing' ? srSwingSortDir : group==='mom' ? srMomSortDir : srLongSortDir;
     var active = curKey===key;
     // Active column shows ▲/▼ in amber; inactive columns show a neutral ⇅
     // hint so users know every header is clickable.
@@ -4141,8 +4204,8 @@ function renderStockRecPage(){
           : ' <span style="color:#f59e0b">▼</span>')
       : ' <span style="color:var(--text4);opacity:.6;font-size:9px">⇅</span>';
     var col = active ? '#f59e0b' : 'var(--text3)';
-    var setK = group==='swing' ? 'srSwingSortKey' : 'srLongSortKey';
-    var setD = group==='swing' ? 'srSwingSortDir' : 'srLongSortDir';
+    var setK = group==='swing' ? 'srSwingSortKey' : group==='mom' ? 'srMomSortKey' : 'srLongSortKey';
+    var setD = group==='swing' ? 'srSwingSortDir' : group==='mom' ? 'srMomSortDir' : 'srLongSortDir';
     var onclick = 'if('+setK+'===\''+key+'\'){'+setD+'='+setD+'===\'asc\'?\'desc\':\'asc\';}else{'+setK+'=\''+key+'\';'+setD+'=\'desc\';}renderStockRec()';
     var t = titleAttr?' title="'+titleAttr+'"':'';
     return '<th onclick="'+onclick+'"'+t+' style="text-align:'+(align||'right')+';padding:6px 8px;color:'+col+';cursor:pointer;user-select:none;white-space:nowrap">'
@@ -4152,7 +4215,6 @@ function renderStockRecPage(){
   var top3 = (filtered.slice(0,3));
 
   var html = '<div style="margin-bottom:20px">';
-  html += analyzerHtml;
 
   html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
   html += '<div>'
@@ -4181,10 +4243,12 @@ function renderStockRecPage(){
   var golden = allStocks.filter(function(s){ return s.goldenCross; }).length;
   var highRoe = allStocks.filter(function(s){ return s.roe&&s.roe>=15; }).length;
   var swingAllCount = allStocks.filter(function(s){return s.isFallenAngel;}).length;
+  var momAllCount   = allStocks.filter(function(s){return s.composite!=null && s.composite>=55;}).length;
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;justify-content:center">';
   var pills = [
     {l:'Total Stocks',    v:allStocks.length,    c:'var(--text)'},
     {l:'Rebound Picks',   v:swingAllCount,       c:'#f59e0b'},
+    {l:'Momentum Picks',  v:momAllCount,         c:'#10b981'},
     {l:'ROE >= 15%',      v:highRoe,             c:'var(--green)'},
     {l:'Golden Cross',    v:golden,              c:'#f59e0b'},
     {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
@@ -4226,19 +4290,24 @@ function renderStockRecPage(){
       + '<span style="color:var(--text3)">Varsity Rebound Pick — quality business pulled back ≥20% with RSI ≤52. Answers <i>&ldquo;is this a tradeable pullback setup?&rdquo;</i></span>'
     + '</div>'
     + '<div style="display:flex;align-items:center;gap:6px">'
+      + '<span style="background:rgba(16,185,129,.18);color:#10b981;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">MOMENTUM SCORE</span>'
+      + '<span style="color:var(--text3)">5-factor blend — FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15. Same score PM Momentum Picks uses. Answers <i>&ldquo;is this a high-conviction 1–3M trade?&rdquo;</i></span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;gap:6px">'
       + '<span style="background:rgba(34,211,238,.18);color:#22d3ee;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">INVESTMENT SCORE</span>'
       + '<span style="color:var(--text3)">Varsity 4-pillar — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only. Answers <i>&ldquo;how good is this business to own for 12M?&rdquo;</i></span>'
     + '</div>'
     + '</div>';
 
-  // ── 2-column split view: Swing Trades (left) | Long Term Trades (right) ──
-  // Both columns respect the currently selected market-cap filter above.
-  // All the detailed column tables (Overview/Quality/Value/Momentum/etc.)
-  // have moved to the new Stock Data top-level tab — this page is now a
-  // compact picker of "what to trade now" vs "what to hold long".
+  // ── 3-column split view: Rebound Picks | Momentum Picks | Long-Term Investments ──
+  // All three columns respect the currently selected market-cap filter above.
+  // Rebound = pullback setups (fallenScore), Momentum = PM 5-factor blend
+  // (composite), Long-Term = Varsity 4-pillar fundamentals (scoreV2). The
+  // detailed column tables (Overview/Quality/Value/Momentum/etc.) live in
+  // the Stock Data top-level tab — this page is a compact picker.
   var scopeLbl = (stockRecFilter==='ALL' ? 'All Stocks' : stockRecFilter);
 
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:flex-start">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:flex-start">';
 
   // ----- LEFT COLUMN: REBOUND PICKS (quality-on-sale) -----
   html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
@@ -4286,6 +4355,53 @@ function renderStockRecPage(){
     html += '<div style="padding:30px;text-align:center;color:var(--text4);font-size:11px">No Rebound Picks in this universe slice right now.</div>';
   }
   html += '</div>'; // end rebound-picks column
+
+  // ----- MIDDLE COLUMN: MOMENTUM PICKS (5-factor composite, Buy+ tier) -----
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
+  html += '<div><div style="font-weight:800;font-size:14px;color:#10b981">📈 Momentum Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%, ranked by Momentum Score</div></div>';
+  html += '<span style="background:rgba(16,185,129,.12);color:#10b981;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+momentumPicks.length+'</span>';
+  html += '</div>';
+  if(momentumPicks.length){
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead><tr style="background:var(--bg3)">'
+      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
+      + _srHdr('mom','sym',       'Stock', 'left')
+      + _srHdr('mom','composite', 'MOMENTUM SCORE','right','Momentum Score — 5-factor composite (FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%) used by Portfolio Manager → Momentum Picks to pick and allocate stocks. Same number on every tab.')
+      + _srHdr('mom','price',     'Price')
+      + _srHdr('mom','change6m',  '6M%',  'right','6-month return')
+      + _srHdr('mom','rsi',       'RSI')
+      + _srHdr('mom','roe',       'ROE%')
+      + '</tr></thead><tbody>';
+    momentumPicks.slice(0, 25).forEach(function(s, i){
+      var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
+      var ms = s.composite;
+      var msCol = ms==null?'var(--text4)':ms>=65?'#22c55e':ms>=55?'#10b981':ms>=45?'#f59e0b':'var(--red)';
+      var c6 = s.change6m;
+      var c6Col = c6==null?'var(--text4)':c6>=15?'var(--green)':c6>=0?'#10b981':c6>=-15?'#f59e0b':'var(--red)';
+      var rsiCol = s.rsi==null?'var(--text4)':s.rsi<35?'var(--green)':s.rsi<60?'var(--text)':s.rsi<70?'#f59e0b':'var(--red)';
+      var roe = s.roe;
+      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#10b981':'var(--text)';
+      var bg = i%2===0?'var(--bg)':'var(--bg2)';
+      html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
+        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+msCol+'">'+(ms!=null?(+ms).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+c6Col+';font-weight:600">'+(c6!=null?c6.toFixed(1)+'%':'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if(momentumPicks.length>25){
+      html += '<div style="text-align:center;padding:8px;font-size:10px;color:var(--text4)">Showing top 25 of '+momentumPicks.length+' · see full data in <b>Stock Data</b> tab</div>';
+    }
+  } else {
+    html += '<div style="padding:30px;text-align:center;color:var(--text4);font-size:11px">No Momentum Picks (composite ≥55) in this universe slice right now.</div>';
+  }
+  html += '</div>'; // end momentum-picks column
 
   // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
   html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
@@ -4335,7 +4451,7 @@ function renderStockRecPage(){
   }
   html += '</div>'; // end long-term-investments column
 
-  html += '</div>'; // end 2-column grid
+  html += '</div>'; // end 3-column grid
 
 
   html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg2);margin-top:16px">';
@@ -4659,7 +4775,7 @@ async function renderStockDataPage(){
   html += '</div>';
 
   // Result count — pretty-print the internal sort key for the user
-  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'REBOUND SCORE',scoreV2:'INVESTMENT SCORE',score:'INVESTMENT SCORE (legacy)',price:'Price'}[sk] || sk;
+  var _sortLabel = {sym:'Stock',grp:'Group',composite:'MOMENTUM SCORE',fallenScore:'REBOUND SCORE',scoreV2:'INVESTMENT SCORE',score:'INVESTMENT SCORE (legacy)',price:'Price'}[sk] || sk;
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
@@ -4694,6 +4810,7 @@ async function renderStockDataPage(){
   html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>';
   html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
   html += sortableHeader('grp',         'Grp',     'center');
+  html += sortableHeader('composite',   'MOMENTUM SCORE',   'right');
   html += sortableHeader('fallenScore', 'REBOUND SCORE',    'right');
   html += sortableHeader('scoreV2',     'INVESTMENT SCORE', 'right');
   html += sortableHeader('price',       'Price',   'right', 'border-right:2px solid var(--border3)');
@@ -4716,7 +4833,7 @@ async function renderStockDataPage(){
   html += '<tbody>';
   var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'};
   if(filtered.length===0){
-    html += '<tr><td colspan="'+(6+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
+    html += '<tr><td colspan="'+(7+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
   }
   filtered.forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
@@ -4729,6 +4846,11 @@ async function renderStockDataPage(){
     // populated when the stock passes the size-aware Fallen Angel filter.
     var fs = s.fallenScore;
     var swCol = fs==null?'var(--text4)':fs>=75?'var(--green)':fs>=55?'#f59e0b':'var(--red)';
+    // MOMENTUM SCORE = PM 5-factor composite (same number as Portfolio Manager
+    // Momentum Picks + Stock Picks → Momentum Picks column). null for stocks
+    // that fail the portfolio quality gate.
+    var mc = s.composite;
+    var mcCol = mc==null?'var(--text4)':mc>=70?'var(--green)':mc>=55?'#f59e0b':'var(--red)';
     html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
       + '<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(idx+1)+'</td>'
       + '<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3">'
@@ -4736,6 +4858,7 @@ async function renderStockDataPage(){
         + '<div style="font-size:10px;color:var(--text3)">'+(s.sector||'')+'</div>'
       + '</td>'
       + '<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+mcCol+'">'+(mc!=null?(+mc).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(lt!=null?(+lt).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
@@ -7012,7 +7135,7 @@ function renderArchitecturePage(){
 
   // ── DEEP STOCK ANALYZER ──
   h += _archCard('🧠', 'Deep Stock Analyzer — what data goes to AI',
-      'Endpoint: <code>GET /api/stocks/analyze/:sym/ai</code> (kite-server.js ~line 14757). Fans out in parallel to 5 LLMs: Groq Llama 3.3 70B, GPT-4.1-nano, DeepSeek V3, Claude Haiku 4.5, Mistral Small. Each is told it has been trained on all 17 Varsity modules and must return a strict JSON verdict.',
+      'Lives in its own <b>🔍 Deep Analyzer</b> top-level tab, right next to Stock Picks in the navbar — no longer embedded inside the Stock Picks page. Client entry point: <code>renderStockAnalyzerPage()</code> in index.html, which seeds the searchable NSE dropdown from <code>stockRecData</code> if present and always refreshes from <code>/api/universe/list</code> so the full universe is pickable even on a cold load. Server endpoint: <code>GET /api/stocks/analyze/:sym/ai</code> (kite-server.js ~line 14757). Fans out in parallel to 5 LLMs: Groq Llama 3.3 70B, GPT-4.1-nano, DeepSeek V3, Claude Haiku 4.5, Mistral Small. Each is told it has been trained on all 17 Varsity modules and must return a strict JSON verdict.',
       '<div style="margin-bottom:10px">The user prompt is literally the stock\'s entire feature row — every fundamental, every TA indicator, every ownership figure, every price level — assembled into labelled sections. Sections sent (only non-null fields included):</div>'
     + _archPillar('Valuation (M3, M13)', '12 fields', 'P/E, P/B, PEG, EV/EBITDA, P/Sales, P/FCF, Earnings Yield, Industry P/E, Dividend Yield, Graham Number, Book Value, % from 52W high.')
     + _archPillar('Profitability (M3)', '11 fields', 'ROE, ROA, ROCE, ROIC, CROIC, Operating Margin, EPS, ROE 3Y avg, ROE 5Y avg, ROCE 3Y avg, ROCE 5Y avg.')
@@ -7028,6 +7151,17 @@ function renderArchitecturePage(){
     + _archPillar('DuPont decomposition (M3)', '4 fields', 'Net margin, asset turnover, equity multiplier, DuPont-derived ROE — lets the model see whether ROE is earned through margins, turnover, or leverage.')
     + _archPillar('Cash cycle + risk (M3, M9)', '4 fields', 'Inventory days, cash conversion cycle, Sharpe ratio, working-capital health.')
     + '<div style="margin-top:12px">The model must respond in a strict JSON schema: <code>verdict</code> (BUY / HOLD / ACCUMULATE / AVOID / SELL), <code>confidence</code> 0-100, <code>target_price</code>, <code>stop_loss</code>, <code>timeframe</code>, <code>bull_case</code>, <code>bear_case</code>, <code>key_factors[]</code> with per-factor assessments, <code>varsity_modules_applied[]</code>, and a <code>one_line_summary</code>. The UI then aggregates all 5 models into a consensus (BUY / HOLD / AVOID / MIXED) and shows per-model cards.</div>'
+  );
+
+  // ── STOCK PICKS PAGE LAYOUT ──
+  h += _archCard('📋', 'Stock Picks page — 3-column layout',
+      'The Stock Picks tab shows three lists side-by-side: <b>Rebound Picks</b> (left, orange ⚡), <b>Momentum Picks</b> (middle, green 📈), and <b>Long-Term Investments</b> (right, blue 🏛). Each column is independently sortable and uses a different score from a different pipeline — NOT three views of the same list.',
+      '<div style="margin-bottom:10px">All three columns read from the same scored universe returned by <code>/api/stocks/score</code> but filter and rank by different score fields:</div>'
+    + _archPillar('Rebound Picks (orange)', 'fallenScore', 'Filter: <code>s.isFallenAngel === true</code>. Sorted by <code>fallenScore</code> desc. Quality-on-sale setups only — see the Rebound Picks card below for the full gate + scoring formula.')
+    + _archPillar('Momentum Picks (green)', 'composite', 'Filter: <code>s.composite &gt;= 55</code> (Buy conviction floor). Sorted by <code>composite</code> desc. Uses the SAME <code>scoreStockForPortfolio()</code> that builds the PM Momentum Picks portfolio — so the MOMENTUM SCORE here is identical to the one in PM Momentum Picks and in the Stock Data → Overview MOMENTUM SCORE column. Single source of truth: <code>scoreStockForPortfolio()</code> in kite-server.js (~line 10384), invoked server-side in the <code>/api/stocks/score</code> handler so every screen sees the same number.')
+    + _archPillar('Long-Term Investments (blue)', 'scoreV2', 'Filter: <code>s.scoreV2 &gt;= 60</code>. Sorted by <code>scoreV2</code> desc. Varsity 4-pillar fundamentals-only (Quality 40 + Growth 25 + Valuation 20 + Business 15) — see the Long-Term Investments card below.')
+    + '<div style="margin-top:12px">The pills row across the top shows <code>Total</code>, <code>Rebound Picks</code>, <code>Momentum Picks</code>, and <code>Long-Term</code> counts in their respective colors. Each column header shows a colored badge with its score name (REBOUND SCORE / MOMENTUM SCORE / INVESTMENT SCORE), and the top 25 rows of each list are rendered to keep the page light.</div>'
+    + _archNote('A stock can appear in more than one column — a quality pullback with a healthy composite can legitimately be in both Rebound and Momentum lists. The three columns are orthogonal filters, not mutually exclusive buckets.')
   );
 
   // ── STOCK PICKS — REBOUND PICKS ──
@@ -7113,6 +7247,17 @@ function renderArchitecturePage(){
     + _archPillar('Our deterministic "why" explainer', 'sent', 'whyStrengths + whyRisks — our own pillar-derived narrative, so the model can cross-check our reasoning.')
     + '<div style="margin-top:12px">Portfolio-level context also included: amount, invested, cash reserve, horizon, count, regime, portfolio expected return, weighted confidence, bucket mix, sector mix, usingPrior flag. Plus the same macro block (VIX, repo, crude, USD/INR, FII/DII, breadth, Nifty 1Y).</div>'
     + '<div style="margin-top:10px">The prompt asks for 9 specific judgments per stock: (1) thesis check against our pillars, (2) moat call per Varsity M3 Ch15, (3) valuation discipline per M13, (4) governance red flags, (5) capital-allocation quality, (6) sector tailwind/headwind per M15, (7) risk flags, (8) timing advisory, (9) portfolio-level sector concentration + bucket mix sanity. In "deep" mode the model also gets instructions to check multi-year ROE consistency, FCF backing of earnings, peer-group dominance, downturn resilience (FY20/FY22), and to ding confidence when usingPrior=YES.</div>'
+  );
+
+  // ── STOCK DATA TAB ──
+  h += _archCard('📊', 'Stock Data tab — the raw universe, sortable',
+      'Renderer: <code>renderStockDataPage()</code> in index.html (~line 4490). Reads from the same scored universe as Stock Picks (<code>stockRecData.stocks</code>) — no separate API call, no separate model. This tab is the "full-universe table view" that lets you sort any column across all 567 stocks, search by symbol/name/sector, and filter by market cap (ALL / NIFTY50 / NEXT50 / MIDCAP / SMALLCAP).',
+      '<div style="margin-bottom:10px"><b>Score columns</b> — three fixed columns between Grp and Price, each sortable by clicking the header:</div>'
+    + _archPillar('MOMENTUM SCORE', 'composite', 'Same <code>composite</code> used by PM Momentum Picks and the Stock Picks → Momentum Picks column. Color-coded ≥70 green / ≥55 amber / &lt;55 red. "-" for stocks that fail the portfolio quality gate in <code>scoreStockForPortfolio()</code>.')
+    + _archPillar('REBOUND SCORE', 'fallenScore', 'Same Rebound Score from <code>scoreFallenAngel()</code>. Only populated for stocks that pass the Fallen Angel eligibility gate — everything else shows "-".')
+    + _archPillar('INVESTMENT SCORE', 'scoreV2', 'Same Varsity 4-pillar <code>scoreV2</code> from <code>scoreOneStockV2()</code>. Populated for every stock in the universe.')
+    + '<div style="margin-top:12px"><b>Sub-tab panels</b> below the score columns surface the underlying raw inputs in logical groups: Overview (valuation + quality), Quality (ROE/ROCE/DuPont/margins/debt), Value (PE/PB/PEG/EV-EBITDA), Momentum (returns + RSI + MACD), Growth (rev/EPS/sales), Technical (200DMA/golden cross/Supertrend/Ichimoku), Financials (revenue/PAT/FCF), Ownership (promoter/FII/DII/pledge), and Signals (flags). Switching sub-tabs changes only the right-hand columns — score columns stay fixed.</div>'
+    + _archNote('This tab is a read-only window into the same scored universe every other tab uses. It has no scoring logic of its own — if the Momentum Score here ever disagrees with PM Momentum Picks, it is a bug because both come from the same <code>scoreStockForPortfolio()</code> call inside the <code>/api/stocks/score</code> handler.')
   );
 
   // ── CONFUSION CLARIFIER ──
@@ -7484,7 +7629,7 @@ function _init() {
   _inited = true;
   // Restore tab from URL hash, or default to MF Recommendation
   var saved = _readHash();
-  var validModes = ['mf','stockrec','stocks','crypto','psuggest','admin'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','psuggest','admin'];
   var validStockTabs = ['overview','positions','signals','trades','market','chart','news'];
   var validCryptoTabs = ['overview','positions','signals','trades','market','chart','news'];
 
@@ -7507,7 +7652,7 @@ window.addEventListener('hashchange', function(){
   if(_hashUpdating) return;
   var h = _readHash();
   if(!h) return;
-  var validModes = ['mf','stockrec','stocks','crypto','psuggest','admin'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','psuggest','admin'];
   if(validModes.indexOf(h.mode) < 0) return;
   if(h.mode === S.mode && !h.tab) return;
   if(h.mode === 'stocks' && h.tab) S.stocksTab = h.tab;
