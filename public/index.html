@@ -3104,11 +3104,12 @@ var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
 // ── Stock Picks table sort state (Swing + Long Term columns) ──
-// Both tables default to sorting by the visible composite Score (desc) so
-// the top-25 slice is the 25 highest-scored rows, matching what the user
-// sees in the Score column. Users can re-sort by FA / FrHi / RSI / etc.
-// by clicking the column headers.
-var srSwingSortKey = 'score';
+// Swing table defaults to SWING SCORE (fallenScore — the quality-on-sale
+// ranking specific to fallen-angel swing setups); Long Term table defaults
+// to the 100-pt composite LONGTERM SCORE. Each table's top-25 slice is
+// ordered by the column visible to the user, and users can click any
+// header to re-sort.
+var srSwingSortKey = 'fallenScore';
 var srSwingSortDir = 'desc';
 var srLongSortKey  = 'score';
 var srLongSortDir  = 'desc';
@@ -4115,7 +4116,13 @@ function renderStockRecPage(){
     var curKey = group==='swing' ? srSwingSortKey : srLongSortKey;
     var curDir = group==='swing' ? srSwingSortDir : srLongSortDir;
     var active = curKey===key;
-    var arrow = active ? (curDir==='asc'?' ▲':' ▼') : '';
+    // Active column shows ▲/▼ in amber; inactive columns show a neutral ⇅
+    // hint so users know every header is clickable.
+    var arrow = active
+      ? (curDir==='asc'
+          ? ' <span style="color:#f59e0b">▲</span>'
+          : ' <span style="color:#f59e0b">▼</span>')
+      : ' <span style="color:var(--text4);opacity:.6;font-size:9px">⇅</span>';
     var col = active ? '#f59e0b' : 'var(--text3)';
     var setK = group==='swing' ? 'srSwingSortKey' : 'srLongSortKey';
     var setD = group==='swing' ? 'srSwingSortDir' : 'srLongSortDir';
@@ -4212,8 +4219,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('swing','sym',        'Stock', 'left')
-      + _srHdr('swing','score',      'Score')
-      + _srHdr('swing','fallenScore','FA',   'right','Fallen Angel Score (quality-on-sale ranking)')
+      + _srHdr('swing','fallenScore','SWING SCORE','right','Swing Score (fallen-angel quality-on-sale ranking)')
       + _srHdr('swing','price',      'Price')
       + _srHdr('swing','pctFromHigh','FrHi%','right','% from 52-week high')
       + _srHdr('swing','rsi',        'RSI')
@@ -4221,7 +4227,8 @@ function renderStockRecPage(){
       + '</tr></thead><tbody>';
     swingPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
-      var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+      var fs = s.fallenScore;
+      var swCol = fs==null?'var(--text4)':fs>=75?'var(--green)':fs>=55?'#f59e0b':'var(--red)';
       var fh = s.pctFromHigh;
       var fhCol = fh==null?'var(--text4)':fh>=-25?'#f59e0b':fh>=-35?'#f97316':'var(--red)';
       var rsiCol = s.rsi==null?'var(--text4)':s.rsi<35?'var(--green)':s.rsi<50?'#f59e0b':'var(--red)';
@@ -4231,8 +4238,7 @@ function renderStockRecPage(){
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+(s.score!=null?s.score:'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:#f59e0b;font-weight:600">'+(s.fallenScore!=null?s.fallenScore:'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+fhCol+';font-weight:600">'+(fh!=null?fh.toFixed(1)+'%':'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
@@ -4260,7 +4266,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('long','sym',        'Stock', 'left')
-      + _srHdr('long','score',      'Score')
+      + _srHdr('long','score',      'LONGTERM SCORE','right','Long-term composite score (Quality + Value + Momentum + Growth + Technical, 100 pts)')
       + _srHdr('long','price',      'Price')
       + _srHdr('long','roe',        'ROE%')
       + _srHdr('long','debtToEq',   'D/E')
@@ -4616,7 +4622,7 @@ async function renderStockDataPage(){
   html += '</div>';
 
   // Result count — pretty-print the internal sort key for the user
-  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'Swing Score',score:'LtTerm Score',price:'Price'}[sk] || sk;
+  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'SWING SCORE',score:'LONGTERM SCORE',price:'Price'}[sk] || sk;
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
@@ -4626,7 +4632,13 @@ async function renderStockDataPage(){
   function sortableHeader(key, label, align, extraStyle){
     extraStyle = extraStyle || '';
     var isSorted = stockDataSortKey===key;
-    var arrow = isSorted ? (stockDataSortDir==='asc'?' ▲':' ▼') : '';
+    // Active column shows ▲/▼; inactive columns show a neutral ⇅ hint
+    // so users can tell every header is clickable.
+    var arrow = isSorted
+      ? (stockDataSortDir==='asc'
+          ? ' <span style="color:#a78bfa">▲</span>'
+          : ' <span style="color:#a78bfa">▼</span>')
+      : ' <span style="color:var(--text4);opacity:.6;font-size:9px">⇅</span>';
     var col = isSorted ? '#a78bfa' : 'var(--text3)';
     var onclick = 'if(stockDataSortKey===\''+key+'\'){stockDataSortDir=stockDataSortDir===\'asc\'?\'desc\':\'asc\';}else{stockDataSortKey=\''+key+'\';stockDataSortDir=\'desc\';}renderStockDataPage()';
     return '<th onclick="'+onclick+'" style="text-align:'+(align||'right')+';padding:6px 8px;color:'+col+';cursor:pointer;user-select:none;white-space:nowrap;'+extraStyle+'">'
@@ -4645,12 +4657,16 @@ async function renderStockDataPage(){
   html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>';
   html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
   html += sortableHeader('grp',         'Grp',     'center');
-  html += sortableHeader('fallenScore', 'Swing',   'right');
-  html += sortableHeader('score',       'LtTerm',  'right');
+  html += sortableHeader('fallenScore', 'SWING SCORE',    'right');
+  html += sortableHeader('score',       'LONGTERM SCORE', 'right');
   html += sortableHeader('price',       'Price',   'right', 'border-right:2px solid var(--border3)');
   activeCols.forEach(function(col){
     var isSorted = stockDataSortKey===col.k;
-    var arrow = isSorted ? (stockDataSortDir==='asc'?' ▲':' ▼') : '';
+    var arrow = isSorted
+      ? (stockDataSortDir==='asc'
+          ? ' <span style="color:#a78bfa">▲</span>'
+          : ' <span style="color:#a78bfa">▼</span>')
+      : ' <span style="color:var(--text4);opacity:.6;font-size:9px">⇅</span>';
     var hc = isSorted ? '#a78bfa' : col.hc;
     var onclick = 'if(stockDataSortKey===\''+col.k+'\'){stockDataSortDir=stockDataSortDir===\'asc\'?\'desc\':\'asc\';}else{stockDataSortKey=\''+col.k+'\';stockDataSortDir=\'desc\';}renderStockDataPage()';
     html += '<th onclick="'+onclick+'" style="text-align:right;padding:6px 8px;color:'+hc+';cursor:pointer;user-select:none;white-space:nowrap'
