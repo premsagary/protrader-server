@@ -240,10 +240,32 @@ async function initDB() {
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS earnings_yield DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_fcf DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS price_to_sales DECIMAL(10,2)`).catch(()=>{});
-    // Shareholding columns (from getstockdetails mode)
+    // Shareholding columns
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS fii_holding DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dii_holding DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS num_shareholders DECIMAL(18,0)`).catch(()=>{});
+    // New columns from Screener.in CSV export (v6)
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS fii_chg DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dii_chg DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS quick_ratio DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS piotroski DECIMAL(5,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS altman_z DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS graham_number DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS book_value DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS fcf DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS ev DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS net_worth DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS croic DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roic DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS div_payout DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS from_52w_high DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS public_holding DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS debtor_days DECIMAL(10,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS inv_turnover DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS asset_turnover DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS cash_equiv DECIMAL(18,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_3y_avg DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_5y_avg DECIMAL(10,2)`).catch(()=>{});
 
     // ── Portfolio Manager tables ──────────────────────────────────────────────
     // Tracks user's actual held positions (what they bought from suggestions)
@@ -3114,56 +3136,91 @@ async function importScreenerCSV(csvText) {
   const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
   const col = (name) => headers.indexOf(name.toLowerCase());
 
-  // Column indices
+  // Column indices — maps Screener.in CSV headers to internal names
+  // Uses first-match: col() returns -1 if not found, get() returns null for -1
   const C = {
+    // Identity
     name:          col('name'),
     nse:           col('nse code'),
     bse:           col('bse code'),
     industry:      col('industry'),
     indGroup:      col('industry group'),
+    // Price & valuation
     price:         col('current price'),
     pe:            col('price to earning'),
     mktCap:        col('market capitalization'),
     divYield:      col('dividend yield'),
-    patQtr:        col('net profit latest quarter'),
-    patQtrYoy:     col('yoy quarterly profit growth'),
-    salesQtr:      col('sales latest quarter'),
-    salesQtrYoy:   col('yoy quarterly sales growth'),
+    pb:            col('price to book value'),
     peg:           col('peg ratio'),
-    intCov:        col('interest coverage ratio'),
-    currentRatio:  col('current ratio'),
+    priceToSales:  Math.max(col('price to sales'), col('market cap to sales')),
+    priceToFCF:    col('price to free cash flow'),
     evEbitda:      col('evebitda'),
+    ev:            col('enterprise value'),
+    earningsYield: col('earnings yield'),
+    indPE:         col('industry pe'),
+    // Profitability
+    roe:           col('return on equity'),
+    roa:           col('return on assets'),
+    roce:          Math.max(col('return on capital employed'), col('roce')),
+    roic:          col('return on invested capital'),
+    opm:           col('opm'),
+    eps:           col('eps'),
+    // Solvency
+    de:            col('debt to equity'),
+    debt:          col('debt'),
+    currentRatio:  col('current ratio'),
+    quickRatio:    col('quick ratio'),
+    intCov:        Math.max(col('interest coverage ratio'), col('interest coverage')),
+    // Shareholding
+    promoter:      col('promoter holding'),
+    promoterChg:   col('change in promoter holding'),
+    pledged:       col('pledged percentage'),
+    fiiHolding:    col('fii holding'),
+    fiiChg:        col('change in fii holding'),
+    diiHolding:    col('dii holding'),
+    diiChg:        col('change in dii holding'),
+    publicHolding: col('public holding'),
+    numShareholders: Math.max(col('number of shareholders'), col('number of shareholders')),
+    // Annual P&L
+    sales:         col('sales'),
+    patAnnual:     col('profit after tax'),
+    // Quarterly
+    salesQtr:      col('sales latest quarter'),
+    patQtr:        Math.max(col('profit after tax latest quarter'), col('net profit latest quarter')),
+    salesQtrYoy:   col('yoy quarterly sales growth'),
+    patQtrYoy:     col('yoy quarterly profit growth'),
+    // Growth
     salesGr1y:     col('sales growth'),
     epsGr1y:       col('profit growth'),
-    indPE:         col('industry pe'),
-    pledged:       col('pledged percentage'),
-    promoterChg:   col('change in promoter holding'),
-    promoter:      col('promoter holding'),
-    debt:          col('debt'),
-    eps:           col('eps'),
-    roe:           col('return on equity'),
-    de:            col('debt to equity'),
-    roa:           col('return on assets'),
-    pb:            col('price to book value'),
-    patAnnual:     col('profit after tax'),
-    patLatest:     col('profit after tax latest quarter'),
-    opm:           col('opm'),
-    sales:         col('sales'),
     salesGr3y:     col('sales growth 3years'),
     salesGr5y:     col('sales growth 5years'),
     epsGr3y:       col('profit growth 3years'),
     epsGr5y:       col('profit growth 5years'),
-    roe5yAvg:      col('average return on equity 5years'),
-    roe3yAvg:      col('average return on equity 3years'),
+    // Returns
     ret1y:         col('return over 1year'),
     ret3y:         col('return over 3years'),
     ret5y:         col('return over 5years'),
     ret6m:         col('return over 6months'),
     ret3m:         col('return over 3months'),
-    roce:          col('roce'),   // ROCE %
-    roceAlt:       col('roce %'), // alternate header name
-    priceToSales:  col('price to sales'),
-    priceToSalesAlt: col('price to sales ratio'),
+    // Averages
+    roe3yAvg:      col('average return on equity 3years'),
+    roe5yAvg:      col('average return on equity 5years'),
+    roce3yAvg:     col('average return on capital employed 3years'),
+    roce5yAvg:     col('average return on capital employed 5years'),
+    // Quality scores & extras
+    piotroski:     col('piotroski score'),
+    altmanZ:       col('altman z score'),
+    grahamNumber:  col('graham number'),
+    bookValue:     col('book value'),
+    fcf:           col('free cash flow last year'),
+    netWorth:      col('net worth'),
+    croic:         col('croic'),
+    divPayout:     Math.max(col('dividend payout ratio'), col('dividend payout')),
+    from52wHigh:   Math.max(col('down from 52w high'), col('from 52w high')),
+    debtorDays:    col('debtor days'),
+    invTurnover:   col('inventory turnover ratio'),
+    assetTurnover: col('asset turnover ratio'),
+    cashEquiv:     col('cash equivalents'),
   };
 
   let imported = 0, skipped = 0;
@@ -3184,46 +3241,81 @@ async function importScreenerCSV(csvText) {
       bse_code:         str(row, C.bse),
       industry:         str(row, C.industry),
       industry_group:   str(row, C.indGroup),
+      // Core fundamentals
       roe:              get(row, C.roe),
       de:               get(row, C.de),
       pe:               get(row, C.pe),
-      rev_gr_3y:        get(row, C.salesGr3y),
-      eps_gr_3y:        get(row, C.epsGr3y),
       opm:              get(row, C.opm),
       roa:              get(row, C.roa),
       pb:               get(row, C.pb),
       peg:              get(row, C.peg),
+      roce:             get(row, C.roce),
+      roic:             get(row, C.roic),
+      eps:              get(row, C.eps),
+      debt:             get(row, C.debt),
+      mkt_cap:          get(row, C.mktCap),
+      current_price:    get(row, C.price),
+      // Solvency
       int_cov:          get(row, C.intCov),
+      current_ratio:    get(row, C.currentRatio),
+      quick_ratio:      get(row, C.quickRatio),
+      div_yield:        get(row, C.divYield),
+      // Valuation
+      ev_ebitda:        get(row, C.evEbitda),
+      ev:               get(row, C.ev),
+      earnings_yield:   get(row, C.earningsYield),
+      price_to_sales:   get(row, C.priceToSales),
+      price_to_fcf:     get(row, C.priceToFCF),
+      industry_pe:      get(row, C.indPE),
+      // Shareholding
       promoter_holding: get(row, C.promoter),
       pledged_pct:      get(row, C.pledged),
       promoter_chg:     get(row, C.promoterChg),
-      mkt_cap:          get(row, C.mktCap),
-      current_price:    get(row, C.price),
-      eps:              get(row, C.eps),
-      debt:             get(row, C.debt),
-      current_ratio:    get(row, C.currentRatio),
-      div_yield:        get(row, C.divYield),
+      fii_holding:      get(row, C.fiiHolding),
+      fii_chg:          get(row, C.fiiChg),
+      dii_holding:      get(row, C.diiHolding),
+      dii_chg:          get(row, C.diiChg),
+      public_holding:   get(row, C.publicHolding),
+      num_shareholders: get(row, C.numShareholders),
+      // P&L
+      sales_annual:     get(row, C.sales),
+      pat_annual:       get(row, C.patAnnual),
+      sales_qtr:        get(row, C.salesQtr),
+      pat_qtr:          get(row, C.patQtr),
+      sales_qtr_yoy:    get(row, C.salesQtrYoy),
+      pat_qtr_yoy:      get(row, C.patQtrYoy),
+      // Growth
       sales_gr_1y:      get(row, C.salesGr1y),
-      sales_gr_5y:      get(row, C.salesGr5y),
       eps_gr_1y:        get(row, C.epsGr1y),
+      rev_gr_3y:        get(row, C.salesGr3y),
+      eps_gr_3y:        get(row, C.epsGr3y),
+      sales_gr_5y:      get(row, C.salesGr5y),
       eps_gr_5y:        get(row, C.epsGr5y),
-      roe_3y_avg:       get(row, C.roe3yAvg),
-      roe_5y_avg:       get(row, C.roe5yAvg),
+      // Returns
       ret_1y:           get(row, C.ret1y),
       ret_3y:           get(row, C.ret3y),
       ret_5y:           get(row, C.ret5y),
       ret_6m:           get(row, C.ret6m),
       ret_3m:           get(row, C.ret3m),
-      ev_ebitda:        get(row, C.evEbitda),
-      industry_pe:      get(row, C.indPE),
-      pat_qtr:          get(row, C.patQtr),
-      sales_qtr:        get(row, C.salesQtr),
-      pat_annual:       get(row, C.patAnnual),
-      sales_annual:     get(row, C.sales),
-      pat_qtr_yoy:      get(row, C.patQtrYoy),
-      sales_qtr_yoy:    get(row, C.salesQtrYoy),
-      roce:             get(row, C.roce) ?? get(row, C.roceAlt),
-      price_to_sales:   get(row, C.priceToSales) ?? get(row, C.priceToSalesAlt),
+      // Averages
+      roe_3y_avg:       get(row, C.roe3yAvg),
+      roe_5y_avg:       get(row, C.roe5yAvg),
+      roce_3y_avg:      get(row, C.roce3yAvg),
+      roce_5y_avg:      get(row, C.roce5yAvg),
+      // Quality scores & extras
+      piotroski:        get(row, C.piotroski),
+      altman_z:         get(row, C.altmanZ),
+      graham_number:    get(row, C.grahamNumber),
+      book_value:       get(row, C.bookValue),
+      fcf:              get(row, C.fcf),
+      net_worth:        get(row, C.netWorth),
+      croic:            get(row, C.croic),
+      div_payout:       get(row, C.divPayout),
+      from_52w_high:    get(row, C.from52wHigh),
+      debtor_days:      get(row, C.debtorDays),
+      inv_turnover:     get(row, C.invTurnover),
+      asset_turnover:   get(row, C.assetTurnover),
+      cash_equiv:       get(row, C.cashEquiv),
     };
 
     try {
@@ -3236,7 +3328,12 @@ async function importScreenerCSV(csvText) {
            eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
            ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
            pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
-           roce,price_to_sales,imported_at)
+           roce,earnings_yield,price_to_fcf,price_to_sales,
+           fii_holding,dii_holding,num_shareholders,
+           fii_chg,dii_chg,quick_ratio,piotroski,altman_z,graham_number,
+           book_value,fcf,ev,net_worth,croic,roic,div_payout,
+           from_52w_high,public_holding,debtor_days,inv_turnover,
+           asset_turnover,cash_equiv,roce_3y_avg,roce_5y_avg,imported_at)
         VALUES
           ($1,$2,$3,$4,$5,$6,
            $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -3245,7 +3342,12 @@ async function importScreenerCSV(csvText) {
            $28,$29,$30,$31,$32,$33,$34,
            $35,$36,$37,$38,$39,$40,
            $41,$42,$43,$44,
-           $45,$46,NOW())
+           $45,$46,$47,$48,
+           $49,$50,$51,
+           $52,$53,$54,$55,$56,$57,
+           $58,$59,$60,$61,$62,$63,$64,
+           $65,$66,$67,$68,
+           $69,$70,$71,$72,NOW())
         ON CONFLICT (sym) DO UPDATE SET
           name=EXCLUDED.name, industry=EXCLUDED.industry,
           roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -3265,7 +3367,33 @@ async function importScreenerCSV(csvText) {
           pat_annual=EXCLUDED.pat_annual, sales_annual=EXCLUDED.sales_annual,
           pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
           roce=COALESCE(EXCLUDED.roce, screener_fundamentals.roce),
+          earnings_yield=COALESCE(EXCLUDED.earnings_yield, screener_fundamentals.earnings_yield),
+          price_to_fcf=COALESCE(EXCLUDED.price_to_fcf, screener_fundamentals.price_to_fcf),
           price_to_sales=COALESCE(EXCLUDED.price_to_sales, screener_fundamentals.price_to_sales),
+          fii_holding=COALESCE(EXCLUDED.fii_holding, screener_fundamentals.fii_holding),
+          dii_holding=COALESCE(EXCLUDED.dii_holding, screener_fundamentals.dii_holding),
+          num_shareholders=COALESCE(EXCLUDED.num_shareholders, screener_fundamentals.num_shareholders),
+          fii_chg=COALESCE(EXCLUDED.fii_chg, screener_fundamentals.fii_chg),
+          dii_chg=COALESCE(EXCLUDED.dii_chg, screener_fundamentals.dii_chg),
+          quick_ratio=COALESCE(EXCLUDED.quick_ratio, screener_fundamentals.quick_ratio),
+          piotroski=COALESCE(EXCLUDED.piotroski, screener_fundamentals.piotroski),
+          altman_z=COALESCE(EXCLUDED.altman_z, screener_fundamentals.altman_z),
+          graham_number=COALESCE(EXCLUDED.graham_number, screener_fundamentals.graham_number),
+          book_value=COALESCE(EXCLUDED.book_value, screener_fundamentals.book_value),
+          fcf=COALESCE(EXCLUDED.fcf, screener_fundamentals.fcf),
+          ev=COALESCE(EXCLUDED.ev, screener_fundamentals.ev),
+          net_worth=COALESCE(EXCLUDED.net_worth, screener_fundamentals.net_worth),
+          croic=COALESCE(EXCLUDED.croic, screener_fundamentals.croic),
+          roic=COALESCE(EXCLUDED.roic, screener_fundamentals.roic),
+          div_payout=COALESCE(EXCLUDED.div_payout, screener_fundamentals.div_payout),
+          from_52w_high=COALESCE(EXCLUDED.from_52w_high, screener_fundamentals.from_52w_high),
+          public_holding=COALESCE(EXCLUDED.public_holding, screener_fundamentals.public_holding),
+          debtor_days=COALESCE(EXCLUDED.debtor_days, screener_fundamentals.debtor_days),
+          inv_turnover=COALESCE(EXCLUDED.inv_turnover, screener_fundamentals.inv_turnover),
+          asset_turnover=COALESCE(EXCLUDED.asset_turnover, screener_fundamentals.asset_turnover),
+          cash_equiv=COALESCE(EXCLUDED.cash_equiv, screener_fundamentals.cash_equiv),
+          roce_3y_avg=COALESCE(EXCLUDED.roce_3y_avg, screener_fundamentals.roce_3y_avg),
+          roce_5y_avg=COALESCE(EXCLUDED.roce_5y_avg, screener_fundamentals.roce_5y_avg),
           imported_at=NOW()
       `, [
         data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -3277,7 +3405,14 @@ async function importScreenerCSV(csvText) {
         data.ret_1y, data.ret_3y, data.ret_5y, data.ret_6m, data.ret_3m,
         data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
         data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
-        data.roce ?? null, data.price_to_sales ?? null,
+        data.roce??null, data.earnings_yield??null, data.price_to_fcf??null, data.price_to_sales??null,
+        data.fii_holding??null, data.dii_holding??null, data.num_shareholders??null,
+        data.fii_chg??null, data.dii_chg??null, data.quick_ratio??null,
+        data.piotroski??null, data.altman_z??null, data.graham_number??null,
+        data.book_value??null, data.fcf??null, data.ev??null, data.net_worth??null,
+        data.croic??null, data.roic??null, data.div_payout??null,
+        data.from_52w_high??null, data.public_holding??null, data.debtor_days??null, data.inv_turnover??null,
+        data.asset_turnover??null, data.cash_equiv??null, data.roce_3y_avg??null, data.roce_5y_avg??null,
       ]);
 
       // Immediately patch into live FUND + FUND_EXT memory
@@ -3357,15 +3492,37 @@ function patchScreenerIntoFUND(sym, d) {
     patQtrYoy:    d.pat_qtr_yoy,
     salesQtrYoy:  d.sales_qtr_yoy,
     industry:     d.industry,
-    // Bonus fields (ROCE, earnings yield, price/FCF, price/sales)
+    // Valuation extras
     roce:         d.roce        ?? null,
     earningsYield:d.earnings_yield ?? null,
     priceToFCF:   d.price_to_fcf ?? null,
     priceToSales: d.price_to_sales ?? null,
-    // Shareholding extras
+    // Shareholding (now from CSV export directly!)
     fiiHolding:   d.fii_holding ?? null,
+    fiiChg:       d.fii_chg ?? null,
     diiHolding:   d.dii_holding ?? null,
+    diiChg:       d.dii_chg ?? null,
+    publicHolding:d.public_holding ?? null,
     numShareholders: d.num_shareholders ?? null,
+    // Quality scores & extras (new from Screener.in CSV v6)
+    quickRatio:   d.quick_ratio ?? null,
+    piotroski:    d.piotroski ?? null,
+    altmanZ:      d.altman_z ?? null,
+    grahamNumber: d.graham_number ?? null,
+    bookValue:    d.book_value ?? null,
+    fcf:          d.fcf ?? null,
+    ev:           d.ev ?? null,
+    netWorth:     d.net_worth ?? null,
+    croic:        d.croic ?? null,
+    roic:         d.roic ?? null,
+    divPayout:    d.div_payout ?? null,
+    from52wHigh:  d.from_52w_high ?? null,
+    debtorDays:   d.debtor_days ?? null,
+    invTurnover:  d.inv_turnover ?? null,
+    assetTurnover:d.asset_turnover ?? null,
+    cashEquiv:    d.cash_equiv ?? null,
+    roce3yAvg:    d.roce_3y_avg ?? null,
+    roce5yAvg:    d.roce_5y_avg ?? null,
     source:       'Screener.in',
     fetchedAt:    Date.now(),
   };
@@ -3394,10 +3551,21 @@ async function loadScreenerFundamentals() {
       pat_annual: row.pat_annual, sales_annual: row.sales_annual,
       pat_qtr_yoy: row.pat_qtr_yoy, sales_qtr_yoy: row.sales_qtr_yoy,
       industry: row.industry,
+      // Extended fields (v6 — all from Screener.in CSV)
       roce: row.roce, earnings_yield: row.earnings_yield,
       price_to_fcf: row.price_to_fcf, price_to_sales: row.price_to_sales,
       fii_holding: row.fii_holding, dii_holding: row.dii_holding,
       num_shareholders: row.num_shareholders,
+      fii_chg: row.fii_chg, dii_chg: row.dii_chg,
+      quick_ratio: row.quick_ratio, piotroski: row.piotroski,
+      altman_z: row.altman_z, graham_number: row.graham_number,
+      book_value: row.book_value, fcf: row.fcf, ev: row.ev,
+      net_worth: row.net_worth, croic: row.croic, roic: row.roic,
+      div_payout: row.div_payout, from_52w_high: row.from_52w_high,
+      public_holding: row.public_holding, debtor_days: row.debtor_days,
+      inv_turnover: row.inv_turnover, asset_turnover: row.asset_turnover,
+      cash_equiv: row.cash_equiv, roce_3y_avg: row.roce_3y_avg,
+      roce_5y_avg: row.roce_5y_avg,
     }));
     console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
     return rows.length;
