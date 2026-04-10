@@ -5613,18 +5613,9 @@ function psRenderLongTermResults(d){
   if(d.breadth!=null) h+='<span style="font-size:10px;color:var(--text3)">Breadth: '+d.breadth+'% above 200DMA</span>';
   if(d.cashPct!=null) h+='<span style="font-size:10px;color:var(--text3)">Cash: '+d.cashPct+'%</span>';
   if(s.weightedConfidence!=null) h+='<span style="font-size:10px;color:var(--text3)">Confidence: '+((s.weightedConfidence||0)*100).toFixed(0)+'%</span>';
-  // Bucket mix inline with regime — keeps diagnostic visible up top
-  var bb=(d.diagnostics&&d.diagnostics.bucketBreakdown)||{};
-  if(Object.keys(bb).length){
-    h+='<span style="font-size:10px;color:var(--text3);margin-left:auto">Bucket mix: ';
-    ['A','B','C','D'].forEach(function(k){
-      if(bb[k]){
-        var col=k==='A'?'#22c55e':k==='B'?'#10b981':k==='C'?'#f59e0b':'#ef4444';
-        h+='<span style="color:'+col+';font-weight:700;margin-left:6px">'+k+': '+bb[k].toFixed(0)+'%</span>';
-      }
-    });
-    h+='</span>';
-  }
+  // (Bucket-mix inline diagnostic removed — the A/B/C/D quality tiers it
+  // surfaced were an internal scoreV2 grouping that confused users, and
+  // the LONG TERM SCORE column already conveys quality at a glance.)
   h+='</div>';
 
   // Summary cards (same 7-card grid as Swing, mapped to long-term fields)
@@ -5664,26 +5655,39 @@ function psRenderLongTermResults(d){
   h+='</div>';
 
   // ── Long-Term picks table ──
-  // Data columns (STOCK · BUCKET · SCOREV2 · ALLOC% · SHARES · INVESTED ·
-  // EXP 12M · RISK · VALUE · TIMING) kept as-is. Track column added on the
-  // right so users can mark long-term buys — they land in My Holdings with
-  // a LONGTERM tag.
+  // Columns: #, Stock, AI REVIEWS, LONG TERM SCORE, PRICE, SHARES, INVESTED,
+  // TIMING, EXP 12M, RISK, VALUE, TRACK.
+  // Bucket column removed — the A/B/C/D bucket was an internal quality
+  // tier derived from scoreV2 (A ≥80, B ≥70, C ≥60, D <60) and was
+  // redundant with the score itself. Alloc% column dropped too; the
+  // absolute Invested amount is more actionable. ScoreV2 renamed to
+  // LONG TERM SCORE to match the rest of the UI.
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  // AI Reviews sits as the 2nd column (directly after Stock) to match the
+  // AI Reviews sits as the 3rd column (after # and Stock) to match the
   // Swing Trade Portfolio table layout.
-  var hdrs=['Stock','AI Reviews','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','Track'];
-  hdrs.forEach(function(hdr,i){
-    // Right-align numeric cols (index 4..10: Alloc%..Timing), left-align the rest
-    var align=(i>=4&&i<=10)?'right':'left';
-    h+='<th style="padding:7px 8px;text-align:'+align+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
+  var hdrs=[
+    {l:'#',                 a:'right'},
+    {l:'Stock',             a:'left' },
+    {l:'AI REVIEWS',        a:'left' },
+    {l:'LONG TERM SCORE',   a:'right'},
+    {l:'PRICE',             a:'right'},
+    {l:'SHARES',            a:'right'},
+    {l:'INVESTED',          a:'right'},
+    {l:'TIMING',            a:'right'},
+    {l:'EXP 12M',           a:'right'},
+    {l:'RISK',              a:'right'},
+    {l:'VALUE',             a:'right'},
+    {l:'TRACK',             a:'center'}
+  ];
+  hdrs.forEach(function(hdr){
+    h+='<th style="padding:7px 8px;text-align:'+hdr.a+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr.l+'</th>';
   });
   h+='</tr></thead><tbody>';
   picks.forEach(function(p,i){
     var er=(p.expectedReturn12m||0)*100;
     var erCol=er>=15?'#22c55e':er>=5?'#10b981':er>=0?'var(--text)':'#ef4444';
-    var bCol=p.scoreBucket==='A'?'#22c55e':p.scoreBucket==='B'?'#10b981':p.scoreBucket==='C'?'#f59e0b':'#ef4444';
     var rCol=p.riskLevel==='LOW'?'#22c55e':p.riskLevel==='HIGH'?'#ef4444':'#f59e0b';
     var vCol=p.valuationLabel==='UNDERVALUED'?'#22c55e':p.valuationLabel==='OVERVALUED'?'#ef4444':'var(--text2)';
     // Kijun buy-zone badge (Varsity M2 Ch21: Kijun-sen as dynamic pullback entry)
@@ -5707,9 +5711,10 @@ function psRenderLongTermResults(d){
     }
 
     h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2)">';
+    h+='<td style="padding:6px 8px;text-align:right;color:var(--text3);font-size:10px">'+(i+1)+'</td>';
     h+='<td style="padding:6px 8px"><div style="font-weight:700;color:var(--text);font-size:11px">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.sector||'')+'</div></td>';
 
-    // AI Reviews column (2nd column — matches Swing Trade Portfolio layout)
+    // AI Reviews column (3rd column — matches Swing Trade Portfolio layout)
     h+='<td style="padding:5px;vertical-align:top">';
     if(_ltAIStockReview){
       var ltAiR=_ltAIStockReview;
@@ -5737,18 +5742,23 @@ function psRenderLongTermResults(d){
     }
     h+='</td>';
 
-    h+='<td style="padding:6px 8px"><span style="color:'+bCol+';font-weight:800;font-size:11px">'+(p.scoreBucket||'—')+'</span></td>';
-    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+bCol+'">'+(p.scoreV2!=null?p.scoreV2.toFixed(1):'-')+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;font-weight:700">'+(p.allocPct!=null?p.allocPct.toFixed(1):'-')+'%</td>';
+    // LONG TERM SCORE — the Varsity 4-pillar composite (Quality 40 +
+    // Growth 25 + Valuation 20 + Business 15). Colored on raw score now
+    // that the Bucket column is gone: ≥75 green, ≥60 amber, else red —
+    // matches the convention used elsewhere in the UI.
+    var ltScore=(p.scoreV2!=null?p.scoreV2:null);
+    var ltScoreCol=ltScore==null?'var(--text3)':ltScore>=75?'#22c55e':ltScore>=60?'#f59e0b':'#ef4444';
+    var ltPrice=(p.currentPrice||p.price||0);
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;font-size:13px;color:'+ltScoreCol+'">'+(ltScore!=null?ltScore.toFixed(1):'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:600">'+(ltPrice?'₹'+(+ltPrice).toFixed(0):'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right">'+(p.shares||0)+'</td>';
     h+='<td style="padding:6px 8px;text-align:right">'+psFmt(p.allocAmt||0)+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+erCol+'">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
-    h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
 
     // Track column — "I Bought" marks the pick as a LONGTERM holding
-    var ltPrice=(p.currentPrice||p.price||0);
     h+='<td style="padding:6px 8px;text-align:center">'
       +'<button onclick="ltBuyStock(\''+p.sym+'\','+(p.shares||0)+','+(+ltPrice).toFixed(2)+',\''+(p.scoreBucket||'')+'\','+(p.scoreV2||0)+')" '
       +'style="background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button>'
@@ -5907,10 +5917,17 @@ function psRenderModelResults(data){
   var benchStocks=pSorted.filter(function(s){return s.action==='WATCH'||s.isBench;});
 
   // Stock table
+  // Column set: #, Stock, AI Reviews, SWING TRADE SCORE (composite — the
+  // blended 5-factor score the portfolio manager actually ranks on),
+  // Price, Shares, Invested, Conviction, Signal, SL, Target, R:R, Track.
+  // Sector column removed (company name sub-text under the ticker already
+  // conveys that). Score/FA/TA triple collapsed to one SWING TRADE SCORE
+  // column — the composite is what the model optimises, FA/TA were just
+  // debug sub-scores that confused users.
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  ['#','Stock','AI Reviews','Sector','Price','Shares','Alloc','Conv.','Score','FA','TA','Signal','SL','Target','R:R','Track'].forEach(function(hdr){
+  ['#','Stock','AI REVIEWS','SWING TRADE SCORE','PRICE','SHARES','INVESTED','CONVICTION','SIGNAL','SL','TARGET','R:R','TRACK'].forEach(function(hdr){
     h+='<th style="padding:7px 5px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -5924,7 +5941,7 @@ function psRenderModelResults(data){
     // Insert divider before first bench stock
     if(isBench&&!printedBenchDivider&&benchStocks.length>0){
       printedBenchDivider=true;
-      h+='<tr><td colspan="16" style="padding:8px 10px;background:rgba(100,116,139,.08);border-top:2px solid rgba(100,116,139,.3);border-bottom:1px solid var(--border)">';
+      h+='<tr><td colspan="13" style="padding:8px 10px;background:rgba(100,116,139,.08);border-top:2px solid rgba(100,116,139,.3);border-bottom:1px solid var(--border)">';
       h+='<span style="font-size:10px;font-weight:800;color:#64748b">📋 BENCH — Watchlist ('+benchStocks.length+') — next in line when capital increases or active stocks get EXIT signal</span>';
       h+='</td></tr>';
     }
@@ -5932,7 +5949,7 @@ function psRenderModelResults(data){
     // Insert divider before first sell-flagged stock
     if(isSellFlagged&&!printedSellDivider&&sellFlagged.length>0){
       printedSellDivider=true;
-      h+='<tr><td colspan="16" style="padding:8px 10px;background:rgba(239,68,68,.08);border-top:2px solid rgba(239,68,68,.3);border-bottom:1px solid var(--border)">';
+      h+='<tr><td colspan="13" style="padding:8px 10px;background:rgba(239,68,68,.08);border-top:2px solid rgba(239,68,68,.3);border-bottom:1px solid var(--border)">';
       h+='<span style="font-size:10px;font-weight:800;color:#ef4444">⚠ CHANGED — AI no longer recommends these ('+sellFlagged.length+')</span>';
       h+='</td></tr>';
     }
@@ -5974,14 +5991,14 @@ function psRenderModelResults(data){
       h+='<span style="font-size:8px;color:var(--text4)">—</span>';
     }
     h+='</td>';
-    h+='<td style="padding:5px;color:var(--text3);font-size:10px">'+stk.sector+'</td>';
+    // SWING TRADE SCORE — the 5-factor composite the portfolio manager
+    // ranks on (FA 30 + TA 25 + Val 15 + Mom 15 + Risk 15). Shown right
+    // after AI Reviews so the buy rationale (AI + score) reads left-to-right.
+    h+='<td style="padding:5px;font-weight:700;font-size:13px;color:'+(stk.composite>=60?'#22c55e':stk.composite>=45?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
     h+='<td style="padding:5px;font-weight:600">₹'+(stk.currentPrice||stk.price).toFixed(0)+'</td>';
     h+='<td style="padding:5px;font-weight:600">'+stk.shares+'</td>';
     h+='<td style="padding:5px;font-size:10px">'+psFmt(stk.allocAmt)+' <span style="color:var(--text4)">('+stk.allocPct+'%)</span></td>';
     h+='<td style="padding:5px"><span style="background:'+stk.convColor+'20;color:'+stk.convColor+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700;white-space:nowrap">'+stk.conviction+'</span></td>';
-    h+='<td style="padding:5px;font-weight:700;color:'+(stk.composite>=60?'#22c55e':stk.composite>=45?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
-    h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+stk.faScore+'</td>';
-    h+='<td style="padding:5px;font-size:9px;color:var(--text3)">'+(stk.taScore||'—')+'</td>';
     // Signal column
     if(isSellFlagged){
       h+='<td style="padding:5px"><span style="background:#ef444430;color:#ef4444;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+stk.action+'</span>';
@@ -6014,7 +6031,7 @@ function psRenderModelResults(data){
       var pmKeys2=Object.keys(pm2);
       var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
       h+='<tr id="ai-row-'+stk.sym+'" style="display:none;background:var(--bg2)">';
-      h+='<td colspan="16" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
+      h+='<td colspan="13" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
       h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">🤖 AI Model Reviews for '+stk.sym+'</div>';
       h+='<div style="display:grid;gap:4px">';
       pmKeys2.forEach(function(mid){
