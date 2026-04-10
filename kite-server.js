@@ -1557,7 +1557,7 @@ const CONFIG = {
   SELL_SCORE:        -2.0,
   CONSENSUS_NEEDED:   2,
   // Varsity M9: volatility-based position sizing replaces fixed amount
-  ACCOUNT_SIZE:       100000,  // ₹1 lakh paper trading account
+  ACCOUNT_SIZE:       90000,  // Default ₹90K — overridden by live Kite margin if available
   RISK_PCT_PER_TRADE: 0.02,    // 2% max risk per trade (Varsity M9 Ch 11)
   MIN_RISK_PCT:       0.005,   // 0.5% floor
   MAX_RISK_PCT:       0.03,    // 3% ceiling (half-Kelly floor)
@@ -1612,11 +1612,31 @@ function findSwingLow(candles, entryPrice) {
   return valid.length > 0 ? valid[0].level : null;
 }
 
+// Live account equity from Kite — cached, refreshed every 5 minutes
+let _liveAccountEquity = null;
+let _liveEquityFetchedAt = 0;
+async function getLiveAccountEquity() {
+  const REFRESH_MS = 5 * 60 * 1000; // 5 min cache
+  if (_liveAccountEquity && (Date.now() - _liveEquityFetchedAt < REFRESH_MS)) return _liveAccountEquity;
+  try {
+    if (!kite) return CONFIG.ACCOUNT_SIZE;
+    const margins = await kite.getMargins('equity');
+    const available = margins?.net ?? margins?.available?.live_balance ?? null;
+    if (available != null && available > 0) {
+      _liveAccountEquity = +available;
+      _liveEquityFetchedAt = Date.now();
+      console.log(`💰 Live Kite equity: ₹${_liveAccountEquity.toLocaleString()}`);
+      return _liveAccountEquity;
+    }
+  } catch(e) { console.log(`⚠ Kite margin fetch failed: ${e.message}`); }
+  return _liveAccountEquity || CONFIG.ACCOUNT_SIZE; // fallback
+}
+
 // ATR-based position sizing with S/R-anchored SL — Varsity M9 Ch 11-13
 // Position Size = (Account × Risk%) / stopDist
 // Stop-loss prefers swing low (support level) over fixed ATR distance
 function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, kellyRisk=null, candles=null) {
-  const equity   = accountEquity || CONFIG.ACCOUNT_SIZE;
+  const equity   = accountEquity || _liveAccountEquity || CONFIG.ACCOUNT_SIZE;
   const riskPct  = kellyRisk || CONFIG.RISK_PCT_PER_TRADE;
   const riskAmt  = equity * Math.min(Math.max(riskPct, CONFIG.MIN_RISK_PCT), CONFIG.MAX_RISK_PCT);
   const mult     = CONFIG.ATR_MULT[regime] || CONFIG.ATR_MULT.UNKNOWN;
@@ -1700,7 +1720,8 @@ async function checkDrawdownCircuitBreaker() {
       SELECT COALESCE(SUM(pnl),0) as total_pnl FROM paper_trades WHERE status='CLOSED'
     `);
     const totalPnl  = parseFloat(rows[0]?.total_pnl || 0);
-    const equity    = CONFIG.ACCOUNT_SIZE + totalPnl;
+    const baseEquity = _liveAccountEquity || CONFIG.ACCOUNT_SIZE;
+    const equity    = baseEquity + totalPnl;
     _peakEquity     = Math.max(_peakEquity, equity);
     const drawdown  = (_peakEquity - equity) / _peakEquity;
 
@@ -1766,6 +1787,9 @@ async function scanAndTrade() {
 
   const scanTime = new Date().toLocaleTimeString("en-IN");
   console.log(`\n⟳ Smart scan at ${scanTime}...`);
+
+  // Refresh live account equity from Kite (cached 5min)
+  await getLiveAccountEquity();
 
   const { rows: openTrades } = await pool.query("SELECT * FROM paper_trades WHERE status='OPEN'");
   let signalCount=0, dominantRegime="UNKNOWN", dominantStrategy="NONE";
@@ -3831,16 +3855,39 @@ app.get("/paper-trades/daily", async(req,res)=>{
 });
 
 // ── Trading mode endpoints ──
-app.get("/api/trading-mode", (req,res) => {
-  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER', kiteConnected: !!kite });
+app.get("/api/trading-mode", async (req,res) => {
+  const liveEquity = await getLiveAccountEquity().catch(()=>CONFIG.ACCOUNT_SIZE);
+  res.json({
+    live: LIVE_TRADING,
+    mode: LIVE_TRADING ? 'LIVE' : 'PAPER',
+    kiteConnected: !!kite,
+    accountEquity: liveEquity,
+    configuredCapital: CONFIG.ACCOUNT_SIZE,
+    riskPerTrade: CONFIG.RISK_PCT_PER_TRADE * 100 + '%',
+    maxPositions: CONFIG.MAX_POSITIONS,
+    drawdownLimits: { reduce: CONFIG.DD_REDUCE_PCT*100+'%', pause: CONFIG.DD_PAUSE_PCT*100+'%', halt: CONFIG.DD_HALT_PCT*100+'%' },
+  });
 });
-app.post("/api/trading-mode", express.json(), (req,res) => {
-  const { live } = req.body;
-  if (typeof live !== 'boolean') return res.status(400).json({ error: 'live must be boolean' });
-  if (live && !kite) return res.status(400).json({ error: 'Cannot enable LIVE mode — Kite is not connected. Login to Kite first.' });
-  LIVE_TRADING = live;
-  console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'}`);
-  res.json({ live: LIVE_TRADING, mode: LIVE_TRADING ? 'LIVE' : 'PAPER', kiteConnected: !!kite });
+app.post("/api/trading-mode", express.json(), async (req,res) => {
+  const { live, capital } = req.body;
+  // Update capital if provided
+  if (capital != null && typeof capital === 'number' && capital > 0) {
+    CONFIG.ACCOUNT_SIZE = capital;
+    console.log(`💰 Account size updated to ₹${capital.toLocaleString()}`);
+  }
+  if (typeof live === 'boolean') {
+    if (live && !kite) return res.status(400).json({ error: 'Cannot enable LIVE mode — Kite is not connected. Login to Kite first.' });
+    LIVE_TRADING = live;
+    console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'}`);
+  }
+  const liveEquity = await getLiveAccountEquity().catch(()=>CONFIG.ACCOUNT_SIZE);
+  res.json({
+    live: LIVE_TRADING,
+    mode: LIVE_TRADING ? 'LIVE' : 'PAPER',
+    kiteConnected: !!kite,
+    accountEquity: liveEquity,
+    configuredCapital: CONFIG.ACCOUNT_SIZE,
+  });
 });
 
 // ── Live trades endpoints (mirror paper-trades structure) ──
