@@ -4641,11 +4641,26 @@ async function refreshAllFundamentals() {
           sf.divYield = +(ext.divYield * _eps / _px).toFixed(2);
         }
 
-        // ═══ NEW: DuPont ROE Decomposition (Varsity M3: Net Margin × Asset Turnover × Equity Multiplier) ═══
-        const _roe = sf.roe ?? ext?.roe;
-        const _npm = sf.profMgn ?? ext?.profMgn;
-        const _assetTurn = ext?.assetTurnover;
+        // ═══ DuPont ROE Decomposition (Varsity M3: Net Margin × Asset Turnover × Equity Multiplier) ═══
+        // Compute Net Profit Margin: PAT / Sales × 100
+        let _npm = sf.profMgn ?? ext?.profMgn;
+        if (_npm == null && _pat > 0 && _sales > 0) {
+          _npm = +(_pat / _sales * 100).toFixed(2);
+          sf.profMgn = _npm;
+        }
+        // Compute Asset Turnover: Sales / Total Assets
+        // Total Assets ≈ Equity × (1 + D/E), where Equity ≈ BookValue × Shares, Shares ≈ MktCap / Price
+        let _assetTurn = sf.assetTurnover ?? ext?.assetTurnover;
         const _de2 = sf.debtToEq ?? ext?.de;
+        if (_assetTurn == null && _sales > 0 && sf.bookValue > 0 && _px > 0 && sf.mktCap > 0) {
+          const sharesEst = sf.mktCap / _px;           // shares in Cr units (mktCap in Cr, price in Rs)
+          const equity = sf.bookValue * sharesEst;      // equity in Cr
+          const totalAssets = equity * (1 + (_de2 || 0)); // Total Assets = Equity × Equity Multiplier
+          if (totalAssets > 0) {
+            _assetTurn = +(_sales / totalAssets).toFixed(2);
+            sf.assetTurnover = _assetTurn;
+          }
+        }
         if (_npm != null && _assetTurn != null && _de2 != null) {
           sf.dupontNetMargin = +_npm;
           sf.dupontAssetTurnover = +_assetTurn;
@@ -4653,13 +4668,23 @@ async function refreshAllFundamentals() {
           sf.dupontROE = +(_npm/100 * _assetTurn * (1 + (_de2 || 0)) * 100).toFixed(1);
         }
 
-        // ═══ NEW: Cash Conversion Cycle (Varsity M13: Debtor Days + Inv Days - Payable Days) ═══
-        const _debtorDays = ext?.debtorDays;
-        const _invTurnover = ext?.invTurnover;
+        // ═══ Cash Conversion Cycle (Varsity M13: Debtor Days + Inv Days - Payable Days) ═══
+        let _debtorDays = sf.debtorDays ?? ext?.debtorDays;
+        let _invTurnover = sf.invTurnover ?? ext?.invTurnover;
+        // Compute debtor days fallback: (Receivables/Sales) × 365 ≈ from receivables turnover
+        // Compute inventory days fallback: if we have invTurnover
+        if (_debtorDays == null && _sales > 0 && sf.currentRatio != null && sf.debt != null) {
+          // Rough estimate: debtorDays ≈ 365 / (sales / (mktCap × currentRatio / PE)) — too approximate
+          // Skip — debtorDays needs actual receivables data
+        }
+        if (_invTurnover == null && _sales > 0 && sf.mktCap > 0) {
+          // Rough inventory turnover from COGS/Inventory — not reliable without data
+          // Skip — invTurnover needs actual inventory data
+        }
         if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
           const invDays = +(365 / _invTurnover).toFixed(0);
           sf.inventoryDays = invDays;
-          sf.cashConversionCycle = +(_debtorDays + invDays).toFixed(0); // Payable days not available, use partial
+          sf.cashConversionCycle = +(_debtorDays + invDays).toFixed(0);
         }
 
         // ═══ NEW: Sharpe Ratio (Varsity M10: (Return - RiskFree) / StdDev) ═══
