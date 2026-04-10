@@ -4375,6 +4375,36 @@ async function refreshAllFundamentals() {
     }
   });
 
+  // ── Post-scoring: merge FUND_EXT (Screener.in) into stockFundamentals ──
+  // Scoring creates fresh entries from ext = global.FUND_EXT, but if FUND_EXT was
+  // loaded from DB rows that predated ALTER TABLE columns (fii_holding, dii_holding, etc.),
+  // those fields are null. A concurrent Screener fetch may have updated FUND_EXT since.
+  // This final merge ensures any freshly-arrived Screener data is captured.
+  if (global.FUND_EXT && Object.keys(global.FUND_EXT).length > 0) {
+    const extFields = ['currentRatio','quickRatio','divYield','pledged','fiiHolding','diiHolding',
+      'numShareholders','patQtrYoy','salesQtrYoy','patQtr','salesQtr','patAnnual','salesAnnual',
+      'priceToFCF','priceToSales','earningsYield','roce','promoter','promoterChg','intCov',
+      'mktCap','roa','pb','peg','evEbitda','industryPE','eps','debt',
+      'salesGr1y','salesGr5y','epsGr1y','epsGr5y','roe3yAvg','roe5yAvg',
+      'ret1y','ret3y','ret5y','roe','debtToEq','pe','revGrowth','earGrowth','opMargin'];
+    // Map FUND_EXT field names that differ from stockFundamentals field names
+    const extKeyMap = { debtToEq:'de', revGrowth:'revGr', earGrowth:'epsGr', opMargin:'opMgn' };
+    let merged = 0;
+    for (const [sym, ext] of Object.entries(global.FUND_EXT)) {
+      const sf = stockFundamentals[sym];
+      if (!sf) continue;
+      let changed = false;
+      for (const field of extFields) {
+        if (sf[field] != null) continue; // already has value
+        const extKey = extKeyMap[field] || field;
+        const v = ext[extKey];
+        if (v != null) { sf[field] = v; changed = true; }
+      }
+      if (changed) merged++;
+    }
+    if (merged > 0) console.log(`📊 Post-scoring: merged FUND_EXT into ${merged} stocks (FII, DII, QoQ, etc.)`);
+  }
+
   stockFundLastFetch = Date.now();
   stockFundLoading   = false;
   stockFundReady     = ok > 10;
@@ -6084,6 +6114,37 @@ app.get('/api/stocks/score', async(req,res)=>{
       const faData = isFa ? scoreFallenAngel(f) : {};
       // Stop loss + R:R (Meera: Risk Analyst)
       const stopData = px ? computeStopAndTarget({...f, price:px}) : null;
+      // ── FUND_EXT fallback: fill any null screener fields from live FUND_EXT ──
+      // This catches cases where stockFundamentals was built from stale scored cache
+      // and the post-scoring merge hasn't run yet (scoring still in progress)
+      const ext = global.FUND_EXT?.[f.sym] || {};
+      const _v = (sfVal, extVal) => sfVal ?? extVal ?? null;  // stockFundamentals → FUND_EXT → null
+      const _fii = _v(f.fiiHolding, ext.fiiHolding);
+      const _dii = _v(f.diiHolding, ext.diiHolding);
+      const _nsh = _v(f.numShareholders, ext.numShareholders);
+      const _cr  = _v(f.currentRatio, ext.currentRatio);
+      const _qr  = _v(f.quickRatio, ext.quickRatio);
+      const _dy  = _v(f.divYield, ext.divYield);
+      const _pl  = _v(f.pledged, ext.pledged);
+      const _pqy = _v(f.patQtrYoy, ext.patQtrYoy);
+      const _sqy = _v(f.salesQtrYoy, ext.salesQtrYoy);
+      const _pfcf= _v(f.priceToFCF, ext.priceToFCF);
+      const _ps  = _v(f.priceToSales, ext.priceToSales);
+      const _ey  = _v(f.earningsYield, ext.earningsYield);
+      const _roce= _v(f.roce, ext.roce);
+      const _prom= _v(f.promoter, ext.promoter);
+      const _prch= _v(f.promoterChg, ext.promoterChg);
+      const _ic  = _v(f.intCov, ext.intCov);
+      const _roa = _v(f.roa, ext.roa);
+      const _pb  = _v(f.pb, ext.pb);
+      const _peg = _v(f.peg, ext.peg);
+      const _ev  = _v(f.evEbitda, ext.evEbitda);
+      const _mc  = _v(f.mktCap, ext.mktCap);
+      const _pq  = _v(f.patQtr, ext.patQtr);
+      const _sq  = _v(f.salesQtr, ext.salesQtr);
+      const _pa  = _v(f.patAnnual, ext.patAnnual);
+      const _sa  = _v(f.salesAnnual, ext.salesAnnual);
+
       return {
         sym:f.sym, name:f.name, grp:f.grp, sector:f.sector, score, hits,
         // Fallen Angel
@@ -6092,60 +6153,60 @@ app.get('/api/stocks/score', async(req,res)=>{
         stopLoss: stopData?.stopLoss, target: stopData?.target,
         riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
         rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
-        // Fundamentals — core
-        roe:f.roe!=null?+f.roe.toFixed(1):null,
-        debtToEq:f.debtToEq!=null?+f.debtToEq.toFixed(2):null,
-        opMargin:f.opMargin!=null?+f.opMargin.toFixed(1):null,
-        pe:f.pe!=null?+f.pe.toFixed(1):null,
-        peg:f.peg!=null?+f.peg.toFixed(2):null,
-        revGrowth:f.revGrowth!=null?+f.revGrowth.toFixed(1):null,
-        earGrowth:f.earGrowth!=null?+f.earGrowth.toFixed(1):null,
-        // Fundamentals — from Screener.in
-        roa:         f.roa!=null?+f.roa.toFixed(1):null,
-        pb:          f.pb!=null?+f.pb.toFixed(2):null,
-        intCov:      f.intCov!=null?+f.intCov.toFixed(1):null,
-        promoter:    f.promoter!=null?+f.promoter.toFixed(1):null,
-        pledged:     f.pledged!=null?+f.pledged.toFixed(1):null,
-        promoterChg: f.promoterChg!=null?+f.promoterChg.toFixed(1):null,
-        mktCap:      f.mktCap!=null?+f.mktCap.toFixed(0):null,
-        divYield:    f.divYield!=null?+f.divYield.toFixed(2):null,
-        eps:         f.eps!=null?+f.eps.toFixed(2):null,
-        roe3yAvg:    f.roe3yAvg!=null?+f.roe3yAvg.toFixed(1):null,
-        salesGr1y:   f.salesGr1y!=null?+f.salesGr1y.toFixed(1):null,
-        salesGr5y:   f.salesGr5y!=null?+f.salesGr5y.toFixed(1):null,
-        epsGr5y:     f.epsGr5y!=null?+f.epsGr5y.toFixed(1):null,
-        ret1y:       f.ret1y!=null?+f.ret1y.toFixed(1):null,
-        ret3y:       f.ret3y!=null?+f.ret3y.toFixed(1):null,
-        ret5y:       f.ret5y!=null?+f.ret5y.toFixed(1):null,
-        ret6m:       f.ret6m!=null?+f.ret6m.toFixed(1):null,
-        ret3m:       f.ret3m!=null?+f.ret3m.toFixed(1):null,
-        epsGr1y:     f.epsGr1y!=null?+f.epsGr1y.toFixed(1):null,
-        roe5yAvg:    f.roe5yAvg!=null?+f.roe5yAvg.toFixed(1):null,
-        currentRatio:f.currentRatio!=null?+f.currentRatio.toFixed(2):null,
-        debt:        f.debt!=null?+f.debt:null,
-        roce:        f.roce!=null?+f.roce.toFixed(1):null,
-        evEbitda:    f.evEbitda!=null?+f.evEbitda.toFixed(1):null,
-        earningsYield:f.earningsYield!=null?+f.earningsYield.toFixed(2):null,
-        priceToFCF:  f.priceToFCF!=null?+f.priceToFCF.toFixed(1):null,
-        priceToSales:f.priceToSales!=null?+f.priceToSales.toFixed(2):null,
-        patQtr:      f.patQtr!=null?+f.patQtr:null,
-        salesQtr:    f.salesQtr!=null?+f.salesQtr:null,
-        patAnnual:   f.patAnnual!=null?+f.patAnnual:null,
-        salesAnnual: f.salesAnnual!=null?+f.salesAnnual:null,
-        patQtrYoy:   f.patQtrYoy!=null?+f.patQtrYoy.toFixed(1):null,
-        salesQtrYoy: f.salesQtrYoy!=null?+f.salesQtrYoy.toFixed(1):null,
+        // Fundamentals — core (with FUND_EXT fallback)
+        roe:f.roe!=null?+f.roe.toFixed(1):(ext.roe!=null?+ext.roe:null),
+        debtToEq:f.debtToEq!=null?+f.debtToEq.toFixed(2):(ext.de!=null?+ext.de:null),
+        opMargin:f.opMargin!=null?+f.opMargin.toFixed(1):(ext.opMgn!=null?+ext.opMgn:null),
+        pe:f.pe!=null?+f.pe.toFixed(1):(ext.pe!=null?+ext.pe:null),
+        peg:_peg!=null?+(+_peg).toFixed(2):null,
+        revGrowth:f.revGrowth!=null?+f.revGrowth.toFixed(1):(ext.revGr!=null?+ext.revGr:null),
+        earGrowth:f.earGrowth!=null?+f.earGrowth.toFixed(1):(ext.epsGr!=null?+ext.epsGr:null),
+        // Fundamentals — from Screener.in (with FUND_EXT fallback)
+        roa:         _roa!=null?+(+_roa).toFixed(1):null,
+        pb:          _pb!=null?+(+_pb).toFixed(2):null,
+        intCov:      _ic!=null?+(+_ic).toFixed(1):null,
+        promoter:    _prom!=null?+(+_prom).toFixed(1):null,
+        pledged:     _pl!=null?+(+_pl).toFixed(1):null,
+        promoterChg: _prch!=null?+(+_prch).toFixed(1):null,
+        mktCap:      _mc!=null?+(+_mc).toFixed(0):null,
+        divYield:    _dy!=null?+(+_dy).toFixed(2):null,
+        eps:         f.eps!=null?+f.eps.toFixed(2):(ext.eps!=null?+ext.eps:null),
+        roe3yAvg:    f.roe3yAvg!=null?+f.roe3yAvg.toFixed(1):(ext.roe3yAvg!=null?+ext.roe3yAvg:null),
+        salesGr1y:   f.salesGr1y!=null?+f.salesGr1y.toFixed(1):(ext.salesGr1y!=null?+ext.salesGr1y:null),
+        salesGr5y:   f.salesGr5y!=null?+f.salesGr5y.toFixed(1):(ext.salesGr5y!=null?+ext.salesGr5y:null),
+        epsGr5y:     f.epsGr5y!=null?+f.epsGr5y.toFixed(1):(ext.epsGr5y!=null?+ext.epsGr5y:null),
+        ret1y:       f.ret1y!=null?+f.ret1y.toFixed(1):(ext.ret1y!=null?+ext.ret1y:null),
+        ret3y:       f.ret3y!=null?+f.ret3y.toFixed(1):(ext.ret3y!=null?+ext.ret3y:null),
+        ret5y:       f.ret5y!=null?+f.ret5y.toFixed(1):(ext.ret5y!=null?+ext.ret5y:null),
+        ret6m:       f.ret6m!=null?+f.ret6m.toFixed(1):(ext.ret6m!=null?+ext.ret6m:null),
+        ret3m:       f.ret3m!=null?+f.ret3m.toFixed(1):(ext.ret3m!=null?+ext.ret3m:null),
+        epsGr1y:     f.epsGr1y!=null?+f.epsGr1y.toFixed(1):(ext.epsGr1y!=null?+ext.epsGr1y:null),
+        roe5yAvg:    f.roe5yAvg!=null?+f.roe5yAvg.toFixed(1):(ext.roe5yAvg!=null?+ext.roe5yAvg:null),
+        currentRatio:_cr!=null?+(+_cr).toFixed(2):null,
+        debt:        f.debt!=null?+f.debt:(ext.debt!=null?+ext.debt:null),
+        roce:        _roce!=null?+(+_roce).toFixed(1):null,
+        evEbitda:    _ev!=null?+(+_ev).toFixed(1):null,
+        earningsYield:_ey!=null?+(+_ey).toFixed(2):null,
+        priceToFCF:  _pfcf!=null?+(+_pfcf).toFixed(1):null,
+        priceToSales:_ps!=null?+(+_ps).toFixed(2):null,
+        patQtr:      _pq!=null?+_pq:null,
+        salesQtr:    _sq!=null?+_sq:null,
+        patAnnual:   _pa!=null?+_pa:null,
+        salesAnnual: _sa!=null?+_sa:null,
+        patQtrYoy:   _pqy!=null?+(+_pqy).toFixed(1):null,
+        salesQtrYoy: _sqy!=null?+(+_sqy).toFixed(1):null,
         // Yahoo Finance exclusive fields
         fwdPE:       f.fwdPE!=null?+f.fwdPE.toFixed(1):null,
         grossMgn:    f.grossMgn!=null?+f.grossMgn.toFixed(1):null,
         profMgn:     f.profMgn!=null?+f.profMgn.toFixed(1):null,
-        quickRatio:  f.quickRatio!=null?+f.quickRatio.toFixed(2):null,
+        quickRatio:  _qr!=null?+(+_qr).toFixed(2):null,
         fcf:         f.fcf!=null?+f.fcf:null,
         instHeld:    f.instHeld!=null?+f.instHeld.toFixed(1):null,
         bookValue:   f.bookValue!=null?+f.bookValue.toFixed(2):null,
-        fiiHolding:  f.fiiHolding!=null?+f.fiiHolding.toFixed(1):null,
-        diiHolding:  f.diiHolding!=null?+f.diiHolding.toFixed(1):null,
-        numShareholders: f.numShareholders!=null?+f.numShareholders:null,
-        industryPE:  f.industryPE!=null?+f.industryPE.toFixed(1):null,
+        fiiHolding:  _fii!=null?+(+_fii).toFixed(1):null,
+        diiHolding:  _dii!=null?+(+_dii).toFixed(1):null,
+        numShareholders: _nsh!=null?+_nsh:null,
+        industryPE:  f.industryPE!=null?+f.industryPE.toFixed(1):(ext.industryPE!=null?+ext.industryPE:null),
         dataSource:  f.dataSource||'Hardcoded',
         // Technical - full set
         price:px,
@@ -7695,7 +7756,7 @@ async function upsertScreenerData(data) {
     data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
     data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
     data.roce, data.earnings_yield, data.price_to_fcf, data.price_to_sales,
-    data.fii_holding||null, data.dii_holding||null, data.num_shareholders||null,
+    data.fii_holding??null, data.dii_holding??null, data.num_shareholders??null,
   ]);
   patchScreenerIntoFUND(data.sym, data);
 }
@@ -8222,7 +8283,12 @@ app.get('/api/admin/pipeline', async (req, res) => {
 
     res.json({
       universe:     { count: parseInt(univResult.rows[0].total), lastSync: univLast, age: ageLabel(univLast), schedule: 'Daily 8AM IST' },
-      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: 'Daily 8PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length },
+      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: 'Daily 8PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length,
+        // Diagnostic: how many FUND_EXT entries have key screener fields populated
+        withFII: Object.values(global.FUND_EXT||{}).filter(e=>e.fiiHolding!=null).length,
+        withDII: Object.values(global.FUND_EXT||{}).filter(e=>e.diiHolding!=null).length,
+        withCR:  Object.values(global.FUND_EXT||{}).filter(e=>e.currentRatio!=null).length,
+      },
       scoring:      { count: scoreData.count, lastSync: scoreLast, age: ageLabel(scoreLast), schedule: 'Daily 7AM IST', running: stockFundLoading },
       mf:           { schedule: 'Every 6 hours' },
       kite:         { connected: !!kite, tokenValid },
