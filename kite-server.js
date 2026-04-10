@@ -47,7 +47,8 @@ const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+app.use(express.text({ limit: '5mb' }));
 
 // -- DB ------------------------------------------------------------------------
 const pool = new Pool({
@@ -3159,6 +3160,10 @@ async function importScreenerCSV(csvText) {
     ret5y:         col('return over 5years'),
     ret6m:         col('return over 6months'),
     ret3m:         col('return over 3months'),
+    roce:          col('roce'),   // ROCE %
+    roceAlt:       col('roce %'), // alternate header name
+    priceToSales:  col('price to sales'),
+    priceToSalesAlt: col('price to sales ratio'),
   };
 
   let imported = 0, skipped = 0;
@@ -3217,6 +3222,8 @@ async function importScreenerCSV(csvText) {
       sales_annual:     get(row, C.sales),
       pat_qtr_yoy:      get(row, C.patQtrYoy),
       sales_qtr_yoy:    get(row, C.salesQtrYoy),
+      roce:             get(row, C.roce) ?? get(row, C.roceAlt),
+      price_to_sales:   get(row, C.priceToSales) ?? get(row, C.priceToSalesAlt),
     };
 
     try {
@@ -3228,7 +3235,8 @@ async function importScreenerCSV(csvText) {
            eps,debt,current_ratio,div_yield,sales_gr_1y,sales_gr_5y,
            eps_gr_1y,eps_gr_5y,roe_3y_avg,roe_5y_avg,ret_1y,ret_3y,ret_5y,
            ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
-           pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,imported_at)
+           pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
+           roce,price_to_sales,imported_at)
         VALUES
           ($1,$2,$3,$4,$5,$6,
            $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -3236,7 +3244,8 @@ async function importScreenerCSV(csvText) {
            $22,$23,$24,$25,$26,$27,
            $28,$29,$30,$31,$32,$33,$34,
            $35,$36,$37,$38,$39,$40,
-           $41,$42,$43,$44,NOW())
+           $41,$42,$43,$44,
+           $45,$46,NOW())
         ON CONFLICT (sym) DO UPDATE SET
           name=EXCLUDED.name, industry=EXCLUDED.industry,
           roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -3255,6 +3264,8 @@ async function importScreenerCSV(csvText) {
           pat_qtr=EXCLUDED.pat_qtr, sales_qtr=EXCLUDED.sales_qtr,
           pat_annual=EXCLUDED.pat_annual, sales_annual=EXCLUDED.sales_annual,
           pat_qtr_yoy=EXCLUDED.pat_qtr_yoy, sales_qtr_yoy=EXCLUDED.sales_qtr_yoy,
+          roce=COALESCE(EXCLUDED.roce, screener_fundamentals.roce),
+          price_to_sales=COALESCE(EXCLUDED.price_to_sales, screener_fundamentals.price_to_sales),
           imported_at=NOW()
       `, [
         data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -3266,6 +3277,7 @@ async function importScreenerCSV(csvText) {
         data.ret_1y, data.ret_3y, data.ret_5y, data.ret_6m, data.ret_3m,
         data.ev_ebitda, data.industry_pe, data.pat_qtr, data.sales_qtr,
         data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
+        data.roce ?? null, data.price_to_sales ?? null,
       ]);
 
       // Immediately patch into live FUND + FUND_EXT memory

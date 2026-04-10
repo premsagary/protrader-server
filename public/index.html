@@ -5191,9 +5191,12 @@ async function renderAdmin() {
           <div>
             <div style="font-size:11px;font-weight:600;color:#f59e0b">📊 Fundamentals</div>
             <div style="font-size:10px;color:var(--text4)">ROE · D/E · PE · margins · promoter% via Screener.in</div>
-            <div style="font-size:10px;color:var(--text4)">Auto-syncs daily at 8PM IST + if stale on startup</div>
+            <div style="font-size:10px;color:var(--text4)">Upload CSV from Screener.in export</div>
           </div>
-          <button onclick="adminForceRefresh('fundamentals')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
+          <div style="display:flex;gap:4px;flex-direction:column;align-items:flex-end">
+            <label style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;border-radius:4px;padding:3px 10px;font-size:10px;cursor:pointer;white-space:nowrap;text-align:center">📤 Upload CSV<input type="file" accept=".csv,.txt" style="display:none" onchange="adminUploadScreenerCSV(this)"></label>
+            <button onclick="adminForceRefresh('fundamentals')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Apify Sync</button>
+          </div>
         </div>
         <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
           <div>
@@ -5455,6 +5458,30 @@ async function adminForceRefresh(what) {
     setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 8000);
   } catch(e) {
     if (msgEl) { msgEl.textContent = '❌ ' + e.message; msgEl.style.color = '#ef4444'; }
+  }
+}
+
+// ── Screener.in CSV Upload ──────────────────────────────────────────────────
+async function adminUploadScreenerCSV(inputEl) {
+  var file = inputEl.files[0];
+  if (!file) return;
+  inputEl.value = ''; // reset so same file can be re-uploaded
+  var msgEl = document.getElementById('admin-force-msg');
+  if (msgEl) { msgEl.textContent = '⏳ Uploading ' + file.name + ' (' + (file.size/1024).toFixed(0) + ' KB)...'; msgEl.style.color = '#f59e0b'; }
+  try {
+    var text = await file.text();
+    var r = await fetch('/api/fundamentals/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: text
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (msgEl) { msgEl.innerHTML = '✅ Imported <b>' + d.imported + '</b> stocks from CSV (' + d.skipped + ' skipped). Re-scoring started.'; msgEl.style.color = '#10b981'; }
+    setTimeout(adminLoadStatus, 3000);
+    setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 15000);
+  } catch(e) {
+    if (msgEl) { msgEl.textContent = '❌ CSV import failed: ' + e.message; msgEl.style.color = '#ef4444'; }
   }
 }
 
