@@ -3143,20 +3143,18 @@ async function importScreenerCSV(csvText) {
     .replace(/\s+/g, ' ')               // collapse multiple spaces
     .trim()
   );
-  console.log(`📊 CSV headers (${rawHeaders.length} cols): ${rawHeaders.slice(0, 15).join(' | ')}${rawHeaders.length > 15 ? ' ...' : ''}`);
+  console.log(`📊 CSV headers (${rawHeaders.length} cols): ${rawHeaders.join(' | ')}`);
 
-  // Flexible column finder: exact match first, then fuzzy (contains / starts-with)
+  // EXACT match only — fuzzy matching was causing wrong column assignments
+  // (e.g. "book value" fuzzy-matched "Price to book value", "debtor days" matched "Debt")
   const col = (name) => {
     const n = name.toLowerCase().replace(/%/g, '').trim();
-    let idx = headers.indexOf(n);
-    if (idx >= 0) return idx;
-    // Try partial match: header contains the name or name contains the header
-    idx = headers.findIndex(h => h.length > 2 && (h.includes(n) || n.includes(h)));
-    return idx >= 0 ? idx : -1;
+    return headers.indexOf(n);
   };
+  // First non-negative index from multiple name alternatives
+  const firstCol = (...names) => { for (const n of names) { const i = col(n); if (i >= 0) return i; } return -1; };
 
   // Column indices — maps Screener.in CSV headers to internal names
-  // Uses first-match: col() returns -1 if not found, get() returns null for -1
   const C = {
     // Identity
     name:          col('name'),
@@ -3171,7 +3169,7 @@ async function importScreenerCSV(csvText) {
     divYield:      col('dividend yield'),
     pb:            col('price to book value'),
     peg:           col('peg ratio'),
-    priceToSales:  Math.max(col('price to sales'), col('market cap to sales')),
+    priceToSales:  firstCol('price to sales', 'market cap to sales'),
     priceToFCF:    col('price to free cash flow'),
     evEbitda:      col('evebitda'),
     ev:            col('enterprise value'),
@@ -3180,32 +3178,32 @@ async function importScreenerCSV(csvText) {
     // Profitability
     roe:           col('return on equity'),
     roa:           col('return on assets'),
-    roce:          Math.max(col('return on capital employed'), col('roce')),
-    roic:          col('return on invested capital'),
-    opm:           col('opm'),
+    roce:          firstCol('return on capital employed', 'roce'),
+    roic:          firstCol('return on invested capital', 'roic'),
+    opm:           firstCol('opm', 'operating profit margin'),
     eps:           col('eps'),
     // Solvency
     de:            col('debt to equity'),
     debt:          col('debt'),
     currentRatio:  col('current ratio'),
     quickRatio:    col('quick ratio'),
-    intCov:        Math.max(col('interest coverage ratio'), col('interest coverage')),
+    intCov:        firstCol('interest coverage ratio', 'interest coverage'),
     // Shareholding
     promoter:      col('promoter holding'),
     promoterChg:   col('change in promoter holding'),
     pledged:       col('pledged percentage'),
-    fiiHolding:    col('fii holding'),
-    fiiChg:        col('change in fii holding'),
-    diiHolding:    col('dii holding'),
-    diiChg:        col('change in dii holding'),
-    publicHolding: col('public holding'),
-    numShareholders: Math.max(col('number of shareholders'), col('number of shareholders')),
+    fiiHolding:    firstCol('fii holding', 'fii holding'),
+    fiiChg:        firstCol('change in fii holding', 'fii holding change'),
+    diiHolding:    firstCol('dii holding', 'dii holding'),
+    diiChg:        firstCol('change in dii holding', 'dii holding change'),
+    publicHolding: firstCol('public holding', 'public shareholding'),
+    numShareholders: firstCol('number of shareholders', 'no. of shareholders', 'shareholders'),
     // Annual P&L
     sales:         col('sales'),
     patAnnual:     col('profit after tax'),
     // Quarterly
     salesQtr:      col('sales latest quarter'),
-    patQtr:        Math.max(col('profit after tax latest quarter'), col('net profit latest quarter')),
+    patQtr:        firstCol('profit after tax latest quarter', 'net profit latest quarter'),
     salesQtrYoy:   col('yoy quarterly sales growth'),
     patQtrYoy:     col('yoy quarterly profit growth'),
     // Growth
@@ -3222,23 +3220,23 @@ async function importScreenerCSV(csvText) {
     ret6m:         col('return over 6months'),
     ret3m:         col('return over 3months'),
     // Averages
-    roe3yAvg:      col('average return on equity 3years'),
-    roe5yAvg:      col('average return on equity 5years'),
-    roce3yAvg:     col('average return on capital employed 3years'),
-    roce5yAvg:     col('average return on capital employed 5years'),
+    roe3yAvg:      firstCol('average return on equity 3years', 'avg return on equity 3years'),
+    roe5yAvg:      firstCol('average return on equity 5years', 'avg return on equity 5years'),
+    roce3yAvg:     firstCol('average return on capital employed 3years', 'avg roce 3years'),
+    roce5yAvg:     firstCol('average return on capital employed 5years', 'avg roce 5years'),
     // Quality scores & extras
-    piotroski:     col('piotroski score'),
-    altmanZ:       col('altman z score'),
+    piotroski:     firstCol('piotroski score', 'piotroski'),
+    altmanZ:       firstCol('altman z score', 'altman z-score'),
     grahamNumber:  col('graham number'),
-    bookValue:     col('book value'),
-    fcf:           col('free cash flow last year'),
-    netWorth:      col('net worth'),
-    croic:         col('croic'),
-    divPayout:     Math.max(col('dividend payout ratio'), col('dividend payout')),
-    from52wHigh:   Math.max(col('down from 52w high'), col('from 52w high')),
+    bookValue:     firstCol('book value', 'book value per share'),
+    fcf:           firstCol('free cash flow last year', 'free cash flow'),
+    netWorth:      firstCol('net worth', 'networth'),
+    croic:         firstCol('croic', 'cash return on invested capital'),
+    divPayout:     firstCol('dividend payout ratio', 'dividend payout'),
+    from52wHigh:   firstCol('down from 52w high', 'from 52w high', 'high from 52w high'),
     debtorDays:    col('debtor days'),
-    invTurnover:   col('inventory turnover ratio'),
-    assetTurnover: col('asset turnover ratio'),
+    invTurnover:   firstCol('inventory turnover ratio', 'inventory turnover'),
+    assetTurnover: firstCol('asset turnover ratio', 'asset turnover'),
     cashEquiv:     col('cash equivalents'),
   };
 
