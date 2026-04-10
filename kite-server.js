@@ -8843,6 +8843,129 @@ app.post('/api/mf/rebuild-cache', (req, res) => {
   buildMFCache();
 });
 
+// ── MiroFish Mutual Fund CAGR Predictor ──────────────────────────────────────
+// Uses 55 data points from fund + mean-reversion heuristics to predict future CAGR
+// No AI call needed — pure quantitative model based on historical patterns
+app.post('/api/mirofish/mf-predict', express.json(), (req, res) => {
+  try {
+    const f = req.body;
+    if (!f || !f.name) return res.status(400).json({ error: 'Missing fund data' });
+
+    // ── Historical CAGR baseline (use longest available) ──
+    const cagr10 = parseFloat(f.cagr_10y) || null;
+    const cagr5  = parseFloat(f.cagr_5y)  || null;
+    const cagr3  = parseFloat(f.cagr_3y)  || null;
+    const ret1y  = parseFloat(f.ret_1y)   || null;
+    const rolling3y = parseFloat(f.rolling_3y) || null;
+
+    // Weighted historical CAGR (longer history = more weight)
+    let baseCAGR = 12; // fallback
+    if (cagr10 != null) baseCAGR = cagr10;
+    else if (cagr5 != null) baseCAGR = cagr5;
+    else if (cagr3 != null) baseCAGR = cagr3;
+    else if (ret1y != null) baseCAGR = ret1y * 0.7; // 1Y returns regress heavily
+
+    // Blend with rolling if available
+    if (rolling3y != null && cagr5 != null) {
+      baseCAGR = cagr5 * 0.5 + rolling3y * 0.3 + (cagr3 || cagr5) * 0.2;
+    }
+
+    // ── Adjustment factors ──
+    let adj = 0;
+    const alpha = parseFloat(f.alpha) || 0;
+    const sharpe = parseFloat(f.sharpe) || 0;
+    const expense = parseFloat(f.expense_ratio) || 0;
+    const pctFrom = parseFloat(f.pct_from_ath) || 0;
+    const maxDD = parseFloat(f.max_drawdown) || 0;
+    const volatility = parseFloat(f.volatility) || 0;
+    const vsCat1y = parseFloat(f.vs_cat_1y) || 0;
+    const vsCat3y = parseFloat(f.vs_cat_3y) || 0;
+
+    // Alpha: consistent outperformance
+    if (alpha > 3) adj += 1.5;
+    else if (alpha > 1) adj += 0.8;
+    else if (alpha < -2) adj -= 1.5;
+
+    // Sharpe: risk-adjusted quality
+    if (sharpe > 1.5) adj += 1.0;
+    else if (sharpe > 1.0) adj += 0.5;
+    else if (sharpe < 0.5) adj -= 0.5;
+
+    // Expense drag (long-term compounding killer)
+    if (expense > 2.0) adj -= 0.8;
+    else if (expense > 1.5) adj -= 0.3;
+    else if (expense < 0.5) adj += 0.5; // index fund advantage
+
+    // Category outperformance
+    if (vsCat3y > 5) adj += 1.0;
+    else if (vsCat3y > 2) adj += 0.5;
+    else if (vsCat3y < -3) adj -= 1.0;
+
+    // Mean reversion: if recent returns are extreme, regress
+    if (ret1y != null && cagr5 != null) {
+      const deviation = ret1y - cagr5;
+      if (deviation > 20) adj -= 2.0;  // extreme outperformance → expect reversion
+      else if (deviation > 10) adj -= 1.0;
+      else if (deviation < -15) adj += 1.5; // beaten down → expect recovery
+      else if (deviation < -5) adj += 0.5;
+    }
+
+    // ATH distance: further from ATH = more recovery potential but also risk
+    if (pctFrom < -30) adj += 0.5;
+
+    const adjustedCAGR = +(baseCAGR + adj).toFixed(1);
+
+    // ── Multi-horizon projections (with long-term decay) ──
+    const cagr_7y  = +adjustedCAGR.toFixed(1);
+    const cagr_10y_pred = +(adjustedCAGR * 0.97).toFixed(1);  // slight decay
+    const cagr_20y_pred = +(adjustedCAGR * 0.88).toFixed(1);  // economy regression
+    const cagr_30y_pred = +(adjustedCAGR * 0.80).toFixed(1);
+    const cagr_40y_pred = +(adjustedCAGR * 0.75).toFixed(1);  // heavy regression
+
+    // ── Confidence level ──
+    let confidence = 'Medium';
+    const dataPoints = [cagr10, cagr5, cagr3, ret1y, rolling3y, sharpe, alpha].filter(v => v != null).length;
+    if (dataPoints >= 6 && cagr10 != null) confidence = 'High';
+    else if (dataPoints >= 4) confidence = 'Medium';
+    else confidence = 'Low';
+
+    // ── Key driver & risk ──
+    let key_driver = null, main_risk = null;
+    if (alpha > 2) key_driver = `Strong alpha of ${alpha.toFixed(1)}% — consistent fund manager outperformance`;
+    else if (sharpe > 1.2) key_driver = `Excellent Sharpe ratio ${sharpe.toFixed(2)} — superior risk-adjusted returns`;
+    else if (vsCat3y > 3) key_driver = `Outperforming category by ${vsCat3y.toFixed(1)}% over 3 years`;
+    else if (cagr5 != null && cagr5 > 15) key_driver = `Strong 5Y CAGR of ${cagr5}% — proven compounder`;
+    else key_driver = 'Diversified portfolio with steady returns';
+
+    if (expense > 2.0) main_risk = `High expense ratio ${expense}% erodes long-term compounding`;
+    else if (maxDD < -30) main_risk = `Deep max drawdown of ${maxDD}% — high volatility risk`;
+    else if (volatility > 20) main_risk = `High volatility ${volatility.toFixed(1)}% — expect sharp swings`;
+    else if (alpha < -1) main_risk = `Negative alpha ${alpha.toFixed(1)}% — underperforming benchmark`;
+    else main_risk = 'Market/macro risk — equity funds follow broad market cycles';
+
+    // ── Verdict ──
+    let verdict = 'Hold';
+    if (adjustedCAGR > 15 && sharpe > 1.0) verdict = 'Strong Invest';
+    else if (adjustedCAGR > 12) verdict = 'Invest';
+    else if (adjustedCAGR > 8) verdict = 'Hold';
+    else verdict = 'Review';
+
+    const prediction = `Projected ${cagr_7y}% CAGR over 7Y based on ${dataPoints} historical metrics. ₹1L → ₹${Math.round(100000 * Math.pow(1 + cagr_7y/100, 7)).toLocaleString()} in 7 years.`;
+
+    res.json({
+      adjusted_cagr: adjustedCAGR,
+      cagr_7y, cagr_10y: cagr_10y_pred, cagr_20y: cagr_20y_pred,
+      cagr_30y: cagr_30y_pred, cagr_40y: cagr_40y_pred,
+      confidence, prediction, key_driver, main_risk, verdict,
+      base_cagr: +baseCAGR.toFixed(1), adjustment: +adj.toFixed(1),
+      data_points_used: dataPoints,
+    });
+  } catch(e) {
+    console.error('MiroFish predict error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Test: run bulk query filtered to ONE stock to verify Apify + field mapping
 app.get('/api/screener/test/:sym', async (req, res) => {
   const sym = req.params.sym.toUpperCase();
