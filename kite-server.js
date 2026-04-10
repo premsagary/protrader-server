@@ -4306,6 +4306,90 @@ function computeTechnicals(candles) {
   // RSI Divergence (Arjun: Quant signal — high quality reversal indicator)
   const rsiDiv = n >= 34 ? computeRSIDivergence(C, 20) : { rsiTrend:null, bullishDiv:false, bearishDiv:false };
 
+  // ═══ NEW: Fibonacci Retracement Levels (Varsity M2 Ch19: 38.2%, 50%, 61.8%) ═══
+  const fibHigh = wk52Hi, fibLow = wk52Lo, fibRange = fibHigh - fibLow;
+  const fib236 = fibRange > 0 ? +(fibHigh - fibRange * 0.236).toFixed(2) : null;
+  const fib382 = fibRange > 0 ? +(fibHigh - fibRange * 0.382).toFixed(2) : null;
+  const fib500 = fibRange > 0 ? +(fibHigh - fibRange * 0.500).toFixed(2) : null;
+  const fib618 = fibRange > 0 ? +(fibHigh - fibRange * 0.618).toFixed(2) : null;
+  // Nearest fib level to current price
+  const fibLevels = [fib236, fib382, fib500, fib618].filter(Boolean);
+  const nearestFib = fibLevels.length ? fibLevels.reduce((best, l) => Math.abs(C[n-1]-l) < Math.abs(C[n-1]-best) ? l : best) : null;
+  const nearFibDist = nearestFib ? +((C[n-1] - nearestFib) / nearestFib * 100).toFixed(1) : null;
+
+  // ═══ NEW: Support & Resistance (Varsity M2 Ch7: recent swing highs/lows) ═══
+  let support = null, resistance = null;
+  if (n >= 60) {
+    // Find swing lows (support) and swing highs (resistance) from last 60 candles
+    const swingH = [], swingL = [];
+    for (let i = n - 58; i < n - 2; i++) {
+      if (H[i] > H[i-1] && H[i] > H[i+1] && H[i] > H[i-2] && H[i] > H[i+2]) swingH.push(H[i]);
+      if (L[i] < L[i-1] && L[i] < L[i+1] && L[i] < L[i-2] && L[i] < L[i+2]) swingL.push(L[i]);
+    }
+    // Nearest support below current price, nearest resistance above
+    const below = swingL.filter(l => l < C[n-1]).sort((a,b) => b - a);
+    const above = swingH.filter(h => h > C[n-1]).sort((a,b) => a - b);
+    support = below.length ? +below[0].toFixed(2) : (fibLevels.find(l => l < C[n-1]) || null);
+    resistance = above.length ? +above[0].toFixed(2) : (fibLevels.reverse().find(l => l > C[n-1]) || null);
+  }
+
+  // ═══ NEW: Ichimoku Cloud (Varsity M2: Tenkan, Kijun, Senkou A/B) ═══
+  let ichimokuSignal = null, ichimokuTenkan = null, ichimokuKijun = null;
+  if (n >= 52) {
+    const hh = (arr, start, len) => Math.max(...arr.slice(start, start+len));
+    const ll = (arr, start, len) => Math.min(...arr.slice(start, start+len));
+    ichimokuTenkan = +((hh(H,n-9,9) + ll(L,n-9,9)) / 2).toFixed(2);    // Tenkan-sen (9)
+    ichimokuKijun  = +((hh(H,n-26,26) + ll(L,n-26,26)) / 2).toFixed(2); // Kijun-sen (26)
+    const senkouA = +((ichimokuTenkan + ichimokuKijun) / 2).toFixed(2);
+    const senkouB = +((hh(H,n-52,52) + ll(L,n-52,52)) / 2).toFixed(2);
+    const cloudTop = Math.max(senkouA, senkouB);
+    const cloudBot = Math.min(senkouA, senkouB);
+    if (C[n-1] > cloudTop) ichimokuSignal = 'above_cloud';       // Bullish
+    else if (C[n-1] < cloudBot) ichimokuSignal = 'below_cloud';  // Bearish
+    else ichimokuSignal = 'inside_cloud';                         // No-trade zone
+  }
+
+  // ═══ NEW: Pivot Points (classic floor trader's method) ═══
+  const pivotHigh = H[n-1], pivotLow = L[n-1], pivotClose = C[n-1];
+  const pivot = +((pivotHigh + pivotLow + pivotClose) / 3).toFixed(2);
+  const pivotR1 = +(2 * pivot - pivotLow).toFixed(2);
+  const pivotS1 = +(2 * pivot - pivotHigh).toFixed(2);
+  const pivotR2 = +(pivot + (pivotHigh - pivotLow)).toFixed(2);
+  const pivotS2 = +(pivot - (pivotHigh - pivotLow)).toFixed(2);
+
+  // ═══ NEW: Multi-timeframe weekly confirmation (Varsity M2: weekly overrides daily) ═══
+  // Convert to weekly bars and check 20-week SMA trend
+  let weeklyTrendConfirmed = null;
+  if (n >= 100) {
+    const weeklyCloses = [];
+    for (let i = 0; i < n; i += 5) weeklyCloses.push(C[Math.min(i + 4, n - 1)]);
+    const wn = weeklyCloses.length;
+    if (wn >= 20) {
+      const wSma20 = weeklyCloses.slice(wn-20).reduce((a,b)=>a+b,0) / 20;
+      const wSma20_prev = weeklyCloses.slice(wn-25, wn-5).reduce((a,b)=>a+b,0) / 20;
+      weeklyTrendConfirmed = weeklyCloses[wn-1] > wSma20 && wSma20 > wSma20_prev ? 'bullish' :
+                             weeklyCloses[wn-1] < wSma20 && wSma20 < wSma20_prev ? 'bearish' : 'neutral';
+    }
+  }
+
+  // ═══ NEW: Dow Theory (Varsity M2: higher highs/lows vs lower highs/lows) ═══
+  let dowTheoryTrend = null;
+  if (n >= 120) {
+    // Find last 4 significant swing highs and lows over 6 months
+    const lookback = Math.min(126, n);
+    const sH = [], sL = [];
+    for (let i = n - lookback + 2; i < n - 2; i++) {
+      if (H[i] >= H[i-1] && H[i] >= H[i+1] && H[i] >= H[i-2] && H[i] >= H[i+2]) sH.push(H[i]);
+      if (L[i] <= L[i-1] && L[i] <= L[i+1] && L[i] <= L[i-2] && L[i] <= L[i+2]) sL.push(L[i]);
+    }
+    if (sH.length >= 2 && sL.length >= 2) {
+      const lastH = sH.slice(-2), lastL = sL.slice(-2);
+      if (lastH[1] > lastH[0] && lastL[1] > lastL[0]) dowTheoryTrend = 'uptrend';
+      else if (lastH[1] < lastH[0] && lastL[1] < lastL[0]) dowTheoryTrend = 'downtrend';
+      else dowTheoryTrend = 'sideways';
+    }
+  }
+
   return {
     price:C[n-1],
     dma20, dma50, dma100, dma200,
@@ -4328,6 +4412,16 @@ function computeTechnicals(candles) {
     rsiTrend: rsiDiv.rsiTrend,
     bullishDiv: rsiDiv.bullishDiv,
     bearishDiv: rsiDiv.bearishDiv,
+    // Fibonacci levels
+    fib382, fib500, fib618, nearestFib, nearFibDist,
+    // Support & Resistance
+    support, resistance,
+    // Ichimoku
+    ichimokuSignal, ichimokuTenkan, ichimokuKijun,
+    // Pivot Points
+    pivot, pivotR1, pivotS1, pivotR2, pivotS2,
+    // Multi-timeframe & Dow Theory
+    weeklyTrendConfirmed, dowTheoryTrend,
   };
 }
 
@@ -4443,6 +4537,13 @@ async function refreshAllFundamentals() {
           goldenCross:tech.goldenCross??null,
           pctFromHigh:tech.pctFromHigh??null, pctAbove200:tech.pctAbove200??null, pctAbove50:tech.pctAbove50??null,
           rsiTrend:tech.rsiTrend??null, bullishDiv:tech.bullishDiv??null, bearishDiv:tech.bearishDiv??null,
+          // Fibonacci, S&R, Ichimoku, Pivot, Multi-timeframe
+          fib382:tech.fib382??null, fib500:tech.fib500??null, fib618:tech.fib618??null,
+          nearestFib:tech.nearestFib??null, nearFibDist:tech.nearFibDist??null,
+          support:tech.support??null, resistance:tech.resistance??null,
+          ichimokuSignal:tech.ichimokuSignal??null, ichimokuTenkan:tech.ichimokuTenkan??null, ichimokuKijun:tech.ichimokuKijun??null,
+          pivot:tech.pivot??null, pivotR1:tech.pivotR1??null, pivotS1:tech.pivotS1??null, pivotR2:tech.pivotR2??null, pivotS2:tech.pivotS2??null,
+          weeklyTrendConfirmed:tech.weeklyTrendConfirmed??null, dowTheoryTrend:tech.dowTheoryTrend??null,
           // Core fundamentals — screener overrides hardcoded FUND
           roe:      f?f[0]:null, debtToEq:f?f[1]:null, pe:f?f[2]:null,
           revGrowth:f?f[3]:null, earGrowth:f?f[4]:null, opMargin:f?f[5]:null,
@@ -4540,8 +4641,39 @@ async function refreshAllFundamentals() {
           sf.divYield = +(ext.divYield * _eps / _px).toFixed(2);
         }
 
-        // currentRatio: try from Yahoo via ext, already mapped above
-        // No additional fallback available
+        // ═══ NEW: DuPont ROE Decomposition (Varsity M3: Net Margin × Asset Turnover × Equity Multiplier) ═══
+        const _roe = sf.roe ?? ext?.roe;
+        const _npm = sf.profMgn ?? ext?.profMgn;
+        const _assetTurn = ext?.assetTurnover;
+        const _de2 = sf.debtToEq ?? ext?.de;
+        if (_npm != null && _assetTurn != null && _de2 != null) {
+          sf.dupontNetMargin = +_npm;
+          sf.dupontAssetTurnover = +_assetTurn;
+          sf.dupontEquityMultiplier = +(1 + (_de2 || 0)).toFixed(2);
+          sf.dupontROE = +(_npm/100 * _assetTurn * (1 + (_de2 || 0)) * 100).toFixed(1);
+        }
+
+        // ═══ NEW: Cash Conversion Cycle (Varsity M13: Debtor Days + Inv Days - Payable Days) ═══
+        const _debtorDays = ext?.debtorDays;
+        const _invTurnover = ext?.invTurnover;
+        if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
+          const invDays = +(365 / _invTurnover).toFixed(0);
+          sf.inventoryDays = invDays;
+          sf.cashConversionCycle = +(_debtorDays + invDays).toFixed(0); // Payable days not available, use partial
+        }
+
+        // ═══ NEW: Sharpe Ratio (Varsity M10: (Return - RiskFree) / StdDev) ═══
+        const _ret1y = sf.ret1y ?? (tech.change52w != null ? +(tech.change52w * 100).toFixed(1) : null);
+        const _annVol = sf.annualVol;
+        if (_ret1y != null && _annVol != null && _annVol > 0) {
+          const riskFreeRate = 7.0; // Approximate India risk-free rate (10Y G-Sec ~7%)
+          sf.sharpeRatio = +((_ret1y - riskFreeRate) / _annVol).toFixed(2);
+        }
+
+        // ═══ NEW: Working Capital Ratio from balance sheet data ═══
+        if (sf.currentRatio != null && sf.debt != null && sf.mktCap != null) {
+          sf.workingCapitalHealth = sf.currentRatio >= 1.5 ? 'strong' : sf.currentRatio >= 1.0 ? 'adequate' : 'weak';
+        }
 
       } catch(e) { fail++; }
     }));
@@ -6430,6 +6562,18 @@ app.get('/api/stocks/score', async(req,res)=>{
         dma200Trend:f.dma200Trend, weeklyTrend:f.weeklyTrend,
         // RSI divergence (Arjun: Quant signal)
         rsiTrend:f.rsiTrend, bullishDiv:f.bullishDiv, bearishDiv:f.bearishDiv,
+        // Fibonacci, S&R, Ichimoku, Pivot, Multi-timeframe, Dow Theory
+        fib382:f.fib382, fib500:f.fib500, fib618:f.fib618,
+        nearestFib:f.nearestFib, nearFibDist:f.nearFibDist,
+        support:f.support, resistance:f.resistance,
+        ichimokuSignal:f.ichimokuSignal,
+        pivot:f.pivot, pivotR1:f.pivotR1, pivotS1:f.pivotS1, pivotR2:f.pivotR2, pivotS2:f.pivotS2,
+        weeklyTrendConfirmed:f.weeklyTrendConfirmed, dowTheoryTrend:f.dowTheoryTrend,
+        // DuPont ROE, CCC, Sharpe
+        dupontNetMargin:f.dupontNetMargin, dupontAssetTurnover:f.dupontAssetTurnover,
+        dupontEquityMultiplier:f.dupontEquityMultiplier, dupontROE:f.dupontROE,
+        cashConversionCycle:f.cashConversionCycle, inventoryDays:f.inventoryDays,
+        sharpeRatio:f.sharpeRatio, workingCapitalHealth:f.workingCapitalHealth,
         fetchedAt:f.fetchedAt,
       };
     });
@@ -9529,6 +9673,49 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
     if (liveQuote.change != null) dataPoints += `Day Change: ${liveQuote.change > 0 ? '+' : ''}${liveQuote.change?.toFixed(2)} (${liveQuote.changePct?.toFixed(2)}%)\n`;
     if (liveQuote.volume) dataPoints += `Volume: ${liveQuote.volume?.toLocaleString()}\n`;
 
+    // ── FIBONACCI & SUPPORT/RESISTANCE (Module 2 Ch19) ──
+    dataPoints += `\n--- FIBONACCI & SUPPORT/RESISTANCE ---\n`;
+    dataPoints += _f('Fib 38.2% Level', sf.fib382);
+    dataPoints += _f('Fib 50% Level', sf.fib500);
+    dataPoints += _f('Fib 61.8% Level', sf.fib618);
+    dataPoints += _f('Nearest Fib', sf.nearestFib);
+    dataPoints += _f('Distance to Nearest Fib', sf.nearFibDist, '%');
+    dataPoints += _f('Support Level', sf.support);
+    dataPoints += _f('Resistance Level', sf.resistance);
+
+    // ── ICHIMOKU CLOUD (Module 2: Japanese institutional framework) ──
+    dataPoints += `\n--- ICHIMOKU CLOUD ---\n`;
+    dataPoints += _f('Ichimoku Signal', sf.ichimokuSignal);
+    dataPoints += _f('Tenkan-sen (9-period)', sf.ichimokuTenkan);
+    dataPoints += _f('Kijun-sen (26-period)', sf.ichimokuKijun);
+
+    // ── PIVOT POINTS (Classic floor method) ──
+    dataPoints += `\n--- PIVOT POINTS ---\n`;
+    dataPoints += _f('Pivot', sf.pivot);
+    dataPoints += _f('R1', sf.pivotR1);
+    dataPoints += _f('R2', sf.pivotR2);
+    dataPoints += _f('S1', sf.pivotS1);
+    dataPoints += _f('S2', sf.pivotS2);
+
+    // ── DOW THEORY & MULTI-TIMEFRAME (Module 2 Ch2, M9) ──
+    dataPoints += `\n--- DOW THEORY & MULTI-TIMEFRAME ---\n`;
+    dataPoints += _f('Dow Theory Trend', sf.dowTheoryTrend);
+    dataPoints += _f('Weekly Trend Confirmed', sf.weeklyTrendConfirmed);
+
+    // ── DUPONT ROE DECOMPOSITION (Module 3: profitability quality check) ──
+    dataPoints += `\n--- DUPONT ROE DECOMPOSITION ---\n`;
+    dataPoints += _f('DuPont Net Margin', sf.dupontNetMargin, '%');
+    dataPoints += _f('DuPont Asset Turnover', sf.dupontAssetTurnover, 'x');
+    dataPoints += _f('DuPont Equity Multiplier', sf.dupontEquityMultiplier, 'x');
+    dataPoints += _f('DuPont ROE', sf.dupontROE, '%');
+
+    // ── CASH CYCLE & RISK METRICS (Module 3, M9) ──
+    dataPoints += `\n--- CASH CYCLE & RISK METRICS ---\n`;
+    dataPoints += _f('Inventory Days', sf.inventoryDays);
+    dataPoints += _f('Cash Conversion Cycle', sf.cashConversionCycle, ' days');
+    dataPoints += _f('Sharpe Ratio', sf.sharpeRatio);
+    dataPoints += _f('Working Capital Health', sf.workingCapitalHealth);
+
     dataPoints += `\nAnalyze this stock comprehensively using ALL Zerodha Varsity principles. Cross-reference fundamentals (M3), technicals (M2), risk (M9), valuation (M13), and sector context (M15). Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
 
     // Call all AI models in parallel (direct API calls)
@@ -11254,6 +11441,24 @@ async function validateSignalsWithAI(mode = 'auto') {
         `ROA=${f.roa||'?'}%`, `GrossMargin=${f.grossMgn||'?'}%`,
       ].join(' ');
 
+      // ── ADVANCED TECHNICALS (Fibonacci, S&R, Ichimoku, Pivot, Dow Theory) ──
+      const advTech = [
+        `Fib38.2=${f.fib382||'?'}`, `Fib50=${f.fib500||'?'}`, `Fib61.8=${f.fib618||'?'}`,
+        `NearFib=${f.nearestFib||'?'}`, `FibDist=${f.nearFibDist||'?'}%`,
+        `Support=${f.support||'?'}`, `Resistance=${f.resistance||'?'}`,
+        `Ichimoku=${f.ichimokuSignal||'?'}`, `Tenkan=${f.ichimokuTenkan||'?'}`, `Kijun=${f.ichimokuKijun||'?'}`,
+        `Pivot=${f.pivot||'?'}`, `R1=${f.pivotR1||'?'}`, `R2=${f.pivotR2||'?'}`, `S1=${f.pivotS1||'?'}`, `S2=${f.pivotS2||'?'}`,
+        `DowTrend=${f.dowTheoryTrend||'?'}`, `WeeklyConf=${f.weeklyTrendConfirmed||'?'}`,
+      ].join(' ');
+
+      // ── DUPONT & CASH CYCLE (Module 3 deep quality) ──
+      const dupontCash = [
+        `DuPontNM=${f.dupontNetMargin||'?'}%`, `DuPontAT=${f.dupontAssetTurnover||'?'}x`,
+        `DuPontEM=${f.dupontEquityMultiplier||'?'}x`, `DuPontROE=${f.dupontROE||'?'}%`,
+        `InvDays=${f.inventoryDays||'?'}`, `CCC=${f.cashConversionCycle||'?'}days`,
+        `Sharpe=${f.sharpeRatio||'?'}`, `WCHealth=${f.workingCapitalHealth||'?'}`,
+      ].join(' ');
+
       return `━━ ${p.sym} (${f.name||p.sym}) [${sector}] Qty=${p.qty} ━━\n` +
         `  PRICE: ${price}\n` +
         `  SCORES: ${scores}\n` +
@@ -11262,6 +11467,8 @@ async function validateSignalsWithAI(mode = 'auto') {
         `  BALANCE_SHEET: ${balanceSheet}\n` +
         `  OWNERSHIP: ${ownership}\n` +
         `  TECHNICALS: ${ta}\n` +
+        `  ADV_TECHNICALS: ${advTech}\n` +
+        `  DUPONT_CASHCYCLE: ${dupontCash}\n` +
         `  DELIVERY: ${delivery}\n` +
         `  OPTIONS_OI: ${options}\n` +
         `  QUARTERLY: ${qrStr}\n` +
@@ -11300,6 +11507,8 @@ async function validateSignalsWithAI(mode = 'auto') {
           `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}% PEG=${mf.pe&&mf.earGrowth>0?(mf.pe/mf.earGrowth).toFixed(2):'?'}\n` +
           `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
           `  TECHNICALS: RSI=${mf.rsi!=null?mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi:'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'}\n` +
+          `  ADV_TECHNICALS: Fib38.2=${mf.fib382||'?'} Fib61.8=${mf.fib618||'?'} Support=${mf.support||'?'} Resistance=${mf.resistance||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Pivot=${mf.pivot||'?'} DowTrend=${mf.dowTheoryTrend||'?'} WeeklyConf=${mf.weeklyTrendConfirmed||'?'}\n` +
+          `  DUPONT_CASHCYCLE: DuPontROE=${mf.dupontROE||'?'}% CCC=${mf.cashConversionCycle||'?'}days Sharpe=${mf.sharpeRatio||'?'}\n` +
           `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
           (delData ? `  DELIVERY: Delivery%=${delData.deliveryPct||'?'}%\n` : '') +
           (optData ? `  OPTIONS: PCR=${optData.pcr} MaxPain=₹${optData.maxPain||'?'} IV=${optData.atmIV||'?'}% IVRank=${optData.ivRank!=null?optData.ivRank+'%':'?'}\n` : '') +
