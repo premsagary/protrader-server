@@ -3540,6 +3540,30 @@ function patchScreenerIntoFUND(sym, d) {
   existing.source = 'Screener.in';
   existing.fetchedAt = Date.now();
   global.FUND_EXT[sym] = existing;
+
+  // Immediately compute CCC and DuPont if data available (don't wait for scoring cycle)
+  const _sf = global.stockFundamentals?.[sym];
+  if (_sf) {
+    // CCC: Debtor Days + Inventory Days
+    const _dd = existing.debtorDays ?? _sf.debtorDays;
+    const _it = existing.invTurnover ?? _sf.invTurnover;
+    if (_dd != null && _it != null && _it > 0) {
+      _sf.inventoryDays = +(365 / _it).toFixed(0);
+      _sf.cashConversionCycle = +(_dd + _sf.inventoryDays).toFixed(0);
+      _sf.debtorDays = _dd;
+      _sf.invTurnover = _it;
+    }
+    // DuPont: compute if we now have the data
+    const _npm = _sf.profMgn ?? existing.profMgn ?? (_sf.patAnnual > 0 && _sf.salesAnnual > 0 ? +(_sf.patAnnual / _sf.salesAnnual * 100).toFixed(2) : null);
+    const _at = _sf.assetTurnover ?? existing.assetTurnover;
+    const _de = _sf.debtToEq ?? existing.de;
+    if (_npm != null && _at != null && _de != null) {
+      _sf.dupontNetMargin = +_npm;
+      _sf.dupontAssetTurnover = +_at;
+      _sf.dupontEquityMultiplier = +(1 + (_de || 0)).toFixed(2);
+      _sf.dupontROE = +(_npm/100 * _at * (1 + (_de || 0)) * 100).toFixed(1);
+    }
+  }
 }
 
 // Load screener data from DB into memory on startup
@@ -9381,7 +9405,7 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       max:    4,
       label:  `P/BV: ${pb != null ? pb+'x' : 'N/A'}`,
       detail: pb != null
-        ? `${pb<1 ? 'Below book value — trading at discount to liquidation value. Deep value if business is healthy.' : pb<2 ? 'Reasonable premium to book — fair for a profitable business.' : pb<4 ? 'Moderate premium — justified if ROE is high (high ROE businesses deserve high P/BV).' : 'High P/BV — priced for perfection. Risk of multiple compression if growth disappoints.'} ${d.sector==='Banking'?'(Varsity: P/BV is the primary valuation metric for banks)':''}`
+        ? `${pb<1 ? 'Below book value — trading at discount to liquidation value. Deep value if business is healthy.' : pb<2 ? 'Reasonable premium to book — fair for a profitable business.' : pb<4 ? 'Moderate premium — justified if ROE is high (high ROE businesses deserve high P/BV).' : 'High P/BV — priced for perfection. Risk of multiple compression if growth disappoints.'} ${sector==='Banking'?'(Varsity: P/BV is the primary valuation metric for banks)':''}`
         : 'Book value data not available',
     };
 
