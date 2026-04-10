@@ -5178,22 +5178,180 @@ function renderPortfolioSuggestion(){
 // Thin wrapper around renderLongTermPortfolioPanel() (defined in the Stocks
 // page section). We reuse the same engine, state, and API — this is just a
 // different home for the same panel, with a proper heading and intro text.
+// Generate/refresh helpers for Long Term — mirror psGenerate/psRefresh/psRegenerate
+// so the Long Term tab has the same interaction model as the Swing tab.
+function ltGenerate(){
+  var el=document.getElementById('lt-amount');
+  if(el){ var n=parseFloat(el.value)||100000; ltPortfolioAmount=Math.round(n); }
+  // "Generate" = build fresh with current amount → force regenerate on server
+  loadLongTermPortfolio(true);
+}
+function ltRefresh(){ loadLongTermPortfolio(false); }
+function ltRegenerate(){ loadLongTermPortfolio(true); }
+
 function psRenderLongTermTab(){
   var h='';
+  // ── Input section (mirrors Swing psRenderModelTab) ─────────────────────
   h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">';
-  h+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
-  h+='<div style="font-size:14px;font-weight:800;color:#f59e0b">🏛 Long Term Portfolio — Varsity v2</div>';
-  h+='<div style="font-size:10px;color:var(--text4);margin-left:auto">Buy-and-hold · 12M horizon · Fundamentals-first</div>';
+  h+='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+  h+='<div style="font-size:13px;font-weight:600;color:var(--text)">Investment Amount:</div>';
+  h+='<div style="display:flex;align-items:center;gap:6px">';
+  h+='<span style="font-size:14px;color:var(--text2)">₹</span>';
+  h+='<input type="number" id="lt-amount" value="'+ltPortfolioAmount+'" min="5000" max="100000000" ';
+  h+='style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px;font-weight:700;width:160px;text-align:right" ';
+  h+='oninput="ltPortfolioAmount=parseFloat(this.value)||100000">';
   h+='</div>';
-  h+='<div style="font-size:10px;color:var(--text3);line-height:1.6">';
-  h+='4-pillar Varsity scoring: <b>Quality 40 · Growth 25 · Valuation 20 · Business 15</b>. ';
-  h+='Technicals act only as a timing overlay — they never influence the fundamental score. ';
-  h+='Portfolio constraints: max 15 stocks, max 3 per sector, 5–25% per position, DC floor 0.6.';
+  var amounts=[{l:'₹50K',v:50000},{l:'₹1L',v:100000},{l:'₹2.5L',v:250000},{l:'₹5L',v:500000},{l:'₹10L',v:1000000},{l:'₹25L',v:2500000}];
+  amounts.forEach(function(a){
+    h+='<button onclick="document.getElementById(\'lt-amount\').value='+a.v+';ltPortfolioAmount='+a.v+'" style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:5px;padding:5px 10px;font-size:10px;cursor:pointer;font-weight:600">'+a.l+'</button>';
+  });
+  h+='<button onclick="ltGenerate()" id="lt-gen-btn" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
   h+='</div>';
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
+  h+='<div style="font-size:10px;color:var(--text4);flex:1">4-pillar Varsity model: Quality 40% + Growth 25% + Valuation 20% + Business 15%. Buy-and-hold · 12M horizon · Max 15 stocks · Max 3 per sector · 5–25% per position · DC floor 0.6.</div>';
+  h+='<button onclick="psRunAIValidation(\'deep\')" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   h+='</div>';
-  // Reuse the existing panel — shared state (ltPortfolioData, ltPortfolioAmount)
-  // means Build/Refresh/Force-Regenerate all work identically.
-  h+=renderLongTermPortfolioPanel();
+  h+='<div id="lt-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-family:monospace;font-size:10px;color:var(--text3);max-height:150px;overflow-y:auto"></div>';
+  h+='</div>';
+
+  // AI validation panel (shared with Swing — same component)
+  h+=psRenderAIValidation();
+
+  // ── Results ─────────────────────────────────────────────────────────────
+  h+='<div id="lt-results">';
+  if(ltPortfolioError){
+    h+='<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:10px;padding:14px;color:#ef4444;font-size:12px;text-align:center">⚠ '+ltPortfolioError+'</div>';
+  } else if(ltPortfolioData){
+    h+=psRenderLongTermResults(ltPortfolioData);
+  } else if(ltPortfolioLoading){
+    h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
+    h+='<div style="font-size:36px;margin-bottom:10px">⏳</div>';
+    h+='<div style="font-size:14px;font-weight:600">Building Varsity long-term portfolio…</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Scoring ~500 stocks on 4-pillar Varsity framework (Quality · Growth · Valuation · Business)</div>';
+    h+='</div>';
+  } else {
+    h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
+    h+='<div style="font-size:36px;margin-bottom:10px">🏛</div>';
+    h+='<div style="font-size:14px;font-weight:600">Loading long-term portfolio…</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Auto-generating with ₹'+(ltPortfolioAmount/1000)+'K. Change amount above and click Generate to customize.</div>';
+    h+='</div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+// ── Long-Term results panel — mirrors psRenderModelResults structure ────
+// Regime banner + summary cards + action bar, then the existing Long-Term
+// picks table (STOCK · BUCKET · SCOREV2 · ALLOC% · SHARES · INVESTED ·
+// EXP 12M · RISK · VALUE · TIMING) — column set deliberately unchanged.
+function psRenderLongTermResults(d){
+  var s=d.summary||{};
+  var h='';
+
+  // Regime banner
+  var regime=d.marketRegime||'NEUTRAL';
+  var rc=regime==='BULL'?'#22c55e':regime==='BEAR'?'#ef4444':'#f59e0b';
+  h+='<div style="background:'+rc+'12;border:1px solid '+rc+'30;border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  h+='<span style="font-weight:800;color:'+rc+';font-size:12px">🏛 '+regime+' MARKET</span>';
+  if(d.breadth!=null) h+='<span style="font-size:10px;color:var(--text3)">Breadth: '+d.breadth+'% above 200DMA</span>';
+  if(d.cashPct!=null) h+='<span style="font-size:10px;color:var(--text3)">Cash: '+d.cashPct+'%</span>';
+  if(s.weightedConfidence!=null) h+='<span style="font-size:10px;color:var(--text3)">Confidence: '+((s.weightedConfidence||0)*100).toFixed(0)+'%</span>';
+  // Bucket mix inline with regime — keeps diagnostic visible up top
+  var bb=(d.diagnostics&&d.diagnostics.bucketBreakdown)||{};
+  if(Object.keys(bb).length){
+    h+='<span style="font-size:10px;color:var(--text3);margin-left:auto">Bucket mix: ';
+    ['A','B','C','D'].forEach(function(k){
+      if(bb[k]){
+        var col=k==='A'?'#22c55e':k==='B'?'#10b981':k==='C'?'#f59e0b':'#ef4444';
+        h+='<span style="color:'+col+';font-weight:700;margin-left:6px">'+k+': '+bb[k].toFixed(0)+'%</span>';
+      }
+    });
+    h+='</span>';
+  }
+  h+='</div>';
+
+  // Summary cards (same 7-card grid as Swing, mapped to long-term fields)
+  var expPct=(s.portfolioExpReturn||0)*100;
+  var expCol=expPct>=15?'#22c55e':expPct>=5?'#10b981':expPct>=0?'var(--text)':'#ef4444';
+  // Avg scoreV2 across picks
+  var picks=d.stocks||[];
+  var avgScore=picks.length?(picks.reduce(function(a,p){return a+(p.scoreV2||0);},0)/picks.length):0;
+  // Avg beta if any pick carries it
+  var betas=picks.map(function(p){return p.beta;}).filter(function(x){return x!=null&&isFinite(x);});
+  var avgBeta=betas.length?(betas.reduce(function(a,b){return a+b;},0)/betas.length):null;
+  var expReturnAmt=s.portfolioExpReturnAmt||Math.round((d.investableAmount||0)*(s.portfolioExpReturn||0));
+
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:14px">';
+  function sc(l,v,c,sub){return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:2px">'+l+'</div>'
+    +'<div style="font-size:15px;font-weight:800;color:'+(c||'var(--text)')+'">'+v+'</div>'
+    +(sub?'<div style="font-size:9px;color:var(--text4);margin-top:1px">'+sub+'</div>':'')+'</div>';}
+  h+=sc('Invested',psFmt(d.investableAmount||0),'#f59e0b');
+  h+=sc('Stocks',(s.count||picks.length||0),'var(--text)',(s.sectors||0)+' sectors');
+  h+=sc('Avg Score',avgScore.toFixed(1)+'/100',avgScore>=75?'#22c55e':avgScore>=60?'#f59e0b':'#ef4444');
+  h+=sc('Beta',(avgBeta!=null?avgBeta.toFixed(2):'—'),(avgBeta==null?'var(--text3)':avgBeta<1?'#22c55e':avgBeta<1.3?'#f59e0b':'#ef4444'));
+  h+=sc('Exp Return (12M)',(expPct>=0?'+':'')+expPct.toFixed(1)+'%'+(s.usingPrior?' *':''),expCol,(expReturnAmt>=0?'+':'')+psFmt(expReturnAmt));
+  h+=sc('Proj Value',psFmt((d.investableAmount||0)+expReturnAmt),expCol);
+  h+=sc('Cash',psFmt(d.cashReserve||0),'var(--text3)',(d.cashPct||0)+'% buffer');
+  h+='</div>';
+
+  // Action bar
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">';
+  h+='<button onclick="ltRefresh()" style="background:rgba(34,211,238,.1);color:#22d3ee;border:1px solid rgba(34,211,238,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">🔄 Refresh</button>';
+  h+='<button onclick="ltRegenerate()" style="background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.25);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">♻ Regenerate</button>';
+  var refTs=s.lastRefreshed||s.generatedAt||d.generatedAt;
+  h+='<span style="font-size:10px;color:var(--text4);margin-left:auto">'+
+    (refTs?(s.lastRefreshed?'Refreshed ':'Generated ')+new Date(refTs).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}):'Just built')+'</span>';
+  var marketOpen=s.marketOpen!=null?s.marketOpen:null;
+  if(marketOpen!=null) h+='<span style="font-size:10px;color:'+(marketOpen?'#22c55e':'#ef4444')+'">● '+(marketOpen?'Open':'Closed')+'</span>';
+  h+='</div>';
+
+  // ── Long-Term picks table — column set DELIBERATELY unchanged ──
+  // STOCK · BUCKET · SCOREV2 · ALLOC% · SHARES · INVESTED · EXP 12M ·
+  // RISK · VALUE · TIMING (Kijun buy-zone badge)
+  h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
+  h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
+  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing'];
+  hdrs.forEach(function(hdr,i){
+    var align=(i===0)?'left':(i>=3)?'right':'left';
+    h+='<th style="padding:7px 8px;text-align:'+align+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
+  });
+  h+='</tr></thead><tbody>';
+  picks.forEach(function(p,i){
+    var er=(p.expectedReturn12m||0)*100;
+    var erCol=er>=15?'#22c55e':er>=5?'#10b981':er>=0?'var(--text)':'#ef4444';
+    var bCol=p.scoreBucket==='A'?'#22c55e':p.scoreBucket==='B'?'#10b981':p.scoreBucket==='C'?'#f59e0b':'#ef4444';
+    var rCol=p.riskLevel==='LOW'?'#22c55e':p.riskLevel==='HIGH'?'#ef4444':'#f59e0b';
+    var vCol=p.valuationLabel==='UNDERVALUED'?'#22c55e':p.valuationLabel==='OVERVALUED'?'#ef4444':'var(--text2)';
+    // Kijun buy-zone badge (Varsity M2 Ch21: Kijun-sen as dynamic pullback entry)
+    var tov=p.timingOverlay||{};
+    var kbz=tov.kijunBuyZone||'UNKNOWN';
+    var kDist=(tov.kijunDistPct!=null)?tov.kijunDistPct:null;
+    var kLabel=kbz==='BUY'?'✅ BUY':kbz==='HOLD'?'⏸ HOLD':kbz==='EXTENDED'?'⚠ EXT':kbz==='BELOW'?'❌ BELOW':'–';
+    var kCol=kbz==='BUY'?'#22c55e':kbz==='HOLD'?'#10b981':kbz==='EXTENDED'?'#f59e0b':kbz==='BELOW'?'#ef4444':'var(--text3)';
+    var kTip=kbz==='UNKNOWN'?'Kijun data not available'
+      :('Kijun dist: '+(kDist>=0?'+':'')+(kDist!=null?kDist.toFixed(1):'?')+'%'
+          +(tov.tkBull===true?' · TK bullish (T>K)':tov.tkBull===false?' · TK bearish (T<K)':''));
+    var rowBg=(i%2===0)?'var(--bg2)':'var(--bg)';
+    h+='<tr style="background:'+rowBg+';border-bottom:1px solid var(--border2)">';
+    h+='<td style="padding:6px 8px"><div style="font-weight:700;color:var(--text);font-size:11px">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.sector||'')+'</div></td>';
+    h+='<td style="padding:6px 8px"><span style="color:'+bCol+';font-weight:800;font-size:11px">'+(p.scoreBucket||'—')+'</span></td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+bCol+'">'+(p.scoreV2!=null?p.scoreV2.toFixed(1):'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700">'+(p.allocPct!=null?p.allocPct.toFixed(1):'-')+'%</td>';
+    h+='<td style="padding:6px 8px;text-align:right">'+(p.shares||0)+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right">'+psFmt(p.allocAmt||0)+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+erCol+'">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
+    h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+
+  if(s.usingPrior){
+    h+='<div style="margin-top:6px;font-size:10px;color:var(--text3)">* Using cold-start Bayesian prior — expected returns will sharpen as forward-return history accumulates.</div>';
+  }
   return h;
 }
 
