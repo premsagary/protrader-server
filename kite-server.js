@@ -9371,23 +9371,15 @@ app.get('/api/stocks/analyze/:sym/ai', async (req, res) => {
     const sector = SECTOR_MAP[sym] || 'Other';
     const px     = livePrices[sym]?.price || null;
 
-    // Build compact data summary for AI prompt
-    const f = fund || fundExt;
-    const roe = f?.[0] ?? fundExt?.roe ?? null;
-    const de = f?.[1] ?? fundExt?.de ?? null;
-    const pe = f?.[2] ?? fundExt?.pe ?? null;
-    const revGr = f?.[3] ?? fundExt?.revGr ?? null;
-    const epsGr = f?.[4] ?? fundExt?.epsGr ?? null;
-    const opMgn = f?.[5] ?? fundExt?.opMgn ?? null;
-    const peg = pe && epsGr && epsGr > 0 ? +(pe / epsGr).toFixed(2) : fundExt?.peg ?? null;
-    const pb = fundExt?.pb ?? null;
-    const roa = fundExt?.roa ?? null;
-    const divYield = fundExt?.divYield ?? null;
-    const mktCap = fundExt?.mktCap ?? null;
+    // Build COMPREHENSIVE data summary — all fundamentals + technicals + ownership
+    const sf = stockFundamentals[sym] || {};
+    const ext = global.FUND_EXT?.[sym] || {};
+    const _v = (a, b) => a ?? b ?? null;
 
     // Get cached TA signals if available
     const taCache = global._taSignalCache?.[sym] || null;
     const liveQuote = livePrices[sym] || {};
+    const mktCap = _v(sf.mktCap, ext.mktCap);
 
     // System prompt tailored for single-stock deep analysis
     const singleStockSystemPrompt = `You are an expert Indian stock market analyst deeply trained on ALL 17 modules of Zerodha Varsity.
@@ -9416,36 +9408,128 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
   "one_line_summary": "One clear sentence: should an investor buy this stock today and why/why not?"
 }`;
 
-    // Build the user prompt with all available data
+    // Build the user prompt with ALL available data (Varsity needs every field for proper analysis)
+    const _f = (label, val, suffix='') => val != null && val !== '?' ? `${label}: ${val}${suffix}\n` : '';
+
     let dataPoints = `STOCK: ${sym} (${meta.n})\nSECTOR: ${sector}\nEXCHANGE: ${meta.grp || 'NSE'}\n`;
     if (px) dataPoints += `CURRENT PRICE: ₹${px}\n`;
-    if (mktCap) dataPoints += `MARKET CAP: ${mktCap}\n`;
+    if (mktCap) dataPoints += `MARKET CAP: ₹${mktCap}Cr\n`;
 
-    dataPoints += `\n--- FUNDAMENTALS ---\n`;
-    if (roe != null) dataPoints += `ROE: ${roe}%\n`;
-    if (de != null) dataPoints += `D/E Ratio: ${de}x\n`;
-    if (pe != null) dataPoints += `P/E: ${pe}x\n`;
-    if (peg != null) dataPoints += `PEG: ${peg}\n`;
-    if (pb != null) dataPoints += `P/BV: ${pb}x\n`;
-    if (revGr != null) dataPoints += `Revenue Growth: ${revGr}%\n`;
-    if (epsGr != null) dataPoints += `EPS Growth: ${epsGr}%\n`;
-    if (opMgn != null) dataPoints += `Operating Margin: ${opMgn}%\n`;
-    if (roa != null) dataPoints += `ROA: ${roa}%\n`;
-    if (divYield != null) dataPoints += `Dividend Yield: ${divYield}%\n`;
+    // ── VALUATION (Module 3, 13) ──
+    dataPoints += `\n--- VALUATION ---\n`;
+    dataPoints += _f('P/E', _v(sf.pe, ext.pe), 'x');
+    dataPoints += _f('P/B', _v(sf.pb, ext.pb), 'x');
+    dataPoints += _f('PEG', _v(sf.peg, ext.peg));
+    dataPoints += _f('EV/EBITDA', _v(sf.evEbitda, ext.evEbitda));
+    dataPoints += _f('P/Sales', _v(sf.priceToSales, ext.priceToSales));
+    dataPoints += _f('P/FCF', _v(sf.priceToFCF, ext.priceToFCF));
+    dataPoints += _f('Earnings Yield', _v(sf.earningsYield, ext.earningsYield), '%');
+    dataPoints += _f('Industry PE', _v(sf.indPE, ext.indPE));
+    dataPoints += _f('Dividend Yield', _v(sf.divYield, ext.divYield), '%');
+    dataPoints += _f('Graham Number', _v(sf.grahamNumber, ext.grahamNumber));
+    dataPoints += _f('Book Value', _v(sf.bookValue, ext.bookValue));
+    dataPoints += _f('From 52W High', _v(sf.from52wHigh, ext.from52wHigh), '%');
 
+    // ── PROFITABILITY (Module 3) ──
+    dataPoints += `\n--- PROFITABILITY ---\n`;
+    dataPoints += _f('ROE', _v(sf.roe, ext.roe), '%');
+    dataPoints += _f('ROA', _v(sf.roa, ext.roa), '%');
+    dataPoints += _f('ROCE', _v(sf.roce, ext.roce), '%');
+    dataPoints += _f('ROIC', _v(sf.roic, ext.roic), '%');
+    dataPoints += _f('CROIC', _v(sf.croic, ext.croic), '%');
+    dataPoints += _f('OPM', _v(sf.opMargin, ext.opm), '%');
+    dataPoints += _f('EPS', _v(sf.eps, ext.eps));
+    dataPoints += _f('ROE 3Y Avg', _v(sf.roe3yAvg, ext.roe3yAvg), '%');
+    dataPoints += _f('ROE 5Y Avg', _v(sf.roe5yAvg, ext.roe5yAvg), '%');
+    dataPoints += _f('ROCE 3Y Avg', _v(sf.roce3yAvg, ext.roce3yAvg), '%');
+    dataPoints += _f('ROCE 5Y Avg', _v(sf.roce5yAvg, ext.roce5yAvg), '%');
+
+    // ── SOLVENCY & LIQUIDITY (Module 3, 13) ──
+    dataPoints += `\n--- SOLVENCY & LIQUIDITY ---\n`;
+    dataPoints += _f('D/E Ratio', _v(sf.debtToEq, ext.de), 'x');
+    dataPoints += _f('Debt', _v(sf.debt, ext.debt), 'Cr');
+    dataPoints += _f('Interest Coverage', _v(sf.intCov, ext.intCov), 'x');
+    dataPoints += _f('Current Ratio', _v(sf.currentRatio, ext.currentRatio));
+    dataPoints += _f('Quick Ratio', _v(sf.quickRatio, ext.quickRatio));
+    dataPoints += _f('FCF', _v(sf.fcf, ext.fcf), 'Cr');
+    dataPoints += _f('Net Worth', _v(sf.netWorth, ext.netWorth), 'Cr');
+    dataPoints += _f('Cash Equivalents', _v(sf.cashEquiv, ext.cashEquiv), 'Cr');
+    dataPoints += _f('Debtor Days', _v(sf.debtorDays, ext.debtorDays));
+    dataPoints += _f('Inv Turnover', _v(sf.invTurnover, ext.invTurnover));
+    dataPoints += _f('Asset Turnover', _v(sf.assetTurnover, ext.assetTurnover));
+
+    // ── GROWTH (Module 3) ──
+    dataPoints += `\n--- GROWTH ---\n`;
+    dataPoints += _f('Revenue Growth 1Y', _v(sf.revGrowth, ext.salesGr1y), '%');
+    dataPoints += _f('EPS Growth 1Y', _v(sf.earGrowth, ext.epsGr1y), '%');
+    dataPoints += _f('Sales Growth 3Y', _v(sf.salesGr3y, ext.salesGr3y), '%');
+    dataPoints += _f('Sales Growth 5Y', _v(sf.salesGr5y, ext.salesGr5y), '%');
+    dataPoints += _f('Profit Growth 3Y', _v(sf.epsGr3y, ext.epsGr3y), '%');
+    dataPoints += _f('Profit Growth 5Y', _v(sf.epsGr5y, ext.epsGr5y), '%');
+    dataPoints += _f('QoQ Sales', _v(sf.salesQtrYoy, ext.salesQtrYoy), '%');
+    dataPoints += _f('QoQ Profit', _v(sf.patQtrYoy, ext.patQtrYoy), '%');
+    dataPoints += _f('PAT Quarterly', _v(sf.patQtr, ext.patQtr), 'Cr');
+    dataPoints += _f('Sales Quarterly', _v(sf.salesQtr, ext.salesQtr), 'Cr');
+    dataPoints += _f('PAT Annual', _v(sf.patAnnual, ext.patAnnual), 'Cr');
+    dataPoints += _f('Sales Annual', _v(sf.salesAnnual, ext.salesAnnual), 'Cr');
+
+    // ── RETURNS ──
+    dataPoints += `\n--- RETURNS ---\n`;
+    dataPoints += _f('Return 3M', _v(sf.ret3m, ext.ret3m), '%');
+    dataPoints += _f('Return 6M', _v(sf.ret6m, ext.ret6m), '%');
+    dataPoints += _f('Return 1Y', _v(sf.ret1y, ext.ret1y), '%');
+    dataPoints += _f('Return 3Y', _v(sf.ret3y, ext.ret3y), '%');
+    dataPoints += _f('Return 5Y', _v(sf.ret5y, ext.ret5y), '%');
+
+    // ── OWNERSHIP (Module 3: promoter alignment, FII/DII flows) ──
+    dataPoints += `\n--- OWNERSHIP ---\n`;
+    dataPoints += _f('Promoter Holding', _v(sf.promoter, ext.promoter), '%');
+    dataPoints += _f('Promoter Change', _v(sf.promoterChg, ext.promoterChg), '%');
+    dataPoints += _f('Pledged', _v(sf.pledged, ext.pledged), '%');
+    dataPoints += _f('FII Holding', _v(sf.fiiHolding, ext.fiiHolding), '%');
+    dataPoints += _f('FII Change', _v(sf.fiiChg, ext.fiiChg), '%');
+    dataPoints += _f('DII Holding', _v(sf.diiHolding, ext.diiHolding), '%');
+    dataPoints += _f('DII Change', _v(sf.diiChg, ext.diiChg), '%');
+    dataPoints += _f('Public Holding', _v(sf.publicHolding, ext.publicHolding), '%');
+    dataPoints += _f('Shareholders', _v(sf.numShareholders, ext.numShareholders));
+    dataPoints += _f('Div Payout Ratio', _v(sf.divPayout, ext.divPayout), '%');
+
+    // ── QUALITY SCORES ──
+    dataPoints += `\n--- QUALITY SCORES ---\n`;
+    dataPoints += _f('Piotroski Score', _v(sf.piotroski, ext.piotroski), '/9');
+    dataPoints += _f('Altman Z Score', _v(sf.altmanZ, ext.altmanZ));
+    dataPoints += _f('Composite Score', sf._compositeScore || sf.composite, '/100');
+
+    // ── TECHNICAL INDICATORS (Module 2) ──
     dataPoints += `\n--- TECHNICAL INDICATORS ---\n`;
     if (taCache) {
       if (taCache.rsi14 != null) dataPoints += `RSI-14: ${taCache.rsi14}\n`;
       if (taCache.macdHist != null) dataPoints += `MACD Histogram: ${taCache.macdHist}\n`;
+      if (taCache.macdBull != null) dataPoints += `MACD Signal: ${taCache.macdBull ? 'Bullish' : 'Bearish'}\n`;
       if (taCache.adx != null) dataPoints += `ADX: ${taCache.adx}\n`;
+      if (taCache.adxPdi != null) dataPoints += `+DI: ${taCache.adxPdi} | -DI: ${taCache.adxNdi}\n`;
       if (taCache.above200 != null) dataPoints += `Above 200 DMA: ${taCache.above200 ? 'Yes' : 'No'}\n`;
       if (taCache.goldenCross != null) dataPoints += `Golden Cross: ${taCache.goldenCross ? 'Yes (50>200)' : 'No (Death Cross)'}\n`;
       if (taCache.supertrendSig) dataPoints += `Supertrend: ${taCache.supertrendSig}\n`;
+      if (taCache.bbPct != null) dataPoints += `Bollinger Band %B: ${taCache.bbPct.toFixed?taCache.bbPct.toFixed(2):taCache.bbPct}\n`;
+      if (taCache.stochK != null) dataPoints += `Stochastic K: ${taCache.stochK} D: ${taCache.stochD}\n`;
+      if (taCache.obvRising != null) dataPoints += `OBV Trend: ${taCache.obvRising ? 'Rising (accumulation)' : 'Falling (distribution)'}\n`;
+      if (taCache.bullishDiv) dataPoints += `⚡ BULLISH DIVERGENCE detected\n`;
+      if (taCache.bearishDiv) dataPoints += `⚠ BEARISH DIVERGENCE detected\n`;
+      if (taCache.volRatio != null) dataPoints += `Volume Ratio: ${taCache.volRatio.toFixed?taCache.volRatio.toFixed(1):taCache.volRatio}x avg\n`;
     }
+    dataPoints += _f('52W High', sf.high52w || sf.wk52Hi);
+    dataPoints += _f('52W Low', sf.low52w || sf.wk52Lo);
+    dataPoints += _f('DMA 20', sf.dma20);
+    dataPoints += _f('DMA 50', sf.dma50);
+    dataPoints += _f('DMA 200', sf.dma200);
+    dataPoints += _f('% Above 200DMA', sf.pctAbove200, '%');
+    dataPoints += _f('Beta', sf.beta);
+    dataPoints += _f('Annual Volatility', sf.annualVol, '%');
     if (liveQuote.change != null) dataPoints += `Day Change: ${liveQuote.change > 0 ? '+' : ''}${liveQuote.change?.toFixed(2)} (${liveQuote.changePct?.toFixed(2)}%)\n`;
     if (liveQuote.volume) dataPoints += `Volume: ${liveQuote.volume?.toLocaleString()}\n`;
 
-    dataPoints += `\nAnalyze this stock comprehensively using Zerodha Varsity principles. Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
+    dataPoints += `\nAnalyze this stock comprehensively using ALL Zerodha Varsity principles. Cross-reference fundamentals (M3), technicals (M2), risk (M9), valuation (M13), and sector context (M15). Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
 
     // Call all AI models in parallel (direct API calls)
     const modelResults = await Promise.allSettled(
