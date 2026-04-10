@@ -9283,7 +9283,12 @@ function scoreOneStockV2(f, peers) {
   const scoreV2 = +(qualityScore + growthScore + valuationScore + businessScore).toFixed(1);
 
   // ── TIMING OVERLAY (separate top-level field, plan §5) ─────────────────
-  // Allowed inputs: pctAbove200, goldenCross, weeklyTrendConfirmed, pctFromHigh
+  // Allowed inputs: pctAbove200, goldenCross, weeklyTrendConfirmed, pctFromHigh,
+  // plus Ichimoku Kijun-based buy-zone (Varsity M2 Ch21 — Kijun = "base line",
+  // textbook pullback entry for fundamentally strong names).
+  // IMPORTANT: these fields MUST NOT touch scoreV2 or the sub-scores. They
+  // live only on the timingOverlay object and guide WHEN to buy the picks
+  // that the fundamental score has already identified as WHAT to own.
   const tTrend  = _norm(f.pctAbove200, 0, 25) ?? 0.5;
   const tGolden = f.goldenCross ? 1 : 0;
   const tWeekly = f.weeklyTrendConfirmed ? 1 : (f.weeklyTrend === 'up' ? 0.7 : 0.3);
@@ -9301,6 +9306,28 @@ function scoreOneStockV2(f, peers) {
                     : timingScore >= 55 ? 'EXTENDED'
                     : timingScore >= 35 ? 'WAIT_FOR_DIP'
                     :                      'WEAK';
+
+  // ── Kijun Buy-Zone (Varsity M2 Ch21: Kijun as dynamic support/entry) ───
+  // Distance from price to Kijun-sen (26-period midline) as a % of Kijun.
+  //   ≤ -3%  : BELOW     — price broken below base line, trend weak, avoid
+  //   -3..2% : BUY       — at/near Kijun, textbook pullback entry zone
+  //    2..8% : HOLD      — above Kijun, mildly extended but still healthy
+  //    >8%   : EXTENDED  — far above Kijun, wait for pullback before adding
+  // A strong-trend confirmation requires Tenkan > Kijun in addition to the
+  // zone being "buy" or "hold".
+  const _price = f.price;
+  const _kijun = f.ichimokuKijun;
+  const _tenk  = f.ichimokuTenkan;
+  const kijunDistPct = (_price != null && _kijun != null && _kijun > 0)
+    ? +(((_price - _kijun) / _kijun) * 100).toFixed(2)
+    : null;
+  const tkBull = (_tenk != null && _kijun != null) ? (_tenk > _kijun) : null;
+  const kijunBuyZone =
+    kijunDistPct == null                          ? 'UNKNOWN'  :
+    kijunDistPct <= -3                            ? 'BELOW'    :
+    kijunDistPct <=  2                            ? 'BUY'      :
+    kijunDistPct <=  8                            ? 'HOLD'     :
+                                                    'EXTENDED';
 
   // ── RISK LEVEL (independent from scoreV2) ──────────────────────────────
   const volR  = _norm(f.annualVol, 18, 45) ?? 0.4;
@@ -9351,6 +9378,14 @@ function scoreOneStockV2(f, peers) {
     timingOverlay: {
       label: timingLabel,
       timingScore,
+      // Ichimoku-derived timing signals — display & AI context only.
+      // These are NOT additive to scoreV2 (FA/TA separation preserved).
+      ichimokuSignal: f.ichimokuSignal || null,
+      tenkan:         _tenk != null ? +_tenk : null,
+      kijun:          _kijun != null ? +_kijun : null,
+      kijunDistPct,     // % distance of price from Kijun (signed)
+      kijunBuyZone,     // 'BUY' | 'HOLD' | 'EXTENDED' | 'BELOW' | 'UNKNOWN'
+      tkBull,           // true if Tenkan > Kijun (momentum bullish)
     },
     valuationLabel,
     riskScore: +riskScore.toFixed(3),
@@ -10136,7 +10171,12 @@ app.get('/api/stocks/score', async(req,res)=>{
         fib382:f.fib382, fib500:f.fib500, fib618:f.fib618,
         nearestFib:f.nearestFib, nearFibDist:f.nearFibDist,
         support:f.support, resistance:f.resistance,
+        // Ichimoku — previously only shipped the signal, dropped Tenkan/Kijun
+        // even though they were computed and cached; UI Tenkan/Kijun columns
+        // were rendering as "-" for every row as a result.
         ichimokuSignal:f.ichimokuSignal,
+        ichimokuTenkan:f.ichimokuTenkan!=null?+f.ichimokuTenkan:null,
+        ichimokuKijun: f.ichimokuKijun !=null?+f.ichimokuKijun :null,
         pivot:f.pivot, pivotR1:f.pivotR1, pivotS1:f.pivotS1, pivotR2:f.pivotR2, pivotS2:f.pivotS2,
         weeklyTrendConfirmed:f.weeklyTrendConfirmed, dowTheoryTrend:f.dowTheoryTrend,
         // DuPont ROE, CCC, Sharpe
@@ -10407,10 +10447,23 @@ function scoreStockForPortfolio(f) {
   else if (f.supertrendSig === 'SELL') taScore -= 5;
   // Volume ratio (unusual volume = institutional interest)
   if (na(f.volRatio) && f.volRatio > 1.5) taScore += 4;
-  // Ichimoku Cloud (M2: Japanese institutional framework — complete trend system)
-  if (f.ichimokuSignal === 'above_cloud') taScore += 8;       // fully bullish
-  else if (f.ichimokuSignal === 'below_cloud') taScore -= 8;  // fully bearish
-  // inside_cloud = no-trade zone, 0 pts
+  // Ichimoku Cloud (Varsity M2 Ch21: full Japanese trend system).
+  // Graded: cloud position alone is weaker than cloud position + confirming
+  // TK cross. "Above cloud + Tenkan>Kijun" is the textbook fully-bullish
+  // setup; "above cloud + Tenkan<Kijun" means price is above the cloud but
+  // momentum is already rolling over — weaker buy. Same logic inverted for
+  // bearish. Inside cloud is a no-trade zone, but a TK cross provides a
+  // gentle bias that a trend may be forming.
+  const _tk = (f.ichimokuTenkan != null && f.ichimokuKijun != null)
+    ? (f.ichimokuTenkan > f.ichimokuKijun ? 'bull' : 'bear')
+    : null;
+  if (f.ichimokuSignal === 'above_cloud') {
+    taScore += (_tk === 'bull') ? 12 : (_tk === 'bear') ? 6 : 8;
+  } else if (f.ichimokuSignal === 'below_cloud') {
+    taScore -= (_tk === 'bear') ? 12 : (_tk === 'bull') ? 6 : 8;
+  } else if (f.ichimokuSignal === 'inside_cloud') {
+    taScore += (_tk === 'bull') ? 2 : (_tk === 'bear') ? -2 : 0;
+  }
   // Dow Theory trend (M2 Ch2: higher highs/lows = primary uptrend)
   if (f.dowTheoryTrend === 'uptrend') taScore += 4;
   else if (f.dowTheoryTrend === 'downtrend') taScore -= 4;
@@ -14865,11 +14918,26 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
     dataPoints += _f('Support Level', sf.support);
     dataPoints += _f('Resistance Level', sf.resistance);
 
-    // ── ICHIMOKU CLOUD (Module 2: Japanese institutional framework) ──
+    // ── ICHIMOKU CLOUD (Module 2 Ch21: Japanese institutional framework) ──
     dataPoints += `\n--- ICHIMOKU CLOUD ---\n`;
     dataPoints += _f('Ichimoku Signal', sf.ichimokuSignal);
     dataPoints += _f('Tenkan-sen (9-period)', sf.ichimokuTenkan);
     dataPoints += _f('Kijun-sen (26-period)', sf.ichimokuKijun);
+    // Derived Kijun buy-zone + TK cross (Varsity: Kijun as dynamic pullback entry)
+    try {
+      const _px = sf.price || sf.ltp || liveQuote.ltp;
+      const _kj = sf.ichimokuKijun;
+      const _tk = sf.ichimokuTenkan;
+      if (_px != null && _kj != null && _kj > 0) {
+        const _dist = +(((_px - _kj) / _kj) * 100).toFixed(2);
+        const _zone = _dist <= -3 ? 'BELOW' : _dist <= 2 ? 'BUY' : _dist <= 8 ? 'HOLD' : 'EXTENDED';
+        dataPoints += `Kijun Distance: ${_dist >= 0 ? '+' : ''}${_dist}%\n`;
+        dataPoints += `Kijun Buy-Zone: ${_zone}\n`;
+      }
+      if (_tk != null && _kj != null) {
+        dataPoints += `TK Cross: ${_tk > _kj ? 'Bullish (T>K)' : 'Bearish (T<K)'}\n`;
+      }
+    } catch(e) {}
 
     // ── PIVOT POINTS (Classic floor method) ──
     dataPoints += `\n--- PIVOT POINTS ---\n`;
@@ -16741,11 +16809,24 @@ async function validateSignalsWithAI(mode = 'auto') {
       ].join(' ');
 
       // ── ADVANCED TECHNICALS (Fibonacci, S&R, Ichimoku, Pivot, Dow Theory) ──
+      // Derive Varsity Kijun buy-zone + TK cross from raw Ichimoku cache
+      let _kjDist = '?', _kjZone = '?', _tkCross = '?';
+      try {
+        const _px = f.price || f.ltp;
+        const _kj = f.ichimokuKijun, _tk = f.ichimokuTenkan;
+        if (_px != null && _kj != null && _kj > 0) {
+          const d = +(((_px - _kj) / _kj) * 100).toFixed(2);
+          _kjDist = (d >= 0 ? '+' : '') + d + '%';
+          _kjZone = d <= -3 ? 'BELOW' : d <= 2 ? 'BUY' : d <= 8 ? 'HOLD' : 'EXTENDED';
+        }
+        if (_tk != null && _kj != null) _tkCross = _tk > _kj ? 'Bull' : 'Bear';
+      } catch(e) {}
       const advTech = [
         `Fib38.2=${f.fib382||'?'}`, `Fib50=${f.fib500||'?'}`, `Fib61.8=${f.fib618||'?'}`,
         `NearFib=${f.nearestFib||'?'}`, `FibDist=${f.nearFibDist||'?'}%`,
         `Support=${f.support||'?'}`, `Resistance=${f.resistance||'?'}`,
         `Ichimoku=${f.ichimokuSignal||'?'}`, `Tenkan=${f.ichimokuTenkan||'?'}`, `Kijun=${f.ichimokuKijun||'?'}`,
+        `KijunDist=${_kjDist}`, `KijunZone=${_kjZone}`, `TKCross=${_tkCross}`,
         `Pivot=${f.pivot||'?'}`, `R1=${f.pivotR1||'?'}`, `R2=${f.pivotR2||'?'}`, `S1=${f.pivotS1||'?'}`, `S2=${f.pivotS2||'?'}`,
         `DowTrend=${f.dowTheoryTrend||'?'}`, `WeeklyConf=${f.weeklyTrendConfirmed||'?'}`,
       ].join(' ');
@@ -16806,7 +16887,7 @@ async function validateSignalsWithAI(mode = 'auto') {
           `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}% PEG=${mf.pe&&mf.earGrowth>0?(mf.pe/mf.earGrowth).toFixed(2):'?'}\n` +
           `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
           `  TECHNICALS: RSI=${mf.rsi!=null?mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi:'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'}\n` +
-          `  ADV_TECHNICALS: Fib38.2=${mf.fib382||'?'} Fib61.8=${mf.fib618||'?'} Support=${mf.support||'?'} Resistance=${mf.resistance||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Pivot=${mf.pivot||'?'} DowTrend=${mf.dowTheoryTrend||'?'} WeeklyConf=${mf.weeklyTrendConfirmed||'?'}\n` +
+          `  ADV_TECHNICALS: Fib38.2=${mf.fib382||'?'} Fib61.8=${mf.fib618||'?'} Support=${mf.support||'?'} Resistance=${mf.resistance||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Tenkan=${mf.ichimokuTenkan||'?'} Kijun=${mf.ichimokuKijun||'?'}${(function(){try{var _p=mf.price||mf.ltp,_k=mf.ichimokuKijun,_t=mf.ichimokuTenkan;if(_p!=null&&_k!=null&&_k>0){var _d=+(((_p-_k)/_k)*100).toFixed(2);var _z=_d<=-3?'BELOW':_d<=2?'BUY':_d<=8?'HOLD':'EXTENDED';var _tk=(_t!=null&&_k!=null)?(_t>_k?'Bull':'Bear'):'?';return' KijunDist='+(_d>=0?'+':'')+_d+'% KijunZone='+_z+' TKCross='+_tk;}return'';}catch(e){return'';}})()} Pivot=${mf.pivot||'?'} DowTrend=${mf.dowTheoryTrend||'?'} WeeklyConf=${mf.weeklyTrendConfirmed||'?'}\n` +
           `  DUPONT_CASHCYCLE: DuPontROE=${mf.dupontROE||'?'}% CCC=${mf.cashConversionCycle||'?'}days Sharpe=${mf.sharpeRatio||'?'}\n` +
           `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
           (delData ? `  DELIVERY: Delivery%=${delData.deliveryPct||'?'}%\n` : '') +

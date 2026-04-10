@@ -3131,7 +3131,7 @@ function renderLongTermPortfolioPanel() {
   var h = '';
   h += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--bg2)">';
   h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-  h += '<span style="font-weight:700;color:#f59e0b;font-size:12px">🏛️ Long-Term Model Portfolio (Varsity v2)</span>';
+  h += '<span style="font-weight:700;color:#f59e0b;font-size:12px">🏛️ Varsity v2 Builder</span>';
   h += '<input type="number" id="lt-amt" value="'+ltPortfolioAmount+'" min="5000" step="5000" '
     + 'onchange="setLongTermPortfolioAmount(this.value)" '
     + 'style="width:110px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11px">';
@@ -3177,13 +3177,24 @@ function renderLongTermPortfolioPanel() {
     // Compact picks list
     h += '<div style="margin-top:10px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">';
     h += '<thead><tr style="color:var(--text3);text-align:right"><th style="text-align:left;padding:3px 6px">Stock</th>'
-      + '<th>Bucket</th><th>ScoreV2</th><th>Alloc %</th><th>Shares</th><th>Invested</th><th>Exp 12M</th><th>Risk</th><th>Value</th></tr></thead><tbody>';
+      + '<th>Bucket</th><th>ScoreV2</th><th>Alloc %</th><th>Shares</th><th>Invested</th><th>Exp 12M</th><th>Risk</th><th>Value</th>'
+      + '<th title="Varsity Ichimoku: distance of price from Kijun (26-period midline). BUY = at/near Kijun pullback zone; HOLD = mildly above; EXTENDED = far above, wait; BELOW = below Kijun, weak">Timing</th>'
+      + '</tr></thead><tbody>';
     (d.stocks || []).forEach(function(p) {
       var er = (p.expectedReturn12m || 0) * 100;
       var erCol = er >= 15 ? 'var(--green)' : er >= 5 ? '#10b981' : er >= 0 ? 'var(--text)' : 'var(--red)';
       var bCol = p.scoreBucket==='A'?'var(--green)':p.scoreBucket==='B'?'#10b981':p.scoreBucket==='C'?'#f59e0b':'var(--red)';
       var rCol = p.riskLevel==='LOW'?'var(--green)':p.riskLevel==='HIGH'?'var(--red)':'#f59e0b';
       var vCol = p.valuationLabel==='UNDERVALUED'?'var(--green)':p.valuationLabel==='OVERVALUED'?'var(--red)':'var(--text2)';
+      // Kijun Buy-Zone badge (Varsity M2 Ch21: Kijun-sen as dynamic pullback entry reference)
+      var tov = p.timingOverlay || {};
+      var kbz = tov.kijunBuyZone || 'UNKNOWN';
+      var kDist = (tov.kijunDistPct != null) ? tov.kijunDistPct : null;
+      var kLabel = kbz==='BUY'?'✅ BUY':kbz==='HOLD'?'⏸ HOLD':kbz==='EXTENDED'?'⚠ EXT':kbz==='BELOW'?'❌ BELOW':'–';
+      var kCol = kbz==='BUY'?'var(--green)':kbz==='HOLD'?'#10b981':kbz==='EXTENDED'?'#f59e0b':kbz==='BELOW'?'var(--red)':'var(--text3)';
+      var kTip = kbz==='UNKNOWN' ? 'Kijun data not available'
+        : ('Kijun dist: '+(kDist>=0?'+':'')+(kDist!=null?kDist.toFixed(1):'?')+'%'
+            + (tov.tkBull===true?' · TK bullish (T>K)':tov.tkBull===false?' · TK bearish (T<K)':''));
       h += '<tr style="border-top:1px solid var(--border2);text-align:right">'
         + '<td style="text-align:left;padding:3px 6px"><b>'+p.sym+'</b> <span style="color:var(--text3);font-size:9px">'+(p.sector||'')+'</span></td>'
         + '<td style="color:'+bCol+';font-weight:700">'+p.scoreBucket+'</td>'
@@ -3194,6 +3205,7 @@ function renderLongTermPortfolioPanel() {
         + '<td style="color:'+erCol+';font-weight:700">'+(er>=0?'+':'')+er.toFixed(1)+'%</td>'
         + '<td style="color:'+rCol+'">'+(p.riskLevel||'-')+'</td>'
         + '<td style="color:'+vCol+';font-size:9px">'+(p.valuationLabel||'-')+'</td>'
+        + '<td style="color:'+kCol+';font-size:9px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>'
         + '</tr>';
     });
     h += '</tbody></table></div>';
@@ -4022,11 +4034,10 @@ function renderStockRecPage(){
     if(stockRecFilter==='NEXT50')  return s.grp==='NEXT50';
     if(stockRecFilter==='MIDCAP')  return s.grp==='MIDCAP';
     if(stockRecFilter==='SMALLCAP') return s.grp==='SMALLCAP';
-    return s.sector===stockRecFilter;
+    return true; // unknown filter value → don't drop rows
   });
   if(stockRecFilter==='FALLEN') filtered = fallenAngels;
 
-  var sectors = [...new Set(allStocks.map(function(s){ return s.sector; }).filter(Boolean))].sort();
   var top3 = filtered.slice(0,3);
 
   var html = '<div style="margin-bottom:20px">';
@@ -4092,7 +4103,9 @@ function renderStockRecPage(){
   });
   html += '</div>';
 
-  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'].concat(sectors.slice(0,8));
+  // Sector chips removed — NIFTY50/NEXT50/MIDCAP/SMALLCAP/ALL/FALLEN already cover
+  // the useful slices; per-sector filtering just created a long noisy row.
+  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
@@ -4450,9 +4463,18 @@ function renderStockRecPage(){
   });
   html += '</div>';
 
-  // ── Long-Term portfolio v2 panel (only on Long-Term tab) ──
+  // ── Long-Term tab intro (portfolio construction moved to Portfolio Manager) ──
+  // The Long-Term tab here is now a pure Varsity v2 scores screener.
+  // Portfolio *construction* (constrained 15-stock model, sector caps, DC floor,
+  // allocation) lives in Portfolio Manager → Long Term Portfolio. Keeping the
+  // two concerns separate: Stocks = scan/screen, Portfolio Manager = build/hold.
   if (stockRecTab === 'longterm') {
-    html += renderLongTermPortfolioPanel();
+    html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:10px;background:var(--bg2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      + '<span style="font-size:12px;color:#f59e0b;font-weight:700">🏛 Varsity v2 scores (fundamentals-first)</span>'
+      + '<span style="font-size:10px;color:var(--text3);flex:1">Every stock in the universe, ranked by 4-pillar Varsity score. Quality 40 · Growth 25 · Valuation 20 · Business 15.</span>'
+      + '<button onclick="_psTab=\'longterm\';setMode(\'psuggest\')" '
+      + 'style="padding:5px 12px;border-radius:6px;border:1px solid #f59e0b;background:rgba(245,158,11,0.15);color:#f59e0b;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">Build portfolio →</button>'
+      + '</div>';
   }
 
   // ── Table ──
@@ -4761,7 +4783,7 @@ var mfishPolling = null;
 async function renderMiroFish() {
   var cont = document.getElementById('main-content');
   if(!cont) return;
-  cont.innerHTML = '<div style="padding:48px;text-align:center"><div style="font-size:14px;color:var(--text3)">MiroFish has been replaced by the AI Signal Validator.<br>Go to Portfolio Manager → Model Portfolio to see AI-powered Varsity reviews.</div></div>';
+  cont.innerHTML = '<div style="padding:48px;text-align:center"><div style="font-size:14px;color:var(--text3)">MiroFish has been replaced by the AI Signal Validator.<br>Go to Portfolio Manager → Swing Trade Portfolio to see AI-powered Varsity reviews.</div></div>';
   return;
 
   // DEPRECATED — original code below (dead code)
@@ -5052,7 +5074,7 @@ var _psData       = null;   // current model portfolio data
 var _psAmount     = 100000; // default ₹1L
 var _psRefreshInt = null;   // auto-refresh interval
 var _psLoading    = false;
-var _psTab        = 'model';  // model | holdings | signals | performance
+var _psTab        = 'model';  // model (Swing Trade) | longterm | holdings | performance
 var _psPositions  = null;   // user's actual positions from DB
 var _psSignals    = null;   // signal history
 var _psSignalFilter = 'all'; // all | action | buy | sell | alerts
@@ -5110,7 +5132,16 @@ function renderPortfolioSuggestion(){
   h+='</div>';
 
   // Sub-tabs
-  var tabs=[{id:'model',l:'📊 Model Portfolio'},{id:'holdings',l:'📋 My Holdings'},{id:'performance',l:'📈 Performance'}];
+  // 'model' keeps its internal id for state/backward-compat, but is shown as
+  // "Swing Trade Portfolio" — the v1 5-factor blend (FA 30 + TA 25 + Val 15 +
+  // Mom 15 + Risk 15) is fundamentally a swing-trading model because 40% of
+  // its weight is TA+Momentum. 'longterm' is the new v2 Varsity buy-and-hold.
+  var tabs=[
+    {id:'model',    l:'📊 Swing Trade Portfolio'},
+    {id:'longterm', l:'🏛 Long Term Portfolio'},
+    {id:'holdings', l:'📋 My Holdings'},
+    {id:'performance', l:'📈 Performance'},
+  ];
   h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
   tabs.forEach(function(t){
     var act=_psTab===t.id;
@@ -5121,6 +5152,7 @@ function renderPortfolioSuggestion(){
   // Tab content
   h+='<div id="ps-tab-content">';
   if(_psTab==='model') h+=psRenderModelTab();
+  else if(_psTab==='longterm') h+=psRenderLongTermTab();
   else if(_psTab==='holdings') h+=psRenderHoldingsTab();
   else if(_psTab==='performance') h+=psRenderPerformanceTab();
   h+='</div>';
@@ -5133,8 +5165,36 @@ function renderPortfolioSuggestion(){
   if(_psTab==='model'&&!_psSignals) psLoadSignals(); // needed for FRESH_BUY ideas in model tab
   if(_psTab==='model'&&!_psAIValidation) psLoadAIValidation(); // load AI verdicts for model badges
   if(_psTab==='model'&&!_psAIReviewsDB) psLoadAIReviewsDB(); // load persisted AI reviews from DB
+  // Long-Term tab: auto-build the v2 Varsity portfolio on first visit so the
+  // panel isn't empty. Same default amount (₹1L) as the swing model.
+  if(_psTab==='longterm' && !ltPortfolioData && !ltPortfolioLoading && !ltPortfolioError) {
+    loadLongTermPortfolio(false);
+  }
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
+}
+
+// ── LONG TERM PORTFOLIO TAB ──
+// Thin wrapper around renderLongTermPortfolioPanel() (defined in the Stocks
+// page section). We reuse the same engine, state, and API — this is just a
+// different home for the same panel, with a proper heading and intro text.
+function psRenderLongTermTab(){
+  var h='';
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">';
+  h+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+='<div style="font-size:14px;font-weight:800;color:#f59e0b">🏛 Long Term Portfolio — Varsity v2</div>';
+  h+='<div style="font-size:10px;color:var(--text4);margin-left:auto">Buy-and-hold · 12M horizon · Fundamentals-first</div>';
+  h+='</div>';
+  h+='<div style="font-size:10px;color:var(--text3);line-height:1.6">';
+  h+='4-pillar Varsity scoring: <b>Quality 40 · Growth 25 · Valuation 20 · Business 15</b>. ';
+  h+='Technicals act only as a timing overlay — they never influence the fundamental score. ';
+  h+='Portfolio constraints: max 15 stocks, max 3 per sector, 5–25% per position, DC floor 0.6.';
+  h+='</div>';
+  h+='</div>';
+  // Reuse the existing panel — shared state (ltPortfolioData, ltPortfolioAmount)
+  // means Build/Refresh/Force-Regenerate all work identically.
+  h+=renderLongTermPortfolioPanel();
+  return h;
 }
 
 // ── MODEL PORTFOLIO TAB ──
@@ -5173,12 +5233,12 @@ function psRenderModelTab(){
     h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
     h+='<div style="font-size:36px;margin-bottom:10px">⏳</div>';
     h+='<div style="font-size:14px;font-weight:600">Analyzing 500+ stocks...</div>';
-    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Building model portfolio with 5-factor Varsity scoring</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Building swing trade portfolio with 5-factor blended scoring</div>';
     h+='</div>';
   } else {
     h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
     h+='<div style="font-size:36px;margin-bottom:10px">💼</div>';
-    h+='<div style="font-size:14px;font-weight:600">Loading model portfolio...</div>';
+    h+='<div style="font-size:14px;font-weight:600">Loading swing trade portfolio...</div>';
     h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Auto-generating with ₹'+(_psAmount/1000)+'K. Change amount above and click Generate to customize.</div>';
     h+='</div>';
   }
@@ -5437,7 +5497,7 @@ function psRenderHoldingsTab(){
     h+='<div style="text-align:center;padding:50px 20px;color:var(--text3)">';
     h+='<div style="font-size:36px;margin-bottom:10px">📋</div>';
     h+='<div style="font-size:14px;font-weight:600">No holdings yet</div>';
-    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Generate a model portfolio and click "I Bought" on stocks you purchased</div>';
+    h+='<div style="font-size:11px;color:var(--text4);margin-top:4px">Generate a swing or long-term portfolio and click "I Bought" on stocks you purchased</div>';
     h+='</div>';
     return h;
   }
