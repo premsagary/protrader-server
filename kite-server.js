@@ -4622,9 +4622,9 @@ async function refreshAllFundamentals() {
     }
   } catch(e) { console.log('📊 Nifty benchmark fetch failed (non-critical):', e.message); }
 
-  // Fetch in parallel batches of 10 — Kite allows ~10 req/s
+  // Fetch in parallel batches of 5 — Kite rate limit ~10 req/s, keep headroom for scans
   // Each call has a 12s timeout so a hanging stock never blocks the batch
-  const BATCH = 10;
+  const BATCH = 5;
   const stocks = [...UNIVERSE];
 
   for (let i = 0; i < stocks.length; i += BATCH) {
@@ -4821,8 +4821,8 @@ async function refreshAllFundamentals() {
 
       } catch(e) { fail++; }
     }));
-    // Small pause between batches to respect Kite rate limits
-    if (i + BATCH < stocks.length) await new Promise(r=>setTimeout(r,200));
+    // Small pause between batches to respect Kite rate limits (5 req/batch + 500ms gap ≈ 10 req/s safe)
+    if (i + BATCH < stocks.length) await new Promise(r=>setTimeout(r,500));
   }
 
   // ── Post-loop: compute industryPE as median PE per sector ──
