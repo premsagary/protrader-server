@@ -424,6 +424,62 @@ function initKite(token) {
   return kite;
 }
 
+// ── QuotaGuard Static IP proxy for Kite order endpoints (SEBI static IP compliance) ──
+// Only order placement goes through the proxy — data endpoints stay on Railway's IP.
+// Set QUOTAGUARDSTATIC_URL env var in Railway: http://user:pass@static-proxy.quotaguard.com:9293
+let _proxyAgent = null;
+function getKiteProxyAgent() {
+  if (_proxyAgent !== null) return _proxyAgent;
+  const proxyUrl = process.env.QUOTAGUARDSTATIC_URL || process.env.QUOTAGUARD_URL || process.env.HTTPS_PROXY;
+  if (!proxyUrl) { _proxyAgent = false; return null; }
+  try {
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    _proxyAgent = new HttpsProxyAgent(proxyUrl);
+    console.log(`🛡️ QuotaGuard proxy enabled for Kite orders: ${proxyUrl.replace(/\/\/[^@]+@/, '//***@')}`);
+    return _proxyAgent;
+  } catch(e) {
+    console.error('⚠ https-proxy-agent not installed, falling back to direct:', e.message);
+    _proxyAgent = false;
+    return null;
+  }
+}
+
+// Place Kite orders through static-IP proxy.
+// Signature mirrors kite.placeOrder(variety, params).
+async function placeOrderViaProxy(variety, params) {
+  if (!kite) throw new Error('Kite not initialized');
+  const agent = getKiteProxyAgent();
+  if (!agent) {
+    // No proxy configured — use SDK directly
+    return await kite.placeOrder(variety, params);
+  }
+  const axios = require('axios');
+  const querystring = require('querystring');
+  const body = querystring.stringify({ ...params, variety });
+  const authHeader = `token ${process.env.KITE_API_KEY}:${kite.access_token || ''}`;
+  try {
+    const res = await axios.request({
+      method: 'POST',
+      url: `https://api.kite.trade/orders/${variety}`,
+      data: body,
+      headers: {
+        'X-Kite-Version': '3',
+        'Authorization': authHeader,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'protrader/1.0',
+      },
+      httpsAgent: agent,
+      proxy: false, // we pass the agent explicitly; don't let axios re-proxy
+      timeout: 15000,
+    });
+    // Kite response: { status: 'success', data: { order_id: '...' } }
+    return res.data?.data || res.data;
+  } catch(e) {
+    const kiteErr = e.response?.data?.message || e.message;
+    throw new Error(kiteErr);
+  }
+}
+
 // -- Persist config in DB (survives Railway restarts) -------------------------
 async function dbGet(key) {
   try {
@@ -1811,6 +1867,469 @@ async function computePortfolioStats() {
   } catch(e) { return null; }
 }
 
+// ============================================================================
+// STRUCTURE FILTER — Support/Resistance + VWAP + PDH/PDL awareness
+// Wraps around existing buyCandidates[] — does NOT change strategies or sizing.
+// Runs after Pass 1 collection, before Pass 2 ranking.
+// ============================================================================
+
+const STRUCTURE_CONFIG = {
+  structureFilterEnabled:      (process.env.STRUCTURE_FILTER_ENABLED ?? 'true') !== 'false',
+  llmFilterEnabled:            (process.env.LLM_FILTER_ENABLED || 'false') === 'true',
+  pivotLookbackLeft:           2,
+  pivotLookbackRight:          2,
+  pivotLookbackCandles:        60,
+  zoneMergeThresholdPct:       0.004,   // 0.4% price merge window
+  useATRZoneWidth:             false,
+  zoneATRMultiplier:           0.5,
+  maxZonesPerSide:             5,
+  minTouchesForStrongZone:     2,
+  rejectIfResistanceWithinPct: 0.5,     // reject if resistance <0.5% overhead
+  nearZoneThresholdPct:        0.5,     // "near" zone definition
+  boostIfSupportBounce:        true,
+  boostIfBreakoutAboveResistance: true,
+  reduceIfFarFromVWAP:         true,
+  farFromVWAPPct:              2.0,     // stretched if >2% from VWAP
+  llmTopCandidatesPerScan:     3,
+  llmMinScoreThreshold:        3.0,
+  llmDecisionCacheMinutes:     10,
+  applyLLMSizeMultiplier:      false,   // v1: log only, don't apply
+};
+
+// In-memory latest scan analyses for /api/candidates/latest endpoint
+let _latestCandidateAnalyses = [];
+let _latestFilterStats = null;
+
+// ── A. Pivot detection (fractal highs/lows) ──
+function detectPivotLevels(candles, left = STRUCTURE_CONFIG.pivotLookbackLeft, right = STRUCTURE_CONFIG.pivotLookbackRight) {
+  const highs = [];
+  const lows  = [];
+  if (!candles || candles.length < left + right + 1) return { pivotHighs: highs, pivotLows: lows };
+  const slice = candles.slice(-STRUCTURE_CONFIG.pivotLookbackCandles);
+  for (let i = left; i < slice.length - right; i++) {
+    const c = slice[i];
+    let isPH = true, isPL = true;
+    for (let k = 1; k <= left && (isPH || isPL); k++) {
+      if (slice[i - k].high >= c.high) isPH = false;
+      if (slice[i - k].low  <= c.low)  isPL = false;
+    }
+    for (let k = 1; k <= right && (isPH || isPL); k++) {
+      if (slice[i + k].high >= c.high) isPH = false;
+      if (slice[i + k].low  <= c.low)  isPL = false;
+    }
+    if (isPH) highs.push({ price: c.high, idx: i });
+    if (isPL) lows.push({  price: c.low,  idx: i });
+  }
+  return { pivotHighs: highs, pivotLows: lows };
+}
+
+// ── B. Cluster nearby pivots into zones (not lines) ──
+function clusterZones(pivots, type, refPrice, atrValue) {
+  if (!pivots || pivots.length === 0) return [];
+  const threshold = STRUCTURE_CONFIG.useATRZoneWidth
+    ? (atrValue || 1) * STRUCTURE_CONFIG.zoneATRMultiplier
+    : refPrice * STRUCTURE_CONFIG.zoneMergeThresholdPct;
+  const sorted = [...pivots].sort((a, b) => a.price - b.price);
+  const zones = [];
+  let cur = { low: sorted[0].price, high: sorted[0].price, touches: 1, lastIdx: sorted[0].idx };
+  for (let i = 1; i < sorted.length; i++) {
+    const p = sorted[i];
+    if (p.price - cur.high <= threshold) {
+      cur.high    = Math.max(cur.high, p.price);
+      cur.touches += 1;
+      cur.lastIdx = Math.max(cur.lastIdx, p.idx);
+    } else {
+      zones.push(cur);
+      cur = { low: p.price, high: p.price, touches: 1, lastIdx: p.idx };
+    }
+  }
+  zones.push(cur);
+  return zones.map(z => ({
+    type,
+    zoneLow:  +z.low.toFixed(2),
+    zoneHigh: +z.high.toFixed(2),
+    mid:      +((z.low + z.high) / 2).toFixed(2),
+    touches:  z.touches,
+    lastTouchIdx: z.lastIdx,
+  }));
+}
+
+// ── C. Score zones (touches + recency + rejection strength) ──
+function scoreZones(zones, candles, type) {
+  const maxIdx = candles.length - 1;
+  return zones.map(z => {
+    const ageCandles  = Math.max(0, maxIdx - z.lastTouchIdx);
+    const recencyScore = Math.max(0, 1 - (ageCandles / 60));
+    let rejections = 0;
+    for (const c of candles) {
+      if (type === 'resistance') {
+        if (c.high >= z.zoneLow && c.close < z.zoneLow) rejections++;
+      } else {
+        if (c.low  <= z.zoneHigh && c.close > z.zoneHigh) rejections++;
+      }
+    }
+    const strengthScore = +(z.touches * 1.5 + recencyScore * 3 + rejections * 0.5).toFixed(2);
+    let strengthLabel = 'LOW';
+    if (strengthScore >= 6)       strengthLabel = 'HIGH';
+    else if (strengthScore >= 3.5) strengthLabel = 'MEDIUM';
+    return { ...z, rejections, recencyScore: +recencyScore.toFixed(2), strengthScore, strengthLabel };
+  });
+}
+
+// ── D. Session VWAP (intraday, last trading day only) ──
+function computeSessionVWAP(candles) {
+  if (!candles || candles.length === 0) return null;
+  const last = candles[candles.length - 1];
+  const lastDate = (last.date instanceof Date ? last.date : new Date(last.date)).toISOString().split('T')[0];
+  const today = candles.filter(c => {
+    const d = (c.date instanceof Date ? c.date : new Date(c.date)).toISOString().split('T')[0];
+    return d === lastDate;
+  });
+  if (today.length === 0) return null;
+  let cumPV = 0, cumV = 0;
+  const vwaps = [];
+  for (const c of today) {
+    const tp = (c.high + c.low + c.close) / 3;
+    const v  = c.volume || 1;
+    cumPV += tp * v;
+    cumV  += v;
+    vwaps.push(cumPV / cumV);
+  }
+  const current = vwaps[vwaps.length - 1];
+  const slope   = vwaps.length > 5 ? current - vwaps[vwaps.length - 5] : 0;
+  return { current: +current.toFixed(2), slope: +slope.toFixed(3) };
+}
+
+// ── E. Previous day levels (PDH/PDL/PDC) derived from 5-min intraday history ──
+function computePreviousDayLevels(candles) {
+  if (!candles || candles.length < 2) return null;
+  const byDate = {};
+  for (const c of candles) {
+    const d = (c.date instanceof Date ? c.date : new Date(c.date)).toISOString().split('T')[0];
+    if (!byDate[d]) byDate[d] = { high: c.high, low: c.low, close: c.close };
+    else {
+      byDate[d].high  = Math.max(byDate[d].high, c.high);
+      byDate[d].low   = Math.min(byDate[d].low,  c.low);
+      byDate[d].close = c.close; // last seen
+    }
+  }
+  const dates = Object.keys(byDate).sort();
+  if (dates.length < 2) return null;
+  const prev = byDate[dates[dates.length - 2]];
+  return { pdh: +prev.high.toFixed(2), pdl: +prev.low.toFixed(2), pdc: +prev.close.toFixed(2) };
+}
+
+// ── F. Full per-candidate structure analysis ──
+function analyzeCandidateStructure(symbol, candles, entryPrice, atrValue) {
+  if (!candles || candles.length < 20) return null;
+
+  const { pivotHighs, pivotLows } = detectPivotLevels(candles);
+  const resZonesRaw = clusterZones(pivotHighs, 'resistance', entryPrice, atrValue);
+  const supZonesRaw = clusterZones(pivotLows,  'support',    entryPrice, atrValue);
+  const resZones = scoreZones(resZonesRaw, candles, 'resistance')
+    .sort((a, b) => b.strengthScore - a.strengthScore)
+    .slice(0, STRUCTURE_CONFIG.maxZonesPerSide);
+  const supZones = scoreZones(supZonesRaw, candles, 'support')
+    .sort((a, b) => b.strengthScore - a.strengthScore)
+    .slice(0, STRUCTURE_CONFIG.maxZonesPerSide);
+
+  // Nearest resistance ABOVE entry; nearest support BELOW entry
+  const nearestResistance = resZones
+    .filter(z => z.zoneHigh > entryPrice)
+    .sort((a, b) => (a.zoneLow - entryPrice) - (b.zoneLow - entryPrice))[0] || null;
+  const nearestSupport = supZones
+    .filter(z => z.zoneLow < entryPrice)
+    .sort((a, b) => (entryPrice - b.zoneHigh) - (entryPrice - a.zoneHigh))[0] || null;
+
+  const distToRPct = nearestResistance
+    ? +(((nearestResistance.zoneLow - entryPrice) / entryPrice) * 100).toFixed(2)
+    : null;
+  const distToSPct = nearestSupport
+    ? +(((entryPrice - nearestSupport.zoneHigh) / entryPrice) * 100).toFixed(2)
+    : null;
+
+  // VWAP
+  const vwapData = computeSessionVWAP(candles);
+  const priceAboveVWAP = vwapData ? entryPrice > vwapData.current : null;
+  const distFromVWAPPct = vwapData
+    ? +(((entryPrice - vwapData.current) / vwapData.current) * 100).toFixed(2)
+    : null;
+  const vwapBias = vwapData
+    ? (priceAboveVWAP ? 'SUPPORT' : 'RESISTANCE')
+    : 'NEUTRAL';
+
+  // Previous day levels
+  const pd = computePreviousDayLevels(candles);
+  const nearPDH = pd ? Math.abs((entryPrice - pd.pdh) / entryPrice) * 100 < 0.5 : false;
+  const nearPDL = pd ? Math.abs((entryPrice - pd.pdl) / entryPrice) * 100 < 0.5 : false;
+  const nearPDC = pd ? Math.abs((entryPrice - pd.pdc) / entryPrice) * 100 < 0.5 : false;
+  const abovePDH = pd ? entryPrice > pd.pdh : false;
+
+  // Volume ratio (last candle vs 20-avg)
+  const last = candles[candles.length - 1];
+  const vols = candles.slice(-20).map(c => c.volume || 0);
+  const avgVol = vols.reduce((a, b) => a + b, 0) / (vols.length || 1);
+  const volumeRatio = avgVol > 0 ? +((last.volume || 0) / avgVol).toFixed(2) : 1;
+
+  // Derived flags
+  const nearResistance = !!(nearestResistance
+    && distToRPct !== null
+    && distToRPct < STRUCTURE_CONFIG.nearZoneThresholdPct
+    && (nearestResistance.strengthLabel === 'HIGH' || nearestResistance.strengthLabel === 'MEDIUM'));
+
+  const nearSupport = !!(nearestSupport
+    && distToSPct !== null
+    && distToSPct < STRUCTURE_CONFIG.nearZoneThresholdPct
+    && (nearestSupport.strengthLabel === 'HIGH' || nearestSupport.strengthLabel === 'MEDIUM'));
+
+  const breakoutAboveResistance = !!(nearestResistance && entryPrice > nearestResistance.zoneHigh);
+
+  // Breakout INTO resistance: entry price sits inside a strong overhead zone
+  const breakoutIntoResistance = !!(nearestResistance
+    && entryPrice >= nearestResistance.zoneLow
+    && entryPrice <= nearestResistance.zoneHigh
+    && (nearestResistance.strengthLabel === 'HIGH' || nearestResistance.strengthLabel === 'MEDIUM'));
+
+  // Trapped: both a near resistance and a near support simultaneously
+  const trappedBetweenZones = !!(nearestResistance && nearestSupport
+    && distToRPct !== null && distToSPct !== null
+    && distToRPct < 1.5 && distToSPct < 1.5
+    && !breakoutAboveResistance);
+
+  // Stacked resistance: ≥2 resistance zones within 2% overhead
+  const stackedResistance = resZones.filter(z =>
+    z.zoneLow > entryPrice && ((z.zoneLow - entryPrice) / entryPrice) * 100 < 2.0
+  ).length >= 2;
+
+  return {
+    symbol,
+    entryPrice: +entryPrice.toFixed(2),
+    nearestResistance: nearestResistance ? {
+      zoneLow:       nearestResistance.zoneLow,
+      zoneHigh:      nearestResistance.zoneHigh,
+      touches:       nearestResistance.touches,
+      strengthScore: nearestResistance.strengthScore,
+      strengthLabel: nearestResistance.strengthLabel,
+      distancePct:   distToRPct,
+    } : null,
+    nearestSupport: nearestSupport ? {
+      zoneLow:       nearestSupport.zoneLow,
+      zoneHigh:      nearestSupport.zoneHigh,
+      touches:       nearestSupport.touches,
+      strengthScore: nearestSupport.strengthScore,
+      strengthLabel: nearestSupport.strengthLabel,
+      distancePct:   distToSPct,
+    } : null,
+    vwap:            vwapData ? { current: vwapData.current, slope: vwapData.slope, bias: vwapBias } : null,
+    pdLevels:        pd,
+    volumeRatio,
+    allResistanceZones: resZones,
+    allSupportZones:    supZones,
+    flags: {
+      nearResistance,
+      nearSupport,
+      breakoutAboveResistance,
+      breakoutIntoResistance,
+      trappedBetweenZones,
+      stackedResistance,
+      priceAboveVWAP: !!priceAboveVWAP,
+      distanceFromVWAPPct: distFromVWAPPct,
+      nearPDH, nearPDL, nearPDC, abovePDH,
+    },
+  };
+}
+
+// ── G. Score adjustment + hard reject rules ──
+function adjustCandidateScoreFromStructure(candidate, structure) {
+  const baseScore = candidate.result.score;
+  if (!structure) {
+    return { rejected: false, reason: null, scoreBefore: baseScore, scoreAfter: baseScore, adjustments: ['no_structure_data'] };
+  }
+  const f = structure.flags;
+  const regime = candidate.result.regime;
+  const adjustments = [];
+  let score = baseScore;
+
+  // ── Hard reject rules ──
+  const resLabel = structure.nearestResistance?.strengthLabel;
+  if (structure.nearestResistance
+      && structure.nearestResistance.distancePct !== null
+      && structure.nearestResistance.distancePct < STRUCTURE_CONFIG.rejectIfResistanceWithinPct
+      && (resLabel === 'HIGH' || resLabel === 'MEDIUM')
+      && !f.breakoutAboveResistance) {
+    return { rejected: true, reason: `R ${structure.nearestResistance.distancePct}% overhead (${resLabel})`, scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+  if (f.breakoutIntoResistance) {
+    return { rejected: true, reason: 'entry inside resistance zone', scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+  if (f.trappedBetweenZones) {
+    return { rejected: true, reason: 'trapped between S/R', scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+  if (!f.priceAboveVWAP && (regime === 'MOMENTUM' || regime === 'BREAKOUT')) {
+    return { rejected: true, reason: `below VWAP in ${regime}`, scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+  if (f.nearPDH && !f.abovePDH) {
+    return { rejected: true, reason: 'at PDH w/o breakout', scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+  if (f.stackedResistance && !f.breakoutAboveResistance) {
+    return { rejected: true, reason: 'stacked resistance overhead', scoreBefore: baseScore, scoreAfter: baseScore, adjustments: [] };
+  }
+
+  // ── Score boosts ──
+  if (f.breakoutAboveResistance && structure.volumeRatio >= 1.5 && STRUCTURE_CONFIG.boostIfBreakoutAboveResistance) {
+    score += 0.8; adjustments.push('+0.8 breakout+vol');
+  }
+  if (f.nearSupport && !f.nearResistance && STRUCTURE_CONFIG.boostIfSupportBounce) {
+    score += 0.5; adjustments.push('+0.5 support bounce');
+  }
+  if (f.priceAboveVWAP && structure.vwap && structure.vwap.slope > 0) {
+    score += 0.3; adjustments.push('+0.3 VWAP slope up');
+  }
+  if (f.abovePDH && structure.volumeRatio >= 1.5) {
+    score += 0.5; adjustments.push('+0.5 above PDH w/ vol');
+  }
+
+  // ── Score reductions ──
+  if (f.nearResistance) {
+    score -= 0.5; adjustments.push('-0.5 near R');
+  }
+  if (!structure.nearestSupport) {
+    score -= 0.3; adjustments.push('-0.3 no visible S');
+  }
+  if (STRUCTURE_CONFIG.reduceIfFarFromVWAP
+      && f.distanceFromVWAPPct !== null
+      && Math.abs(f.distanceFromVWAPPct) > STRUCTURE_CONFIG.farFromVWAPPct) {
+    score -= 0.4; adjustments.push('-0.4 stretched from VWAP');
+  }
+  if (structure.nearestResistance && structure.nearestSupport) {
+    const dR = structure.nearestResistance.distancePct || 0;
+    const dS = structure.nearestSupport.distancePct || 0;
+    if (Math.abs(dR - dS) < 0.3 && dR > 0.5 && dS > 0.5) {
+      score -= 0.3; adjustments.push('-0.3 middle of range');
+    }
+  }
+
+  return { rejected: false, reason: null, scoreBefore: +baseScore.toFixed(2), scoreAfter: +score.toFixed(2), adjustments };
+}
+
+// ── H. LLM shortlist: only top N with adjusted score ≥ threshold ──
+function shortlistCandidatesForLLM(candidates) {
+  return candidates
+    .filter(c => !c.rejected && (c.adjustedScore ?? c.result.score) >= STRUCTURE_CONFIG.llmMinScoreThreshold)
+    .sort((a, b) => (b.adjustedScore ?? b.result.score) - (a.adjustedScore ?? a.result.score))
+    .slice(0, STRUCTURE_CONFIG.llmTopCandidatesPerScan);
+}
+
+// ── I. LLM reviewer (OpenAI-compatible chat completions) ──
+const _llmDecisionCache = new Map();
+async function reviewCandidateWithLLM(candidate, structure) {
+  if (!STRUCTURE_CONFIG.llmFilterEnabled) {
+    return { decision: 'APPROVE', confidence: 1, setupQuality: 'N/A', riskFlag: 'LOW', positionSizeMultiplier: 1, comment: 'LLM disabled', skipped: true };
+  }
+  const sym = candidate.stock.sym;
+  const cached = _llmDecisionCache.get(sym);
+  if (cached && cached.expires > Date.now()) {
+    return { ...cached.decision, cached: true };
+  }
+  const apiKey = process.env.LLM_FILTER_API_KEY || process.env.OPENAI_API_KEY;
+  const model  = process.env.LLM_FILTER_MODEL   || 'gpt-4o-mini';
+  const url    = process.env.LLM_FILTER_URL     || 'https://api.openai.com/v1/chat/completions';
+  if (!apiKey) {
+    return { decision: 'APPROVE', confidence: 1, setupQuality: 'N/A', riskFlag: 'LOW', positionSizeMultiplier: 1, comment: 'no LLM key', skipped: true };
+  }
+
+  const compactInput = {
+    symbol:               sym,
+    strategy:             candidate.result.strategy,
+    regime:               candidate.result.regime,
+    entryPrice:           structure.entryPrice,
+    score:                candidate.adjustedScore ?? candidate.result.score,
+    volumeRatio:          structure.volumeRatio,
+    priceAboveVWAP:       structure.flags.priceAboveVWAP,
+    distanceFromVWAPPct:  structure.flags.distanceFromVWAPPct,
+    nearestResistance:    structure.nearestResistance,
+    nearestSupport:       structure.nearestSupport,
+    pdLevels:             structure.pdLevels,
+    flags: {
+      breakoutAboveResistance: structure.flags.breakoutAboveResistance,
+      breakoutIntoResistance:  structure.flags.breakoutIntoResistance,
+      trappedBetweenZones:     structure.flags.trappedBetweenZones,
+      nearPDH:                 structure.flags.nearPDH,
+      abovePDH:                structure.flags.abovePDH,
+      stackedResistance:       structure.flags.stackedResistance,
+    },
+  };
+
+  const systemPrompt = 'You are a trading setup reviewer. A rules-based engine has already found a candidate. You do not invent trades. You only review quality and reject weak or extended setups. Return valid JSON only with keys: decision (APPROVE|REJECT|CAUTION), confidence (0..1), setupQuality (STRONG|MEDIUM|WEAK), riskFlag (LOW|MEDIUM|HIGH), positionSizeMultiplier (0.5..1.0), comment (short). Prefer rejecting weak trades over forcing approval.';
+
+  try {
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: JSON.stringify(compactInput) },
+        ],
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) throw new Error(`LLM HTTP ${resp.status}`);
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content || '{}';
+    const parsed = JSON.parse(content);
+    const decision = {
+      decision:               ['APPROVE','REJECT','CAUTION'].includes(parsed.decision) ? parsed.decision : 'CAUTION',
+      confidence:             typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5,
+      setupQuality:           ['STRONG','MEDIUM','WEAK'].includes(parsed.setupQuality) ? parsed.setupQuality : 'MEDIUM',
+      riskFlag:               ['LOW','MEDIUM','HIGH'].includes(parsed.riskFlag) ? parsed.riskFlag : 'MEDIUM',
+      positionSizeMultiplier: typeof parsed.positionSizeMultiplier === 'number'
+        ? Math.min(1, Math.max(0.5, parsed.positionSizeMultiplier))
+        : 1,
+      comment:                (parsed.comment || '').toString().slice(0, 200),
+    };
+    _llmDecisionCache.set(sym, {
+      decision,
+      expires: Date.now() + STRUCTURE_CONFIG.llmDecisionCacheMinutes * 60 * 1000,
+    });
+    return decision;
+  } catch(e) {
+    console.log(`  ⚠ LLM filter error ${sym}: ${e.message}`);
+    return { decision: 'APPROVE', confidence: 0.5, setupQuality: 'UNKNOWN', riskFlag: 'MEDIUM', positionSizeMultiplier: 1, comment: `err: ${e.message}`, error: true };
+  }
+}
+
+// ── J. Final decision assembly (structure + LLM → final) ──
+function applyFinalCandidateDecision(candidate) {
+  if (candidate.rejected) {
+    candidate.finalDecision = 'REJECTED';
+    candidate.finalReason   = candidate.rejectReason;
+    return candidate;
+  }
+  if (candidate.llmDecision && candidate.llmDecision.decision === 'REJECT') {
+    candidate.finalDecision = 'REJECTED';
+    candidate.finalReason   = `LLM: ${candidate.llmDecision.comment || 'rejected'}`;
+    candidate.rejected      = true;
+    return candidate;
+  }
+  // CAUTION: mild score reduction but still allowed
+  if (candidate.llmDecision && candidate.llmDecision.decision === 'CAUTION') {
+    candidate.adjustedScore = (candidate.adjustedScore ?? candidate.result.score) - 0.3;
+  }
+  candidate.finalDecision = 'APPROVED';
+  candidate.finalReason   = null;
+  return candidate;
+}
+
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
@@ -1915,7 +2434,7 @@ async function scanAndTrade() {
 
           if (LIVE_TRADING && kite) {
             try {
-              const order = await kite.placeOrder('regular', {
+              const order = await placeOrderViaProxy('regular', {
                 exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'SELL',
                 quantity: openPos.quantity, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
               });
@@ -1953,23 +2472,130 @@ async function scanAndTrade() {
   }
 
   // ╔══════════════════════════════════════════════════════════════════════╗
-  // ║  PASS 2: Rank BUY candidates by score (highest first) and enter    ║
-  // ║  top signals respecting position limits + correlation guards.       ║
-  // ║  This eliminates large-cap bias from sequential scanning.          ║
+  // ║  PASS 1.5: STRUCTURE FILTER + OPTIONAL LLM REVIEW                   ║
+  // ║  Runs S/R + VWAP + PDH/PDL analysis on every candidate.             ║
+  // ║  Hard-rejects bad setups. Adjusts score for the rest.               ║
+  // ║  Optional LLM reviewer runs on top N shortlist only.                ║
   // ╚══════════════════════════════════════════════════════════════════════╝
-  buyCandidates.sort((a, b) => b.result.score - a.result.score);
+  const filterStats = {
+    total:               buyCandidates.length,
+    rejectedByStructure: 0,
+    rejectedByLLM:       0,
+    approved:            0,
+    rejectReasons:       {},
+    llmCalls:            0,
+    llmApprove:          0,
+    llmCaution:          0,
+    llmReject:           0,
+  };
+
+  if (STRUCTURE_CONFIG.structureFilterEnabled && buyCandidates.length > 0) {
+    for (const c of buyCandidates) {
+      try {
+        const highs14 = c.candles.slice(-14).map(x => x.high);
+        const lows14  = c.candles.slice(-14).map(x => x.low);
+        const atrVal  = highs14.map((h, i) => h - lows14[i]).reduce((a, b) => a + b, 0) / 14;
+        const structure = analyzeCandidateStructure(c.stock.sym, c.candles, c.last.close, atrVal);
+        c.structure = structure;
+
+        const adj = adjustCandidateScoreFromStructure(c, structure);
+        c.adjustments    = adj.adjustments;
+        c.adjustedScore  = adj.scoreAfter;
+        if (adj.rejected) {
+          c.rejected     = true;
+          c.rejectReason = adj.reason;
+          filterStats.rejectedByStructure += 1;
+          filterStats.rejectReasons[adj.reason] = (filterStats.rejectReasons[adj.reason] || 0) + 1;
+        }
+      } catch(e) {
+        console.log(`  ⚠ structure analysis error ${c.stock.sym}: ${e.message}`);
+        c.adjustedScore = c.result.score;
+      }
+    }
+
+    // LLM review — only top N non-rejected candidates above threshold
+    if (STRUCTURE_CONFIG.llmFilterEnabled) {
+      const shortlist = shortlistCandidatesForLLM(buyCandidates);
+      for (const c of shortlist) {
+        try {
+          const decision = await reviewCandidateWithLLM(c, c.structure);
+          c.llmDecision = decision;
+          filterStats.llmCalls += 1;
+          if (decision.decision === 'APPROVE')  filterStats.llmApprove += 1;
+          if (decision.decision === 'CAUTION')  filterStats.llmCaution += 1;
+          if (decision.decision === 'REJECT') {
+            filterStats.llmReject += 1;
+            filterStats.rejectedByLLM += 1;
+            filterStats.rejectReasons['LLM_' + (decision.comment || 'reject').slice(0,30)] =
+              (filterStats.rejectReasons['LLM_' + (decision.comment || 'reject').slice(0,30)] || 0) + 1;
+          }
+        } catch(e) {
+          console.log(`  ⚠ LLM review error ${c.stock.sym}: ${e.message}`);
+        }
+      }
+    }
+
+    // Finalize
+    for (const c of buyCandidates) applyFinalCandidateDecision(c);
+    filterStats.approved = buyCandidates.filter(c => !c.rejected).length;
+
+    // Store for /api/candidates/latest
+    _latestCandidateAnalyses = buyCandidates.map(c => ({
+      symbol:          c.stock.sym,
+      name:            c.stock.n,
+      strategy:        c.result.strategy,
+      regime:          c.result.regime,
+      originalScore:   +c.result.score.toFixed(2),
+      adjustedScore:   c.adjustedScore ?? c.result.score,
+      adjustments:     c.adjustments || [],
+      structure:       c.structure || null,
+      llmDecision:     c.llmDecision || null,
+      finalDecision:   c.finalDecision || (c.rejected ? 'REJECTED' : 'APPROVED'),
+      rejectReason:    c.rejectReason || null,
+      entryPrice:      c.last.close,
+      scannedAt:       new Date().toISOString(),
+    }));
+    _latestFilterStats = filterStats;
+
+    console.log(`  🧱 Structure filter: ${filterStats.total} → ${filterStats.approved} approved, ${filterStats.rejectedByStructure} rejected (S), ${filterStats.rejectedByLLM} rejected (LLM)`);
+    if (Object.keys(filterStats.rejectReasons).length > 0) {
+      const topReasons = Object.entries(filterStats.rejectReasons)
+        .sort((a, b) => b[1] - a[1]).slice(0, 3)
+        .map(([r, n]) => `${r}×${n}`).join(', ');
+      console.log(`     top reject reasons: ${topReasons}`);
+    }
+  } else {
+    // Structure filter disabled — passthrough
+    for (const c of buyCandidates) { c.adjustedScore = c.result.score; c.finalDecision = 'APPROVED'; }
+    _latestCandidateAnalyses = [];
+    _latestFilterStats = filterStats;
+  }
+
+  // ╔══════════════════════════════════════════════════════════════════════╗
+  // ║  PASS 2: Rank BUY candidates by adjustedScore (highest first) and    ║
+  // ║  enter top signals respecting position limits + correlation guards.  ║
+  // ║  This eliminates large-cap bias from sequential scanning.            ║
+  // ╚══════════════════════════════════════════════════════════════════════╝
+  buyCandidates.sort((a, b) => (b.adjustedScore ?? b.result.score) - (a.adjustedScore ?? a.result.score));
 
   if (buyCandidates.length > 0) {
-    console.log(`  📊 Ranked ${buyCandidates.length} BUY candidates: ${buyCandidates.slice(0,10).map(c=>`${c.stock.sym}(${c.result.score})`).join(' > ')}`);
+    const live = buyCandidates.filter(c => !c.rejected);
+    console.log(`  📊 Ranked ${live.length} live BUY candidates: ${live.slice(0,10).map(c=>`${c.stock.sym}(${(c.adjustedScore ?? c.result.score).toFixed(1)})`).join(' > ')}`);
   }
 
   for (const candidate of buyCandidates) {
     const { stock, result, candles, last } = candidate;
 
+    // Skip candidates rejected by structure filter or LLM
+    if (candidate.rejected) {
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — ${candidate.rejectReason || 'structure filter'}`);
+      continue;
+    }
+
     // Re-check slot availability (exits in pass 1 may have freed slots)
     const currentOpen = openTrades.filter(t=>t.status==="OPEN").length;
     if (currentOpen >= CONFIG.MAX_POSITIONS) {
-      console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — all ${CONFIG.MAX_POSITIONS} slots full`);
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — all ${CONFIG.MAX_POSITIONS} slots full`);
       break; // sorted by score, so remaining are weaker — stop here
     }
 
@@ -2008,18 +2634,38 @@ async function scanAndTrade() {
       continue;
     }
 
+    // Append structure + LLM detail to indicators string for audit trail
+    let enrichedDetail = result.detail || '';
+    if (candidate.structure) {
+      const s = candidate.structure;
+      const bits = [];
+      if (s.nearestResistance) bits.push(`R:${s.nearestResistance.zoneLow}-${s.nearestResistance.zoneHigh}(${s.nearestResistance.strengthLabel},${s.nearestResistance.distancePct}%)`);
+      if (s.nearestSupport)    bits.push(`S:${s.nearestSupport.zoneLow}-${s.nearestSupport.zoneHigh}(${s.nearestSupport.strengthLabel},${s.nearestSupport.distancePct}%)`);
+      if (s.vwap)              bits.push(`VWAP:${s.vwap.current}(${s.flags.priceAboveVWAP?'above':'below'})`);
+      if (s.pdLevels)          bits.push(`PDH:${s.pdLevels.pdh}/PDL:${s.pdLevels.pdl}`);
+      if (bits.length > 0)     enrichedDetail += ` [STRUCT: ${bits.join(' ')}]`;
+    }
+    if (candidate.adjustments && candidate.adjustments.length > 0) {
+      enrichedDetail += ` [ADJ: ${candidate.adjustments.join(' ')}]`;
+    }
+    if (candidate.llmDecision && !candidate.llmDecision.skipped) {
+      enrichedDetail += ` [LLM: ${candidate.llmDecision.decision}/${candidate.llmDecision.setupQuality}/${(candidate.llmDecision.confidence||0).toFixed(2)}]`;
+    }
+
+    const finalScore = candidate.adjustedScore ?? result.score;
+
     // Paper trade
     await pool.query(
       `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
        VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
       [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
-       +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail]
+       +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail]
     );
 
     // Live order
     if (LIVE_TRADING && kite) {
       try {
-        const order = await kite.placeOrder('regular', {
+        const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
           quantity: qty, product: 'CNC', order_type: 'LIMIT', price: price, validity: 'DAY',
         });
@@ -2038,7 +2684,10 @@ async function scanAndTrade() {
 
     openTrades.push({symbol:stock.sym,status:"OPEN"});
     dominantStrategy=result.strategy;
-    console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | Score:${result.score} | Rank:${buyCandidates.indexOf(candidate)+1}/${buyCandidates.length} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
+    const scoreStr = candidate.adjustedScore != null && candidate.adjustedScore !== result.score
+      ? `Score:${result.score}→${candidate.adjustedScore.toFixed(2)}`
+      : `Score:${result.score}`;
+    console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | ${scoreStr} | Rank:${buyCandidates.indexOf(candidate)+1}/${buyCandidates.length} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
     signalCount++;
   }
 
@@ -2047,10 +2696,16 @@ async function scanAndTrade() {
 
   broadcast({ type:"tick", prices:livePrices });
 
+  // Build scan_log message — include structure filter stats when available
+  let scanMsg = `Market: ${dominantRegime} | ${signalCount} signals | ${Object.entries(regimeCounts).map(([k,v])=>`${k}:${v}`).join(" ")}`;
+  if (_latestFilterStats && _latestFilterStats.total > 0) {
+    const fs = _latestFilterStats;
+    scanMsg += ` | Filter: ${fs.total}→${fs.approved} (S-rej:${fs.rejectedByStructure}${fs.rejectedByLLM?`, LLM-rej:${fs.rejectedByLLM}`:''})`;
+  }
+
   await pool.query(
     "INSERT INTO scan_log (stocks,signals,regime,strategy,message) VALUES ($1,$2,$3,$4,$5)",
-    [UNIVERSE.length, signalCount, dominantRegime, dominantStrategy,
-     `Market: ${dominantRegime} | ${signalCount} signals | ${Object.entries(regimeCounts).map(([k,v])=>`${k}:${v}`).join(" ")}`]
+    [UNIVERSE.length, signalCount, dominantRegime, dominantStrategy, scanMsg]
   );
   console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals\n`);
 }
@@ -3956,7 +4611,7 @@ app.post("/api/test-buy", express.json(), async (req, res) => {
 
     console.log(`🧪 TEST BUY: ${qty} x ${sym} @ ₹${price} (LIMIT, CNC)`);
 
-    const order = await kite.placeOrder('regular', {
+    const order = await placeOrderViaProxy('regular', {
       exchange: 'NSE',
       tradingsymbol: sym,
       transaction_type: 'BUY',
@@ -4042,6 +4697,39 @@ app.get("/regime", (req,res)=>{
 });
 
 app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
+
+// ── Structure Filter + LLM review visibility ──
+app.get("/api/candidates/latest", (req, res) => {
+  res.json({
+    candidates: _latestCandidateAnalyses || [],
+    stats:      _latestFilterStats      || null,
+    config: {
+      structureFilterEnabled: STRUCTURE_CONFIG.structureFilterEnabled,
+      llmFilterEnabled:       STRUCTURE_CONFIG.llmFilterEnabled,
+      rejectIfResistanceWithinPct: STRUCTURE_CONFIG.rejectIfResistanceWithinPct,
+      llmTopCandidatesPerScan:     STRUCTURE_CONFIG.llmTopCandidatesPerScan,
+      llmMinScoreThreshold:        STRUCTURE_CONFIG.llmMinScoreThreshold,
+    },
+    scannedAt: _latestCandidateAnalyses?.[0]?.scannedAt || null,
+  });
+});
+
+app.get("/api/structure/config", (req, res) => res.json(STRUCTURE_CONFIG));
+
+app.post("/api/structure/config", express.json(), (req, res) => {
+  // Runtime overrides — not persisted. Useful for live tuning.
+  const allowed = [
+    'structureFilterEnabled','llmFilterEnabled',
+    'rejectIfResistanceWithinPct','nearZoneThresholdPct','farFromVWAPPct',
+    'llmTopCandidatesPerScan','llmMinScoreThreshold','llmDecisionCacheMinutes',
+    'boostIfSupportBounce','boostIfBreakoutAboveResistance','reduceIfFarFromVWAP',
+    'zoneMergeThresholdPct','maxZonesPerSide',
+  ];
+  for (const k of allowed) {
+    if (k in (req.body || {})) STRUCTURE_CONFIG[k] = req.body[k];
+  }
+  res.json({ ok: true, config: STRUCTURE_CONFIG });
+});
 
 // -- Stock Scoring Engine - Kite Daily Candles --------------------------------
 // Phase 1: Kite getHistoricalData(daily, 1yr) -> price, DMA50/200, 52w, RSI, volume

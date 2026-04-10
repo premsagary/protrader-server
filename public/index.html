@@ -486,6 +486,7 @@ const STOCKS_TABS = [
   {id:"overview",   label:"◎ Overview"},
   {id:"positions",  label:"○ Positions"},
   {id:"trades",     label:"⇅ Trade History"},
+  {id:"candidates", label:"◉ Candidates"},
   {id:"market",     label:"▦ Live Market"},
   {id:"chart",      label:"↗ Chart"},
   {id:"news",       label:"◈ News (RSS)"},
@@ -881,6 +882,160 @@ function renderStocksTrades(){
   h+=_tradesStatsFooter(ns);
 
   document.getElementById("trades-sections").innerHTML=h;
+}
+
+// =======================================================
+// STOCKS — CANDIDATES (Structure Filter + LLM Filter view)
+// =======================================================
+async function renderStocksCandidates(){
+  document.getElementById("main-content").innerHTML=`
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <p style="font-size:13px;color:var(--text2);flex:1;margin:0">
+        Live view of the last scan's BUY candidates after the Structure Filter (pivot zones, VWAP, PDH/PDL)
+        and optional LLM review. Updates every scan (~3 min during market hours).
+      </p>
+      <button class="btn btn-sm" onclick="renderStocksCandidates()">↻ Refresh</button>
+      <button class="btn btn-sm" onclick="scanNow()">▶ Scan now</button>
+    </div>
+    <div id="cand-stats" style="margin-bottom:14px"></div>
+    <div id="cand-table-wrap"></div>
+    <div id="cand-config" style="margin-top:14px;font-size:11px;color:var(--text3)"></div>`;
+
+  let data;
+  try {
+    const r = await fetch("/api/candidates/latest");
+    if (!r.ok) throw new Error("HTTP "+r.status);
+    data = await r.json();
+  } catch (e) {
+    document.getElementById("cand-table-wrap").innerHTML =
+      `<div class="empty">Failed to load candidates: ${e.message}</div>`;
+    return;
+  }
+
+  const cands = data.candidates || [];
+  const stats = data.stats || null;
+  const cfg   = data.config || {};
+
+  // --- Stats summary cards ---
+  const statsHtml = (()=>{
+    if (!stats || !stats.total) {
+      return `<div class="empty">No scan data yet. Run a scan, or wait for the next auto-scan during market hours.</div>`;
+    }
+    const topReasons = Object.entries(stats.rejectReasons || {})
+      .sort((a,b)=>b[1]-a[1]).slice(0,3)
+      .map(([k,v])=>`${k}×${v}`).join(", ") || "-";
+    return `<div class="stat-grid">
+      ${sc("Scanned", stats.total, "var(--text)", "BUY candidates in last pass")}
+      ${sc("Approved", stats.approved, "var(--green)", "Passed filter")}
+      ${sc("Rejected (Structure)", stats.rejectedByStructure, stats.rejectedByStructure>0?"var(--amber)":"var(--text2)")}
+      ${sc("Rejected (LLM)", stats.rejectedByLLM, stats.rejectedByLLM>0?"var(--amber)":"var(--text2)", cfg.llmFilterEnabled?"LLM enabled":"LLM disabled")}
+      ${sc("LLM Calls", stats.llmCalls||0, "var(--blue)", `A:${stats.llmApprove||0} C:${stats.llmCaution||0} R:${stats.llmReject||0}`)}
+      ${sc("Top Reject Reasons", topReasons, "var(--text2)")}
+    </div>`;
+  })();
+  document.getElementById("cand-stats").innerHTML = statsHtml;
+
+  // --- Candidates table ---
+  const tableHtml = (()=>{
+    if (!cands.length) {
+      return `<div class="empty">No BUY candidates in the last scan.</div>`;
+    }
+    const rows = cands.map(c=>{
+      const s      = c.structure || {};
+      const flags  = s.flags || {};
+      const R      = s.nearestResistance;
+      const Sup    = s.nearestSupport;
+      const vwap   = s.vwap;
+      const llm    = c.llmDecision;
+      const orig   = (+c.originalScore||0).toFixed(2);
+      const adj    = (+c.adjustedScore||0).toFixed(2);
+      const delta  = (+c.adjustedScore - +c.originalScore);
+      const deltaCol = delta > 0 ? "var(--green)" : delta < 0 ? "var(--red)" : "var(--text2)";
+      const deltaStr = (delta>=0?"+":"") + delta.toFixed(2);
+
+      const rStr = R
+        ? `<div style="font-size:11px">${INR(R.zoneLow)}–${INR(R.zoneHigh)}</div>
+           <div style="font-size:10px;color:var(--text3)">${R.strengthLabel} · ${R.touches}t · ${R.distancePct}%</div>`
+        : `<span style="color:var(--text3)">—</span>`;
+      const sStr = Sup
+        ? `<div style="font-size:11px">${INR(Sup.zoneLow)}–${INR(Sup.zoneHigh)}</div>
+           <div style="font-size:10px;color:var(--text3)">${Sup.strengthLabel} · ${Sup.touches}t · ${Sup.distancePct}%</div>`
+        : `<span style="color:var(--text3)">—</span>`;
+
+      const vwapStr = vwap
+        ? `<span style="color:${flags.priceAboveVWAP?"var(--green)":"var(--red)"}">${flags.priceAboveVWAP?"▲":"▼"} ${INR(vwap.current)}</span>
+           <div style="font-size:10px;color:var(--text3)">${(flags.distanceFromVWAPPct>=0?"+":"")}${flags.distanceFromVWAPPct}% · ${vwap.bias}</div>`
+        : `<span style="color:var(--text3)">—</span>`;
+
+      const flagBits = [];
+      if (flags.nearResistance)          flagBits.push(`<span style="color:var(--red)">nearR</span>`);
+      if (flags.breakoutAboveResistance) flagBits.push(`<span style="color:var(--green)">breakout</span>`);
+      if (flags.breakoutIntoResistance)  flagBits.push(`<span style="color:var(--red)">intoR</span>`);
+      if (flags.trappedBetweenZones)     flagBits.push(`<span style="color:var(--amber)">trapped</span>`);
+      if (flags.stackedResistance)       flagBits.push(`<span style="color:var(--amber)">stackedR</span>`);
+      if (flags.nearSupport)             flagBits.push(`<span style="color:var(--green)">nearS</span>`);
+      if (flags.abovePDH)                flagBits.push(`<span style="color:var(--green)">&gt;PDH</span>`);
+      if (flags.nearPDH)                 flagBits.push(`<span style="color:var(--text2)">~PDH</span>`);
+      if (flags.nearPDL)                 flagBits.push(`<span style="color:var(--text2)">~PDL</span>`);
+      const flagsStr = flagBits.length ? flagBits.join(" · ") : `<span style="color:var(--text3)">—</span>`;
+
+      const llmStr = llm
+        ? `<div style="font-size:11px">${llm.decision||"-"}</div>
+           <div style="font-size:10px;color:var(--text3)">conf ${llm.confidence!=null?llm.confidence:"-"}</div>
+           ${llm.reason?`<div style="font-size:10px;color:var(--text3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(llm.reason||'').replace(/"/g,'&quot;')}">${llm.reason}</div>`:""}`
+        : `<span style="color:var(--text3)">—</span>`;
+
+      const finalCol = c.finalDecision === "APPROVED" ? "g" :
+                       c.finalDecision === "REJECTED" ? "r" : "a";
+      const finalStr = pill(c.finalDecision||"-", finalCol);
+
+      const rejectStr = c.rejectReason
+        ? `<span style="font-size:10px;color:var(--red)">${c.rejectReason}</span>`
+        : `<span style="color:var(--text3)">—</span>`;
+
+      return `<tr>
+        <td style="font-weight:600">${c.symbol}<div style="font-size:10px;color:var(--text3);font-weight:400">${c.name||""}</div></td>
+        <td style="font-size:11px">${c.strategy||"-"}</td>
+        <td>${c.regime?pill(c.regime,"b"):"-"}</td>
+        <td style="text-align:right;font-family:monospace">${orig}</td>
+        <td style="text-align:right;font-family:monospace;font-weight:600">${adj}</td>
+        <td style="text-align:right;font-family:monospace;color:${deltaCol}">${deltaStr}</td>
+        <td>${rStr}</td>
+        <td>${sStr}</td>
+        <td>${vwapStr}</td>
+        <td style="font-size:10px;line-height:1.5">${flagsStr}</td>
+        <td>${llmStr}</td>
+        <td>${finalStr}</td>
+        <td>${rejectStr}</td>
+      </tr>`;
+    }).join("");
+
+    return `<div class="tw"><table>
+      <thead><tr>
+        <th>Symbol</th><th>Strategy</th><th>Regime</th>
+        <th style="text-align:right">Orig</th><th style="text-align:right">Adj</th><th style="text-align:right">Δ</th>
+        <th>Nearest R</th><th>Nearest S</th><th>VWAP</th>
+        <th>Flags</th><th>LLM</th><th>Final</th><th>Reject</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  })();
+  document.getElementById("cand-table-wrap").innerHTML = tableHtml;
+
+  // --- Config footer ---
+  const scanned = data.scannedAt ? new Date(data.scannedAt).toLocaleString() : "never";
+  document.getElementById("cand-config").innerHTML =
+    `Last scan: ${scanned} · Structure filter: ${cfg.structureFilterEnabled?"ON":"OFF"} · LLM filter: ${cfg.llmFilterEnabled?"ON":"OFF"} · Reject if R within ${cfg.rejectIfResistanceWithinPct||"?"}% · LLM top ${cfg.llmTopCandidatesPerScan||"?"} · LLM min score ${cfg.llmMinScoreThreshold||"?"}`;
+}
+
+async function scanNow(){
+  try {
+    const r = await fetch("/scan-now", {method:"POST"});
+    if (!r.ok) throw new Error("HTTP "+r.status);
+    // Backend scan is async; poll candidates a few seconds later
+    const btns = document.querySelectorAll('button');
+    setTimeout(()=>{ if (S.stocksTab==="candidates") renderStocksCandidates(); }, 4000);
+  } catch(e){ alert("Scan failed: "+e.message); }
 }
 
 function renderStocksMarket(){
@@ -1472,14 +1627,15 @@ function render(){
   renderTopBar();
   const tab = S.mode==="stocks" ? S.stocksTab : S.cryptoTab;
   if(S.mode==="stocks"){
-    if(tab==="overview")  renderStocksOverview();
-    if(tab==="positions") renderStocksPositions();
-    if(tab==="trades")    renderStocksTrades();
-    if(tab==="market")    renderStocksMarket();
-    if(tab==="portfolio") renderPortfolio();
-    if(tab==="scanlog")   renderScanLog();
-    if(tab==="chart")     renderStocksChartPage();
-    if(tab==="news")      renderStocksNewsPage();
+    if(tab==="overview")   renderStocksOverview();
+    if(tab==="positions")  renderStocksPositions();
+    if(tab==="trades")     renderStocksTrades();
+    if(tab==="candidates") renderStocksCandidates();
+    if(tab==="market")     renderStocksMarket();
+    if(tab==="portfolio")  renderPortfolio();
+    if(tab==="scanlog")    renderScanLog();
+    if(tab==="chart")      renderStocksChartPage();
+    if(tab==="news")       renderStocksNewsPage();
   } else {
     if(tab==="overview")  renderCryptoOverview();
     if(tab==="positions") renderCryptoPositions();
