@@ -85,6 +85,11 @@ async function initDB() {
         status        VARCHAR(10)   DEFAULT 'OPEN'
       )
     `);
+    // Part 6: structured JSON columns for Structure Filter + LLM analytics
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS structure_json JSONB`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS llm_json       JSONB`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS decision_json  JSONB`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS confidence     DECIMAL(4,2)`).catch(()=>{});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_trades (
         id            SERIAL PRIMARY KEY,
@@ -1894,11 +1899,37 @@ const STRUCTURE_CONFIG = {
   llmMinScoreThreshold:        3.0,
   llmDecisionCacheMinutes:     10,
   applyLLMSizeMultiplier:      false,   // v1: log only, don't apply
+
+  // ── Part 8: additional flags for Phase 2 enhancements ──
+  chartZonesEnabled:           true,    // render S/R bands on chart
+  chartVWAPEnabled:            true,    // render VWAP line on chart
+  chartPDLevelsEnabled:        true,    // render PDH/PDL/PDC lines on chart
+  llmNewsEnabled:              (process.env.LLM_NEWS_ENABLED || 'false') === 'true',
+  llmNewsHeadlineCount:        4,       // headlines sent per candidate
+  analyticsEnabled:            true,
+  correlationFilterEnabled:    false,   // real rolling-correlation (stub for future)
+  slippageSimulationEnabled:   false,   // adjust paper P&L realistically (stub)
+  slippageBps:                 5,       // 5 basis points per side
+  brokerageBps:                3,       // 3 bps per side (flat model)
 };
 
 // In-memory latest scan analyses for /api/candidates/latest endpoint
 let _latestCandidateAnalyses = [];
 let _latestFilterStats = null;
+
+// In-memory Pass 2 debug snapshot — top ranked candidates + skip reasons
+// Exposed via /api/scan/pass2-debug for UI visibility (Part 5)
+let _latestPass2Debug = {
+  scannedAt:    null,
+  ranked:       [],   // [{symbol, rank, score, adjScore, strategy, regime, status: ENTERED|SKIPPED, skipReason}]
+  entered:      0,
+  skippedSlots: 0,
+  skippedCorr:  0,
+  skippedDup:   0,
+  skippedFilter: 0,
+  rejectedStructure: 0,
+  rejectedLLM:  0,
+};
 
 // ── A. Pivot detection (fractal highs/lows) ──
 function detectPivotLevels(candles, left = STRUCTURE_CONFIG.pivotLookbackLeft, right = STRUCTURE_CONFIG.pivotLookbackRight) {
@@ -2222,6 +2253,34 @@ function shortlistCandidatesForLLM(candidates) {
 
 // ── I. LLM reviewer (OpenAI-compatible chat completions) ──
 const _llmDecisionCache = new Map();
+// Small in-module helper — fetch a few recent headlines from the existing
+// RSS-based /api/news pipeline. Used only when llmNewsEnabled=true. Never
+// throws — returns [] on any failure.
+const _newsCache = new Map(); // sym -> { expires, items }
+async function fetchHeadlinesForSymbol(sym, limit) {
+  const now = Date.now();
+  const cached = _newsCache.get(sym);
+  if (cached && cached.expires > now) return cached.items.slice(0, limit);
+  try {
+    const port = process.env.PORT || 3001;
+    const base = process.env.INTERNAL_BASE_URL || `http://127.0.0.1:${port}`;
+    const r = await fetch(`${base}/api/news?sym=${encodeURIComponent(sym)}`).catch(() => null);
+    if (!r || !r.ok) return [];
+    const items = await r.json().catch(() => []);
+    const slim = (Array.isArray(items) ? items : [])
+      .slice(0, 10)
+      .map(it => ({
+        headline:  (it.headline || '').slice(0, 140),
+        sentiment: it.sentiment || 'neutral',
+        timeAgo:   it.timeAgo   || '',
+      }));
+    _newsCache.set(sym, { expires: now + 10 * 60 * 1000, items: slim });
+    return slim.slice(0, limit);
+  } catch (e) {
+    return [];
+  }
+}
+
 async function reviewCandidateWithLLM(candidate, structure) {
   if (!STRUCTURE_CONFIG.llmFilterEnabled) {
     return { decision: 'APPROVE', confidence: 1, setupQuality: 'N/A', riskFlag: 'LOW', positionSizeMultiplier: 1, comment: 'LLM disabled', skipped: true };
@@ -2236,6 +2295,14 @@ async function reviewCandidateWithLLM(candidate, structure) {
   const url    = process.env.LLM_FILTER_URL     || 'https://api.openai.com/v1/chat/completions';
   if (!apiKey) {
     return { decision: 'APPROVE', confidence: 1, setupQuality: 'N/A', riskFlag: 'LOW', positionSizeMultiplier: 1, comment: 'no LLM key', skipped: true };
+  }
+
+  // Optionally attach recent headlines for headline-risk awareness
+  let newsItems = [];
+  if (STRUCTURE_CONFIG.llmNewsEnabled) {
+    try {
+      newsItems = await fetchHeadlinesForSymbol(sym, STRUCTURE_CONFIG.llmNewsHeadlineCount || 4);
+    } catch(e) { newsItems = []; }
   }
 
   const compactInput = {
@@ -2258,9 +2325,14 @@ async function reviewCandidateWithLLM(candidate, structure) {
       abovePDH:                structure.flags.abovePDH,
       stackedResistance:       structure.flags.stackedResistance,
     },
+    news:  STRUCTURE_CONFIG.llmNewsEnabled ? newsItems.map(n => n.headline) : undefined,
   };
 
-  const systemPrompt = 'You are a trading setup reviewer. A rules-based engine has already found a candidate. You do not invent trades. You only review quality and reject weak or extended setups. Return valid JSON only with keys: decision (APPROVE|REJECT|CAUTION), confidence (0..1), setupQuality (STRONG|MEDIUM|WEAK), riskFlag (LOW|MEDIUM|HIGH), positionSizeMultiplier (0.5..1.0), comment (short). Prefer rejecting weak trades over forcing approval.';
+  const baseSystemPrompt = 'You are a trading setup reviewer. A rules-based engine has already found a candidate. You do not invent trades. You only review quality and reject weak or extended setups. Return valid JSON only with keys: decision (APPROVE|REJECT|CAUTION), confidence (0..1), setupQuality (STRONG|MEDIUM|WEAK), riskFlag (LOW|MEDIUM|HIGH), positionSizeMultiplier (0.5..1.0), comment (short). Prefer rejecting weak trades over forcing approval.';
+  const newsSystemAddition = ' You are also given up to 5 recent news headlines for the stock. Also return newsRisk (LOW|MEDIUM|HIGH): HIGH if headlines contradict the technical setup or indicate material risk (regulatory, fraud, earnings miss, downgrade, lawsuit, governance issue), MEDIUM if mixed or uncertain, LOW otherwise. If newsRisk is HIGH, set decision=REJECT.';
+  const systemPrompt = STRUCTURE_CONFIG.llmNewsEnabled
+    ? baseSystemPrompt + newsSystemAddition
+    : baseSystemPrompt;
 
   try {
     const controller = new AbortController();
@@ -2292,10 +2364,14 @@ async function reviewCandidateWithLLM(candidate, structure) {
       confidence:             typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5,
       setupQuality:           ['STRONG','MEDIUM','WEAK'].includes(parsed.setupQuality) ? parsed.setupQuality : 'MEDIUM',
       riskFlag:               ['LOW','MEDIUM','HIGH'].includes(parsed.riskFlag) ? parsed.riskFlag : 'MEDIUM',
+      newsRisk:               STRUCTURE_CONFIG.llmNewsEnabled && ['LOW','MEDIUM','HIGH'].includes(parsed.newsRisk)
+                                ? parsed.newsRisk
+                                : null,
       positionSizeMultiplier: typeof parsed.positionSizeMultiplier === 'number'
         ? Math.min(1, Math.max(0.5, parsed.positionSizeMultiplier))
         : 1,
       comment:                (parsed.comment || '').toString().slice(0, 200),
+      newsCount:              STRUCTURE_CONFIG.llmNewsEnabled ? newsItems.length : 0,
     };
     _llmDecisionCache.set(sym, {
       decision,
@@ -2309,24 +2385,123 @@ async function reviewCandidateWithLLM(candidate, structure) {
 }
 
 // ── J. Final decision assembly (structure + LLM → final) ──
+//
+// Produces a unified decision object on the candidate in this shape:
+//   {
+//     symbol, originalScore, adjustedScore,
+//     structureDecision: 'APPROVE'|'REJECT',
+//     llmDecision:       'APPROVE'|'REJECT'|'CAUTION'|null,
+//     finalDecision:     'APPROVED'|'REJECTED',
+//     rejectReason:      string|null,
+//     confidence:        0..1
+//   }
+//
+// Rule: hard risk rules (structure reject, near strong resistance, trapped)
+// always win — the LLM can only reject or downgrade, never promote a
+// rules-rejected candidate into approved.
 function applyFinalCandidateDecision(candidate) {
+  const origScore = +(+candidate.result.score).toFixed(2);
+  const adjScore  = +(+(candidate.adjustedScore ?? candidate.result.score)).toFixed(2);
+  const struct    = candidate.structure || null;
+  const llm       = candidate.llmDecision || null;
+
+  // Structure decision always primary
+  const structureDecision = candidate.rejected ? 'REJECT' : 'APPROVE';
+
+  // Confidence blend: start from normalized score, boost/cut from structure +
+  // LLM signals. Stays in [0,1].
+  const baseConf = Math.min(1, Math.max(0, (adjScore - 1.5) / 4.0));
+  let confidence = baseConf;
+  if (struct) {
+    if (struct.flags?.breakoutAboveResistance)       confidence += 0.10;
+    if (struct.flags?.nearSupport)                   confidence += 0.05;
+    if (struct.flags?.abovePDH)                      confidence += 0.05;
+    if (struct.flags?.priceAboveVWAP)                confidence += 0.03;
+    if (struct.flags?.trappedBetweenZones)           confidence -= 0.15;
+    if (struct.flags?.stackedResistance)             confidence -= 0.10;
+    if (struct.flags?.nearResistance)                confidence -= 0.05;
+  }
+  if (llm && !llm.skipped) {
+    if      (llm.decision === 'APPROVE') confidence += 0.15 * (llm.confidence ?? 0.5);
+    else if (llm.decision === 'CAUTION') confidence -= 0.10;
+    else if (llm.decision === 'REJECT')  confidence -= 0.30;
+  }
+  if (llm?.newsRisk === 'HIGH')   confidence -= 0.15;
+  if (llm?.newsRisk === 'MEDIUM') confidence -= 0.05;
+  confidence = +Math.min(1, Math.max(0, confidence)).toFixed(2);
+
+  // 1) Structure reject — hard rule, LLM can never override
   if (candidate.rejected) {
     candidate.finalDecision = 'REJECTED';
-    candidate.finalReason   = candidate.rejectReason;
+    candidate.finalReason   = candidate.rejectReason || 'structure filter';
+    candidate.decisionObject = {
+      symbol:            candidate.stock.sym,
+      originalScore:     origScore,
+      adjustedScore:     adjScore,
+      structureDecision: 'REJECT',
+      llmDecision:       llm?.decision || null,
+      finalDecision:     'REJECTED',
+      rejectReason:      candidate.rejectReason || 'structure filter',
+      confidence,
+    };
     return candidate;
   }
-  if (candidate.llmDecision && candidate.llmDecision.decision === 'REJECT') {
+
+  // 2) LLM REJECT — allowed (can only reject, never promote)
+  if (llm && llm.decision === 'REJECT') {
     candidate.finalDecision = 'REJECTED';
-    candidate.finalReason   = `LLM: ${candidate.llmDecision.comment || 'rejected'}`;
+    candidate.finalReason   = `LLM: ${llm.comment || 'rejected'}`;
     candidate.rejected      = true;
+    candidate.rejectReason  = candidate.rejectReason || `LLM_${(llm.comment || 'reject').slice(0, 30)}`;
+    candidate.decisionObject = {
+      symbol:            candidate.stock.sym,
+      originalScore:     origScore,
+      adjustedScore:     adjScore,
+      structureDecision: 'APPROVE',
+      llmDecision:       'REJECT',
+      finalDecision:     'REJECTED',
+      rejectReason:      candidate.rejectReason,
+      confidence,
+    };
     return candidate;
   }
-  // CAUTION: mild score reduction but still allowed
-  if (candidate.llmDecision && candidate.llmDecision.decision === 'CAUTION') {
-    candidate.adjustedScore = (candidate.adjustedScore ?? candidate.result.score) - 0.3;
+
+  // 3) News risk HIGH — reject if configured (Part 2)
+  if (STRUCTURE_CONFIG.llmNewsEnabled && llm?.newsRisk === 'HIGH') {
+    candidate.finalDecision = 'REJECTED';
+    candidate.finalReason   = `NEWS_HIGH_RISK`;
+    candidate.rejected      = true;
+    candidate.rejectReason  = 'NEWS_HIGH_RISK';
+    candidate.decisionObject = {
+      symbol:            candidate.stock.sym,
+      originalScore:     origScore,
+      adjustedScore:     adjScore,
+      structureDecision: 'APPROVE',
+      llmDecision:       llm.decision,
+      finalDecision:     'REJECTED',
+      rejectReason:      'NEWS_HIGH_RISK',
+      confidence,
+    };
+    return candidate;
   }
+
+  // 4) LLM CAUTION — mild score reduction but still allowed
+  if (llm && llm.decision === 'CAUTION') {
+    candidate.adjustedScore = +((candidate.adjustedScore ?? candidate.result.score) - 0.3).toFixed(2);
+  }
+
   candidate.finalDecision = 'APPROVED';
   candidate.finalReason   = null;
+  candidate.decisionObject = {
+    symbol:            candidate.stock.sym,
+    originalScore:     origScore,
+    adjustedScore:     +(+candidate.adjustedScore || adjScore).toFixed(2),
+    structureDecision: 'APPROVE',
+    llmDecision:       llm?.decision || null,
+    finalDecision:     'APPROVED',
+    rejectReason:      null,
+    confidence,
+  };
   return candidate;
 }
 
@@ -2552,6 +2727,8 @@ async function scanAndTrade() {
       llmDecision:     c.llmDecision || null,
       finalDecision:   c.finalDecision || (c.rejected ? 'REJECTED' : 'APPROVED'),
       rejectReason:    c.rejectReason || null,
+      confidence:      c.decisionObject?.confidence ?? null,
+      decisionObject:  c.decisionObject || null,
       entryPrice:      c.last.close,
       scannedAt:       new Date().toISOString(),
     }));
@@ -2578,10 +2755,39 @@ async function scanAndTrade() {
   // ╚══════════════════════════════════════════════════════════════════════╝
   buyCandidates.sort((a, b) => (b.adjustedScore ?? b.result.score) - (a.adjustedScore ?? a.result.score));
 
+  // Reset Pass 2 debug for this scan
+  _latestPass2Debug = {
+    scannedAt:         new Date().toISOString(),
+    ranked:            [],
+    entered:           0,
+    skippedSlots:      0,
+    skippedCorr:       0,
+    skippedDup:        0,
+    skippedFilter:     0,
+    rejectedStructure: filterStats.rejectedByStructure || 0,
+    rejectedLLM:       filterStats.rejectedByLLM || 0,
+  };
+
   if (buyCandidates.length > 0) {
     const live = buyCandidates.filter(c => !c.rejected);
     console.log(`  📊 Ranked ${live.length} live BUY candidates: ${live.slice(0,10).map(c=>`${c.stock.sym}(${(c.adjustedScore ?? c.result.score).toFixed(1)})`).join(' > ')}`);
   }
+
+  // Helper to record Pass 2 outcome per candidate
+  const recordPass2 = (candidate, status, skipReason = null) => {
+    const idx = _latestPass2Debug.ranked.length;
+    _latestPass2Debug.ranked.push({
+      rank:       idx + 1,
+      symbol:     candidate.stock.sym,
+      strategy:   candidate.result.strategy,
+      regime:     candidate.result.regime,
+      score:      +candidate.result.score.toFixed(2),
+      adjScore:   +(+(candidate.adjustedScore ?? candidate.result.score)).toFixed(2),
+      confidence: candidate.decisionObject?.confidence ?? null,
+      status,      // ENTERED | SKIPPED
+      skipReason,  // 'structure'|'slots'|'correlation'|'dedup'|'llm'|null
+    });
+  };
 
   for (const candidate of buyCandidates) {
     const { stock, result, candles, last } = candidate;
@@ -2589,6 +2795,8 @@ async function scanAndTrade() {
     // Skip candidates rejected by structure filter or LLM
     if (candidate.rejected) {
       console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — ${candidate.rejectReason || 'structure filter'}`);
+      _latestPass2Debug.skippedFilter += 1;
+      recordPass2(candidate, 'SKIPPED', candidate.rejectReason || 'structure filter');
       continue;
     }
 
@@ -2596,13 +2804,24 @@ async function scanAndTrade() {
     const currentOpen = openTrades.filter(t=>t.status==="OPEN").length;
     if (currentOpen >= CONFIG.MAX_POSITIONS) {
       console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — all ${CONFIG.MAX_POSITIONS} slots full`);
-      break; // sorted by score, so remaining are weaker — stop here
+      _latestPass2Debug.skippedSlots += 1;
+      recordPass2(candidate, 'SKIPPED', 'max_positions');
+      // Record the rest as slot-capped without the break, so the UI can see
+      // the whole ranked list with reasons:
+      for (const rest of buyCandidates.slice(buyCandidates.indexOf(candidate) + 1)) {
+        if (rest.rejected) continue;
+        recordPass2(rest, 'SKIPPED', 'max_positions');
+        _latestPass2Debug.skippedSlots += 1;
+      }
+      break;
     }
 
     // Correlation guard
     const tooCorrrelated = await isTooCorrelated(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
     if (tooCorrrelated) {
       console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — sector concentration limit`);
+      _latestPass2Debug.skippedCorr += 1;
+      recordPass2(candidate, 'SKIPPED', 'correlation');
       continue;
     }
 
@@ -2631,6 +2850,8 @@ async function scanAndTrade() {
     );
     if (recentDup.length > 0) {
       console.log(`  ⊘ SKIP ${stock.sym} — duplicate (already bought within 60s)`);
+      _latestPass2Debug.skippedDup += 1;
+      recordPass2(candidate, 'SKIPPED', 'dedup');
       continue;
     }
 
@@ -2654,12 +2875,39 @@ async function scanAndTrade() {
 
     const finalScore = candidate.adjustedScore ?? result.score;
 
+    // Build structured JSON payloads for analytics / future ML
+    const structureJson = candidate.structure ? {
+      nearestResistance: candidate.structure.nearestResistance || null,
+      nearestSupport:    candidate.structure.nearestSupport    || null,
+      vwap:              candidate.structure.vwap              || null,
+      pdLevels:          candidate.structure.pdLevels          || null,
+      volumeRatio:       candidate.structure.volumeRatio       || null,
+      flags:             candidate.structure.flags             || null,
+      adjustments:       candidate.adjustments                 || [],
+    } : null;
+    const llmJson = candidate.llmDecision && !candidate.llmDecision.skipped
+      ? {
+          decision:     candidate.llmDecision.decision,
+          confidence:   candidate.llmDecision.confidence,
+          setupQuality: candidate.llmDecision.setupQuality,
+          riskFlag:     candidate.llmDecision.riskFlag,
+          newsRisk:     candidate.llmDecision.newsRisk || null,
+          comment:      candidate.llmDecision.comment,
+        }
+      : null;
+    const decisionJson = candidate.decisionObject || null;
+    const confVal      = candidate.decisionObject?.confidence ?? null;
+
     // Paper trade
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status)
-       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN')`,
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence)
+       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15)`,
       [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
-       +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail]
+       +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
+       structureJson ? JSON.stringify(structureJson) : null,
+       llmJson       ? JSON.stringify(llmJson)       : null,
+       decisionJson  ? JSON.stringify(decisionJson)  : null,
+       confVal]
     );
 
     // Live order
@@ -2688,6 +2936,8 @@ async function scanAndTrade() {
       ? `Score:${result.score}→${candidate.adjustedScore.toFixed(2)}`
       : `Score:${result.score}`;
     console.log(`  ▲ BUY  ${stock.sym} @ ₹${price} | ${result.regime} | ${result.strategy} | ${scoreStr} | Rank:${buyCandidates.indexOf(candidate)+1}/${buyCandidates.length} | SL:${sl}(${posSize.slSource}) | TGT:${tgt} | Qty:${qty} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
+    _latestPass2Debug.entered += 1;
+    recordPass2(candidate, 'ENTERED', null);
     signalCount++;
   }
 
@@ -4724,11 +4974,250 @@ app.post("/api/structure/config", express.json(), (req, res) => {
     'llmTopCandidatesPerScan','llmMinScoreThreshold','llmDecisionCacheMinutes',
     'boostIfSupportBounce','boostIfBreakoutAboveResistance','reduceIfFarFromVWAP',
     'zoneMergeThresholdPct','maxZonesPerSide',
+    // Phase 2 flags
+    'chartZonesEnabled','chartVWAPEnabled','chartPDLevelsEnabled',
+    'llmNewsEnabled','llmNewsHeadlineCount',
+    'analyticsEnabled','correlationFilterEnabled',
+    'slippageSimulationEnabled','slippageBps','brokerageBps',
   ];
   for (const k of allowed) {
     if (k in (req.body || {})) STRUCTURE_CONFIG[k] = req.body[k];
   }
   res.json({ ok: true, config: STRUCTURE_CONFIG });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 5: Pass 2 debug snapshot — top ranked candidates + skip reasons
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/scan/pass2-debug", (req, res) => {
+  res.json({
+    ..._latestPass2Debug,
+    topEntered: (_latestPass2Debug.ranked || []).filter(r => r.status === 'ENTERED').slice(0, 20),
+    topSkipped: (_latestPass2Debug.ranked || []).filter(r => r.status === 'SKIPPED').slice(0, 40),
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 4: Analytics — strategy / regime / exit / time / trade-quality / filter
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/analytics", async (req, res) => {
+  if (!STRUCTURE_CONFIG.analyticsEnabled) {
+    return res.json({ enabled: false });
+  }
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+
+    // Closed trades in window — used by most calcs
+    const { rows: closed } = await pool.query(
+      `SELECT strategy, regime, exit_reason, pnl, pnl_pct, entry_time, exit_time, capital
+         FROM paper_trades
+        WHERE status = 'CLOSED' AND exit_time > NOW() - ($1::int * INTERVAL '1 day')`,
+      [days]
+    );
+
+    const safeNum  = v => (v == null ? 0 : +v);
+    const safePct  = (a, b) => (b > 0 ? +((a / b) * 100).toFixed(1) : 0);
+    const groupBy  = (arr, key) => {
+      const m = new Map();
+      for (const t of arr) {
+        const k = t[key] || 'UNKNOWN';
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(t);
+      }
+      return m;
+    };
+    const summarize = (key, trades) => {
+      if (!trades.length) {
+        return { key, trades:0, wins:0, losses:0, winRate:0, netPnL:0,
+                 avgWin:0, avgLoss:0, profitFactor:0, expectancy:0 };
+      }
+      const pnls   = trades.map(t => safeNum(t.pnl));
+      const wins   = pnls.filter(p => p > 0);
+      const losses = pnls.filter(p => p <= 0);
+      const grossWin  = wins.reduce((s,p)=>s+p, 0);
+      const grossLoss = Math.abs(losses.reduce((s,p)=>s+p, 0));
+      const avgWin    = wins.length   ? grossWin  / wins.length  : 0;
+      const avgLoss   = losses.length ? grossLoss / losses.length: 0;
+      const winProb   = wins.length / trades.length;
+      return {
+        key,
+        trades:       trades.length,
+        wins:         wins.length,
+        losses:       losses.length,
+        winRate:      safePct(wins.length, trades.length),
+        netPnL:       +pnls.reduce((s,p)=>s+p, 0).toFixed(2),
+        avgWin:       +avgWin.toFixed(2),
+        avgLoss:      +avgLoss.toFixed(2),
+        profitFactor: grossLoss > 0 ? +(grossWin / grossLoss).toFixed(2) : 0,
+        expectancy:   +(winProb * avgWin - (1 - winProb) * avgLoss).toFixed(2),
+      };
+    };
+
+    // A. Strategy analytics
+    const byStrategy = [];
+    for (const [k, v] of groupBy(closed, 'strategy')) byStrategy.push(summarize(k, v));
+    byStrategy.sort((a, b) => b.netPnL - a.netPnL);
+
+    // B. Regime analytics
+    const byRegime = [];
+    for (const [k, v] of groupBy(closed, 'regime')) byRegime.push(summarize(k, v));
+    byRegime.sort((a, b) => b.netPnL - a.netPnL);
+
+    // C. Exit analysis
+    const byExit = [];
+    for (const [k, v] of groupBy(closed, 'exit_reason')) byExit.push(summarize(k, v));
+    byExit.sort((a, b) => b.trades - a.trades);
+
+    // D. Time-of-day analysis (by entry hour, IST)
+    //    Buckets: first hour (9–10), mid (10–14), closing (14–16)
+    const bucketFor = t => {
+      const d = new Date(t.entry_time);
+      const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+      const h = ist.getUTCHours();
+      if (h >= 9 && h < 10)  return 'first_hour';
+      if (h >= 10 && h < 14) return 'mid';
+      if (h >= 14 && h < 16) return 'closing';
+      return 'other';
+    };
+    const timeBuckets = { first_hour:[], mid:[], closing:[], other:[] };
+    for (const t of closed) timeBuckets[bucketFor(t)].push(t);
+    const byTimeBucket = Object.keys(timeBuckets)
+      .map(k => summarize(k, timeBuckets[k]))
+      .filter(r => r.trades > 0);
+
+    // E. Trade quality metrics — expectancy, profit factor, avg holding
+    const pnls    = closed.map(t => safeNum(t.pnl));
+    const winsArr = pnls.filter(p => p > 0);
+    const lossArr = pnls.filter(p => p <= 0);
+    const grossWin  = winsArr.reduce((s, p) => s + p, 0);
+    const grossLoss = Math.abs(lossArr.reduce((s, p) => s + p, 0));
+    const profitFactor = grossLoss > 0 ? +(grossWin / grossLoss).toFixed(2) : null;
+    const avgWin  = winsArr.length ? grossWin / winsArr.length : 0;
+    const avgLoss = lossArr.length ? grossLoss / lossArr.length : 0;
+    const winProb = closed.length ? winsArr.length / closed.length : 0;
+    const expectancy = +(winProb * avgWin - (1 - winProb) * avgLoss).toFixed(2);
+
+    // Avg holding time in minutes
+    const holdMins = closed
+      .filter(t => t.entry_time && t.exit_time)
+      .map(t => (new Date(t.exit_time) - new Date(t.entry_time)) / 60000);
+    const avgHoldMin = holdMins.length
+      ? +(holdMins.reduce((s, m) => s + m, 0) / holdMins.length).toFixed(1)
+      : 0;
+
+    // F. Filter insights — from live _latestFilterStats + _latestPass2Debug
+    const ls = _latestFilterStats || {};
+    const filterInsights = {
+      total:               ls.total               || 0,
+      approved:            ls.approved            || 0,
+      rejectedByStructure: ls.rejectedByStructure || 0,
+      rejectedByLLM:       ls.rejectedByLLM       || 0,
+      topRejectReasons:    ls.rejectReasons       || {},
+      pass2Entered:        _latestPass2Debug.entered,
+      pass2SkippedSlots:   _latestPass2Debug.skippedSlots,
+      pass2SkippedCorr:    _latestPass2Debug.skippedCorr,
+      pass2SkippedDup:     _latestPass2Debug.skippedDup,
+      pass2SkippedFilter:  _latestPass2Debug.skippedFilter,
+      pass2RejectedStruct: _latestPass2Debug.rejectedStructure,
+      pass2RejectedLLM:    _latestPass2Debug.rejectedLLM,
+    };
+
+    res.json({
+      enabled:      true,
+      generatedAt:  new Date().toISOString(),
+      window:       { days, closedTrades: closed.length },
+      totalClosed:  closed.length,
+      byStrategy,
+      byRegime,
+      byExit,
+      byTimeBucket,
+      quality: {
+        totalTrades:  closed.length,
+        wins:         winsArr.length,
+        losses:       lossArr.length,
+        winRate:      safePct(winsArr.length, closed.length),
+        avgWin:       +avgWin.toFixed(2),
+        avgLoss:      +avgLoss.toFixed(2),
+        profitFactor,
+        expectancy,
+        avgHoldMin,
+        grossWin:     +grossWin.toFixed(2),
+        grossLoss:    +grossLoss.toFixed(2),
+        netPnL:       +(grossWin - grossLoss).toFixed(2),
+      },
+      filterInsights,
+    });
+  } catch (e) {
+    console.error("analytics error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part 1: Chart structure overlay — zones + VWAP + PDH/PDL/PDC for a symbol
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/chart/structure/:symbol", async (req, res) => {
+  try {
+    const sym = (req.params.symbol || '').toUpperCase();
+    const interval = (req.query.interval || '5minute');
+    const token = validTokens[sym] || INSTRUMENTS[sym];
+    if (!token) return res.status(404).json({ error: `no token for ${sym}` });
+
+    const today   = new Date().toISOString().split("T")[0];
+    const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString().split("T")[0];
+    const candles = await kite.getHistoricalData(token, interval, weekAgo, today).catch(() => []);
+    if (!candles || candles.length < 20) {
+      return res.json({ symbol: sym, zones: { resistance: [], support: [] }, vwap: null, pdLevels: null });
+    }
+
+    // Normalize candles to expected shape
+    const normalized = candles.map(c => ({
+      date:   c.date,
+      open:   +c.open,
+      high:   +c.high,
+      low:    +c.low,
+      close:  +c.close,
+      volume: +c.volume,
+    }));
+
+    const entryPrice = normalized[normalized.length - 1].close;
+
+    // ATR for optional ATR-based zone width
+    const highs14 = normalized.slice(-14).map(c => c.high);
+    const lows14  = normalized.slice(-14).map(c => c.low);
+    const atrValue = highs14.length
+      ? highs14.map((h, i) => h - lows14[i]).reduce((a, b) => a + b, 0) / 14
+      : 0;
+
+    const struct = analyzeCandidateStructure(sym, normalized, entryPrice, atrValue);
+    if (!struct) {
+      return res.json({ symbol: sym, zones: { resistance: [], support: [] }, vwap: null, pdLevels: null });
+    }
+
+    res.json({
+      symbol:   sym,
+      interval,
+      entryPrice,
+      zones: {
+        resistance: struct.allResistanceZones || [],
+        support:    struct.allSupportZones    || [],
+        nearestResistance: struct.nearestResistance,
+        nearestSupport:    struct.nearestSupport,
+      },
+      vwap:     struct.vwap,
+      pdLevels: struct.pdLevels,
+      flags:    struct.flags,
+      volumeRatio: struct.volumeRatio,
+      config: {
+        chartZonesEnabled:    STRUCTURE_CONFIG.chartZonesEnabled,
+        chartVWAPEnabled:     STRUCTURE_CONFIG.chartVWAPEnabled,
+        chartPDLevelsEnabled: STRUCTURE_CONFIG.chartPDLevelsEnabled,
+      },
+    });
+  } catch (e) {
+    console.error("chart structure error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // -- Stock Scoring Engine - Kite Daily Candles --------------------------------

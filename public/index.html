@@ -372,6 +372,11 @@ const S = {
   newsNseSym:"RELIANCE", newsCryptoSym:"BTCUSDT",
   equityChart:null, pnlChart:null,
   mfData:null, mfLoading:false, mfTotal:null,
+  // Chart structure overlay (Part 1)
+  chartStructure:null,
+  chartOverlayToggles:{zones:true, vwap:true, pdLevels:true, llmNotes:true},
+  // Analytics window (Part 4)
+  analyticsDays:30,
 };
 
 // =======================================================
@@ -487,6 +492,7 @@ const STOCKS_TABS = [
   {id:"positions",  label:"○ Positions"},
   {id:"trades",     label:"⇅ Trade History"},
   {id:"candidates", label:"◉ Candidates"},
+  {id:"analytics",  label:"◐ Analytics"},
   {id:"market",     label:"▦ Live Market"},
   {id:"chart",      label:"↗ Chart"},
   {id:"news",       label:"◈ News (RSS)"},
@@ -898,6 +904,7 @@ async function renderStocksCandidates(){
       <button class="btn btn-sm" onclick="scanNow()">▶ Scan now</button>
     </div>
     <div id="cand-stats" style="margin-bottom:14px"></div>
+    <div id="cand-pass2" style="margin-bottom:14px"></div>
     <div id="cand-table-wrap"></div>
     <div id="cand-config" style="margin-top:14px;font-size:11px;color:var(--text3)"></div>`;
 
@@ -1026,6 +1033,169 @@ async function renderStocksCandidates(){
   const scanned = data.scannedAt ? new Date(data.scannedAt).toLocaleString() : "never";
   document.getElementById("cand-config").innerHTML =
     `Last scan: ${scanned} · Structure filter: ${cfg.structureFilterEnabled?"ON":"OFF"} · LLM filter: ${cfg.llmFilterEnabled?"ON":"OFF"} · Reject if R within ${cfg.rejectIfResistanceWithinPct||"?"}% · LLM top ${cfg.llmTopCandidatesPerScan||"?"} · LLM min score ${cfg.llmMinScoreThreshold||"?"}`;
+
+  // --- Pass 2 debug (ranked candidates + skip reasons) ---
+  try {
+    const dbgR = await fetch("/api/scan/pass2-debug");
+    if (dbgR.ok) {
+      const dbg = await dbgR.json();
+      const entered   = dbg.topEntered   || [];
+      const skipped   = dbg.topSkipped   || [];
+      const tEl = document.getElementById("cand-pass2");
+      if (!tEl) return;
+      if (!entered.length && !skipped.length) {
+        tEl.innerHTML = `<div class="empty" style="margin:0">No Pass 2 data yet — run a scan.</div>`;
+        return;
+      }
+      const fmtRow = (c, isEntered) => {
+        const statCol = c.status === "ENTERED" ? "var(--green)"
+                      : c.status === "SKIPPED" ? "var(--amber)"
+                      : c.status === "REJECTED"? "var(--red)" : "var(--text2)";
+        const reason = c.skipReason || c.rejectReason || "—";
+        return `<tr>
+          <td style="text-align:right;color:var(--text3);font-family:monospace">${c.rank}</td>
+          <td style="font-weight:600">${c.symbol}</td>
+          <td style="font-size:11px">${c.strategy||"-"}</td>
+          <td>${c.regime?pill(c.regime,"b"):"-"}</td>
+          <td style="text-align:right;font-family:monospace">${c.score!=null?(+c.score).toFixed(2):"-"}</td>
+          <td style="text-align:right;font-family:monospace;font-weight:600">${c.adjScore!=null?(+c.adjScore).toFixed(2):"-"}</td>
+          <td style="text-align:right;font-family:monospace">${c.confidence!=null?(+c.confidence).toFixed(2):"-"}</td>
+          <td style="color:${statCol};font-size:11px;font-weight:600">${c.status||"-"}</td>
+          <td style="font-size:10px;color:var(--text3)">${reason}</td>
+        </tr>`;
+      };
+      const scannedStr = dbg.scannedAt ? new Date(dbg.scannedAt).toLocaleTimeString() : "-";
+      tEl.innerHTML = `
+        <div class="sec-title" style="display:flex;align-items:center;gap:8px;margin-top:0">
+          <span>Pass 2 · Ranked candidates</span>
+          <span style="font-size:11px;color:var(--text3);font-weight:400">entered ${dbg.entered||0} · skipSlots ${dbg.skippedSlots||0} · skipCorr ${dbg.skippedCorr||0} · skipDup ${dbg.skippedDup||0} · structRej ${dbg.rejectedStructure||0} · llmRej ${dbg.rejectedLLM||0} · @${scannedStr}</span>
+        </div>
+        <div class="tw"><table>
+          <thead><tr>
+            <th style="text-align:right">#</th><th>Symbol</th><th>Strategy</th><th>Regime</th>
+            <th style="text-align:right">Score</th><th style="text-align:right">Adj</th>
+            <th style="text-align:right">Conf</th><th>Status</th><th>Reason</th>
+          </tr></thead>
+          <tbody>${[...entered, ...skipped].map((c,i)=>fmtRow(c, i<entered.length)).join("")}</tbody>
+        </table></div>`;
+    }
+  } catch(e) { /* ignore pass2 debug failures */ }
+}
+
+// =======================================================
+// STOCKS · ANALYTICS (Part 4)
+// =======================================================
+async function renderStocksAnalytics(){
+  const days = S.analyticsDays || 30;
+  document.getElementById("main-content").innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <p style="font-size:13px;color:var(--text2);flex:1;margin:0">
+        Trade analytics from closed paper trades · strategy / regime / exit / time-of-day breakdowns, quality metrics, and Structure Filter insights.
+      </p>
+      <div style="display:flex;gap:4px">
+        ${[7,30,90,365].map(d=>`<button class="fpill${days===d?" active":""}" onclick="S.analyticsDays=${d};renderStocksAnalytics()">${d===365?"1y":d+"d"}</button>`).join("")}
+      </div>
+      <button class="btn btn-sm" onclick="renderStocksAnalytics()">↻ Refresh</button>
+    </div>
+    <div id="anl-summary" style="margin-bottom:14px"></div>
+    <div id="anl-panels"></div>
+    <div id="anl-footer" style="margin-top:14px;font-size:11px;color:var(--text3)"></div>`;
+
+  let a;
+  try {
+    const r = await fetch(`/api/analytics?days=${days}`);
+    if (!r.ok) throw new Error("HTTP "+r.status);
+    a = await r.json();
+  } catch (e) {
+    document.getElementById("anl-panels").innerHTML =
+      `<div class="empty">Failed to load analytics: ${e.message}</div>`;
+    return;
+  }
+
+  const q = a.quality || {};
+  const summaryHtml = (()=>{
+    if (!a.totalClosed) {
+      return `<div class="empty">No closed trades in the last ${days} days.</div>`;
+    }
+    const wrCol = q.winRate>=55?"var(--green)":q.winRate>=45?"var(--amber)":"var(--red)";
+    const pfCol = q.profitFactor>=1.5?"var(--green)":q.profitFactor>=1?"var(--amber)":"var(--red)";
+    const expCol= q.expectancy>0?"var(--green)":"var(--red)";
+    return `<div class="stat-grid">
+      ${sc("Closed trades", a.totalClosed, "var(--text)", `${days}d window`)}
+      ${sc("Win rate", `${(q.winRate||0).toFixed(1)}%`, wrCol, `${q.wins||0}W / ${q.losses||0}L`)}
+      ${sc("Profit factor", (q.profitFactor||0).toFixed(2), pfCol, "gross win / gross loss")}
+      ${sc("Expectancy", INR((q.expectancy||0).toFixed(0)), expCol, "per trade")}
+      ${sc("Avg win", `+${INR((q.avgWin||0).toFixed(0))}`,"var(--green)")}
+      ${sc("Avg loss", INR((q.avgLoss||0).toFixed(0)),"var(--red)")}
+      ${sc("Avg hold", `${q.avgHoldMin!=null?Math.round(q.avgHoldMin):"-"}m`,"var(--text2)")}
+      ${sc("Net P&L", `${(q.netPnL||0)>=0?"+":""}${INR((q.netPnL||0).toFixed(0))}`, clr(q.netPnL))}
+    </div>`;
+  })();
+  document.getElementById("anl-summary").innerHTML = summaryHtml;
+
+  // Helper: group-table renderer
+  const gtable = (title, rows, cols) => {
+    if (!rows || !rows.length) return `<div class="empty" style="margin-bottom:12px">${title}: no data</div>`;
+    return `
+      <div class="sec-title" style="margin-top:14px">${title}</div>
+      <div class="tw"><table>
+        <thead><tr>${cols.map(c=>`<th${c.r?' style="text-align:right"':""}>${c.h}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(row=>`<tr>${cols.map(c=>{
+          const v = c.f ? c.f(row[c.k], row) : row[c.k];
+          const style = c.r?'text-align:right;font-family:monospace':'';
+          const col = c.color ? `color:${c.color(row[c.k], row)}` : "";
+          return `<td style="${style};${col}">${v??"-"}</td>`;
+        }).join("")}</tr>`).join("")}</tbody>
+      </table></div>`;
+  };
+
+  const wrFmt = v => `${(v||0).toFixed(1)}%`;
+  const wrCol = v => v>=55?"var(--green)":v>=45?"var(--amber)":"var(--red)";
+  const pnlFmt= v => `${(v||0)>=0?"+":""}${INR((v||0).toFixed(0))}`;
+  const pnlCol= v => clr(v);
+
+  const cols = [
+    {h:"Key",      k:"key"},
+    {h:"Trades",   k:"trades",      r:true},
+    {h:"Wins",     k:"wins",        r:true},
+    {h:"Losses",   k:"losses",      r:true},
+    {h:"Win %",    k:"winRate",     r:true, f:wrFmt, color:wrCol},
+    {h:"Net P&L",  k:"netPnL",      r:true, f:pnlFmt, color:pnlCol},
+    {h:"Avg win",  k:"avgWin",      r:true, f:v=>INR((v||0).toFixed(0))},
+    {h:"Avg loss", k:"avgLoss",     r:true, f:v=>INR((v||0).toFixed(0))},
+    {h:"PF",       k:"profitFactor",r:true, f:v=>(v||0).toFixed(2)},
+    {h:"Expect",   k:"expectancy",  r:true, f:pnlFmt, color:pnlCol},
+  ];
+
+  let panels = "";
+  panels += gtable("By Strategy", a.byStrategy||[], cols);
+  panels += gtable("By Regime",   a.byRegime||[],   cols);
+  panels += gtable("By Exit Reason", a.byExit||[],  cols);
+  panels += gtable("By Time of Day", a.byTimeBucket||[], cols);
+
+  // Filter insights
+  const fi = a.filterInsights || {};
+  const fiHtml = `
+    <div class="sec-title" style="margin-top:18px">Structure Filter insights</div>
+    <div class="stat-grid">
+      ${sc("Scanned (last pass)", fi.total||0, "var(--text)", "BUY candidates")}
+      ${sc("Approved (last pass)", fi.approved||0, "var(--green)")}
+      ${sc("Rej · Structure", fi.rejectedByStructure||0, (fi.rejectedByStructure||0)>0?"var(--amber)":"var(--text2)")}
+      ${sc("Rej · LLM", fi.rejectedByLLM||0, (fi.rejectedByLLM||0)>0?"var(--amber)":"var(--text2)")}
+      ${sc("Pass2 entered", fi.pass2Entered||0, "var(--green)")}
+      ${sc("Pass2 skipped slots", fi.pass2SkippedSlots||0, "var(--text2)")}
+      ${sc("Pass2 skipped corr", fi.pass2SkippedCorr||0, "var(--text2)")}
+      ${sc("Pass2 skipped dup", fi.pass2SkippedDup||0, "var(--text2)")}
+    </div>
+    ${fi.topRejectReasons && Object.keys(fi.topRejectReasons).length ? `
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">Top reject reasons: ${
+        Object.entries(fi.topRejectReasons).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k,v])=>`${k}×${v}`).join(" · ")
+      }</div>` : ""}`;
+  panels += fiHtml;
+
+  document.getElementById("anl-panels").innerHTML = panels;
+  document.getElementById("anl-footer").innerHTML =
+    `Analytics window: last ${days} days · generated ${a.generatedAt?new Date(a.generatedAt).toLocaleString():"-"}`;
 }
 
 async function scanNow(){
@@ -1138,6 +1308,9 @@ async function resetTrades(){
 
 // -- STOCKS CHART - Custom candlestick using Kite /history/:symbol -------------
 function renderStocksChartPage(){
+  const t = S.chartOverlayToggles;
+  const toggleBtn = (key,label) =>
+    `<button class="btn btn-sm" onclick="toggleChartOverlay('${key}')" style="${t[key]?'background:var(--text);color:var(--bg);border-color:var(--text)':''}">${t[key]?'● ':'○ '}${label}</button>`;
   document.getElementById("main-content").innerHTML=`
     <div class="fr" style="margin-bottom:10px">
       <select id="chart-sym-sel" onchange="S.chartSym=this.value;loadKiteChart()" style="min-width:200px">
@@ -1150,14 +1323,30 @@ function renderStocksChartPage(){
       <span id="kite-chart-change" style="font-size:12px"></span>
       <span style="font-size:11px;color:var(--text3);margin-left:auto">Real-time · Kite Connect · Free</span>
     </div>
+    <div class="fr" style="margin-bottom:8px;font-size:11px;flex-wrap:wrap">
+      <span style="color:var(--text3);margin-right:4px">Overlays:</span>
+      ${toggleBtn("zones","S/R Zones")}
+      ${toggleBtn("vwap","VWAP")}
+      ${toggleBtn("pdLevels","PDH/PDL/PDC")}
+      ${toggleBtn("llmNotes","LLM notes")}
+      <span id="chart-struct-summary" style="margin-left:auto;color:var(--text3);font-size:10px"></span>
+    </div>
     <div id="kite-chart-container" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;position:relative">
       <canvas id="kite-candle-chart" style="width:100%;height:420px"></canvas>
+      <div id="kite-chart-tooltip" style="position:absolute;display:none;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:11px;pointer-events:none;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.3)"></div>
       <div id="kite-chart-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:10px;font-size:13px;color:var(--text2)">Loading chart data...</div>
     </div>
     <div id="kite-chart-info" style="display:flex;gap:16px;padding:8px 0;font-size:12px;color:var(--text2);flex-wrap:wrap"></div>
     <div id="chart-trades" style="margin-top:12px"></div>`;
   S.chartTF = S.chartTF||"5m";
   loadKiteChart();
+}
+
+function toggleChartOverlay(key){
+  if(!S.chartOverlayToggles) S.chartOverlayToggles={};
+  S.chartOverlayToggles[key] = !S.chartOverlayToggles[key];
+  // Re-render the chart page so toggle button states update, then redraw
+  renderStocksChartPage();
 }
 
 async function loadKiteChart(){
@@ -1178,13 +1367,22 @@ async function loadKiteChart(){
   const interval=intervalMap[tf]||"5minute";
 
   try {
-    const r=await fetch(`/history/${sym}?interval=${interval}`);
-    if(!r.ok) throw new Error("Failed to fetch");
-    const candles=await r.json();
+    // Fetch candles + structure overlay in parallel
+    const [candleResp, structResp] = await Promise.all([
+      fetch(`/history/${sym}?interval=${interval}`),
+      fetch(`/api/chart/structure/${sym}?interval=${interval}`).catch(()=>null),
+    ]);
+    if(!candleResp.ok) throw new Error("Failed to fetch");
+    const candles=await candleResp.json();
     if(!candles||candles.length<2) throw new Error("No data");
 
+    // Structure is optional — safe fallback to null
+    let structure = null;
+    try { if(structResp && structResp.ok) structure = await structResp.json(); } catch(e){}
+    S.chartStructure = structure;
+
     if(loading) loading.style.display="none";
-    drawCandleChart(candles, sym, tf);
+    drawCandleChart(candles, sym, tf, structure);
 
     // Update price display
     const last=candles[candles.length-1];
@@ -1194,6 +1392,17 @@ async function loadKiteChart(){
     const chgEl=document.getElementById("kite-chart-change");
     if(priceEl) priceEl.textContent=INR(last.close);
     if(chgEl){chgEl.textContent=`${chg>=0?"+":""}${chg.toFixed(2)}%`;chgEl.style.color=clr(chg);}
+
+    // Structure summary line
+    const summaryEl = document.getElementById("chart-struct-summary");
+    if (summaryEl && structure) {
+      const bits=[];
+      if(structure.zones?.nearestResistance) bits.push(`R ${INR(structure.zones.nearestResistance.zoneLow)}–${INR(structure.zones.nearestResistance.zoneHigh)} (${structure.zones.nearestResistance.strengthLabel}, ${structure.zones.nearestResistance.distancePct}%)`);
+      if(structure.zones?.nearestSupport)    bits.push(`S ${INR(structure.zones.nearestSupport.zoneLow)}–${INR(structure.zones.nearestSupport.zoneHigh)} (${structure.zones.nearestSupport.strengthLabel}, ${structure.zones.nearestSupport.distancePct}%)`);
+      if(structure.vwap)                     bits.push(`VWAP ${INR(structure.vwap.current)} (${structure.vwap.bias||(structure.flags?.priceAboveVWAP?'SUPPORT':'RESISTANCE')})`);
+      if(structure.pdLevels)                 bits.push(`PDH ${INR(structure.pdLevels.pdh)} · PDL ${INR(structure.pdLevels.pdl)}`);
+      summaryEl.innerHTML = bits.join(' · ');
+    }
 
     // Info bar
     const info=document.getElementById("kite-chart-info");
@@ -1222,7 +1431,7 @@ async function loadKiteChart(){
     </div>`).join("");
 }
 
-function drawCandleChart(candles, sym, tf){
+function drawCandleChart(candles, sym, tf, structure){
   const canvas=document.getElementById("kite-candle-chart");
   if(!canvas) return;
 
@@ -1243,16 +1452,49 @@ function drawCandleChart(candles, sym, tf){
   const C={
     bg:"#0d1117", grid:"rgba(255,255,255,0.04)", text:"#6e7681",
     bull:"#3fb950", bear:"#f85149", wick:"#484f58",
-    ema9:"#58a6ff", ema21:"#d29922", vol:"rgba(255,255,255,0.06)"
+    ema9:"#58a6ff", ema21:"#d29922", vol:"rgba(255,255,255,0.06)",
+    resStrong:"rgba(248,81,73,0.28)", resMed:"rgba(248,81,73,0.16)", resWeak:"rgba(248,81,73,0.08)", resEdge:"rgba(248,81,73,0.6)",
+    supStrong:"rgba(63,185,80,0.28)", supMed:"rgba(63,185,80,0.16)", supWeak:"rgba(63,185,80,0.08)", supEdge:"rgba(63,185,80,0.6)",
+    vwapAbove:"#3fb950", vwapBelow:"#f85149",
+    pdh:"#d29922", pdl:"#a371f7", pdc:"#8b949e",
   };
 
   // Margins
   const mL=65,mR=16,mT=16,mB=40,mVol=60;
   const cW=W-mL-mR, cH=H-mT-mB-mVol-8;
 
-  // Price range
+  // Toggles + structure overlays
+  const T = S.chartOverlayToggles || {zones:true, vwap:true, pdLevels:true, llmNotes:true};
+  const zonesEnabled   = T.zones    && structure && structure.zones;
+  const vwapEnabled    = T.vwap     && structure && structure.vwap && typeof structure.vwap.current === 'number';
+  const pdEnabled      = T.pdLevels && structure && structure.pdLevels;
+
+  // Price range — expand to include overlays so they're always visible
   const highs=data.map(c=>c.high), lows=data.map(c=>c.low);
-  const pMax=Math.max(...highs)*1.001, pMin=Math.min(...lows)*0.999;
+  let pMax=Math.max(...highs)*1.001, pMin=Math.min(...lows)*0.999;
+  if (zonesEnabled) {
+    const allZones = [
+      ...(structure.zones.resistance || []),
+      ...(structure.zones.support    || []),
+    ];
+    for (const z of allZones) {
+      if (typeof z.zoneHigh === 'number') pMax = Math.max(pMax, z.zoneHigh);
+      if (typeof z.zoneLow  === 'number') pMin = Math.min(pMin, z.zoneLow);
+    }
+  }
+  if (vwapEnabled) {
+    pMax = Math.max(pMax, structure.vwap.current);
+    pMin = Math.min(pMin, structure.vwap.current);
+  }
+  if (pdEnabled) {
+    const pd = structure.pdLevels;
+    for (const v of [pd.pdh, pd.pdl, pd.pdc]) {
+      if (typeof v === 'number') { pMax = Math.max(pMax, v); pMin = Math.min(pMin, v); }
+    }
+  }
+  // Small pad to keep the overlay labels from clipping
+  const pad = (pMax - pMin) * 0.01;
+  pMax += pad; pMin -= pad;
   const pRange=pMax-pMin||1;
 
   // Volume range
@@ -1321,6 +1563,113 @@ function drawCandleChart(candles, sym, tf){
     ctx.fillStyle=isBull?"#16a34a30":"#dc262630";
     ctx.fillRect(x,mT+cH+8+mVol-vH,candleW,vH);
   });
+
+  // ───────── Structure overlays ─────────
+  // Track zone hit-boxes for hover tooltip
+  window._chartZoneHitBoxes = [];
+
+  const drawZoneBand = (z, type) => {
+    if (typeof z.zoneHigh !== 'number' || typeof z.zoneLow !== 'number') return;
+    const yTop = toY(z.zoneHigh), yBot = toY(z.zoneLow);
+    if (yBot < mT || yTop > mT+cH) return;
+    const yClipTop = Math.max(mT, yTop);
+    const yClipBot = Math.min(mT+cH, yBot);
+    const bandH    = Math.max(1, yClipBot - yClipTop);
+    const label    = (z.strengthLabel || 'WEAK').toUpperCase();
+    const fill     = type === 'R'
+      ? (label==='STRONG'?C.resStrong:label==='MEDIUM'?C.resMed:C.resWeak)
+      : (label==='STRONG'?C.supStrong:label==='MEDIUM'?C.supMed:C.supWeak);
+    const edge     = type === 'R' ? C.resEdge : C.supEdge;
+    ctx.fillStyle = fill;
+    ctx.fillRect(mL, yClipTop, cW, bandH);
+    ctx.strokeStyle = edge; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.moveTo(mL, yClipTop); ctx.lineTo(mL+cW, yClipTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mL, yClipBot); ctx.lineTo(mL+cW, yClipBot); ctx.stroke();
+    // Right-edge tag
+    const tag = `${type==='R'?'R':'S'} ${INR(z.zoneLow.toFixed(0))}–${INR(z.zoneHigh.toFixed(0))} · ${label}`;
+    ctx.font = "10px -apple-system,sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillStyle = edge;
+    ctx.fillText(tag, mL+cW-4, Math.max(yClipTop+10, mT+10));
+    // Record hit-box for hover
+    window._chartZoneHitBoxes.push({
+      x: mL, y: yClipTop, w: cW, h: bandH,
+      meta: { type: type==='R'?'Resistance':'Support', label, z }
+    });
+  };
+
+  if (zonesEnabled) {
+    (structure.zones.resistance || []).forEach(z => drawZoneBand(z, 'R'));
+    (structure.zones.support    || []).forEach(z => drawZoneBand(z, 'S'));
+  }
+
+  // VWAP line (flat horizontal at vwap.current — session vwap is a single current value)
+  if (vwapEnabled) {
+    const vv = structure.vwap.current;
+    const lastClose = closes[closes.length-1];
+    const color = (typeof lastClose === 'number' && lastClose >= vv) ? C.vwapAbove : C.vwapBelow;
+    const y = toY(vv);
+    ctx.setLineDash([6,3]);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(mL, y); ctx.lineTo(mL+cW, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = "10px -apple-system,sans-serif";
+    ctx.textAlign = "left";
+    const slope = typeof structure.vwap.slope === 'number' ? (structure.vwap.slope>0?' ↑':structure.vwap.slope<0?' ↓':' →') : '';
+    ctx.fillText(`VWAP ${INR(vv.toFixed(0))}${slope}`, mL+4, y-3);
+  }
+
+  // PDH / PDL / PDC horizontal lines
+  if (pdEnabled) {
+    const pd = structure.pdLevels;
+    const pdLines = [
+      { v: pd.pdh, label: 'PDH', color: C.pdh },
+      { v: pd.pdl, label: 'PDL', color: C.pdl },
+      { v: pd.pdc, label: 'PDC', color: C.pdc },
+    ];
+    for (const pl of pdLines) {
+      if (typeof pl.v !== 'number') continue;
+      const y = toY(pl.v);
+      if (y < mT || y > mT+cH) continue;
+      ctx.setLineDash([2,3]);
+      ctx.strokeStyle = pl.color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(mL, y); ctx.lineTo(mL+cW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = pl.color;
+      ctx.font = "10px -apple-system,sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(`${pl.label} ${INR(pl.v.toFixed(0))}`, mL+cW-4, y-2);
+    }
+  }
+
+  // Hover tooltip for zones
+  const tip = document.getElementById('kite-chart-tooltip');
+  if (tip) {
+    canvas.onmousemove = (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (ev.clientX - rect.left);
+      const my = (ev.clientY - rect.top);
+      const hit = (window._chartZoneHitBoxes || []).find(b =>
+        mx >= b.x && mx <= b.x+b.w && my >= b.y && my <= b.y+b.h
+      );
+      if (hit) {
+        const z = hit.meta.z;
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX - rect.left + 12) + 'px';
+        tip.style.top  = (ev.clientY - rect.top  + 12) + 'px';
+        tip.innerHTML = `
+          <div style="font-weight:600;color:${hit.meta.type==='Resistance'?'#f85149':'#3fb950'}">${hit.meta.type} · ${hit.meta.label}</div>
+          <div>Range: ${INR((+z.zoneLow).toFixed(2))} – ${INR((+z.zoneHigh).toFixed(2))}</div>
+          <div>Touches: ${z.touches ?? '—'} · Score: ${(z.score??0).toFixed ? (+z.score).toFixed(1) : z.score ?? '—'}</div>
+          ${z.rejections ? `<div>Rejections: ${z.rejections}</div>` : ''}
+          ${z.recencyBars != null ? `<div>Last touch: ${z.recencyBars} bars ago</div>` : ''}`;
+      } else {
+        tip.style.display = 'none';
+      }
+    };
+    canvas.onmouseleave = () => { tip.style.display = 'none'; };
+  }
 
   // X axis labels
   ctx.fillStyle=C.text;ctx.font="10px -apple-system,sans-serif";ctx.textAlign="center";
@@ -1631,6 +1980,7 @@ function render(){
     if(tab==="positions")  renderStocksPositions();
     if(tab==="trades")     renderStocksTrades();
     if(tab==="candidates") renderStocksCandidates();
+    if(tab==="analytics")  renderStocksAnalytics();
     if(tab==="market")     renderStocksMarket();
     if(tab==="portfolio")  renderPortfolio();
     if(tab==="scanlog")    renderScanLog();
