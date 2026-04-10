@@ -17527,11 +17527,15 @@ app.get('/api/ai/validation-longterm', async (req, res) => {
 // API endpoint — get per-stock AI reviews from DB (persisted, survives restart)
 app.get('/api/ai/reviews', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT sym, model_id, model_name, verdict, confidence, signal_type,
+    // Optional filter: ?signal_type=LONG_TERM_HOLD to return only long-term reviews,
+    // or ?signal_type=SWING to return only swing reviews. Without a filter, returns all.
+    const sigType = (req.query.signal_type || '').toUpperCase();
+    const sqlBase = `SELECT sym, model_id, model_name, verdict, confidence, signal_type,
               varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at
-       FROM ai_stock_reviews ORDER BY sym, model_id`
-    );
+       FROM ai_stock_reviews`;
+    const { rows } = sigType
+      ? await pool.query(sqlBase + ` WHERE signal_type=$1 ORDER BY sym, model_id`, [sigType])
+      : await pool.query(sqlBase + ` ORDER BY sym, model_id`);
     // Group by stock
     const byStock = {};
     rows.forEach(r => {

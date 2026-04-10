@@ -5171,6 +5171,8 @@ function renderPortfolioSuggestion(){
   if(_psTab==='longterm' && !ltPortfolioData && !ltPortfolioLoading && !ltPortfolioError) {
     loadLongTermPortfolio(false);
   }
+  // Load persisted LT AI reviews from DB so badges survive page refresh
+  if(_psTab==='longterm' && !_ltAIReviewsDB) ltLoadAIReviewsDB();
   if(_psTab==='holdings'&&!_psPositions) psLoadPositions();
   if(_psTab==='performance'&&!_psPerf) psLoadPerformance();
 }
@@ -5199,6 +5201,23 @@ function ltRegenerate(){ loadLongTermPortfolio(true); }
 // the same way the swing version does.
 var _ltAIValidation = null;       // cached LT AI result for re-rendering
 var _ltAILogEntries = [];          // persisted log lines for the LT AI panel
+var _ltAIReviewsDB  = null;       // persisted LT AI reviews loaded from PostgreSQL (survives refresh)
+
+// Load persisted Long Term AI reviews from DB. Mirrors psLoadAIReviewsDB but
+// filters on signal_type=LONG_TERM_HOLD so swing reviews don't bleed in.
+async function ltLoadAIReviewsDB(){
+  try{
+    var r=await fetch('/api/ai/reviews?signal_type=LONG_TERM_HOLD');
+    var d=await r.json();
+    if(d&&d.stocks){
+      _ltAIReviewsDB={};
+      d.stocks.forEach(function(s){
+        _ltAIReviewsDB[s.sym]={sym:s.sym,per_model:s.models,agrees:s.agrees,disagrees:s.disagrees,models_total:s.total,
+          consensus_verdict:s.agrees>=s.disagrees?'AGREE':'DISAGREE',reviewed_at:s.reviewed_at};
+      });
+    }
+  }catch(e){}
+}
 
 async function ltRunAIValidation(){
   var btn=document.getElementById('lt-ai-btn')||event.target;
@@ -5256,6 +5275,11 @@ async function ltRunAIValidation(){
     var r=await fetch('/api/ai/validate-longterm?amount='+amt+'&mode=deep');
     _ltAIValidation=await r.json();
     clearInterval(pollTimer);
+    // Refresh persisted DB cache so badges stay after a page refresh. Server
+    // already wrote the new rows to ai_stock_reviews during validateLongTerm…
+    // so this just pulls them back for the in-memory lookup fallback.
+    _ltAIReviewsDB=null;
+    ltLoadAIReviewsDB();
     // Re-render the tab so the AI results panel becomes part of the page
     var tc=document.getElementById('ps-tab-content');
     if(tc) tc.innerHTML=psRenderLongTermTab();
@@ -5352,37 +5376,11 @@ function psRenderLTAIValidation(){
   }
   h+='</div>'; // close header card
 
-  // Per-stock consensus table
-  if(v.signal_reviews&&v.signal_reviews.length){
-    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px">';
-    h+='<div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;color:var(--text);background:rgba(245,158,11,.05)">Per-Stock Consensus · '+v.signal_reviews.length+' Long Term picks reviewed</div>';
-    h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">';
-    h+='<thead><tr style="background:var(--bg3);color:var(--text4);font-size:9px;text-align:left">';
-    h+='<th style="padding:6px 8px">Stock</th>';
-    h+='<th style="padding:6px 8px">Verdict</th>';
-    h+='<th style="padding:6px 8px">Consensus</th>';
-    h+='<th style="padding:6px 8px">Confidence</th>';
-    h+='<th style="padding:6px 8px">Varsity Module</th>';
-    h+='<th style="padding:6px 8px">Thesis / Reasoning</th>';
-    h+='<th style="padding:6px 8px">Recommendation</th>';
-    h+='<th style="padding:6px 8px">Risk Flag</th>';
-    h+='</tr></thead><tbody>';
-    v.signal_reviews.forEach(function(r){
-      var vc=r.consensus_verdict||r.verdict||'?';
-      var vColor=vc==='AGREE'?'#22c55e':vc==='DISAGREE'?'#ef4444':vc==='MODIFY'?'#f59e0b':'#64748b';
-      h+='<tr style="border-top:1px solid var(--border)">';
-      h+='<td style="padding:6px 8px;font-weight:700;color:var(--text)">'+r.sym+'</td>';
-      h+='<td style="padding:6px 8px"><span style="background:'+vColor+'20;color:'+vColor+';padding:2px 8px;border-radius:4px;font-weight:700;font-size:9px">'+vc+'</span></td>';
-      h+='<td style="padding:6px 8px;color:var(--text3)">'+(r.consensus_score||'?')+' ('+(r.consensus_pct||0)+'%)</td>';
-      h+='<td style="padding:6px 8px;color:var(--text3)">'+(r.confidence||0)+'%</td>';
-      h+='<td style="padding:6px 8px;color:var(--text4);font-size:9px">'+String(r.varsity_module||'').replace(/</g,'&lt;')+'</td>';
-      h+='<td style="padding:6px 8px;color:var(--text2);max-width:340px">'+String(r.varsity_reasoning||'').replace(/</g,'&lt;')+'</td>';
-      h+='<td style="padding:6px 8px;color:var(--text2);max-width:220px">'+String(r.recommendation||'').replace(/</g,'&lt;')+'</td>';
-      h+='<td style="padding:6px 8px;color:#f97316;max-width:200px">'+String(r.risk_flag||'').replace(/</g,'&lt;')+'</td>';
-      h+='</tr>';
-    });
-    h+='</tbody></table></div></div>';
-  }
+  // NOTE: The per-stock consensus table was removed from this panel. Per-stock
+  // verdicts now render INLINE in the Long Term picks table (AI Reviews column)
+  // matching the Swing Trade layout, and the full per-model reasoning is in an
+  // expandable row under each pick. This panel only shows portfolio-level
+  // summary info (model status, flags, missed signals, portfolio summary).
 
   h+='</div>'; // close #lt-ai-validation-panel
   return h;
@@ -5512,8 +5510,9 @@ function psRenderLongTermResults(d){
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','Track'];
+  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','AI Reviews','Track'];
   hdrs.forEach(function(hdr,i){
+    // Right-align numeric cols (index 3..9), left-align Stock/Bucket/AI Reviews/Track
     var align=(i===0)?'left':(i>=3&&i<=9)?'right':'left';
     h+='<th style="padding:7px 8px;text-align:'+align+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
@@ -5545,6 +5544,46 @@ function psRenderLongTermResults(d){
     h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
+
+    // ── AI REVIEWS column ─────────────────────────────────────────────
+    // Prefer the fresh in-memory result from the latest Deep Review run, then
+    // fall back to persisted per-stock reviews from the DB so badges survive
+    // page refresh. Same layout and verdict colors as the Swing Trade table
+    // so users can learn it once.
+    var _ltAIStockReview=null;
+    if(_ltAIValidation&&_ltAIValidation.signal_reviews){
+      _ltAIStockReview=_ltAIValidation.signal_reviews.find(function(r){return r.sym===p.sym;});
+    }
+    if(!_ltAIStockReview&&_ltAIReviewsDB&&_ltAIReviewsDB[p.sym]){
+      _ltAIStockReview=_ltAIReviewsDB[p.sym];
+    }
+    h+='<td style="padding:5px;vertical-align:top">';
+    if(_ltAIStockReview){
+      var ltAiR=_ltAIStockReview;
+      var ltPm=ltAiR.per_model||ltAiR.models||{};
+      var ltPmKeys=Object.keys(ltPm);
+      var _ltAiAgree=0,_ltAiDisagree=0,_ltAiModify=0,_ltAiTotal=ltPmKeys.length;
+      var _ltAiAgreeNames=[],_ltAiModifyNames=[],_ltAiDisagreeNames=[],_ltAiSkipNames=[];
+      var _ltMn={'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','mistral':'Mistral'};
+      ltPmKeys.forEach(function(mid){
+        var v=ltPm[mid].verdict;var sn=_ltMn[mid]||mid;
+        if(v==='AGREE'){_ltAiAgree++;_ltAiAgreeNames.push(sn);}
+        else if(v==='DISAGREE'){_ltAiDisagree++;_ltAiDisagreeNames.push(sn);}
+        else if(v==='MODIFY'){_ltAiModify++;_ltAiModifyNames.push(sn);}
+        else{_ltAiSkipNames.push(sn);}
+      });
+      h+='<div style="font-size:8px;font-weight:700;line-height:1.6">';
+      if(_ltAiAgree>0) h+='<div style="color:#22c55e">✅'+_ltAiAgree+' Agreed <span style="font-weight:500;opacity:0.8">('+_ltAiAgreeNames.join(', ')+')</span></div>';
+      if(_ltAiModify>0) h+='<div style="color:#f59e0b">⚠️'+_ltAiModify+' Caution <span style="font-weight:500;opacity:0.8">('+_ltAiModifyNames.join(', ')+')</span></div>';
+      if(_ltAiDisagree>0) h+='<div style="color:#ef4444">❌'+_ltAiDisagree+' Disagree <span style="font-weight:500;opacity:0.8">('+_ltAiDisagreeNames.join(', ')+')</span></div>';
+      if(_ltAiSkipNames.length>0) h+='<div style="color:#6b7280">⏭'+_ltAiSkipNames.length+' No Review <span style="font-weight:500;opacity:0.8">('+_ltAiSkipNames.join(', ')+')</span></div>';
+      h+='<div onclick="psToggleAIRow(\'lt-'+p.sym+'\')" id="ai-toggle-lt-'+p.sym+'" style="color:#22d3ee;cursor:pointer;margin-top:1px;font-weight:600;display:flex;align-items:center;gap:2px"><span id="ai-arrow-lt-'+p.sym+'">▶</span> Show AI Reviews ('+_ltAiTotal+' models)</div>';
+      h+='</div>';
+    } else {
+      h+='<span style="font-size:8px;color:var(--text4)">—</span>';
+    }
+    h+='</td>';
+
     // Track column — "I Bought" marks the pick as a LONGTERM holding
     var ltPrice=(p.currentPrice||p.price||0);
     h+='<td style="padding:6px 8px;text-align:center">'
@@ -5552,6 +5591,43 @@ function psRenderLongTermResults(d){
       +'style="background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button>'
       +'</td>';
     h+='</tr>';
+
+    // ── AI Review expandable row (hidden by default, toggled by badge click) ──
+    // The id is prefixed with "lt-" so the same psToggleAIRow() helper used by
+    // the swing table can open/close this row without symbol collisions when
+    // a stock sits in both portfolios simultaneously.
+    if(_ltAIStockReview){
+      var ltAiR2=_ltAIStockReview;
+      var ltPm2=ltAiR2.per_model||ltAiR2.models||{};
+      var ltPmKeys2=Object.keys(ltPm2);
+      var _ltMn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
+      h+='<tr id="ai-row-lt-'+p.sym+'" style="display:none;background:var(--bg2)">';
+      // colspan = 12 columns in the LT table (Stock/Bucket/ScoreV2/Alloc%/Shares/
+      // Invested/Exp 12M/Risk/Value/Timing/AI Reviews/Track)
+      h+='<td colspan="12" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
+      h+='<div style="font-size:10px;font-weight:700;color:#f59e0b;margin-bottom:6px">🏛 Long-Term AI Model Reviews for '+p.sym+'</div>';
+      h+='<div style="display:grid;gap:4px">';
+      ltPmKeys2.forEach(function(mid){
+        var mv2=ltPm2[mid];
+        var v2c=mv2.verdict==='AGREE'?'#22c55e':mv2.verdict==='DISAGREE'?'#ef4444':mv2.verdict==='NO_REVIEW'?'#6b7280':'#f59e0b';
+        var v2i=mv2.verdict==='AGREE'?'✅':mv2.verdict==='DISAGREE'?'❌':mv2.verdict==='NO_REVIEW'?'⏭':'⚠️';
+        var mName2=_ltMn2[mid]||mv2.model_name||mid;
+        var reason2=mv2.varsity_reasoning||mv2.recommendation||'';
+        var risk2=mv2.risk_flag||'';
+        var vmod=mv2.varsity_module||'';
+        h+='<div style="background:var(--bg);border-radius:5px;padding:6px 10px;border-left:3px solid '+v2c+';'+(mv2.verdict==='NO_REVIEW'?'opacity:0.5;':'')+'">';
+        h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;flex-wrap:wrap">';
+        h+='<span style="font-size:10px;font-weight:800;color:'+v2c+'">'+v2i+' '+mName2+'</span>';
+        h+='<span style="font-size:8px;font-weight:800;color:'+v2c+';text-transform:uppercase;background:'+v2c+'15;padding:1px 5px;border-radius:3px">'+String(mv2.verdict||'').replace('_',' ')+'</span>';
+        if(mv2.confidence&&mv2.verdict!=='NO_REVIEW') h+='<span style="font-size:8px;color:var(--text4)">'+mv2.confidence+'% conf</span>';
+        if(vmod) h+='<span style="font-size:8px;color:var(--text4);font-style:italic">'+String(vmod).replace(/</g,'&lt;')+'</span>';
+        h+='</div>';
+        if(reason2) h+='<div style="font-size:9px;color:var(--text3);line-height:1.4;margin-top:2px">'+String(reason2).replace(/</g,'&lt;')+'</div>';
+        if(risk2&&mv2.verdict!=='NO_REVIEW') h+='<div style="font-size:9px;color:#f97316;margin-top:2px">⚠ '+String(risk2).replace(/</g,'&lt;')+'</div>';
+        h+='</div>';
+      });
+      h+='</div></td></tr>';
+    }
   });
   h+='</tbody></table></div>';
 
