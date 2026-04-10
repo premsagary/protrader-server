@@ -335,12 +335,12 @@ async function initDB() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ai_stock_reviews (
         sym            VARCHAR(20) NOT NULL,
-        model_id       VARCHAR(30) NOT NULL,
-        model_name     VARCHAR(60),
-        verdict        VARCHAR(20) NOT NULL,
+        model_id       VARCHAR(80) NOT NULL,
+        model_name     VARCHAR(100),
+        verdict        VARCHAR(30) NOT NULL,
         confidence     INTEGER DEFAULT 0,
-        signal_type    VARCHAR(30),
-        varsity_module VARCHAR(50),
+        signal_type    VARCHAR(60),
+        varsity_module VARCHAR(100),
         varsity_reasoning TEXT,
         recommendation TEXT,
         risk_flag      TEXT,
@@ -353,10 +353,10 @@ async function initDB() {
       CREATE TABLE IF NOT EXISTS ai_disagree_log (
         id             SERIAL PRIMARY KEY,
         sym            VARCHAR(20) NOT NULL,
-        model_id       VARCHAR(30) NOT NULL,
-        model_name     VARCHAR(60),
-        signal_type    VARCHAR(30),
-        verdict        VARCHAR(20) NOT NULL,
+        model_id       VARCHAR(80) NOT NULL,
+        model_name     VARCHAR(100),
+        signal_type    VARCHAR(60),
+        verdict        VARCHAR(30) NOT NULL,
         confidence     INTEGER DEFAULT 0,
         reason         TEXT,
         risk_flag      TEXT,
@@ -366,6 +366,17 @@ async function initDB() {
     // Create index for fast disagree lookups by stock
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_sym ON ai_disagree_log(sym)`).catch(()=>{});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_disagree_run ON ai_disagree_log(run_at)`).catch(()=>{});
+
+    // ── Widen varchar columns for AI review tables (fix "value too long" errors) ──
+    await pool.query(`ALTER TABLE ai_stock_reviews ALTER COLUMN model_id TYPE VARCHAR(80)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_stock_reviews ALTER COLUMN model_name TYPE VARCHAR(100)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_stock_reviews ALTER COLUMN signal_type TYPE VARCHAR(60)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_stock_reviews ALTER COLUMN varsity_module TYPE VARCHAR(100)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_stock_reviews ALTER COLUMN verdict TYPE VARCHAR(30)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN model_id TYPE VARCHAR(80)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN model_name TYPE VARCHAR(100)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN signal_type TYPE VARCHAR(60)`).catch(()=>{});
+    await pool.query(`ALTER TABLE ai_disagree_log ALTER COLUMN verdict TYPE VARCHAR(30)`).catch(()=>{});
 
     // ── Users table for auth ─────────────────────────────────────────────────
     await pool.query(`
@@ -1552,6 +1563,17 @@ function selectAndRunStrategy(candles, dailyCandles=null) {
 let LIVE_TRADING = (process.env.LIVE_TRADING || '').toLowerCase() === 'true';
 console.log(`🔀 Trading mode: ${LIVE_TRADING ? '🔴 LIVE (real orders via Kite)' : '📝 PAPER (simulated only)'}`);
 
+// Restore persisted trading mode from DB on startup (runs after pool is ready)
+async function restoreTradingModeFromDB() {
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_config WHERE key='LIVE_TRADING'`);
+    if (rows.length > 0 && rows[0].value === 'true') {
+      LIVE_TRADING = true;
+      console.log('🔀 Restored LIVE trading mode from DB');
+    }
+  } catch(e) { /* table may not exist yet */ }
+}
+
 const CONFIG = {
   BUY_SCORE:          2.5,
   SELL_SCORE:        -2.0,
@@ -1657,7 +1679,15 @@ function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, k
   }
 
   const target   = +(entryPrice + stopDist * CONFIG.RISK_REWARD).toFixed(2);
-  const shares   = Math.max(1, Math.floor(riskAmt / stopDist));
+  let shares   = Math.max(1, Math.floor(riskAmt / stopDist));
+
+  // ── Position sizing cap — max 20% of account equity per position (Varsity M9 Ch 11) ──
+  const maxCapitalPerPosition = equity * 0.20;
+  const rawCapital = shares * entryPrice;
+  if (rawCapital > maxCapitalPerPosition) {
+    shares = Math.max(1, Math.floor(maxCapitalPerPosition / entryPrice));
+  }
+
   const capital  = shares * entryPrice;
   return {
     shares,
@@ -1966,6 +1996,16 @@ async function scanAndTrade() {
     const qty = posSize.shares;
     if (posSize.slSource === 'swing_low') {
       result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
+    }
+
+    // ── Dedup guard — skip if same symbol bought within last 60 seconds ──
+    const { rows: recentDup } = await pool.query(
+      `SELECT id FROM paper_trades WHERE symbol=$1 AND status='OPEN' AND entry_time > NOW() - INTERVAL '60 seconds' LIMIT 1`,
+      [stock.sym]
+    );
+    if (recentDup.length > 0) {
+      console.log(`  ⊘ SKIP ${stock.sym} — duplicate (already bought within 60s)`);
+      continue;
     }
 
     // Paper trade
@@ -3878,7 +3918,15 @@ app.post("/api/trading-mode", express.json(), async (req,res) => {
   if (typeof live === 'boolean') {
     if (live && !kite) return res.status(400).json({ error: 'Cannot enable LIVE mode — Kite is not connected. Login to Kite first.' });
     LIVE_TRADING = live;
-    console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'}`);
+    // Persist to DB so it survives deploys
+    try {
+      await pool.query(
+        `INSERT INTO app_config(key, value, updated_at) VALUES('LIVE_TRADING', $1, NOW())
+         ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [live ? 'true' : 'false']
+      );
+    } catch(e) { console.error('Failed to persist trading mode:', e.message); }
+    console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'} (persisted to DB)`);
   }
   const liveEquity = await getLiveAccountEquity().catch(()=>CONFIG.ACCOUNT_SIZE);
   res.json({
@@ -10265,9 +10313,10 @@ app.get("/api/stocks/recommendations", async(req,res)=>{
 app.post("/reset-trades", async(req,res)=>{
   try {
     await pool.query("DELETE FROM paper_trades");
+    await pool.query("DELETE FROM live_trades").catch(()=>{});
     await pool.query("DELETE FROM scan_log");
-    res.json({message:"All paper trades and scan log cleared. Fresh start!"});
-    console.log("🗑️  Paper trades reset by user");
+    res.json({message:"All paper trades, live trades, and scan log cleared. Fresh start!"});
+    console.log("🗑️  All trades reset by user");
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
@@ -10969,6 +11018,9 @@ async function start() {
   startCryptoTicker(); // REST polling every 60s
   setTimeout(scanCrypto, 10000); // first scan after 10s
   cron.schedule("*/15 * * * *", ()=>scanCrypto());
+
+  // Restore persisted trading mode from DB
+  await restoreTradingModeFromDB();
 
   const PORT=process.env.PORT||3001;
   server.listen(PORT, ()=>{
