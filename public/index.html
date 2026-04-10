@@ -1120,13 +1120,15 @@ async function renderStocksAnalytics(){
     const wrCol = q.winRate>=55?"var(--green)":q.winRate>=45?"var(--amber)":"var(--red)";
     const pfCol = q.profitFactor>=1.5?"var(--green)":q.profitFactor>=1?"var(--amber)":"var(--red)";
     const expCol= q.expectancy>0?"var(--green)":"var(--red)";
+    const shCol = (q.sharpe||0)>=1?"var(--green)":(q.sharpe||0)>=0?"var(--amber)":"var(--red)";
     return `<div class="stat-grid">
       ${sc("Closed trades", a.totalClosed, "var(--text)", `${days}d window`)}
       ${sc("Win rate", `${(q.winRate||0).toFixed(1)}%`, wrCol, `${q.wins||0}W / ${q.losses||0}L`)}
       ${sc("Profit factor", (q.profitFactor||0).toFixed(2), pfCol, "gross win / gross loss")}
       ${sc("Expectancy", INR((q.expectancy||0).toFixed(0)), expCol, "per trade")}
-      ${sc("Avg win", `+${INR((q.avgWin||0).toFixed(0))}`,"var(--green)")}
-      ${sc("Avg loss", INR((q.avgLoss||0).toFixed(0)),"var(--red)")}
+      ${sc("Sharpe", (q.sharpe||0).toFixed(2), shCol, "annualized")}
+      ${sc("Sortino", (q.sortino||0).toFixed(2), shCol, "annualized · downside")}
+      ${sc("Max drawdown", `−${INR((q.maxDrawdown||0).toFixed(0))}`, "var(--red)", "trough vs peak")}
       ${sc("Avg hold", `${q.avgHoldMin!=null?Math.round(q.avgHoldMin):"-"}m`,"var(--text2)")}
       ${sc("Net P&L", `${(q.netPnL||0)>=0?"+":""}${INR((q.netPnL||0).toFixed(0))}`, clr(q.netPnL))}
     </div>`;
@@ -1168,10 +1170,96 @@ async function renderStocksAnalytics(){
   ];
 
   let panels = "";
+
+  // ─── Realistic P&L (slippage + brokerage) ───
+  if (a.realistic) {
+    const r = a.realistic;
+    panels += `
+      <div class="sec-title" style="margin-top:14px">Realistic P&amp;L (slippage + brokerage)</div>
+      <div class="stat-grid">
+        ${sc("Gross P&L", `${r.grossPnL>=0?"+":""}${INR(r.grossPnL.toFixed(0))}`, clr(r.grossPnL), "before costs")}
+        ${sc("Net P&L",   `${r.netPnL>=0?"+":""}${INR(r.netPnL.toFixed(0))}`,     clr(r.netPnL),   "after slippage + brokerage")}
+        ${sc("Total costs", INR(r.totalCosts.toFixed(0)), "var(--amber)", `avg ${INR(r.avgCostPerTrade.toFixed(0))}/trade`)}
+        ${sc("Drag", `${r.grossPnL ? ((r.grossPnL - r.netPnL)/Math.abs(r.grossPnL)*100).toFixed(1) : '0.0'}%`, "var(--text2)", "cost impact")}
+      </div>`;
+  }
+
   panels += gtable("By Strategy", a.byStrategy||[], cols);
   panels += gtable("By Regime",   a.byRegime||[],   cols);
   panels += gtable("By Exit Reason", a.byExit||[],  cols);
   panels += gtable("By Time of Day", a.byTimeBucket||[], cols);
+
+  // ─── Confidence calibration ───
+  if (a.confidenceBuckets && a.confidenceBuckets.length) {
+    panels += gtable("Confidence calibration · is higher confidence actually better?", a.confidenceBuckets, cols);
+  }
+
+  // ─── A/B flag comparisons ───
+  if (a.flagCompare && Object.keys(a.flagCompare).length) {
+    const flagRows = [];
+    for (const [flag, group] of Object.entries(a.flagCompare)) {
+      flagRows.push({ ...group.on,  key: `${flag} · ON`  });
+      flagRows.push({ ...group.off, key: `${flag} · OFF` });
+    }
+    panels += gtable("A/B Filter Comparison · ON vs OFF", flagRows, cols);
+  }
+  if (a.byExperiment && a.byExperiment.length) {
+    panels += gtable("By Experiment Group", a.byExperiment, cols);
+  }
+
+  // ─── Duration distribution ───
+  if (a.durationDistribution && a.durationDistribution.some(d=>d.count>0)) {
+    const maxCount = Math.max(...a.durationDistribution.map(d=>d.count));
+    panels += `
+      <div class="sec-title" style="margin-top:14px">Hold time distribution</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px">
+        ${a.durationDistribution.map(d=>{
+          const w = maxCount > 0 ? (d.count / maxCount * 100) : 0;
+          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">
+            <div style="width:60px;color:var(--text2)">${d.bucket}</div>
+            <div style="flex:1;background:var(--bg2);border-radius:4px;height:14px;position:relative">
+              <div style="background:var(--text);height:100%;width:${w}%;border-radius:4px"></div>
+            </div>
+            <div style="width:80px;text-align:right;font-family:monospace">${d.count} · ${d.pct||0}%</div>
+          </div>`;
+        }).join("")}
+      </div>`;
+  }
+
+  // ─── Equity curve (SVG) ───
+  if (a.dailyEquity && a.dailyEquity.length > 0) {
+    const pts = a.dailyEquity;
+    const W = 720, H = 180, mL = 40, mR = 10, mT = 10, mB = 20;
+    const cW = W - mL - mR, cH = H - mT - mB;
+    const eqs   = pts.map(p=>p.equity);
+    const minEq = Math.min(0, ...eqs);
+    const maxEq = Math.max(0, ...eqs);
+    const range = (maxEq - minEq) || 1;
+    const toX = i => mL + (i / Math.max(1, pts.length - 1)) * cW;
+    const toY = v => mT + cH - ((v - minEq) / range) * cH;
+    // Equity path
+    const eqPath = pts.map((p, i) => `${i===0?"M":"L"} ${toX(i).toFixed(1)} ${toY(p.equity).toFixed(1)}`).join(" ");
+    // Running peak path for drawdown shading
+    let peak = -Infinity;
+    const peakSeries = pts.map(p => { peak = Math.max(peak, p.equity); return peak; });
+    const ddPath = `${eqPath} L ${toX(pts.length-1).toFixed(1)} ${toY(peakSeries[peakSeries.length-1]).toFixed(1)} ` +
+                   pts.map((p, i) => `L ${toX(pts.length-1-i).toFixed(1)} ${toY(peakSeries[pts.length-1-i]).toFixed(1)}`).join(" ") + " Z";
+    // Zero line
+    const zeroY = toY(0);
+    panels += `
+      <div class="sec-title" style="margin-top:14px">Equity curve · ${pts.length} days</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;overflow:auto">
+        <svg width="${W}" height="${H}" style="max-width:100%">
+          <line x1="${mL}" y1="${zeroY}" x2="${W-mR}" y2="${zeroY}" stroke="rgba(255,255,255,0.1)" stroke-dasharray="3,3"/>
+          <path d="${ddPath}" fill="rgba(248,81,73,0.08)" stroke="none"/>
+          <path d="${eqPath}" fill="none" stroke="#3fb950" stroke-width="1.5"/>
+          <text x="${mL-4}" y="${toY(maxEq)+4}" text-anchor="end" font-size="10" fill="#6e7681">${INR(maxEq.toFixed(0))}</text>
+          <text x="${mL-4}" y="${toY(minEq)+4}" text-anchor="end" font-size="10" fill="#6e7681">${INR(minEq.toFixed(0))}</text>
+          <text x="${mL-4}" y="${zeroY+4}"      text-anchor="end" font-size="10" fill="#6e7681">0</text>
+        </svg>
+        <div style="font-size:10px;color:var(--text3);margin-top:4px">Green = cumulative equity · pink shading = drawdown from running peak</div>
+      </div>`;
+  }
 
   // Filter insights
   const fi = a.filterInsights || {};

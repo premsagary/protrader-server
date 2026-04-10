@@ -90,6 +90,10 @@ async function initDB() {
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS llm_json       JSONB`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS decision_json  JSONB`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS confidence     DECIMAL(4,2)`).catch(()=>{});
+    // Phase 3 — A/B experiment tag + realistic PnL
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS experiment     JSONB`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS gross_pnl      DECIMAL(18,4)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS costs          DECIMAL(18,4)`).catch(()=>{});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_trades (
         id            SERIAL PRIMARY KEY,
@@ -1782,24 +1786,171 @@ async function computeKelly() {
   } catch(e) { return null; }
 }
 
-// Correlation guard — Varsity M9 Ch 4-5
-// Returns true if new stock is too correlated with existing positions
-async function isTooCorrelated(sym, openPositions) {
-  if (!openPositions || openPositions.length === 0) return false;
+// ─── Phase 3 · Part 2 — Slippage + brokerage simulation helpers ──────────
+//
+// Paper-trading P&L is unrealistic because it assumes zero fill cost. These
+// helpers adjust fill prices on entry/exit and apply a round-trip brokerage
+// cost so expectancy/winRate/profitFactor numbers reflect a tradeable edge.
+//
+// Slippage is applied directionally: entries fill ABOVE mid for longs, exits
+// fill BELOW mid. Brokerage is charged on notional (both legs).
+//
+// Everything is gated by STRUCTURE_CONFIG.slippageSimulationEnabled so legacy
+// trades keep their original math.
+// ──────────────────────────────────────────────────────────────────────────
+function applyEntrySlippage(price) {
+  if (!STRUCTURE_CONFIG.slippageSimulationEnabled) return price;
+  const bps = +STRUCTURE_CONFIG.slippageBps || 0;
+  return +(price * (1 + bps / 10000)).toFixed(4);
+}
+function applyExitSlippage(price) {
+  if (!STRUCTURE_CONFIG.slippageSimulationEnabled) return price;
+  const bps = +STRUCTURE_CONFIG.slippageBps || 0;
+  return +(price * (1 - bps / 10000)).toFixed(4);
+}
+// Round-trip brokerage as absolute ₹ cost on notional (both legs together)
+function computeRoundTripCost(entryPrice, exitPrice, qty) {
+  if (!STRUCTURE_CONFIG.slippageSimulationEnabled) return 0;
+  const bps = +STRUCTURE_CONFIG.brokerageBps || 0;
+  const notional = (entryPrice + exitPrice) * qty;
+  return +(notional * (bps / 10000)).toFixed(4);
+}
+// Full realistic PnL on exit — includes slippage + brokerage
+function computeRealisticExitPnL(entryPriceAdj, rawExitPrice, qty) {
+  const exitAdj = applyExitSlippage(rawExitPrice);
+  const gross   = (exitAdj - entryPriceAdj) * qty;
+  const costs   = computeRoundTripCost(entryPriceAdj, exitAdj, qty);
+  const net     = gross - costs;
+  return {
+    exitPrice:  +exitAdj.toFixed(4),
+    grossPnL:   +gross.toFixed(2),
+    costs:      +costs.toFixed(2),
+    pnl:        +net.toFixed(2),
+    pnlPct:     +((net / (entryPriceAdj * qty)) * 100).toFixed(2),
+  };
+}
+
+// ─── Phase 3 · Part 1 — Real rolling Pearson correlation on 5-min returns ───
+//
+// Replaces the old sector-proxy check. Fetches the last N 5-minute candles for
+// the candidate and each open position, converts them to percent returns, and
+// computes Pearson correlation. If |corr| > threshold vs ANY open position,
+// reject — prevents hidden concentration risk beyond naive sector counting.
+//
+// Falls back to the old sector-count check if the correlation feature is
+// disabled or candle data is unavailable.
+//
+// Cache: returns arrays are cached per-symbol for 3 minutes to avoid hammering
+// Kite's historical endpoint during one scan.
+// ──────────────────────────────────────────────────────────────────────────
+const _returnsCache = new Map(); // sym -> { returns: [...], expires }
+
+function pearsonCorrelation(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 10) return 0;
+  const xa = a.slice(-n), xb = b.slice(-n);
+  const mean = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+  const ma = mean(xa), mb = mean(xb);
+  let num = 0, da = 0, db = 0;
+  for (let i = 0; i < n; i++) {
+    const xi = xa[i] - ma, yi = xb[i] - mb;
+    num += xi * yi;
+    da  += xi * xi;
+    db  += yi * yi;
+  }
+  const denom = Math.sqrt(da * db);
+  if (!denom) return 0;
+  return num / denom;
+}
+
+async function getSymbolReturns(sym, lookback) {
+  const now = Date.now();
+  const cached = _returnsCache.get(sym);
+  if (cached && cached.expires > now && cached.returns.length >= lookback) {
+    return cached.returns.slice(-lookback);
+  }
   try {
-    const newCandles = stockFundamentals[sym];
-    if (!newCandles) return false;
-    for (const pos of openPositions) {
-      const posF = stockFundamentals[pos.symbol];
-      if (!posF) continue;
-      // Same sector = likely correlated — simple proxy
-      if ((newCandles.sector||'') === (posF.sector||'') && newCandles.sector) {
-        const sectorCount = openPositions.filter(p=>stockFundamentals[p.symbol]?.sector===newCandles.sector).length;
-        if (sectorCount >= CONFIG.MAX_SECTOR_POSITIONS) return true;
-      }
+    const token = validTokens[sym] || INSTRUMENTS[sym];
+    if (!token) return null;
+    const today   = new Date().toISOString().split("T")[0];
+    const weekAgo = new Date(now - 7*24*60*60*1000).toISOString().split("T")[0];
+    const candles = await kite.getHistoricalData(token, "5minute", weekAgo, today).catch(() => []);
+    if (!candles || candles.length < 12) return null;
+    const closes  = candles.map(c => +c.close);
+    const returns = [];
+    for (let i = 1; i < closes.length; i++) {
+      const prev = closes[i-1], cur = closes[i];
+      if (prev > 0) returns.push((cur - prev) / prev);
     }
-    return false;
-  } catch(e) { return false; }
+    _returnsCache.set(sym, { expires: now + 3 * 60 * 1000, returns });
+    return returns.slice(-lookback);
+  } catch(e) {
+    return null;
+  }
+}
+
+// Correlation guard — Phase 3 real Pearson, with sector-count fallback
+// Returns { blocked: bool, reason: string, maxCorr, maxSym } — the call-site
+// in scanAndTrade only needs to know whether to skip, but the richer shape is
+// exposed for logging + Pass 2 debug visibility.
+async function checkCorrelationBlock(sym, openPositions) {
+  if (!openPositions || openPositions.length === 0) {
+    return { blocked: false, reason: null, maxCorr: 0, maxSym: null };
+  }
+  // Real Pearson path
+  if (STRUCTURE_CONFIG.correlationFilterEnabled) {
+    try {
+      const lookback  = STRUCTURE_CONFIG.correlationLookback  || 60;
+      const threshold = STRUCTURE_CONFIG.correlationThreshold || 0.75;
+      const candRet   = await getSymbolReturns(sym, lookback);
+      if (!candRet || candRet.length < 10) {
+        // Fall through to sector proxy if we don't have enough data
+      } else {
+        let maxCorr = 0, maxSym = null;
+        for (const pos of openPositions) {
+          if (!pos.symbol || pos.symbol === sym) continue;
+          const posRet = await getSymbolReturns(pos.symbol, lookback);
+          if (!posRet || posRet.length < 10) continue;
+          const corr = pearsonCorrelation(candRet, posRet);
+          if (Math.abs(corr) > Math.abs(maxCorr)) {
+            maxCorr = corr; maxSym = pos.symbol;
+          }
+        }
+        if (Math.abs(maxCorr) > threshold) {
+          return {
+            blocked: true,
+            reason:  `corr ${maxCorr.toFixed(2)} vs ${maxSym} > ${threshold}`,
+            maxCorr, maxSym,
+          };
+        }
+        return { blocked: false, reason: null, maxCorr, maxSym };
+      }
+    } catch(e) { /* fall through */ }
+  }
+  // Fallback: old sector-count proxy
+  try {
+    const newF = stockFundamentals[sym];
+    if (!newF || !newF.sector) return { blocked: false, reason: null, maxCorr: 0, maxSym: null };
+    const sectorCount = openPositions.filter(
+      p => stockFundamentals[p.symbol]?.sector === newF.sector
+    ).length;
+    if (sectorCount >= CONFIG.MAX_SECTOR_POSITIONS) {
+      return {
+        blocked: true,
+        reason:  `sector ${newF.sector} already has ${sectorCount} positions`,
+        maxCorr: null, maxSym: null,
+      };
+    }
+    return { blocked: false, reason: null, maxCorr: null, maxSym: null };
+  } catch(e) {
+    return { blocked: false, reason: null, maxCorr: 0, maxSym: null };
+  }
+}
+
+// Back-compat shim — preserves old boolean-returning API for any other caller
+async function isTooCorrelated(sym, openPositions) {
+  const r = await checkCorrelationBlock(sym, openPositions);
+  return !!r.blocked;
 }
 
 // Drawdown circuit breaker — Varsity M9 Ch 6
@@ -1900,22 +2051,53 @@ const STRUCTURE_CONFIG = {
   llmDecisionCacheMinutes:     10,
   applyLLMSizeMultiplier:      false,   // v1: log only, don't apply
 
-  // ── Part 8: additional flags for Phase 2 enhancements ──
+  // ── Phase 2 flags ──
   chartZonesEnabled:           true,    // render S/R bands on chart
   chartVWAPEnabled:            true,    // render VWAP line on chart
   chartPDLevelsEnabled:        true,    // render PDH/PDL/PDC lines on chart
   llmNewsEnabled:              (process.env.LLM_NEWS_ENABLED || 'false') === 'true',
   llmNewsHeadlineCount:        4,       // headlines sent per candidate
   analyticsEnabled:            true,
-  correlationFilterEnabled:    false,   // real rolling-correlation (stub for future)
-  slippageSimulationEnabled:   false,   // adjust paper P&L realistically (stub)
-  slippageBps:                 5,       // 5 basis points per side
-  brokerageBps:                3,       // 3 bps per side (flat model)
+
+  // ── Phase 3 flags ──
+  // Part 1: real rolling Pearson correlation (replaces sector-based proxy)
+  correlationFilterEnabled:    (process.env.CORR_FILTER_ENABLED || 'true') !== 'false',
+  correlationLookback:         60,      // last N candles used for returns
+  correlationThreshold:        0.75,    // reject if |corr| > threshold vs any open position
+  // Part 2: slippage + brokerage simulation
+  slippageSimulationEnabled:   (process.env.SLIPPAGE_SIM_ENABLED || 'true') !== 'false',
+  slippageBps:                 5,       // 5 bps per side
+  brokerageBps:                3,       // 3 bps per side (round-trip model)
+  // Part 3: confidence calibration buckets in analytics
+  confidenceCalibrationEnabled:true,
+  // Part 4: A/B testing framework — tag trades with experiment flags
+  abTestingEnabled:            true,
+  // Part 5: news quality filter (dedup, freshness, source whitelist, symbol match)
+  newsQualityFilterEnabled:    true,
+  newsFreshnessHours:          24,
+  newsSourceWhitelist:         [
+    'reuters','bloomberg','moneycontrol','livemint','economictimes',
+    'business-standard','cnbctv18','the hindu businessline','bseindia','nseindia',
+  ],
+  // Part 8: scan latency monitoring
+  scanLatencyWarnSec:          180,     // warn if scan > 3 minutes
 };
 
 // In-memory latest scan analyses for /api/candidates/latest endpoint
 let _latestCandidateAnalyses = [];
 let _latestFilterStats = null;
+
+// Phase 3 · Part 8 — latest scan health snapshot (latency, warnings, failures)
+let _latestScanHealth = {
+  scannedAt:       null,
+  durationSec:     null,
+  lagging:         false,
+  warnThresholdSec:null,
+  dataWarnings:    0,
+  apiFailures:     [],
+  universeSize:    0,
+  signalCount:     0,
+};
 
 // In-memory Pass 2 debug snapshot — top ranked candidates + skip reasons
 // Exposed via /api/scan/pass2-debug for UI visibility (Part 5)
@@ -2257,7 +2439,65 @@ const _llmDecisionCache = new Map();
 // RSS-based /api/news pipeline. Used only when llmNewsEnabled=true. Never
 // throws — returns [] on any failure.
 const _newsCache = new Map(); // sym -> { expires, items }
-async function fetchHeadlinesForSymbol(sym, limit) {
+// ─── Phase 3 · Part 5 — News quality filter ──────────────────────────────
+// Applied after /api/news returns raw items and before they go to the LLM.
+// Removes duplicates, stale items, off-symbol noise, and non-whitelisted
+// sources. Degrades gracefully if any metadata is missing.
+// ──────────────────────────────────────────────────────────────────────────
+function _normalizeHeadline(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function _itemAgeHours(it) {
+  // Prefer explicit timestamp; fall back to timeAgo string like "3h ago"
+  if (it.publishedAt) {
+    const t = new Date(it.publishedAt).getTime();
+    if (Number.isFinite(t)) return (Date.now() - t) / 3600000;
+  }
+  const m = /(\d+)\s*(m|h|d)/i.exec(it.timeAgo || '');
+  if (!m) return null;
+  const n = +m[1];
+  if (m[2].toLowerCase() === 'm') return n / 60;
+  if (m[2].toLowerCase() === 'h') return n;
+  if (m[2].toLowerCase() === 'd') return n * 24;
+  return null;
+}
+function _sourceOk(it, whitelist) {
+  if (!whitelist || !whitelist.length) return true;
+  const src = (it.source || it.provider || it.domain || '').toLowerCase();
+  if (!src) return true; // unknown source — don't drop blindly
+  return whitelist.some(w => src.includes(w));
+}
+function _symbolMatches(it, sym, name) {
+  const h = _normalizeHeadline(it.headline);
+  if (!h) return false;
+  const s = (sym || '').toLowerCase();
+  if (s && h.includes(s)) return true;
+  // Relax to first word of company name ("Reliance", "Infosys", ...)
+  const firstWord = (name || '').split(/\s+/)[0];
+  if (firstWord && firstWord.length >= 4 && h.includes(firstWord.toLowerCase())) return true;
+  return false;
+}
+function filterHeadlinesForQuality(items, sym, name) {
+  if (!STRUCTURE_CONFIG.newsQualityFilterEnabled) return items;
+  const freshH  = +STRUCTURE_CONFIG.newsFreshnessHours || 24;
+  const wl      = STRUCTURE_CONFIG.newsSourceWhitelist || [];
+  const seen    = new Set();
+  const out     = [];
+  for (const raw of items || []) {
+    if (!raw || !raw.headline) continue;
+    const key = _normalizeHeadline(raw.headline);
+    if (!key || seen.has(key)) continue;       // dedup
+    const age = _itemAgeHours(raw);
+    if (age != null && age > freshH) continue;  // freshness
+    if (!_sourceOk(raw, wl)) continue;          // source whitelist
+    if (!_symbolMatches(raw, sym, name)) continue; // symbol relevance
+    seen.add(key);
+    out.push(raw);
+  }
+  return out;
+}
+
+async function fetchHeadlinesForSymbol(sym, limit, stockMeta) {
   const now = Date.now();
   const cached = _newsCache.get(sym);
   if (cached && cached.expires > now) return cached.items.slice(0, limit);
@@ -2266,13 +2506,17 @@ async function fetchHeadlinesForSymbol(sym, limit) {
     const base = process.env.INTERNAL_BASE_URL || `http://127.0.0.1:${port}`;
     const r = await fetch(`${base}/api/news?sym=${encodeURIComponent(sym)}`).catch(() => null);
     if (!r || !r.ok) return [];
-    const items = await r.json().catch(() => []);
-    const slim = (Array.isArray(items) ? items : [])
+    const raw = await r.json().catch(() => []);
+    const rawArr = Array.isArray(raw) ? raw : [];
+    // Apply quality filter (dedup/freshness/source/symbol match)
+    const filtered = filterHeadlinesForQuality(rawArr, sym, stockMeta?.n || stockMeta?.name);
+    const slim = filtered
       .slice(0, 10)
       .map(it => ({
         headline:  (it.headline || '').slice(0, 140),
         sentiment: it.sentiment || 'neutral',
-        timeAgo:   it.timeAgo   || '',
+        source:    it.source || it.provider || '',
+        timeAgo:   it.timeAgo || '',
       }));
     _newsCache.set(sym, { expires: now + 10 * 60 * 1000, items: slim });
     return slim.slice(0, limit);
@@ -2301,7 +2545,11 @@ async function reviewCandidateWithLLM(candidate, structure) {
   let newsItems = [];
   if (STRUCTURE_CONFIG.llmNewsEnabled) {
     try {
-      newsItems = await fetchHeadlinesForSymbol(sym, STRUCTURE_CONFIG.llmNewsHeadlineCount || 4);
+      newsItems = await fetchHeadlinesForSymbol(
+        sym,
+        STRUCTURE_CONFIG.llmNewsHeadlineCount || 4,
+        candidate.stock
+      );
     } catch(e) { newsItems = []; }
   }
 
@@ -2509,6 +2757,11 @@ async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
 
+  // Phase 3 · Part 8 — scan latency monitoring
+  const _scanStartedAt = Date.now();
+  let   _scanDataWarnings = 0;
+  const _scanApiFailures  = [];
+
   const scanTime = new Date().toLocaleTimeString("en-IN");
   console.log(`\n⟳ Smart scan at ${scanTime}...`);
 
@@ -2599,12 +2852,20 @@ async function scanAndTrade() {
         const exitSig = result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
 
         if (hitSL||hitTgt||exitSig) {
-          const pnl    = +((cmp-entryPrice)*openPos.quantity).toFixed(2);
-          const pnlPct = +((cmp-entryPrice)/entryPrice*100).toFixed(2);
+          // Phase 3 · Part 2 — slippage + brokerage-adjusted exit pricing
+          const realistic = computeRealisticExitPnL(entryPrice, cmp, openPos.quantity);
+          const exitFill  = realistic.exitPrice;
+          const pnl       = realistic.pnl;
+          const pnlPct    = realistic.pnlPct;
+          const grossPnL  = realistic.grossPnL;
+          const costs     = realistic.costs;
           const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":`Strategy Exit (${result.sellVotes}/3 SELL)`;
           await pool.query(
-            `UPDATE paper_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4 WHERE id=$5`,
-            [cmp,pnl,pnlPct,reason,openPos.id]
+            `UPDATE paper_trades
+                SET status='CLOSED', exit_price=$1, exit_time=NOW(),
+                    pnl=$2, pnl_pct=$3, exit_reason=$4, gross_pnl=$5, costs=$6
+              WHERE id=$7`,
+            [exitFill,pnl,pnlPct,reason,grossPnL,costs,openPos.id]
           );
 
           if (LIVE_TRADING && kite) {
@@ -2816,14 +3077,19 @@ async function scanAndTrade() {
       break;
     }
 
-    // Correlation guard
-    const tooCorrrelated = await isTooCorrelated(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
-    if (tooCorrrelated) {
-      console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — sector concentration limit`);
+    // Correlation guard — Phase 3 real Pearson w/ sector fallback
+    const corrCheck = await checkCorrelationBlock(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
+    if (corrCheck.blocked) {
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${result.score}) — ${corrCheck.reason}`);
       _latestPass2Debug.skippedCorr += 1;
-      recordPass2(candidate, 'SKIPPED', 'correlation');
+      recordPass2(candidate, 'SKIPPED', corrCheck.reason || 'correlation');
       continue;
     }
+    // Stash for decision object / analytics audit
+    candidate.correlation = {
+      maxCorr: corrCheck.maxCorr,
+      maxSym:  corrCheck.maxSym,
+    };
 
     // ATR-based position sizing + S/R-anchored SL + Kelly
     const price   = last.close;
@@ -2898,16 +3164,29 @@ async function scanAndTrade() {
     const decisionJson = candidate.decisionObject || null;
     const confVal      = candidate.decisionObject?.confidence ?? null;
 
+    // Phase 3 · Part 2 — apply entry slippage to the recorded fill price
+    const entryFill = applyEntrySlippage(price);
+
+    // Phase 3 · Part 4 — A/B experiment tagging (what filters were in effect)
+    const experimentJson = STRUCTURE_CONFIG.abTestingEnabled ? {
+      structure: !!STRUCTURE_CONFIG.structureFilterEnabled,
+      llm:       !!STRUCTURE_CONFIG.llmFilterEnabled,
+      news:      !!STRUCTURE_CONFIG.llmNewsEnabled,
+      correlation: !!STRUCTURE_CONFIG.correlationFilterEnabled,
+      slippage:  !!STRUCTURE_CONFIG.slippageSimulationEnabled,
+    } : null;
+
     // Paper trade
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence)
-       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15)`,
-      [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment)
+       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16)`,
+      [stock.sym,stock.n,entryFill,qty,+(qty*entryFill).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
        +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
        structureJson ? JSON.stringify(structureJson) : null,
        llmJson       ? JSON.stringify(llmJson)       : null,
        decisionJson  ? JSON.stringify(decisionJson)  : null,
-       confVal]
+       confVal,
+       experimentJson ? JSON.stringify(experimentJson) : null]
     );
 
     // Live order
@@ -2953,11 +3232,30 @@ async function scanAndTrade() {
     scanMsg += ` | Filter: ${fs.total}→${fs.approved} (S-rej:${fs.rejectedByStructure}${fs.rejectedByLLM?`, LLM-rej:${fs.rejectedByLLM}`:''})`;
   }
 
+  // Phase 3 · Part 8 — record scan latency + warn if it exceeded threshold
+  const _scanDurationMs  = Date.now() - _scanStartedAt;
+  const _scanDurationSec = +(_scanDurationMs / 1000).toFixed(1);
+  const _scanWarnSec     = STRUCTURE_CONFIG.scanLatencyWarnSec || 180;
+  _latestScanHealth = {
+    scannedAt:       new Date().toISOString(),
+    durationSec:     _scanDurationSec,
+    lagging:         _scanDurationSec > _scanWarnSec,
+    warnThresholdSec:_scanWarnSec,
+    dataWarnings:    _scanDataWarnings,
+    apiFailures:     _scanApiFailures.slice(0, 20),
+    universeSize:    UNIVERSE.length,
+    signalCount,
+  };
+  if (_scanDurationSec > _scanWarnSec) {
+    console.warn(`⚠ Scan latency ${_scanDurationSec}s > ${_scanWarnSec}s threshold`);
+  }
+  scanMsg += ` | ${_scanDurationSec}s`;
+
   await pool.query(
     "INSERT INTO scan_log (stocks,signals,regime,strategy,message) VALUES ($1,$2,$3,$4,$5)",
     [UNIVERSE.length, signalCount, dominantRegime, dominantStrategy, scanMsg]
   );
-  console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals\n`);
+  console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals | ${_scanDurationSec}s\n`);
 }
 
 // -- REST API ------------------------------------------------------------------
@@ -4977,8 +5275,13 @@ app.post("/api/structure/config", express.json(), (req, res) => {
     // Phase 2 flags
     'chartZonesEnabled','chartVWAPEnabled','chartPDLevelsEnabled',
     'llmNewsEnabled','llmNewsHeadlineCount',
-    'analyticsEnabled','correlationFilterEnabled',
+    'analyticsEnabled',
+    // Phase 3 flags
+    'correlationFilterEnabled','correlationLookback','correlationThreshold',
     'slippageSimulationEnabled','slippageBps','brokerageBps',
+    'confidenceCalibrationEnabled','abTestingEnabled',
+    'newsQualityFilterEnabled','newsFreshnessHours','newsSourceWhitelist',
+    'scanLatencyWarnSec',
   ];
   for (const k of allowed) {
     if (k in (req.body || {})) STRUCTURE_CONFIG[k] = req.body[k];
@@ -4997,6 +5300,11 @@ app.get("/api/scan/pass2-debug", (req, res) => {
   });
 });
 
+// Phase 3 · Part 8 — scan health / latency snapshot
+app.get("/api/scan/health", (req, res) => {
+  res.json(_latestScanHealth);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 4: Analytics — strategy / regime / exit / time / trade-quality / filter
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5009,7 +5317,9 @@ app.get("/api/analytics", async (req, res) => {
 
     // Closed trades in window — used by most calcs
     const { rows: closed } = await pool.query(
-      `SELECT strategy, regime, exit_reason, pnl, pnl_pct, entry_time, exit_time, capital
+      `SELECT strategy, regime, exit_reason, pnl, pnl_pct,
+              entry_time, exit_time, capital, confidence,
+              gross_pnl, costs, experiment
          FROM paper_trades
         WHERE status = 'CLOSED' AND exit_time > NOW() - ($1::int * INTERVAL '1 day')`,
       [days]
@@ -5122,6 +5432,164 @@ app.get("/api/analytics", async (req, res) => {
       pass2RejectedLLM:    _latestPass2Debug.rejectedLLM,
     };
 
+    // ─── Phase 3 · Part 3 — Confidence calibration buckets ───
+    const confidenceBuckets = [];
+    if (STRUCTURE_CONFIG.confidenceCalibrationEnabled) {
+      const ranges = [
+        { range: '0.00-0.50', lo: 0.0,  hi: 0.5  },
+        { range: '0.50-0.60', lo: 0.5,  hi: 0.6  },
+        { range: '0.60-0.70', lo: 0.6,  hi: 0.7  },
+        { range: '0.70-0.80', lo: 0.7,  hi: 0.8  },
+        { range: '0.80-1.00', lo: 0.8,  hi: 1.01 },
+      ];
+      for (const b of ranges) {
+        const bucketTrades = closed.filter(t => {
+          const c = t.confidence == null ? null : +t.confidence;
+          return c != null && c >= b.lo && c < b.hi;
+        });
+        confidenceBuckets.push({ ...summarize(b.range, bucketTrades) });
+      }
+    }
+
+    // ─── Phase 3 · Part 4 — A/B experiment breakdown ───
+    const experimentGroups = {};
+    if (STRUCTURE_CONFIG.abTestingEnabled) {
+      for (const t of closed) {
+        let exp = t.experiment;
+        if (typeof exp === 'string') { try { exp = JSON.parse(exp); } catch(_) { exp = null; } }
+        if (!exp) continue;
+        const key = `struct:${exp.structure?'on':'off'} · llm:${exp.llm?'on':'off'} · news:${exp.news?'on':'off'}`;
+        (experimentGroups[key] = experimentGroups[key] || []).push(t);
+      }
+    }
+    const byExperiment = Object.entries(experimentGroups).map(([k,v]) => summarize(k, v));
+
+    // Also slice by each individual flag (useful ON vs OFF comparison)
+    const flagCompare = {};
+    if (STRUCTURE_CONFIG.abTestingEnabled) {
+      const parseExp = t => {
+        let e = t.experiment;
+        if (typeof e === 'string') { try { e = JSON.parse(e); } catch(_) { e = null; } }
+        return e;
+      };
+      for (const flag of ['structure','llm','news','correlation','slippage']) {
+        const on  = closed.filter(t => { const e = parseExp(t); return e && e[flag] === true; });
+        const off = closed.filter(t => { const e = parseExp(t); return e && e[flag] === false; });
+        if (on.length || off.length) {
+          flagCompare[flag] = {
+            on:  summarize('on',  on),
+            off: summarize('off', off),
+          };
+        }
+      }
+    }
+
+    // ─── Phase 3 · Part 7 — Duration distribution ───
+    const durationBuckets = {
+      '<15m':0, '15-60m':0, '1-4h':0, '4h-1d':0, '>1d':0,
+    };
+    for (const t of closed) {
+      if (!t.entry_time || !t.exit_time) continue;
+      const mins = (new Date(t.exit_time) - new Date(t.entry_time)) / 60000;
+      if      (mins < 15)   durationBuckets['<15m']++;
+      else if (mins < 60)   durationBuckets['15-60m']++;
+      else if (mins < 240)  durationBuckets['1-4h']++;
+      else if (mins < 1440) durationBuckets['4h-1d']++;
+      else                  durationBuckets['>1d']++;
+    }
+    const durationDistribution = Object.entries(durationBuckets)
+      .map(([bucket, count]) => ({ bucket, count, pct: safePct(count, closed.length) }));
+
+    // ─── Phase 3 · Part 7 — Equity curve + drawdown ───
+    // Build equity curve chronologically from closed trade PnLs
+    const sortedByExit = [...closed]
+      .filter(t => t.exit_time)
+      .sort((a,b) => new Date(a.exit_time) - new Date(b.exit_time));
+    const equityCurve = [];
+    let cumulative = 0, peak = 0, maxDD = 0, maxDDStart = null, maxDDEnd = null;
+    let curDDStart = null, recoveryBars = 0, maxRecoveryBars = 0;
+    for (const t of sortedByExit) {
+      cumulative += safeNum(t.pnl);
+      if (cumulative > peak) {
+        peak = cumulative;
+        if (curDDStart != null) {
+          // recovered
+          maxRecoveryBars = Math.max(maxRecoveryBars, recoveryBars);
+          curDDStart = null; recoveryBars = 0;
+        }
+      } else {
+        if (curDDStart == null) curDDStart = equityCurve.length;
+        recoveryBars++;
+        const dd = peak - cumulative;
+        if (dd > maxDD) {
+          maxDD = dd;
+          maxDDStart = curDDStart;
+          maxDDEnd   = equityCurve.length;
+        }
+      }
+      equityCurve.push({
+        exitTime:  t.exit_time,
+        pnl:       +safeNum(t.pnl).toFixed(2),
+        equity:    +cumulative.toFixed(2),
+        peak:      +peak.toFixed(2),
+        drawdown:  +(peak - cumulative).toFixed(2),
+      });
+    }
+
+    // Daily equity progression (for a cleaner chart)
+    const dailyEquity = [];
+    {
+      let running = 0;
+      const byDay = new Map();
+      for (const t of sortedByExit) {
+        const d = new Date(t.exit_time).toISOString().slice(0,10);
+        byDay.set(d, (byDay.get(d) || 0) + safeNum(t.pnl));
+      }
+      for (const [day, dayPnl] of [...byDay.entries()].sort()) {
+        running += dayPnl;
+        dailyEquity.push({ date: day, dayPnL: +dayPnl.toFixed(2), equity: +running.toFixed(2) });
+      }
+    }
+
+    // ─── Phase 3 · Part 7 — Rolling Sharpe / Sortino ───
+    const rollingRiskMetrics = (()=>{
+      const pnlPcts = sortedByExit
+        .map(t => safeNum(t.pnl_pct) / 100)
+        .filter(v => Number.isFinite(v));
+      const N = pnlPcts.length;
+      if (N < 5) return { sharpe: 0, sortino: 0, samples: N };
+      const mean = pnlPcts.reduce((s,v)=>s+v, 0) / N;
+      const variance = pnlPcts.reduce((s,v)=>s+(v-mean)**2, 0) / N;
+      const std = Math.sqrt(variance);
+      const downside = Math.sqrt(
+        pnlPcts.filter(v=>v<0).reduce((s,v)=>s+v*v, 0) / N
+      );
+      // Annualized (paper: ~250 trades/yr, conservative)
+      const annFactor = Math.sqrt(252);
+      return {
+        samples:      N,
+        mean:         +(mean * 100).toFixed(4),
+        std:          +(std * 100).toFixed(4),
+        sharpe:       std > 0      ? +(mean / std * annFactor).toFixed(2)       : 0,
+        sortino:      downside > 0 ? +(mean / downside * annFactor).toFixed(2)  : 0,
+      };
+    })();
+
+    // ─── Phase 3 · Part 2 — Realistic PnL vs gross PnL comparison ───
+    const realistic = (()=>{
+      const grosses = closed.map(t => safeNum(t.gross_pnl ?? t.pnl));
+      const nets    = closed.map(t => safeNum(t.pnl));
+      const costs   = closed.map(t => safeNum(t.costs));
+      return {
+        grossPnL:      +grosses.reduce((s,v)=>s+v,0).toFixed(2),
+        netPnL:        +nets.reduce((s,v)=>s+v,0).toFixed(2),
+        totalCosts:    +costs.reduce((s,v)=>s+v,0).toFixed(2),
+        avgCostPerTrade: closed.length
+          ? +(costs.reduce((s,v)=>s+v,0) / closed.length).toFixed(2)
+          : 0,
+      };
+    })();
+
     res.json({
       enabled:      true,
       generatedAt:  new Date().toISOString(),
@@ -5144,7 +5612,21 @@ app.get("/api/analytics", async (req, res) => {
         grossWin:     +grossWin.toFixed(2),
         grossLoss:    +grossLoss.toFixed(2),
         netPnL:       +(grossWin - grossLoss).toFixed(2),
+        maxDrawdown:  +maxDD.toFixed(2),
+        maxDrawdownRange: maxDDStart != null
+          ? { startIdx: maxDDStart, endIdx: maxDDEnd }
+          : null,
+        sharpe:       rollingRiskMetrics.sharpe,
+        sortino:      rollingRiskMetrics.sortino,
       },
+      confidenceBuckets,
+      byExperiment,
+      flagCompare,
+      durationDistribution,
+      equityCurve:   equityCurve.slice(-200),   // cap for frontend
+      dailyEquity,
+      rollingRiskMetrics,
+      realistic,
       filterInsights,
     });
   } catch (e) {
