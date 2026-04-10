@@ -1261,7 +1261,118 @@ async function renderStocksAnalytics(){
       </div>`;
   }
 
-  // Filter insights
+  // ═══════════════════════════════════════════════════════════════════════
+  // PHASE 4 PANELS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── Auto Insights (Part 8) — load lazily ───
+  panels += `<div class="sec-title" style="margin-top:14px">Auto insights · deterministic pattern detection</div>
+    <div id="anl-insights-box" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px;color:var(--text2)">loading insights…</div>`;
+
+  // ─── Walk-forward windows (Part 14) ───
+  if (a.walkForward && a.walkForward.length) {
+    const wfCols = [
+      {h:"Window",  k:"window"},
+      {h:"Trades",  k:"trades", r:true},
+      {h:"Win %",   k:"winRate", r:true, f:wrFmt, color:wrCol},
+      {h:"Net P&L", k:"netPnL",  r:true, f:pnlFmt, color:pnlCol},
+      {h:"Expect",  k:"expectancy", r:true, f:pnlFmt, color:pnlCol},
+      {h:"PF",      k:"profitFactor", r:true, f:v=>(v||0).toFixed(2)},
+    ];
+    panels += gtable("Walk-forward · 7d / 30d / 90d · avoid overfitting", a.walkForward, wfCols);
+  }
+
+  // ─── Cost impact by strategy (Part 11) ───
+  if (a.costByStrategy && a.costByStrategy.length) {
+    const ciCols = [
+      {h:"Strategy", k:"strategy"},
+      {h:"Trades",   k:"trades", r:true},
+      {h:"Gross P&L",k:"grossPnL", r:true, f:pnlFmt, color:pnlCol},
+      {h:"Net P&L",  k:"netPnL",   r:true, f:pnlFmt, color:pnlCol},
+      {h:"Total cost",k:"totalCost",r:true, f:v=>INR((v||0).toFixed(0))},
+      {h:"Avg cost", k:"avgCost",  r:true, f:v=>INR((v||0).toFixed(0))},
+      {h:"Cost/Gross %", k:"costPctOfGross", r:true, f:v=>`${(v||0).toFixed(1)}%`,
+       color:v => v>=30?"var(--red)":v>=15?"var(--amber)":"var(--text2)"},
+      {h:"Low edge?",k:"lowEdge",  r:true, f:v=>v?"⚠":""},
+    ];
+    panels += gtable("Cost impact by strategy · flags low-edge strategies", a.costByStrategy, ciCols);
+  }
+
+  // ─── Stability per strategy (Part 12) ───
+  if (a.stabilityByStrategy && a.stabilityByStrategy.length) {
+    const stCols = [
+      {h:"Strategy",       k:"strategy"},
+      {h:"Trades",         k:"trades", r:true},
+      {h:"Net P&L",        k:"netPnL", r:true, f:pnlFmt, color:pnlCol},
+      {h:"Max DD",         k:"maxDrawdown", r:true, f:v=>INR((v||0).toFixed(0)), color:()=>"var(--red)"},
+      {h:"Longest L streak",k:"longestLossStreak", r:true},
+      {h:"Max recovery (trades)", k:"maxRecoveryBars", r:true},
+    ];
+    panels += gtable("Stability per strategy · drawdown + recovery", a.stabilityByStrategy, stCols);
+  }
+
+  // ─── Cohort analysis (Part 13) ───
+  if (a.cohorts && a.cohorts.length) {
+    panels += gtable("Candidate cohorts · performance by structure flags", a.cohorts, cols);
+  }
+
+  // ─── Threshold optimization (Part 1) ───
+  if (a.thresholds && a.thresholds.length) {
+    const thPanels = a.thresholds.map(th => {
+      if (!th.buckets || !th.buckets.length) return "";
+      const tCols = [
+        {h:"Range",   k:"range"},
+        {h:"Trades",  k:"trades",     r:true},
+        {h:"Win %",   k:"winRate",    r:true, f:wrFmt, color:wrCol},
+        {h:"Net P&L", k:"netPnL",     r:true, f:pnlFmt, color:pnlCol},
+        {h:"Expect",  k:"expectancy", r:true, f:pnlFmt, color:pnlCol},
+        {h:"PF",      k:"profitFactor",r:true, f:v=>(v||0).toFixed(2)},
+      ];
+      return gtable(`Threshold · ${th.name}${th.currentValue!=null?` (current: ${th.currentValue})`:""}`, th.buckets, tCols);
+    }).join("");
+    panels += `<div class="sec-title" style="margin-top:14px">Threshold optimization · performance by actual value</div>${thPanels}`;
+  }
+
+  // ─── Confidence sizing simulation (Part 7) ───
+  if (a.sizingSim) {
+    const sim = a.sizingSim;
+    panels += `
+      <div class="sec-title" style="margin-top:14px">Confidence sizing simulation · paper-only what-if</div>
+      <div class="stat-grid">
+        ${sc("Real net",  `${sim.realNet>=0?"+":""}${INR(sim.realNet.toFixed(0))}`, clr(sim.realNet), "uniform sizing")}
+        ${sc("Sim net",   `${sim.simNet>=0?"+":""}${INR(sim.simNet.toFixed(0))}`,   clr(sim.simNet),   "sized by confidence")}
+        ${sc("Edge",      `${sim.edge>=0?"+":""}${INR(sim.edge.toFixed(0))}`,       clr(sim.edge),     `${sim.edgePct}% vs real`)}
+      </div>
+      <div class="tw" style="margin-top:8px"><table>
+        <thead><tr><th>Band</th><th style="text-align:right">Trades</th><th style="text-align:right">Real P&L</th><th style="text-align:right">Sim P&L</th><th style="text-align:right">Δ</th></tr></thead>
+        <tbody>${Object.entries(sim.byBand).map(([k,v])=>`
+          <tr><td>${k}</td>
+              <td style="text-align:right;font-family:monospace">${v.trades}</td>
+              <td style="text-align:right;font-family:monospace;color:${clr(v.pnl)}">${pnlFmt(v.pnl)}</td>
+              <td style="text-align:right;font-family:monospace;color:${clr(v.sim)}">${pnlFmt(v.sim)}</td>
+              <td style="text-align:right;font-family:monospace;color:${clr(v.sim-v.pnl)}">${pnlFmt(v.sim-v.pnl)}</td>
+          </tr>`).join("")}
+        </tbody></table></div>`;
+  }
+
+  // ─── Portfolio stats (Part 6) ───
+  if (a.portfolioStats) {
+    const ps = a.portfolioStats;
+    panels += `
+      <div class="sec-title" style="margin-top:14px">Ranking engine averages (${ps.samples} trades with ranking data)</div>
+      <div class="stat-grid">
+        ${sc("Avg ranking score",   ps.avgRankingScore.toFixed(3),  "var(--text)")}
+        ${sc("Avg structure quality", ps.avgStructureQ.toFixed(3), "var(--text2)")}
+        ${sc("Avg reward/risk",     ps.avgRewardRisk.toFixed(3),   "var(--text2)")}
+        ${sc("Avg portfolio impact",ps.avgPortfolioImpact.toFixed(3), "var(--text2)")}
+      </div>`;
+  }
+
+  // ─── Rejected trade analysis (Part 9) — load lazily ───
+  panels += `<div class="sec-title" style="margin-top:14px">Rejected trade analysis · what happened after rejection</div>
+    <div id="anl-rejects-box" style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px;color:var(--text2)">loading rejected trades…</div>`;
+
+  // Filter insights (existing Phase 3)
   const fi = a.filterInsights || {};
   const fiHtml = `
     <div class="sec-title" style="margin-top:18px">Structure Filter insights</div>
@@ -1282,6 +1393,73 @@ async function renderStocksAnalytics(){
   panels += fiHtml;
 
   document.getElementById("anl-panels").innerHTML = panels;
+
+  // ─── Lazy-load Phase 4 Auto Insights + Rejected trades ───
+  (async () => {
+    try {
+      const r = await fetch(`/api/insights?days=${days}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      const box = document.getElementById("anl-insights-box");
+      if (box) {
+        const list = (data.insights || []).map(s => `<li style="margin:4px 0">${s.replace(/</g,"&lt;")}</li>`).join("");
+        box.innerHTML = list ? `<ul style="margin:0;padding-left:18px">${list}</ul>` : "No insights yet.";
+      }
+    } catch (e) {
+      const box = document.getElementById("anl-insights-box");
+      if (box) box.innerHTML = `<span style="color:var(--red)">insights load failed: ${e.message}</span>`;
+    }
+    try {
+      const r = await fetch(`/api/rejected-trades?days=${Math.min(days,30)}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      const box = document.getElementById("anl-rejects-box");
+      if (!box) return;
+      const agg = data.byReason || [];
+      const recent = (data.recent || []).slice(0, 20);
+      if (!agg.length && !recent.length) {
+        box.innerHTML = "No rejected candidates tracked yet. Rejections are recorded during live scans.";
+        return;
+      }
+      let html = "";
+      if (agg.length) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-bottom:6px">Aggregated by reject reason · positive false-reject score = possible missed trade</div>`;
+        html += `<div class="tw"><table>
+          <thead><tr><th>Reject reason</th><th style="text-align:right">Total</th><th style="text-align:right">Settled</th><th style="text-align:right">Avg max upside</th><th style="text-align:right">Avg max downside</th><th style="text-align:right">False-reject score</th></tr></thead>
+          <tbody>${agg.map(r => `
+            <tr>
+              <td>${(r.reason||"").replace(/</g,"&lt;")}</td>
+              <td style="text-align:right;font-family:monospace">${r.total}</td>
+              <td style="text-align:right;font-family:monospace">${r.settled}</td>
+              <td style="text-align:right;font-family:monospace;color:${(r.avgMaxUpside||0)>0?"var(--green)":"var(--text2)"}">${r.avgMaxUpside!=null?(r.avgMaxUpside>=0?"+":"")+r.avgMaxUpside+"%":"-"}</td>
+              <td style="text-align:right;font-family:monospace;color:${(r.avgMaxDownside||0)<0?"var(--red)":"var(--text2)"}">${r.avgMaxDownside!=null?(r.avgMaxDownside>=0?"+":"")+r.avgMaxDownside+"%":"-"}</td>
+              <td style="text-align:right;font-family:monospace;color:${(r.falseRejectScore||0)>0?"var(--green)":"var(--text2)"}">${r.falseRejectScore!=null?(r.falseRejectScore>=0?"+":"")+r.falseRejectScore:"-"}</td>
+            </tr>`).join("")}
+          </tbody></table></div>`;
+      }
+      if (recent.length) {
+        html += `<div style="font-size:11px;color:var(--text3);margin-top:10px;margin-bottom:4px">Recent rejections (last ${recent.length})</div>`;
+        html += `<div class="tw"><table>
+          <thead><tr><th>Symbol</th><th>Reason</th><th>Strategy</th><th>Regime</th><th style="text-align:right">Entry</th><th style="text-align:right">Max up</th><th style="text-align:right">Max down</th><th>Settled</th></tr></thead>
+          <tbody>${recent.map(r => `
+            <tr>
+              <td>${r.symbol||""}</td>
+              <td style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(r.reject_reason||"").replace(/</g,"&lt;")}</td>
+              <td style="font-size:11px">${r.strategy||""}</td>
+              <td style="font-size:11px">${r.regime||""}</td>
+              <td style="text-align:right;font-family:monospace">${r.entry_price!=null?INR(+r.entry_price):"-"}</td>
+              <td style="text-align:right;font-family:monospace;color:${(r.max_upside_pct||0)>0?"var(--green)":"var(--text2)"}">${r.max_upside_pct!=null?(+r.max_upside_pct).toFixed(2)+"%":"-"}</td>
+              <td style="text-align:right;font-family:monospace;color:${(r.max_downside_pct||0)<0?"var(--red)":"var(--text2)"}">${r.max_downside_pct!=null?(+r.max_downside_pct).toFixed(2)+"%":"-"}</td>
+              <td style="font-size:10px">${r.settled?"✓":"…"}</td>
+            </tr>`).join("")}
+          </tbody></table></div>`;
+      }
+      box.innerHTML = html;
+    } catch (e) {
+      const box = document.getElementById("anl-rejects-box");
+      if (box) box.innerHTML = `<span style="color:var(--red)">rejected-trades load failed: ${e.message}</span>`;
+    }
+  })();
   document.getElementById("anl-footer").innerHTML =
     `Analytics window: last ${days} days · generated ${a.generatedAt?new Date(a.generatedAt).toLocaleString():"-"}`;
 }

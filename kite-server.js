@@ -94,6 +94,34 @@ async function initDB() {
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS experiment     JSONB`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS gross_pnl      DECIMAL(18,4)`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS costs          DECIMAL(18,4)`).catch(()=>{});
+    // Phase 4 — ranking score breakdown (audit), portfolio impact, reward/risk
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS ranking_json   JSONB`).catch(()=>{});
+    // Phase 4 — Part 9: rejected candidates table with forward-tracking columns
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rejected_candidates (
+        id              SERIAL PRIMARY KEY,
+        symbol          VARCHAR(20) NOT NULL,
+        name            VARCHAR(100),
+        rejected_at     TIMESTAMP   DEFAULT NOW(),
+        entry_price     DECIMAL(18,4),
+        reject_reason   TEXT,
+        reject_stage    VARCHAR(32),
+        strategy        VARCHAR(50),
+        regime          VARCHAR(20),
+        score           DECIMAL(8,2),
+        confidence      DECIMAL(4,2),
+        structure_json  JSONB,
+        price_5m        DECIMAL(18,4),
+        price_15m       DECIMAL(18,4),
+        price_60m       DECIMAL(18,4),
+        max_upside_pct  DECIMAL(8,2),
+        max_downside_pct DECIMAL(8,2),
+        hypothetical_pnl_pct DECIMAL(8,2),
+        settled         BOOLEAN DEFAULT FALSE
+      )
+    `).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rejected_candidates_rejected_at ON rejected_candidates(rejected_at DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rejected_candidates_symbol      ON rejected_candidates(symbol)`).catch(()=>{});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_trades (
         id            SERIAL PRIMARY KEY,
@@ -1953,6 +1981,346 @@ async function isTooCorrelated(sym, openPositions) {
   return !!r.blocked;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 4 — Decision quality, measurement, optimization helpers
+// All additive; every function respects its STRUCTURE_CONFIG flag.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Part 4: regime-specific threshold overrides ──
+// Returns a *shallow* override map applied on top of STRUCTURE_CONFIG at
+// decision time; never mutates the global config. Tunings are deliberately
+// conservative — they widen/tighten existing gates, don't invent new ones.
+function getRegimeOverrides(regime) {
+  if (!STRUCTURE_CONFIG.regimeTuningEnabled) return {};
+  const R = (regime || '').toUpperCase();
+  if (R === 'TRENDING') {
+    // Trends can run through overhead R and extend from VWAP — loosen both.
+    return {
+      rejectIfResistanceWithinPct: Math.max(0.25, STRUCTURE_CONFIG.rejectIfResistanceWithinPct * 0.6),
+      farFromVWAPPct:              STRUCTURE_CONFIG.farFromVWAPPct + 0.75,
+      requireBreakout:             false,
+      requireNearSupport:          false,
+    };
+  }
+  if (R === 'RANGING') {
+    // Ranges need strong support proximity and strict overhead R rejection.
+    return {
+      rejectIfResistanceWithinPct: Math.max(0.4, STRUCTURE_CONFIG.rejectIfResistanceWithinPct * 1.2),
+      farFromVWAPPct:              Math.max(1.0, STRUCTURE_CONFIG.farFromVWAPPct - 0.5),
+      requireNearSupport:          true,
+      requireBreakout:             false,
+    };
+  }
+  if (R === 'BREAKOUT') {
+    return {
+      requireBreakout:        true,
+      requireVolumeConfirm:   true,
+      minVolumeRatio:         1.3,
+      requireNearSupport:     false,
+    };
+  }
+  if (R === 'MOMENTUM') {
+    return {
+      requirePriceAboveVWAP:  true,
+      rejectIfResistanceWithinPct: Math.max(0.4, STRUCTURE_CONFIG.rejectIfResistanceWithinPct * 0.9),
+      requireBreakout:        false,
+    };
+  }
+  return {};
+}
+
+// ── Part 5: strategy-specific filtering ──
+function getStrategyOverrides(strategy) {
+  if (!STRUCTURE_CONFIG.strategyTuningEnabled) return {};
+  const S = (strategy || '').toLowerCase();
+  if (S.includes('rsi') || S.includes('mean')) {
+    // Mean-reversion: needs to be near support, should NOT be in breakout
+    return { requireNearSupport: true, rejectIfBreakout: true };
+  }
+  if (S.includes('vwap')) {
+    return { requirePriceAboveVWAP: true, rejectIfBelowVWAP: true };
+  }
+  if (S.includes('boll') || S.includes('breakout')) {
+    return { requireBreakout: true, rejectIfTrapped: true };
+  }
+  if (S.includes('macd') || S.includes('ema') || S.includes('momentum')) {
+    return { requirePriceAboveVWAP: true };
+  }
+  return {};
+}
+
+// ── Part 4 + 5: Apply regime/strategy soft filters to a candidate ──
+// Returns { blocked, reason, adjustments[] }. Applied AFTER Pass 1.5 structure
+// filter, only when respective flags are on. Never throws — falls back to no-op
+// on missing structure data.
+function applyRegimeStrategyTuning(candidate) {
+  const out = { blocked: false, reason: null, adjustments: [] };
+  const s = candidate.structure;
+  if (!s) return out;
+  const f = s.flags || {};
+  const regOv = getRegimeOverrides(candidate.result.regime);
+  const stgOv = getStrategyOverrides(candidate.result.strategy);
+
+  // Combine (strategy rules win on conflicts — they're narrower)
+  const ov = { ...regOv, ...stgOv };
+
+  if (ov.requireNearSupport && !f.nearSupport) {
+    out.blocked = true; out.reason = `${candidate.result.strategy} needs near support`;
+    return out;
+  }
+  if (ov.requireBreakout && !f.breakoutAboveResistance) {
+    out.blocked = true; out.reason = `${candidate.result.strategy} needs breakout`;
+    return out;
+  }
+  if (ov.requirePriceAboveVWAP && !f.priceAboveVWAP) {
+    out.blocked = true; out.reason = `${candidate.result.strategy} needs price>VWAP`;
+    return out;
+  }
+  if (ov.rejectIfBreakout && f.breakoutAboveResistance) {
+    out.blocked = true; out.reason = 'mean-rev blocked: breakout detected';
+    return out;
+  }
+  if (ov.rejectIfBelowVWAP && !f.priceAboveVWAP) {
+    out.blocked = true; out.reason = 'VWAP strategy blocked: price<VWAP';
+    return out;
+  }
+  if (ov.rejectIfTrapped && f.trappedBetweenZones) {
+    out.blocked = true; out.reason = 'breakout strategy blocked: trapped';
+    return out;
+  }
+  if (ov.requireVolumeConfirm) {
+    const vr = s.volumeRatio || 0;
+    const minVR = +ov.minVolumeRatio || 1.2;
+    if (vr < minVR) { out.blocked = true; out.reason = `breakout w/o volume (${vr}x<${minVR}x)`; return out; }
+  }
+  // Regime overhead widening/tightening: soft adjustment, only if still blocked by
+  // the original threshold. We express this as a note, not a re-decision, to avoid
+  // double-counting with the original structure filter output.
+  if (regOv.rejectIfResistanceWithinPct != null) {
+    out.adjustments.push(`regimeR:${regOv.rejectIfResistanceWithinPct}`);
+  }
+  return out;
+}
+
+// ── Part 2: Pass 2 multi-factor ranking score ──
+// rankingScore = adjustedScore*0.35 + confidence*0.25 + structureQuality*0.15
+//              + regimeScore*0.10  + rewardRisk*0.10  − correlationPenalty*0.05
+// Each input is normalized to ~[0,1] before weighting. Missing inputs fall back
+// to adjustedScore (so behavior degrades gracefully when data is sparse).
+function computeStructureQualityScore(candidate) {
+  const s = candidate.structure;
+  if (!s) return 0.5;
+  const f = s.flags || {};
+  let q = 0.4;  // neutral base
+  const resLbl = s.nearestResistance?.strengthLabel;
+  const supLbl = s.nearestSupport?.strengthLabel;
+  if (f.nearSupport)                q += 0.15;
+  if (supLbl === 'HIGH')            q += 0.10;
+  if (f.breakoutAboveResistance)    q += 0.20;
+  if (f.priceAboveVWAP)             q += 0.05;
+  if ((s.volumeRatio || 0) >= 1.5)  q += 0.05;
+  if (f.nearResistance && resLbl === 'HIGH' && !f.breakoutAboveResistance) q -= 0.15;
+  if (f.trappedBetweenZones)        q -= 0.20;
+  if (f.stackedResistance && !f.breakoutAboveResistance) q -= 0.10;
+  return Math.max(0, Math.min(1, q));
+}
+
+// Regime score: lookup table, tunable. Higher = historically more profitable
+// for a typical multi-strategy intraday system. Defaults are deliberate but
+// the weight is small (0.10), so this is a tiebreaker, not a driver.
+const _regimeDefaultScore = {
+  TRENDING: 0.85, MOMENTUM: 0.80, BREAKOUT: 0.75,
+  RANGING:  0.55, REVERSAL: 0.50, UNKNOWN:  0.50,
+};
+function computeRegimeScore(regime) {
+  const R = (regime || 'UNKNOWN').toUpperCase();
+  return _regimeDefaultScore[R] ?? 0.5;
+}
+
+function computeRewardRiskScore(candidate, price, stopLoss, target) {
+  // RR in raw ratio → squashed to [0,1] via tanh-like curve at RR=3
+  if (!price || !stopLoss || !target) return 0.5;
+  const risk   = price - stopLoss;
+  const reward = target - price;
+  if (risk <= 0 || reward <= 0) return 0.3;
+  const rr = reward / risk;
+  // Map: RR 1→0.33, RR 2→0.66, RR 3→0.90, RR 4→0.96
+  return Math.max(0, Math.min(1, 1 - Math.exp(-rr / 1.5)));
+}
+
+function computeCorrelationPenalty(candidate) {
+  const mc = Math.abs(candidate.correlation?.maxCorr ?? 0);
+  // No penalty until |corr|>0.3; ramps to 1.0 at corr=0.9
+  if (mc < 0.3) return 0;
+  return Math.min(1, (mc - 0.3) / 0.6);
+}
+
+function computeRankingScore(candidate, price, stopLoss, target, portfolioCtx) {
+  // Fallback — if the upgrade is off, use raw adjustedScore for sort ordering.
+  const adj = +(candidate.adjustedScore ?? candidate.result.score) || 0;
+  if (!STRUCTURE_CONFIG.rankingUpgradeEnabled) {
+    return { rankingScore: adj, breakdown: null };
+  }
+  // Normalize inputs to ~[0,1]
+  const adjNorm = Math.max(0, Math.min(1, adj / 8));   // raw score ~[0..8]
+  const conf    = +(candidate.decisionObject?.confidence ?? 0.6);
+  const confN   = Math.max(0, Math.min(1, conf));
+  const sQ      = computeStructureQualityScore(candidate);
+  const regS    = computeRegimeScore(candidate.result.regime);
+  const rrS     = computeRewardRiskScore(candidate, price, stopLoss, target);
+  const corrPen = computeCorrelationPenalty(candidate);
+
+  // Part 6 — portfolio impact: regime diversity bonus
+  let regimeBonus = 0;
+  if (STRUCTURE_CONFIG.portfolioAllocationEnabled && portfolioCtx) {
+    const regimeOpen = portfolioCtx.regimesOpen || {};
+    const myRegime = (candidate.result.regime || 'UNKNOWN').toUpperCase();
+    const alreadyHas = regimeOpen[myRegime] || 0;
+    // reward first-of-regime entries, penalize stacking
+    if (alreadyHas === 0) regimeBonus =  STRUCTURE_CONFIG.portfolioRegimeBonus;
+    if (alreadyHas >= 2)  regimeBonus = -STRUCTURE_CONFIG.portfolioRegimeBonus;
+  }
+
+  const w = STRUCTURE_CONFIG.rankingWeights || {};
+  const rankingScore = +(
+    adjNorm * (w.adjustedScore    ?? 0.35) +
+    confN   * (w.confidence       ?? 0.25) +
+    sQ      * (w.structureQuality ?? 0.15) +
+    regS    * (w.regimeScore      ?? 0.10) +
+    rrS     * (w.rewardRisk       ?? 0.10) -
+    corrPen * (w.correlationPenalty ?? 0.05) +
+    regimeBonus
+  ).toFixed(4);
+
+  return {
+    rankingScore,
+    breakdown: {
+      adjustedScore: adj, adjNorm,
+      confidence: conf, structureQuality: +sQ.toFixed(3),
+      regimeScore: regS, rewardRisk: +rrS.toFixed(3),
+      correlationPenalty: +corrPen.toFixed(3),
+      regimeBonus: +regimeBonus.toFixed(3),
+      portfolioImpactScore: +((1 - corrPen) * 0.5 + (regimeBonus > 0 ? 0.5 : 0)).toFixed(3),
+    },
+  };
+}
+
+// ── Part 3: confidence bucket → sizing multiplier (simulation only) ──
+function confidenceSizingMultiplier(conf) {
+  if (conf == null || !Number.isFinite(+conf)) return 1.0;
+  const c = +conf;
+  if (c > 0.80) return 1.00;
+  if (c > 0.65) return 0.75;
+  if (c > 0.55) return 0.50;
+  return 0;  // below 0.55 — would be rejected entirely if sim sizing applied
+}
+function confidenceBand(conf) {
+  if (conf == null) return 'unknown';
+  const c = +conf;
+  if (c > 0.80) return 'high';
+  if (c > 0.65) return 'normal';
+  if (c > 0.55) return 'low';
+  return 'reject';
+}
+
+// ── Part 9: rejected candidate persistence + forward-tracking ──
+async function persistRejectedCandidate(candidate, stage, reason) {
+  if (!STRUCTURE_CONFIG.rejectedTradeAnalysisEnabled) return;
+  try {
+    const s = candidate.structure || null;
+    const structureJson = s ? {
+      nearestResistance: s.nearestResistance || null,
+      nearestSupport:    s.nearestSupport    || null,
+      vwap:              s.vwap              || null,
+      pdLevels:          s.pdLevels          || null,
+      volumeRatio:       s.volumeRatio       || null,
+      flags:             s.flags             || null,
+    } : null;
+    await pool.query(
+      `INSERT INTO rejected_candidates
+         (symbol,name,entry_price,reject_reason,reject_stage,strategy,regime,score,confidence,structure_json)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        candidate.stock.sym,
+        candidate.stock.n,
+        +(+(candidate.last?.close || 0)).toFixed(4),
+        reason || null,
+        stage  || null,
+        candidate.result?.strategy || null,
+        candidate.result?.regime   || null,
+        +(+(candidate.adjustedScore ?? candidate.result?.score ?? 0)).toFixed(2),
+        candidate.decisionObject?.confidence ?? null,
+        structureJson ? JSON.stringify(structureJson) : null,
+      ]
+    ).catch(()=>{});
+  } catch (_) { /* non-fatal */ }
+}
+
+// Called at scan-end with the latest {sym→price} map to update open rejected
+// rows with forward prices for the post-rejection analysis (Part 9).
+async function updateRejectedTracking(livePrices) {
+  if (!STRUCTURE_CONFIG.rejectedTradeAnalysisEnabled) return;
+  if (!livePrices || Object.keys(livePrices).length === 0) return;
+  const horizonMin = STRUCTURE_CONFIG.rejectedTrackingHorizonMin || 60;
+  try {
+    // Pull unsettled rejections within horizon window
+    const { rows } = await pool.query(
+      `SELECT id, symbol, entry_price, rejected_at, price_5m, price_15m, price_60m,
+              max_upside_pct, max_downside_pct
+         FROM rejected_candidates
+        WHERE settled = FALSE
+          AND rejected_at > NOW() - ($1::int * INTERVAL '1 minute')
+        ORDER BY rejected_at DESC
+        LIMIT 500`,
+      [horizonMin + 5]
+    );
+    if (rows.length === 0) return;
+
+    for (const r of rows) {
+      const px = +(+(livePrices[r.symbol] || 0));
+      if (!px || !r.entry_price) continue;
+      const entry = +r.entry_price;
+      const ageMin = (Date.now() - new Date(r.rejected_at).getTime()) / 60000;
+      const retPct = +(((px - entry) / entry) * 100).toFixed(2);
+
+      // Update running max/min (hypothetical long trade)
+      const newMaxUp   = Math.max(+(r.max_upside_pct   || -Infinity), retPct);
+      const newMaxDown = Math.min(+(r.max_downside_pct ||  Infinity), retPct);
+
+      const patch = {
+        max_upside_pct:   Number.isFinite(newMaxUp)   ? +newMaxUp.toFixed(2)   : null,
+        max_downside_pct: Number.isFinite(newMaxDown) ? +newMaxDown.toFixed(2) : null,
+      };
+      // Settlement thresholds (5m/15m/60m) — only record the first snapshot past each
+      if (r.price_5m  == null && ageMin >= 5)   patch.price_5m  = px;
+      if (r.price_15m == null && ageMin >= 15)  patch.price_15m = px;
+      if (r.price_60m == null && ageMin >= 60)  patch.price_60m = px;
+
+      const settled = ageMin >= horizonMin;
+      // Hypothetical PnL on settlement = max(max_upside, −|max_downside|)
+      // simplified: use max_upside as proxy (bull bias, same as an ATR target/SL frame)
+      let hypoPnl = null;
+      if (settled) {
+        hypoPnl = patch.max_upside_pct ?? r.max_upside_pct ?? retPct;
+      }
+
+      const sets = [
+        'max_upside_pct=$2',
+        'max_downside_pct=$3',
+      ];
+      const vals = [r.id, patch.max_upside_pct, patch.max_downside_pct];
+      if ('price_5m'  in patch) { sets.push(`price_5m=$${vals.length+1}`);  vals.push(patch.price_5m);  }
+      if ('price_15m' in patch) { sets.push(`price_15m=$${vals.length+1}`); vals.push(patch.price_15m); }
+      if ('price_60m' in patch) { sets.push(`price_60m=$${vals.length+1}`); vals.push(patch.price_60m); }
+      if (settled) {
+        sets.push(`settled=TRUE`, `hypothetical_pnl_pct=$${vals.length+1}`);
+        vals.push(hypoPnl != null ? +hypoPnl.toFixed(2) : null);
+      }
+      await pool.query(`UPDATE rejected_candidates SET ${sets.join(', ')} WHERE id=$1`, vals).catch(()=>{});
+    }
+  } catch (_) { /* non-fatal */ }
+}
+
 // Drawdown circuit breaker — Varsity M9 Ch 6
 let _peakEquity = CONFIG.ACCOUNT_SIZE;
 let _ddPaused   = false;
@@ -2081,6 +2449,41 @@ const STRUCTURE_CONFIG = {
   ],
   // Part 8: scan latency monitoring
   scanLatencyWarnSec:          180,     // warn if scan > 3 minutes
+
+  // ── Phase 4 flags ──
+  // Part 1: threshold optimization engine (/api/analytics/thresholds)
+  thresholdOptimizationEnabled: true,
+  // Part 2: Pass 2 multi-factor ranking score (adjustedScore + confidence + structure quality + regime + R:R − corr)
+  rankingUpgradeEnabled:        true,
+  rankingWeights: {
+    adjustedScore:   0.35,
+    confidence:      0.25,
+    structureQuality:0.15,
+    regimeScore:     0.10,
+    rewardRisk:      0.10,
+    correlationPenalty: 0.05,  // subtracted
+  },
+  // Part 3: confidence-based selection rules
+  confidenceSelectionEnabled:   true,
+  confidenceRejectBelow:        0.55,  // hard reject below this (only when enabled)
+  // Part 4: regime-specific threshold overrides
+  regimeTuningEnabled:          true,
+  // Part 5: strategy-specific filtering
+  strategyTuningEnabled:        true,
+  // Part 6: portfolio-aware allocation (diversity + corr penalty blended into ranking)
+  portfolioAllocationEnabled:   true,
+  portfolioRegimeBonus:         0.10,  // bonus weight toward diversity across regimes
+  // Part 7: confidence-based sizing simulation (paper only, does not change live sizing)
+  confidenceSizingSimEnabled:   true,
+  // Part 8: auto insights engine (/api/insights)
+  autoInsightsEnabled:          true,
+  // Part 9: rejected trade analysis (persist + post-rejection tracking)
+  rejectedTradeAnalysisEnabled: true,
+  rejectedTrackingHorizonMin:   60,    // track for 60 mins post-rejection
+  // Part 13: candidate cohort analysis (group by structure flags)
+  cohortAnalysisEnabled:        true,
+  // Part 14: walk-forward window comparison (7/30/90d)
+  walkForwardEnabled:           true,
 };
 
 // In-memory latest scan analyses for /api/candidates/latest endpoint
@@ -3010,11 +3413,83 @@ async function scanAndTrade() {
   }
 
   // ╔══════════════════════════════════════════════════════════════════════╗
-  // ║  PASS 2: Rank BUY candidates by adjustedScore (highest first) and    ║
+  // ║  PASS 2: Rank BUY candidates (Phase 4 multi-factor score) and        ║
   // ║  enter top signals respecting position limits + correlation guards.  ║
   // ║  This eliminates large-cap bias from sequential scanning.            ║
   // ╚══════════════════════════════════════════════════════════════════════╝
-  buyCandidates.sort((a, b) => (b.adjustedScore ?? b.result.score) - (a.adjustedScore ?? a.result.score));
+
+  // Phase 4 · Part 3 — confidence hard-reject (only on non-already-rejected)
+  if (STRUCTURE_CONFIG.confidenceSelectionEnabled) {
+    const minConf = +STRUCTURE_CONFIG.confidenceRejectBelow || 0;
+    for (const c of buyCandidates) {
+      if (c.rejected) continue;
+      const conf = c.decisionObject?.confidence;
+      if (conf != null && +conf < minConf) {
+        c.rejected     = true;
+        c.rejectReason = `confidence ${(+conf).toFixed(2)} < ${minConf}`;
+        filterStats.rejectedByStructure += 1;  // count as pre-entry reject
+        filterStats.rejectReasons['low_confidence'] = (filterStats.rejectReasons['low_confidence'] || 0) + 1;
+      }
+    }
+  }
+
+  // Phase 4 · Parts 4+5 — regime/strategy soft tuning filter
+  if (STRUCTURE_CONFIG.regimeTuningEnabled || STRUCTURE_CONFIG.strategyTuningEnabled) {
+    for (const c of buyCandidates) {
+      if (c.rejected) continue;
+      const tune = applyRegimeStrategyTuning(c);
+      if (tune.blocked) {
+        c.rejected     = true;
+        c.rejectReason = tune.reason;
+        filterStats.rejectedByStructure += 1;
+        filterStats.rejectReasons[tune.reason] = (filterStats.rejectReasons[tune.reason] || 0) + 1;
+      }
+      if (tune.adjustments && tune.adjustments.length) {
+        c.adjustments = (c.adjustments || []).concat(tune.adjustments);
+      }
+    }
+  }
+
+  // Phase 4 · Part 6 — portfolio context (regime diversity of currently-open positions)
+  const _portfolioCtx = (() => {
+    const regimesOpen = {};
+    for (const t of openTrades.filter(x => x.status === 'OPEN')) {
+      const r = (t.regime || 'UNKNOWN').toUpperCase();
+      regimesOpen[r] = (regimesOpen[r] || 0) + 1;
+    }
+    return { regimesOpen };
+  })();
+
+  // Phase 4 · Part 2 — compute rankingScore per candidate with lightweight
+  // ATR-based stop/target estimate for pre-sort RR. Final ranking is recomputed
+  // with the real sizing output inside the loop (and persisted to ranking_json).
+  for (const c of buyCandidates) {
+    try {
+      const cl = c.candles;
+      if (!cl || cl.length < 15) continue;
+      const highs14 = cl.slice(-14).map(x => x.high);
+      const lows14  = cl.slice(-14).map(x => x.low);
+      const atrVal  = highs14.map((h, i) => h - lows14[i]).reduce((a, b) => a + b, 0) / 14;
+      const px = c.last.close;
+      // Rough ATR estimate: stop = px − 1.2*ATR, target = px + 2.4*ATR
+      const estStop = px - 1.2 * atrVal;
+      const estTgt  = px + 2.4 * atrVal;
+      const rk = computeRankingScore(c, px, estStop, estTgt, _portfolioCtx);
+      c.rankingScore    = rk.rankingScore;
+      c.rankingBreakdown = rk.breakdown;
+    } catch (_) {
+      c.rankingScore = +(c.adjustedScore ?? c.result.score);
+    }
+  }
+
+  // Primary sort: rankingScore DESC (falls back to adjustedScore when flag off)
+  buyCandidates.sort((a, b) => {
+    const ra = +(a.rankingScore ?? a.adjustedScore ?? a.result.score) || 0;
+    const rb = +(b.rankingScore ?? b.adjustedScore ?? b.result.score) || 0;
+    if (rb !== ra) return rb - ra;
+    // Tiebreak on adjustedScore (preserves legacy behavior when scores tie)
+    return (+(b.adjustedScore ?? b.result.score)) - (+(a.adjustedScore ?? a.result.score));
+  });
 
   // Reset Pass 2 debug for this scan
   _latestPass2Debug = {
@@ -3038,16 +3513,23 @@ async function scanAndTrade() {
   const recordPass2 = (candidate, status, skipReason = null) => {
     const idx = _latestPass2Debug.ranked.length;
     _latestPass2Debug.ranked.push({
-      rank:       idx + 1,
-      symbol:     candidate.stock.sym,
-      strategy:   candidate.result.strategy,
-      regime:     candidate.result.regime,
-      score:      +candidate.result.score.toFixed(2),
-      adjScore:   +(+(candidate.adjustedScore ?? candidate.result.score)).toFixed(2),
-      confidence: candidate.decisionObject?.confidence ?? null,
-      status,      // ENTERED | SKIPPED
-      skipReason,  // 'structure'|'slots'|'correlation'|'dedup'|'llm'|null
+      rank:         idx + 1,
+      symbol:       candidate.stock.sym,
+      strategy:     candidate.result.strategy,
+      regime:       candidate.result.regime,
+      score:        +candidate.result.score.toFixed(2),
+      adjScore:     +(+(candidate.adjustedScore ?? candidate.result.score)).toFixed(2),
+      rankingScore: +(+(candidate.rankingScore ?? 0)).toFixed(4),
+      confidence:   candidate.decisionObject?.confidence ?? null,
+      confidenceBand: confidenceBand(candidate.decisionObject?.confidence),
+      status,        // ENTERED | SKIPPED
+      skipReason,    // 'structure'|'slots'|'correlation'|'dedup'|'llm'|null
     });
+    // Phase 4 · Part 9 — persist rejected rows for post-rejection price tracking
+    if (status === 'SKIPPED' && STRUCTURE_CONFIG.rejectedTradeAnalysisEnabled) {
+      // Fire-and-forget
+      persistRejectedCandidate(candidate, skipReason, skipReason);
+    }
   };
 
   for (const candidate of buyCandidates) {
@@ -3174,19 +3656,34 @@ async function scanAndTrade() {
       news:      !!STRUCTURE_CONFIG.llmNewsEnabled,
       correlation: !!STRUCTURE_CONFIG.correlationFilterEnabled,
       slippage:  !!STRUCTURE_CONFIG.slippageSimulationEnabled,
+      // Phase 4 flags for A/B slicing
+      rankingUpgrade:  !!STRUCTURE_CONFIG.rankingUpgradeEnabled,
+      confSelection:   !!STRUCTURE_CONFIG.confidenceSelectionEnabled,
+      regimeTuning:    !!STRUCTURE_CONFIG.regimeTuningEnabled,
+      strategyTuning:  !!STRUCTURE_CONFIG.strategyTuningEnabled,
+      portfolioAlloc:  !!STRUCTURE_CONFIG.portfolioAllocationEnabled,
+    } : null;
+
+    // Phase 4 · Part 2 — recompute rankingScore with real sizing output and
+    // persist the full breakdown for analytics + Pass 2 audit trail.
+    const rkFinal = computeRankingScore(candidate, price, +sl, +tgt, _portfolioCtx);
+    const rankingJson = rkFinal.breakdown ? {
+      rankingScore: rkFinal.rankingScore,
+      ...rkFinal.breakdown,
     } : null;
 
     // Paper trade
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment)
-       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16)`,
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json)
+       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17)`,
       [stock.sym,stock.n,entryFill,qty,+(qty*entryFill).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
        +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
        structureJson ? JSON.stringify(structureJson) : null,
        llmJson       ? JSON.stringify(llmJson)       : null,
        decisionJson  ? JSON.stringify(decisionJson)  : null,
        confVal,
-       experimentJson ? JSON.stringify(experimentJson) : null]
+       experimentJson ? JSON.stringify(experimentJson) : null,
+       rankingJson    ? JSON.stringify(rankingJson)    : null]
     );
 
     // Live order
@@ -3250,6 +3747,10 @@ async function scanAndTrade() {
     console.warn(`⚠ Scan latency ${_scanDurationSec}s > ${_scanWarnSec}s threshold`);
   }
   scanMsg += ` | ${_scanDurationSec}s`;
+
+  // Phase 4 · Part 9 — update post-rejection forward-price snapshots for
+  // previously rejected candidates using the latest livePrices from this scan.
+  try { await updateRejectedTracking(livePrices); } catch (_) { /* non-fatal */ }
 
   await pool.query(
     "INSERT INTO scan_log (stocks,signals,regime,strategy,message) VALUES ($1,$2,$3,$4,$5)",
@@ -5282,6 +5783,15 @@ app.post("/api/structure/config", express.json(), (req, res) => {
     'confidenceCalibrationEnabled','abTestingEnabled',
     'newsQualityFilterEnabled','newsFreshnessHours','newsSourceWhitelist',
     'scanLatencyWarnSec',
+    // Phase 4 flags
+    'thresholdOptimizationEnabled',
+    'rankingUpgradeEnabled','rankingWeights',
+    'confidenceSelectionEnabled','confidenceRejectBelow',
+    'regimeTuningEnabled','strategyTuningEnabled',
+    'portfolioAllocationEnabled','portfolioRegimeBonus',
+    'confidenceSizingSimEnabled','autoInsightsEnabled',
+    'rejectedTradeAnalysisEnabled','rejectedTrackingHorizonMin',
+    'cohortAnalysisEnabled','walkForwardEnabled',
   ];
   for (const k of allowed) {
     if (k in (req.body || {})) STRUCTURE_CONFIG[k] = req.body[k];
@@ -5319,7 +5829,7 @@ app.get("/api/analytics", async (req, res) => {
     const { rows: closed } = await pool.query(
       `SELECT strategy, regime, exit_reason, pnl, pnl_pct,
               entry_time, exit_time, capital, confidence,
-              gross_pnl, costs, experiment
+              gross_pnl, costs, experiment, structure_json, ranking_json
          FROM paper_trades
         WHERE status = 'CLOSED' AND exit_time > NOW() - ($1::int * INTERVAL '1 day')`,
       [days]
@@ -5590,6 +6100,249 @@ app.get("/api/analytics", async (req, res) => {
       };
     })();
 
+    // ═══ PHASE 4 ANALYTICS EXTENSIONS ═══
+
+    // Helper — safely parse any JSONB column (may arrive as string or object)
+    const _parseJson = v => {
+      if (v == null) return null;
+      if (typeof v === 'object') return v;
+      try { return JSON.parse(v); } catch (_) { return null; }
+    };
+
+    // ─── Phase 4 · Part 11 — Cost impact by strategy ───
+    const costByStrategy = [];
+    for (const [k, v] of groupBy(closed, 'strategy')) {
+      const gross = v.reduce((s,t)=>s+safeNum(t.gross_pnl ?? t.pnl), 0);
+      const net   = v.reduce((s,t)=>s+safeNum(t.pnl), 0);
+      const cost  = v.reduce((s,t)=>s+safeNum(t.costs), 0);
+      const avgCost = v.length ? cost / v.length : 0;
+      const costPctOfGross = gross !== 0 ? +((Math.abs(cost) / Math.abs(gross)) * 100).toFixed(1) : 0;
+      costByStrategy.push({
+        strategy: k,
+        trades: v.length,
+        grossPnL: +gross.toFixed(2),
+        netPnL:   +net.toFixed(2),
+        totalCost:+cost.toFixed(2),
+        avgCost:  +avgCost.toFixed(2),
+        costPctOfGross,
+        lowEdge:  gross > 0 && costPctOfGross > 30,  // flag low-edge strategies
+      });
+    }
+    costByStrategy.sort((a,b) => b.netPnL - a.netPnL);
+
+    // ─── Phase 4 · Part 12 — Drawdown + stability per strategy ───
+    // For each strategy: equity curve, maxDD, longest losing streak, recovery
+    const stabilityByStrategy = [];
+    for (const [strat, trades] of groupBy(closed, 'strategy')) {
+      const sorted = [...trades].filter(t=>t.exit_time).sort((a,b)=>new Date(a.exit_time)-new Date(b.exit_time));
+      let eq = 0, pk = 0, mdd = 0;
+      let curStreak = 0, longestLoss = 0;
+      let recoveryBars = 0, maxRecovery = 0;
+      for (const t of sorted) {
+        const p = safeNum(t.pnl);
+        eq += p;
+        if (eq > pk) { pk = eq; if (recoveryBars > 0) { maxRecovery = Math.max(maxRecovery, recoveryBars); recoveryBars = 0; } }
+        else { recoveryBars += 1; mdd = Math.max(mdd, pk - eq); }
+        if (p <= 0) { curStreak += 1; longestLoss = Math.max(longestLoss, curStreak); }
+        else curStreak = 0;
+      }
+      stabilityByStrategy.push({
+        strategy:         strat,
+        trades:           sorted.length,
+        netPnL:           +eq.toFixed(2),
+        maxDrawdown:      +mdd.toFixed(2),
+        longestLossStreak: longestLoss,
+        maxRecoveryBars:  maxRecovery,
+      });
+    }
+    stabilityByStrategy.sort((a,b) => b.netPnL - a.netPnL);
+
+    // ─── Phase 4 · Part 13 — Candidate cohort analysis by structure flags ───
+    // Buckets: breakout+vol / near-support / trapped / stacked R / priceAboveVWAP / nearR+noBreakout
+    const cohortTrades = STRUCTURE_CONFIG.cohortAnalysisEnabled ? {
+      breakout:            [],
+      nearSupport:         [],
+      trapped:             [],
+      stackedR:            [],
+      priceAboveVWAP:      [],
+      highVolume:          [],
+      nearResistance:      [],
+    } : null;
+    if (cohortTrades) {
+      for (const t of closed) {
+        const s = _parseJson(t.structure_json);
+        const f = s?.flags || null;
+        if (!f) continue;
+        if (f.breakoutAboveResistance && (s.volumeRatio ?? 0) >= 1.3) cohortTrades.breakout.push(t);
+        if (f.nearSupport && !f.nearResistance) cohortTrades.nearSupport.push(t);
+        if (f.trappedBetweenZones)              cohortTrades.trapped.push(t);
+        if (f.stackedResistance && !f.breakoutAboveResistance) cohortTrades.stackedR.push(t);
+        if (f.priceAboveVWAP)                   cohortTrades.priceAboveVWAP.push(t);
+        if ((s.volumeRatio ?? 0) >= 1.5)        cohortTrades.highVolume.push(t);
+        if (f.nearResistance && !f.breakoutAboveResistance) cohortTrades.nearResistance.push(t);
+      }
+    }
+    const cohorts = cohortTrades
+      ? Object.entries(cohortTrades).map(([k,v]) => summarize(k, v)).filter(r => r.trades > 0)
+      : [];
+
+    // ─── Phase 4 · Part 1 — Threshold optimization buckets ───
+    // For each tunable threshold, bucket trades by the value of that threshold
+    // on the trade's structure_json, compute summarize() per bucket. This reveals
+    // "what would happen if we tightened/loosened this threshold?".
+    const thresholdsReport = [];
+    if (STRUCTURE_CONFIG.thresholdOptimizationEnabled) {
+      const bucketize = (label, valueFn, buckets) => {
+        const buckTrades = buckets.map(b => ({ ...b, trades: [] }));
+        for (const t of closed) {
+          const s = _parseJson(t.structure_json);
+          const v = valueFn(s, t);
+          if (v == null || !Number.isFinite(+v)) continue;
+          const vv = +v;
+          for (const b of buckTrades) {
+            if (vv >= b.lo && vv < b.hi) { b.trades.push(t); break; }
+          }
+        }
+        return {
+          name:       label,
+          currentValue: STRUCTURE_CONFIG[label] ?? null,
+          buckets:    buckTrades.map(b => ({
+            range:  b.range,
+            ...summarize(b.range, b.trades),
+          })),
+        };
+      };
+
+      // 1. Distance to nearest resistance (%) — drives rejectIfResistanceWithinPct
+      thresholdsReport.push(bucketize(
+        'rejectIfResistanceWithinPct',
+        (s) => s?.nearestResistance?.distancePct,
+        [
+          { range:'0-0.3%',  lo:0,   hi:0.3 },
+          { range:'0.3-0.6%',lo:0.3, hi:0.6 },
+          { range:'0.6-1.0%',lo:0.6, hi:1.0 },
+          { range:'1.0-2.0%',lo:1.0, hi:2.0 },
+          { range:'>2.0%',   lo:2.0, hi:Infinity },
+        ],
+      ));
+      // 2. nearZoneThreshold — distance to nearest support
+      thresholdsReport.push(bucketize(
+        'nearZoneThresholdPct',
+        (s) => s?.nearestSupport?.distancePct,
+        [
+          { range:'0-0.3%',  lo:0,   hi:0.3 },
+          { range:'0.3-0.6%',lo:0.3, hi:0.6 },
+          { range:'0.6-1.0%',lo:0.6, hi:1.0 },
+          { range:'1.0-2.0%',lo:1.0, hi:2.0 },
+          { range:'>2.0%',   lo:2.0, hi:Infinity },
+        ],
+      ));
+      // 3. VWAP distance
+      thresholdsReport.push(bucketize(
+        'farFromVWAPPct',
+        (s) => s?.flags?.distanceFromVWAPPct != null ? Math.abs(+s.flags.distanceFromVWAPPct) : null,
+        [
+          { range:'0-0.5%',  lo:0,   hi:0.5 },
+          { range:'0.5-1.0%',lo:0.5, hi:1.0 },
+          { range:'1.0-2.0%',lo:1.0, hi:2.0 },
+          { range:'2.0-3.0%',lo:2.0, hi:3.0 },
+          { range:'>3.0%',   lo:3.0, hi:Infinity },
+        ],
+      ));
+      // 4. Volume ratio — drives breakoutBoost/volume-confirm
+      thresholdsReport.push(bucketize(
+        'volumeRatio',
+        (s) => s?.volumeRatio,
+        [
+          { range:'<1.0x',   lo:0,   hi:1.0 },
+          { range:'1.0-1.3x',lo:1.0, hi:1.3 },
+          { range:'1.3-1.5x',lo:1.3, hi:1.5 },
+          { range:'1.5-2.0x',lo:1.5, hi:2.0 },
+          { range:'>=2.0x',  lo:2.0, hi:Infinity },
+        ],
+      ));
+      // 5. Resistance zone strength score
+      thresholdsReport.push(bucketize(
+        'resistanceStrengthScore',
+        (s) => s?.nearestResistance?.strengthScore,
+        [
+          { range:'weak(0-2)',   lo:0,   hi:2   },
+          { range:'med(2-4)',    lo:2,   hi:4   },
+          { range:'strong(4-6)', lo:4,   hi:6   },
+          { range:'elite(>=6)',  lo:6,   hi:Infinity },
+        ],
+      ));
+    }
+
+    // ─── Phase 4 · Part 7 — Confidence-based sizing SIMULATION (paper only) ───
+    // Applies a hypothetical sizing multiplier per confidence band WITHOUT
+    // changing recorded PnL. Computes an alternate PnL curve so we can measure
+    // what the system would have made if it had sized by confidence.
+    const sizingSim = (() => {
+      if (!STRUCTURE_CONFIG.confidenceSizingSimEnabled) return null;
+      let realNet = 0, simNet = 0;
+      const byBand = { high:{trades:0,pnl:0,sim:0}, normal:{trades:0,pnl:0,sim:0},
+                        low:{trades:0,pnl:0,sim:0}, reject:{trades:0,pnl:0,sim:0},
+                        unknown:{trades:0,pnl:0,sim:0} };
+      for (const t of closed) {
+        const p = safeNum(t.pnl);
+        const conf = t.confidence != null ? +t.confidence : null;
+        const band = confidenceBand(conf);
+        const mult = confidenceSizingMultiplier(conf);
+        realNet += p;
+        simNet  += p * mult;
+        byBand[band].trades += 1;
+        byBand[band].pnl    += p;
+        byBand[band].sim    += p * mult;
+      }
+      for (const k of Object.keys(byBand)) {
+        byBand[k].pnl = +byBand[k].pnl.toFixed(2);
+        byBand[k].sim = +byBand[k].sim.toFixed(2);
+      }
+      return {
+        realNet:  +realNet.toFixed(2),
+        simNet:   +simNet.toFixed(2),
+        edge:     +(simNet - realNet).toFixed(2),
+        edgePct:  realNet !== 0 ? +(((simNet - realNet) / Math.abs(realNet)) * 100).toFixed(1) : 0,
+        byBand,
+      };
+    })();
+
+    // ─── Phase 4 · Part 14 — Walk-forward comparison (7/30/90 day windows) ───
+    const walkForward = (() => {
+      if (!STRUCTURE_CONFIG.walkForwardEnabled) return null;
+      const windows = [
+        { label: '7d',  days: 7  },
+        { label: '30d', days: 30 },
+        { label: '90d', days: 90 },
+      ];
+      const now = Date.now();
+      const results = [];
+      for (const w of windows) {
+        const cutoff = now - w.days * 24 * 60 * 60 * 1000;
+        const subset = closed.filter(t => t.exit_time && new Date(t.exit_time).getTime() >= cutoff);
+        results.push({ window: w.label, ...summarize(w.label, subset) });
+      }
+      return results;
+    })();
+
+    // ─── Phase 4 · Part 6 — Portfolio impact aggregates (from ranking_json) ───
+    const portfolioStats = (() => {
+      const withRanking = closed.map(t => _parseJson(t.ranking_json)).filter(r => r && r.rankingScore != null);
+      if (withRanking.length === 0) return null;
+      const avgRanking = withRanking.reduce((s,r)=>s + +r.rankingScore, 0) / withRanking.length;
+      const avgStructQ = withRanking.reduce((s,r)=>s + +(r.structureQuality || 0), 0) / withRanking.length;
+      const avgRR      = withRanking.reduce((s,r)=>s + +(r.rewardRisk || 0), 0) / withRanking.length;
+      const avgPortImpact = withRanking.reduce((s,r)=>s + +(r.portfolioImpactScore || 0), 0) / withRanking.length;
+      return {
+        samples:          withRanking.length,
+        avgRankingScore:  +avgRanking.toFixed(4),
+        avgStructureQ:    +avgStructQ.toFixed(3),
+        avgRewardRisk:    +avgRR.toFixed(3),
+        avgPortfolioImpact: +avgPortImpact.toFixed(3),
+      };
+    })();
+
     res.json({
       enabled:      true,
       generatedAt:  new Date().toISOString(),
@@ -5628,9 +6381,409 @@ app.get("/api/analytics", async (req, res) => {
       rollingRiskMetrics,
       realistic,
       filterInsights,
+      // ── Phase 4 additions ──
+      costByStrategy,
+      stabilityByStrategy,
+      cohorts,
+      thresholds:   thresholdsReport,
+      sizingSim,
+      walkForward,
+      portfolioStats,
     });
   } catch (e) {
     console.error("analytics error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 4 · Part 1 — Dedicated threshold optimization endpoint
+// ═══════════════════════════════════════════════════════════════════════════
+app.get("/api/analytics/thresholds", async (req, res) => {
+  if (!STRUCTURE_CONFIG.thresholdOptimizationEnabled) {
+    return res.json({ enabled: false, thresholds: [] });
+  }
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    const { rows: closed } = await pool.query(
+      `SELECT strategy, regime, pnl, pnl_pct, structure_json
+         FROM paper_trades
+        WHERE status='CLOSED' AND exit_time > NOW() - ($1::int * INTERVAL '1 day')`,
+      [days]
+    );
+    const parse = v => { if (v==null) return null; if (typeof v==='object') return v; try { return JSON.parse(v); } catch(_){ return null; } };
+    const safeNum = v => (v == null ? 0 : +v);
+    const safePct = (a,b) => (b > 0 ? +((a/b)*100).toFixed(1) : 0);
+    const summarize = (trades) => {
+      if (!trades.length) return { trades:0, winRate:0, expectancy:0, profitFactor:0, netPnL:0 };
+      const pnls = trades.map(t => safeNum(t.pnl));
+      const wins = pnls.filter(p => p > 0);
+      const losses = pnls.filter(p => p <= 0);
+      const gw = wins.reduce((s,p)=>s+p,0);
+      const gl = Math.abs(losses.reduce((s,p)=>s+p,0));
+      const aw = wins.length ? gw/wins.length : 0;
+      const al = losses.length ? gl/losses.length : 0;
+      const wp = wins.length / trades.length;
+      return {
+        trades: trades.length,
+        winRate: safePct(wins.length, trades.length),
+        expectancy: +(wp*aw - (1-wp)*al).toFixed(2),
+        profitFactor: gl > 0 ? +(gw/gl).toFixed(2) : 0,
+        netPnL: +pnls.reduce((s,p)=>s+p,0).toFixed(2),
+      };
+    };
+
+    const groupByValue = (valueFn, buckets) => {
+      const buckTrades = buckets.map(b => ({ ...b, trades: [] }));
+      for (const t of closed) {
+        const s = parse(t.structure_json);
+        const v = valueFn(s, t);
+        if (v == null || !Number.isFinite(+v)) continue;
+        const vv = +v;
+        for (const b of buckTrades) {
+          if (vv >= b.lo && vv < b.hi) { b.trades.push(t); break; }
+        }
+      }
+      return buckTrades.map(b => ({ range: b.range, value: b.lo, ...summarize(b.trades) }));
+    };
+
+    const byStrategy = (valueFn, buckets) => {
+      const strategies = [...new Set(closed.map(t => t.strategy || 'UNKNOWN'))];
+      const out = {};
+      for (const strat of strategies) {
+        const subset = closed.filter(t => (t.strategy || 'UNKNOWN') === strat);
+        const buckTrades = buckets.map(b => ({ ...b, trades: [] }));
+        for (const t of subset) {
+          const s = parse(t.structure_json);
+          const v = valueFn(s, t);
+          if (v == null || !Number.isFinite(+v)) continue;
+          const vv = +v;
+          for (const b of buckTrades) {
+            if (vv >= b.lo && vv < b.hi) { b.trades.push(t); break; }
+          }
+        }
+        out[strat] = buckTrades.map(b => ({ range: b.range, ...summarize(b.trades) }));
+      }
+      return out;
+    };
+
+    const byRegime = (valueFn, buckets) => {
+      const regimes = [...new Set(closed.map(t => t.regime || 'UNKNOWN'))];
+      const out = {};
+      for (const reg of regimes) {
+        const subset = closed.filter(t => (t.regime || 'UNKNOWN') === reg);
+        const buckTrades = buckets.map(b => ({ ...b, trades: [] }));
+        for (const t of subset) {
+          const s = parse(t.structure_json);
+          const v = valueFn(s, t);
+          if (v == null || !Number.isFinite(+v)) continue;
+          const vv = +v;
+          for (const b of buckTrades) {
+            if (vv >= b.lo && vv < b.hi) { b.trades.push(t); break; }
+          }
+        }
+        out[reg] = buckTrades.map(b => ({ range: b.range, ...summarize(b.trades) }));
+      }
+      return out;
+    };
+
+    const distBuckets = [
+      { range:'0-0.3%',  lo:0,   hi:0.3 },
+      { range:'0.3-0.6%',lo:0.3, hi:0.6 },
+      { range:'0.6-1.0%',lo:0.6, hi:1.0 },
+      { range:'1.0-2.0%',lo:1.0, hi:2.0 },
+      { range:'>2.0%',   lo:2.0, hi:Infinity },
+    ];
+    const volBuckets = [
+      { range:'<1.0x',   lo:0,   hi:1.0 },
+      { range:'1.0-1.3x',lo:1.0, hi:1.3 },
+      { range:'1.3-1.5x',lo:1.3, hi:1.5 },
+      { range:'1.5-2.0x',lo:1.5, hi:2.0 },
+      { range:'>=2.0x',  lo:2.0, hi:Infinity },
+    ];
+
+    const thresholds = [
+      {
+        name:         'rejectIfResistanceWithinPct',
+        currentValue: STRUCTURE_CONFIG.rejectIfResistanceWithinPct,
+        description:  'Distance to nearest resistance — trades grouped by actual overhead distance',
+        buckets:      groupByValue(s => s?.nearestResistance?.distancePct, distBuckets),
+        byStrategy:   byStrategy(s => s?.nearestResistance?.distancePct, distBuckets),
+        byRegime:     byRegime(s => s?.nearestResistance?.distancePct, distBuckets),
+      },
+      {
+        name:         'nearZoneThresholdPct',
+        currentValue: STRUCTURE_CONFIG.nearZoneThresholdPct,
+        description:  'Distance to nearest support — trades grouped by actual support proximity',
+        buckets:      groupByValue(s => s?.nearestSupport?.distancePct, distBuckets),
+        byStrategy:   byStrategy(s => s?.nearestSupport?.distancePct, distBuckets),
+        byRegime:     byRegime(s => s?.nearestSupport?.distancePct, distBuckets),
+      },
+      {
+        name:         'farFromVWAPPct',
+        currentValue: STRUCTURE_CONFIG.farFromVWAPPct,
+        description:  'Absolute distance from VWAP — measures stretch penalty sweet spot',
+        buckets:      groupByValue(s => s?.flags?.distanceFromVWAPPct != null ? Math.abs(+s.flags.distanceFromVWAPPct) : null, [
+          { range:'0-0.5%',  lo:0,   hi:0.5 },
+          { range:'0.5-1.0%',lo:0.5, hi:1.0 },
+          { range:'1.0-2.0%',lo:1.0, hi:2.0 },
+          { range:'2.0-3.0%',lo:2.0, hi:3.0 },
+          { range:'>3.0%',   lo:3.0, hi:Infinity },
+        ]),
+      },
+      {
+        name:         'volumeRatio (breakoutBoost)',
+        currentValue: 1.5,
+        description:  'Volume ratio at entry — measures volume-confirm threshold',
+        buckets:      groupByValue(s => s?.volumeRatio, volBuckets),
+        byRegime:     byRegime(s => s?.volumeRatio, volBuckets),
+      },
+      {
+        name:         'supportBounceBoost (strengthScore)',
+        currentValue: STRUCTURE_CONFIG.minTouchesForStrongZone,
+        description:  'Support zone strength at entry — measures supportBounce quality',
+        buckets:      groupByValue(s => s?.nearestSupport?.strengthScore, [
+          { range:'weak(0-2)',   lo:0, hi:2 },
+          { range:'med(2-4)',    lo:2, hi:4 },
+          { range:'strong(4-6)', lo:4, hi:6 },
+          { range:'elite(>=6)',  lo:6, hi:Infinity },
+        ]),
+      },
+    ];
+
+    res.json({
+      enabled:     true,
+      generatedAt: new Date().toISOString(),
+      window:      { days, closedTrades: closed.length },
+      thresholds,
+    });
+  } catch (e) {
+    console.error("/api/analytics/thresholds error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 4 · Part 8 — Auto insights engine (deterministic, no LLM)
+// ═══════════════════════════════════════════════════════════════════════════
+app.get("/api/insights", async (req, res) => {
+  if (!STRUCTURE_CONFIG.autoInsightsEnabled) {
+    return res.json({ enabled: false, insights: [] });
+  }
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    // Inline minimal analytics — fetch only what insights need
+    const { rows: closed } = await pool.query(
+      `SELECT strategy, regime, pnl, pnl_pct, exit_time, confidence,
+              experiment, structure_json, gross_pnl, costs
+         FROM paper_trades
+        WHERE status='CLOSED' AND exit_time > NOW() - ($1::int * INTERVAL '1 day')`,
+      [days]
+    );
+    const parse = v => { if (v==null) return null; if (typeof v==='object') return v; try { return JSON.parse(v); } catch(_){ return null; } };
+    const safeNum = v => (v == null ? 0 : +v);
+    const winRate = arr => arr.length ? (arr.filter(t => safeNum(t.pnl) > 0).length / arr.length) * 100 : 0;
+    const expectancyOf = arr => {
+      if (!arr.length) return 0;
+      const p = arr.map(t => safeNum(t.pnl));
+      const w = p.filter(x=>x>0), l = p.filter(x=>x<=0);
+      const aw = w.length ? w.reduce((s,x)=>s+x,0)/w.length : 0;
+      const al = l.length ? Math.abs(l.reduce((s,x)=>s+x,0))/l.length : 0;
+      const wp = w.length / arr.length;
+      return wp*aw - (1-wp)*al;
+    };
+
+    const insights = [];
+    if (closed.length < 5) {
+      insights.push('Not enough closed trades yet to generate reliable insights (need ≥5).');
+      return res.json({ enabled: true, insights, trades: closed.length });
+    }
+
+    // ── 1. Filter value (ON vs OFF per flag) ──
+    const parseExp = t => parse(t.experiment);
+    for (const flag of ['structure','llm','news','correlation','slippage','rankingUpgrade','confSelection','regimeTuning','strategyTuning']) {
+      const on  = closed.filter(t => { const e = parseExp(t); return e && e[flag] === true;  });
+      const off = closed.filter(t => { const e = parseExp(t); return e && e[flag] === false; });
+      if (on.length >= 5 && off.length >= 5) {
+        const wrOn  = winRate(on), wrOff = winRate(off);
+        const diff  = +(wrOn - wrOff).toFixed(1);
+        if (Math.abs(diff) >= 3) {
+          insights.push(`${flag} filter ${diff >= 0 ? 'improved' : 'reduced'} win rate by ${diff >= 0 ? '+' : ''}${diff}% (${wrOn.toFixed(0)}% ON vs ${wrOff.toFixed(0)}% OFF, n=${on.length}/${off.length})`);
+        }
+      }
+    }
+
+    // ── 2. Confidence calibration (best band) ──
+    const confHigh = closed.filter(t => t.confidence != null && +t.confidence > 0.75);
+    if (confHigh.length >= 5) {
+      const exHigh = expectancyOf(confHigh);
+      const exAll  = expectancyOf(closed);
+      if (exAll !== 0 && exHigh / (exAll || 1) >= 1.2) {
+        insights.push(`High confidence trades (>0.75) have ${(exHigh/exAll).toFixed(1)}x the expectancy of average trades`);
+      }
+    }
+
+    // ── 3. Best/worst strategy by regime ──
+    const stratRegime = new Map();
+    for (const t of closed) {
+      const k = `${t.strategy || 'UNK'}|${t.regime || 'UNK'}`;
+      if (!stratRegime.has(k)) stratRegime.set(k, []);
+      stratRegime.get(k).push(t);
+    }
+    const stratRegimeStats = [];
+    for (const [k, arr] of stratRegime) {
+      if (arr.length < 5) continue;
+      const [strategy, regime] = k.split('|');
+      stratRegimeStats.push({ strategy, regime, n: arr.length, wr: winRate(arr), ex: expectancyOf(arr) });
+    }
+    stratRegimeStats.sort((a,b) => b.ex - a.ex);
+    if (stratRegimeStats.length) {
+      const best  = stratRegimeStats[0];
+      const worst = stratRegimeStats[stratRegimeStats.length - 1];
+      insights.push(`Best strategy×regime: ${best.strategy} in ${best.regime} (WR ${best.wr.toFixed(0)}%, expectancy ${best.ex.toFixed(1)}, n=${best.n})`);
+      if (worst.ex < 0 && worst !== best) {
+        insights.push(`Worst strategy×regime: ${worst.strategy} in ${worst.regime} (WR ${worst.wr.toFixed(0)}%, expectancy ${worst.ex.toFixed(1)}, n=${worst.n}) — consider disabling`);
+      }
+    }
+
+    // ── 4. Breakout vs non-breakout win rate ──
+    const breakouts = closed.filter(t => {
+      const s = parse(t.structure_json);
+      return s?.flags?.breakoutAboveResistance;
+    });
+    if (breakouts.length >= 5) {
+      const wrB = winRate(breakouts);
+      const wrAll = winRate(closed);
+      if (Math.abs(wrB - wrAll) >= 5) {
+        insights.push(`Breakout trades win ${wrB.toFixed(0)}% vs ${wrAll.toFixed(0)}% overall — ${wrB > wrAll ? 'strong edge' : 'underperforming'}`);
+      }
+    }
+
+    // ── 5. Resistance distance sweet spot ──
+    const distBuckets = { '0-0.5%':[], '0.5-1.0%':[], '1.0-2.0%':[], '>2.0%':[] };
+    for (const t of closed) {
+      const s = parse(t.structure_json);
+      const d = s?.nearestResistance?.distancePct;
+      if (d == null) continue;
+      if (d < 0.5)       distBuckets['0-0.5%'].push(t);
+      else if (d < 1.0)  distBuckets['0.5-1.0%'].push(t);
+      else if (d < 2.0)  distBuckets['1.0-2.0%'].push(t);
+      else               distBuckets['>2.0%'].push(t);
+    }
+    let bestBucket = null, bestWR = -1;
+    for (const [k, arr] of Object.entries(distBuckets)) {
+      if (arr.length < 5) continue;
+      const wr = winRate(arr);
+      if (wr > bestWR) { bestWR = wr; bestBucket = k; }
+    }
+    if (bestBucket) {
+      insights.push(`Best trades occur when resistance distance is ${bestBucket} (WR ${bestWR.toFixed(0)}%)`);
+    }
+
+    // ── 6. Cost impact warning ──
+    const gross = closed.reduce((s,t) => s + safeNum(t.gross_pnl ?? t.pnl), 0);
+    const cost  = closed.reduce((s,t) => s + safeNum(t.costs), 0);
+    if (gross > 0 && (cost / gross) > 0.2) {
+      insights.push(`Costs consume ${((cost/gross)*100).toFixed(0)}% of gross profit — consider reducing trade frequency or improving edge`);
+    }
+
+    // ── 7. Recent vs historical performance (walk-forward lite) ──
+    const now = Date.now();
+    const cutoff7 = now - 7*24*60*60*1000;
+    const recent = closed.filter(t => new Date(t.exit_time).getTime() >= cutoff7);
+    if (recent.length >= 5 && closed.length >= 15) {
+      const wrR = winRate(recent), wrAll = winRate(closed);
+      const diff = +(wrR - wrAll).toFixed(1);
+      if (Math.abs(diff) >= 5) {
+        insights.push(`Recent 7d win rate (${wrR.toFixed(0)}%) ${diff >= 0 ? 'exceeds' : 'lags'} 30d average (${wrAll.toFixed(0)}%) by ${Math.abs(diff)}% — ${diff >= 0 ? 'consistency improving' : 'possible regime shift'}`);
+      }
+    }
+
+    // ── 8. Rejected candidate analysis (did we miss anything?) ──
+    try {
+      const { rows: rj } = await pool.query(
+        `SELECT reject_reason, AVG(max_upside_pct) AS avg_up, COUNT(*) AS n
+           FROM rejected_candidates
+          WHERE settled=TRUE AND rejected_at > NOW() - ($1::int * INTERVAL '1 day')
+          GROUP BY reject_reason
+         HAVING COUNT(*) >= 5
+          ORDER BY AVG(max_upside_pct) DESC
+          LIMIT 3`,
+        [days]
+      );
+      for (const r of rj) {
+        if (r.avg_up != null && +r.avg_up >= 1.0) {
+          insights.push(`Rejected "${r.reject_reason}" candidates averaged +${(+r.avg_up).toFixed(1)}% max upside post-rejection (n=${r.n}) — possible false reject`);
+        }
+      }
+    } catch (_) {}
+
+    if (insights.length === 0) {
+      insights.push('No significant patterns detected yet — system edge appears balanced across filters and regimes.');
+    }
+    res.json({ enabled: true, generatedAt: new Date().toISOString(), trades: closed.length, insights });
+  } catch (e) {
+    console.error("/api/insights error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 4 · Part 9 — Rejected trade analysis endpoint
+// ═══════════════════════════════════════════════════════════════════════════
+app.get("/api/rejected-trades", async (req, res) => {
+  try {
+    const days  = Math.max(1, Math.min(30, parseInt(req.query.days)  || 7));
+    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit) || 100));
+
+    const { rows: recent } = await pool.query(
+      `SELECT id, symbol, name, rejected_at, entry_price, reject_reason, reject_stage,
+              strategy, regime, score, confidence, price_5m, price_15m, price_60m,
+              max_upside_pct, max_downside_pct, hypothetical_pnl_pct, settled
+         FROM rejected_candidates
+        WHERE rejected_at > NOW() - ($1::int * INTERVAL '1 day')
+        ORDER BY rejected_at DESC
+        LIMIT $2`,
+      [days, limit]
+    );
+
+    // Aggregate by reject_reason (only settled rows)
+    const { rows: agg } = await pool.query(
+      `SELECT reject_reason,
+              COUNT(*)::int                    AS total,
+              COUNT(*) FILTER (WHERE settled)  AS settled_n,
+              AVG(max_upside_pct)              AS avg_upside,
+              AVG(max_downside_pct)            AS avg_downside,
+              AVG(hypothetical_pnl_pct)        AS avg_hypo_pnl
+         FROM rejected_candidates
+        WHERE rejected_at > NOW() - ($1::int * INTERVAL '1 day')
+        GROUP BY reject_reason
+        ORDER BY total DESC
+        LIMIT 50`,
+      [days]
+    );
+
+    // False-reject score per reason (high upside + low downside = possible miss)
+    const byReason = agg.map(r => ({
+      reason:          r.reject_reason,
+      total:           +r.total,
+      settled:         +r.settled_n,
+      avgMaxUpside:    r.avg_upside    != null ? +(+r.avg_upside).toFixed(2)    : null,
+      avgMaxDownside:  r.avg_downside  != null ? +(+r.avg_downside).toFixed(2)  : null,
+      avgHypoPnL:      r.avg_hypo_pnl  != null ? +(+r.avg_hypo_pnl).toFixed(2)  : null,
+      falseRejectScore: r.avg_upside != null && r.avg_downside != null
+        ? +(((+r.avg_upside) + (+r.avg_downside)) / 2).toFixed(2)  // net: positive = likely missed
+        : null,
+    }));
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      window:      { days, rows: recent.length },
+      recent,
+      byReason,
+    });
+  } catch (e) {
+    console.error("/api/rejected-trades error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
