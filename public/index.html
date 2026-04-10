@@ -5078,6 +5078,7 @@ var _psTab        = 'model';  // model (Swing Trade) | longterm | holdings | per
 var _psPositions  = null;   // user's actual positions from DB
 var _psSignals    = null;   // signal history
 var _psSignalFilter = 'all'; // all | action | buy | sell | alerts
+var _psHoldingsFilter = 'all'; // all | swing | longterm — split My Holdings by strategy
 var _psPerf       = null;   // performance data
 var _psAIValidation = null; // AI validation results
 var _psAIReviewsDB  = null; // Persisted AI reviews from PostgreSQL (survives refresh)
@@ -5189,6 +5190,24 @@ function ltGenerate(){
 function ltRefresh(){ loadLongTermPortfolio(false); }
 function ltRegenerate(){ loadLongTermPortfolio(true); }
 
+// AI Deep Review on Long Term tab — the existing /api/ai/validate endpoint
+// only knows how to review the Swing (v1) portfolio, so calling it from
+// here produced confusing cross-portfolio verdicts (and surfaced the Groq
+// 413 error against swing data). Until a long-term-aware endpoint ships,
+// show a clear inline note instead of firing the swing validator.
+function ltRunAIValidation(){
+  var log=document.getElementById('lt-ai-log');
+  if(!log) return;
+  log.style.display='block';
+  log.innerHTML=''
+    +'<div style="padding:6px 4px">'
+    +'<div style="font-size:11px;font-weight:700;color:#22d3ee;margin-bottom:4px">🧠 Long Term AI Deep Review — coming soon</div>'
+    +'<div style="font-size:10px;color:var(--text3);line-height:1.5">The 5-model consensus validator is currently scoped to the Swing Trade Portfolio. '
+    +'A Varsity v2–aware version (long-horizon thesis check, moat durability, capital allocation, management quality) is on the roadmap. '
+    +'In the meantime, use <b>Swing Trade Portfolio → AI Deep Review</b> for AI verdicts on short-term trades.</div>'
+    +'</div>';
+}
+
 function psRenderLongTermTab(){
   var h='';
   // ── Input section (mirrors Swing psRenderModelTab) ─────────────────────
@@ -5209,13 +5228,10 @@ function psRenderLongTermTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">4-pillar Varsity model: Quality 40% + Growth 25% + Valuation 20% + Business 15%. Buy-and-hold · 12M horizon · Max 15 stocks · Max 3 per sector · 5–25% per position · DC floor 0.6.</div>';
-  h+='<button onclick="psRunAIValidation(\'deep\')" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   h+='</div>';
-  h+='<div id="lt-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-family:monospace;font-size:10px;color:var(--text3);max-height:150px;overflow-y:auto"></div>';
+  h+='<div id="lt-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:10px;color:var(--text3);max-height:180px;overflow-y:auto"></div>';
   h+='</div>';
-
-  // AI validation panel (shared with Swing — same component)
-  h+=psRenderAIValidation();
 
   // ── Results ─────────────────────────────────────────────────────────────
   h+='<div id="lt-results">';
@@ -5306,15 +5322,17 @@ function psRenderLongTermResults(d){
   if(marketOpen!=null) h+='<span style="font-size:10px;color:'+(marketOpen?'#22c55e':'#ef4444')+'">● '+(marketOpen?'Open':'Closed')+'</span>';
   h+='</div>';
 
-  // ── Long-Term picks table — column set DELIBERATELY unchanged ──
-  // STOCK · BUCKET · SCOREV2 · ALLOC% · SHARES · INVESTED · EXP 12M ·
-  // RISK · VALUE · TIMING (Kijun buy-zone badge)
+  // ── Long-Term picks table ──
+  // Data columns (STOCK · BUCKET · SCOREV2 · ALLOC% · SHARES · INVESTED ·
+  // EXP 12M · RISK · VALUE · TIMING) kept as-is. Track column added on the
+  // right so users can mark long-term buys — they land in My Holdings with
+  // a LONGTERM tag.
   h+='<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">';
-  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing'];
+  var hdrs=['Stock','Bucket','ScoreV2','Alloc %','Shares','Invested','Exp 12M','Risk','Value','Timing','Track'];
   hdrs.forEach(function(hdr,i){
-    var align=(i===0)?'left':(i>=3)?'right':'left';
+    var align=(i===0)?'left':(i>=3&&i<=9)?'right':'left';
     h+='<th style="padding:7px 8px;text-align:'+align+';font-size:10px;color:var(--text3);font-weight:700;white-space:nowrap">'+hdr+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -5345,6 +5363,12 @@ function psRenderLongTermResults(d){
     h+='<td style="padding:6px 8px;text-align:right;color:'+rCol+';font-size:10px;font-weight:700">'+(p.riskLevel||'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+vCol+';font-size:10px">'+(p.valuationLabel||'-')+'</td>';
     h+='<td style="padding:6px 8px;text-align:right;color:'+kCol+';font-size:10px;font-weight:700" title="'+kTip+'">'+kLabel+'</td>';
+    // Track column — "I Bought" marks the pick as a LONGTERM holding
+    var ltPrice=(p.currentPrice||p.price||0);
+    h+='<td style="padding:6px 8px;text-align:center">'
+      +'<button onclick="ltBuyStock(\''+p.sym+'\','+(p.shares||0)+','+(+ltPrice).toFixed(2)+',\''+(p.scoreBucket||'')+'\','+(p.scoreV2||0)+')" '
+      +'style="background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap">I Bought</button>'
+      +'</td>';
     h+='</tr>';
   });
   h+='</tbody></table></div>';
@@ -5700,7 +5724,17 @@ function psRenderHoldingsTab(){
     var pnlC2=(p.unrealised_pct||0)>=0?'#22c55e':'#ef4444';
     var urgBg=p.urgency==='URGENT'?'rgba(239,68,68,.08)':p.urgency==='HIGH'?'rgba(245,158,11,.06)':(i%2===0?'var(--bg2)':'var(--bg)');
     h+='<tr style="background:'+urgBg+';border-bottom:1px solid var(--border2)">';
-    h+='<td style="padding:5px"><div style="font-weight:700;color:var(--text)">'+p.sym+'</div><div style="font-size:9px;color:var(--text4)">'+(p.name||'')+'</div></td>';
+    // Portfolio strategy tag — SWING (v1) or LONGTERM (Varsity v2)
+    var pType=(p.portfolio_type||'SWING').toUpperCase();
+    var ptBg=pType==='LONGTERM'?'rgba(245,158,11,.18)':'rgba(34,211,238,.15)';
+    var ptFg=pType==='LONGTERM'?'#f59e0b':'#22d3ee';
+    var ptBr=pType==='LONGTERM'?'rgba(245,158,11,.35)':'rgba(34,211,238,.3)';
+    var ptLabel=pType==='LONGTERM'?'🏛 LONG TERM':'📊 SWING';
+    h+='<td style="padding:5px">'
+      +'<div style="font-weight:700;color:var(--text)">'+p.sym+'</div>'
+      +'<div style="font-size:9px;color:var(--text4);margin-bottom:2px">'+(p.name||'')+'</div>'
+      +'<span style="background:'+ptBg+';color:'+ptFg+';border:1px solid '+ptBr+';border-radius:3px;padding:1px 5px;font-size:8px;font-weight:800;letter-spacing:.3px;white-space:nowrap">'+ptLabel+'</span>'
+      +'</td>';
     h+='<td style="padding:5px;font-weight:600">'+p.qty+'</td>';
     h+='<td style="padding:5px">₹'+(+p.avg_price).toFixed(0)+'</td>';
     h+='<td style="padding:5px;font-weight:600">₹'+(+p.currentPrice).toFixed(0)+'</td>';
@@ -6336,10 +6370,28 @@ async function psBuyStock(sym,qty,price,sl,tgt,conv){
   var actualPrice=prompt('At what price? (current: ₹'+price+')',''+price);
   if(!actualPrice)return;
   try{
-    var r=await fetch('/api/portfolio/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sym:sym,qty:parseInt(actualQty),price:parseFloat(actualPrice),stopLoss:sl||null,target:tgt||null,conviction:conv,reason:'Model portfolio suggestion'})});
+    var r=await fetch('/api/portfolio/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sym:sym,qty:parseInt(actualQty),price:parseFloat(actualPrice),stopLoss:sl||null,target:tgt||null,conviction:conv,reason:'Swing Trade model suggestion',portfolioType:'SWING'})});
     var d=await r.json();
     if(d.error){alert(d.error);return;}
-    alert('✅ '+sym+' tracked! Check My Holdings tab.');
+    alert('✅ '+sym+' tracked as Swing Trade! Check My Holdings tab.');
+    _psPositions=null; // force reload
+  }catch(e){alert('Error: '+e.message);}
+}
+
+// Long Term buy — mirrors psBuyStock but tags the position as LONGTERM so
+// My Holdings can show the strategy tag. Long-term picks don't carry SL or
+// target (buy-and-hold horizon), so those are left null.
+async function ltBuyStock(sym,qty,price,bucket,score){
+  var actualQty=prompt('How many shares of '+sym+' did you buy? (suggested: '+qty+')',''+qty);
+  if(!actualQty)return;
+  var actualPrice=prompt('At what price? (current: ₹'+price+')',''+price);
+  if(!actualPrice)return;
+  try{
+    var convLabel=bucket==='A'?'Strong Buy':bucket==='B'?'Buy':bucket==='C'?'Accumulate':'Watch';
+    var r=await fetch('/api/portfolio/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sym:sym,qty:parseInt(actualQty),price:parseFloat(actualPrice),stopLoss:null,target:null,conviction:convLabel,qualityScore:score||null,reason:'Long Term Varsity v2 pick (Bucket '+bucket+')',portfolioType:'LONGTERM'})});
+    var d=await r.json();
+    if(d.error){alert(d.error);return;}
+    alert('✅ '+sym+' tracked as Long Term! Check My Holdings tab.');
     _psPositions=null; // force reload
   }catch(e){alert('Error: '+e.message);}
 }

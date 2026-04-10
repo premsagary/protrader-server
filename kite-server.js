@@ -331,6 +331,11 @@ async function initDB() {
         realised_pct   DECIMAL(8,2)
       )
     `);
+    // Tag each position with the portfolio strategy it came from so My
+    // Holdings can distinguish Swing (v1) from Long Term (Varsity v2) buys.
+    // Existing rows default to 'SWING' (all pre-migration buys were swing).
+    await pool.query(`ALTER TABLE portfolio_positions ADD COLUMN IF NOT EXISTS portfolio_type VARCHAR(16) DEFAULT 'SWING'`).catch(()=>{});
+    await pool.query(`UPDATE portfolio_positions SET portfolio_type='SWING' WHERE portfolio_type IS NULL`).catch(()=>{});
 
     // Signal history — every signal the system generates
     await pool.query(`
@@ -11543,7 +11548,7 @@ app.post('/api/portfolio/suggest/v2/regenerate', async (req, res) => {
 // POST /api/portfolio/buy — mark a stock as bought (user tracking)
 app.post('/api/portfolio/buy', async (req, res) => {
   try {
-    const { sym, qty, price, stopLoss, target, conviction, qualityScore, reason } = req.body;
+    const { sym, qty, price, stopLoss, target, conviction, qualityScore, reason, portfolioType } = req.body;
     if (!sym || !qty || !price) return res.status(400).json({ error: 'sym, qty, price required' });
 
     const f = stockFundamentals[sym];
@@ -11551,11 +11556,15 @@ app.post('/api/portfolio/buy', async (req, res) => {
     const sector = f?.sector || 'Other';
     const grp = f?.grp || '';
     const invested = qty * price;
+    // Portfolio strategy tag: 'SWING' (v1 5-factor) | 'LONGTERM' (Varsity v2).
+    // Default to SWING to preserve behaviour for any caller that doesn't
+    // send the field yet.
+    const pType = (portfolioType === 'LONGTERM') ? 'LONGTERM' : 'SWING';
 
     const { rows } = await pool.query(
-      `INSERT INTO portfolio_positions(sym,name,sector,grp,qty,avg_price,invested_amt,stop_loss,target,conviction,quality_score,buy_reason)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [sym, name, sector, grp, qty, price, invested, stopLoss||null, target||null, conviction||null, qualityScore||null, reason||null]
+      `INSERT INTO portfolio_positions(sym,name,sector,grp,qty,avg_price,invested_amt,stop_loss,target,conviction,quality_score,buy_reason,portfolio_type)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [sym, name, sector, grp, qty, price, invested, stopLoss||null, target||null, conviction||null, qualityScore||null, reason||null, pType]
     );
 
     // Log signal
