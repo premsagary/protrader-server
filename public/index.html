@@ -257,6 +257,7 @@ select option{background:var(--bg3)}
     <button class="mode-tab stocks" onclick="setMode('stocks')" id="mode-stocks">Stocks RoboTrade</button>
     <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">Crypto RoboTrade</button>
     <button class="mode-tab" onclick="setMode('psuggest')" id="mode-psuggest" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#22d3ee;border-color:#22d3ee40">💼 Portfolio</button>
+    <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata" style="color:#a78bfa">📊 Stock Data</button>
     <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
@@ -535,6 +536,7 @@ function setMode(mode){
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
   try{ document.getElementById("mode-psuggest").className ="mode-tab"      +(mode==="psuggest"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab"         +(mode==="admin"    ?" active":""); }catch(e){}
   if(mode==="mf"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
@@ -552,6 +554,12 @@ function setMode(mode){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){}
     renderPortfolioSuggestion();
+    return;
+  }
+  if(mode==="stockdata"){
+    try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
+    try{ renderTopBar(); }catch(e){}
+    renderStockDataPage();
     return;
   }
   if(mode==="admin"){
@@ -3094,6 +3102,13 @@ var stockRecShowAll = false;
 var stockRecTab = 'overview';
 var stockRecRetries = 0;
 
+// ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
+var stockDataTab      = 'overview';
+var stockDataSearch   = '';
+var stockDataSortKey  = 'score';   // column key to sort by
+var stockDataSortDir  = 'desc';    // 'asc' | 'desc'
+var stockDataFilter   = 'ALL';     // market-cap slice (ALL/NIFTY50/NEXT50/MIDCAP/SMALLCAP)
+
 // ── Long-Term portfolio v2 state ──
 var ltPortfolioAmount = 100000;   // default ₹1L
 var ltPortfolioData = null;       // cached response from /api/portfolio/suggest/v2
@@ -3243,7 +3258,7 @@ async function renderStockRec(forceRefresh){
       +'<button class="btn btn-sm" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">↻ Retry</button>'
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">'
-      +['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'].map(function(f){
+      +['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'].map(function(f){
         return '<div style="padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--bg2);font-size:11px;color:var(--text3)">'+f+'</div>';
       }).join('')
       +'</div>'
@@ -4024,21 +4039,40 @@ function renderStockRecPage(){
   analyzerHtml += '<div id="stock-analyzer-result" style="margin-top:0;max-height:85vh;overflow-y:auto;overflow-x:hidden"></div>';
   analyzerHtml += '</div>';
 
-  var fallenAngels = allStocks.filter(function(s){ return s.isFallenAngel; })
-    .sort(function(a,b){ return (b.fallenScore||0)-(a.fallenScore||0); });
-
+  // Universe slice for the currently selected market cap (ALL / NIFTY50 / NEXT50 /
+  // MIDCAP / SMALLCAP). The FALLEN filter was removed because "Fallen Angels" is
+  // just the swing-trade side of the same universe — shown in the left column of
+  // the split view below.
   var filtered = allStocks.filter(function(s){
     if(stockRecFilter==='ALL') return true;
-    if(stockRecFilter==='FALLEN') return s.isFallenAngel;
     if(stockRecFilter==='NIFTY50') return s.grp==='NIFTY50';
     if(stockRecFilter==='NEXT50')  return s.grp==='NEXT50';
     if(stockRecFilter==='MIDCAP')  return s.grp==='MIDCAP';
     if(stockRecFilter==='SMALLCAP') return s.grp==='SMALLCAP';
     return true; // unknown filter value → don't drop rows
   });
-  if(stockRecFilter==='FALLEN') filtered = fallenAngels;
 
-  var top3 = filtered.slice(0,3);
+  // Swing Trades column = fallen angels (quality on sale) in the selected slice.
+  var swingPicks = filtered
+    .filter(function(s){ return s.isFallenAngel; })
+    .sort(function(a,b){ return (b.fallenScore||0)-(a.fallenScore||0); });
+
+  // Long-Term Trades column = quality stocks not collapsing. Use v1 signals
+  // (score, ROE, D/E, earnings growth, not deeply fallen) to pre-rank until
+  // Deep Review / Portfolio Manager v2 provides scoreV2. This keeps the screen
+  // useful without an extra fetch — the authoritative long-term builder lives
+  // in Portfolio Manager → Long Term Portfolio.
+  var longTermPicks = filtered
+    .filter(function(s){
+      var roeOk = (s.roe==null) || s.roe>=12;
+      var deOk  = (s.debtToEq==null) || s.debtToEq<=2;
+      var grOk  = (s.earGrowth==null) || s.earGrowth>=0;
+      var notCollapsing = (s.pctFromHigh==null) || s.pctFromHigh>=-35;
+      return (s.score||0)>=60 && roeOk && deOk && grOk && notCollapsing;
+    })
+    .sort(function(a,b){ return (b.score||0)-(a.score||0); });
+
+  var top3 = (filtered.slice(0,3));
 
   var html = '<div style="margin-bottom:20px">';
   html += analyzerHtml;
@@ -4083,10 +4117,11 @@ function renderStockRecPage(){
   var buys = allStocks.filter(function(s){ return s.recKey==='buy'||s.recKey==='strong_buy'; }).length;
   var golden = allStocks.filter(function(s){ return s.goldenCross; }).length;
   var highRoe = allStocks.filter(function(s){ return s.roe&&s.roe>=15; }).length;
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">';
+  var swingAllCount = allStocks.filter(function(s){return s.isFallenAngel;}).length;
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;justify-content:center">';
   var pills = [
     {l:'Total Stocks',    v:allStocks.length,    c:'var(--text)'},
-    {l:'Fallen Angels',   v:fallenAngels.length, c:'#f59e0b', hot:true},
+    {l:'Swing Trades',    v:swingAllCount,       c:'#f59e0b'},
     {l:'ROE >= 15%',      v:highRoe,             c:'var(--green)'},
     {l:'Golden Cross',    v:golden,              c:'#f59e0b'},
     {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--blue)'},
@@ -4095,86 +4130,189 @@ function renderStockRecPage(){
     {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'#10b981'},
   ];
   pills.forEach(function(p){
-    html+='<div style="background:'+(p.hot?'rgba(245,158,11,.1)':'var(--bg2)')+';border:1px solid '+(p.hot?'rgba(245,158,11,.4)':'var(--border)')+';border-radius:8px;padding:7px 13px;cursor:'+(p.hot?'pointer':'default')+'"'
-      +(p.hot?' onclick="stockRecFilter=\'FALLEN\';renderStockRec()"':'')+' title="'+(p.hot?'Click to view Fallen Angels':'')+'">'
-      +'<div style="font-size:10px;color:'+(p.hot?'#f59e0b':'var(--text3)')+'">'+p.l+(p.hot?' 🔥':'')+'</div>'
+    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 13px">'
+      +'<div style="font-size:10px;color:var(--text3)">'+p.l+'</div>'
       +'<div style="font-size:18px;font-weight:700;color:'+p.c+'">'+p.v+'</div>'
       +'</div>';
   });
   html += '</div>';
 
-  // Sector chips removed — NIFTY50/NEXT50/MIDCAP/SMALLCAP/ALL/FALLEN already cover
-  // the useful slices; per-sector filtering just created a long noisy row.
-  var filters = ['ALL','FALLEN','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
+  // Market-cap filter row — centered, FALLEN removed (Fallen Angels are the
+  // Swing Trades column below). The user picks a market cap slice up top, then
+  // the 2-column split view below fans that slice into Swing vs Long-Term.
+  var filters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;justify-content:center">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
-    var isFallen = f==='FALLEN';
-    html += '<button onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:4px 12px;border-radius:20px;border:1px solid '
-      +(active?'#f59e0b':isFallen?'rgba(245,158,11,.3)':'var(--border)')+';background:'
-      +(active?'rgba(245,158,11,0.2)':isFallen?'rgba(245,158,11,.08)':'var(--bg2)')
-      +';color:'+(active||isFallen?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'400')+'">'
-      +(isFallen?'🔥 ':'')+f+'</button>';
+    html += '<button onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+      +(active?'#f59e0b':'var(--border)')+';background:'
+      +(active?'rgba(245,158,11,0.2)':'var(--bg2)')
+      +';color:'+(active?'#f59e0b':'var(--text2)')+';font-size:12px;cursor:pointer;font-weight:'+(active?'700':'500')+'">'
+      +f+'</button>';
   });
   html += '</div>';
 
-  if(stockRecFilter==='FALLEN'){
-    html += '<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:12px;padding:14px 16px;margin-bottom:16px">';
-    html += '<div style="font-weight:700;font-size:13px;color:#f59e0b;margin-bottom:6px">🔥 Fallen Angels — Quality Stocks On Sale</div>';
-    html += '<div style="font-size:11px;color:var(--text2);line-height:1.7">';
-    html += 'These are <b>high-quality stocks</b> (score &ge;50) that have <b>fallen 20%+ from their 52-week high</b> — ';
-    html += 'not because of broken fundamentals, but likely due to market correction, sector rotation, or temporary bad news. ';
-    html += 'RSI is not overbought, debt is manageable, and earnings are intact. ';
-    html += 'This is historically where <b>institutional investors quietly accumulate</b>.<br>';
-    html += '<span style="color:#f59e0b">Filter: Score &ge;50 + Down &ge;20% from peak + RSI &le;50 + D/E &le;2 + EPS not collapsing</span>';
-    html += '</div>';
-    var deepFallen = fallenAngels.filter(function(s){return (s.pctFromHigh||0)<=-35;});
-    var nearDma200 = fallenAngels.filter(function(s){
-      var px=s.price, d200=s.dma200;
-      return px&&d200&&Math.abs(px-d200)/d200<0.08;
+  // ── 2-column split view: Swing Trades (left) | Long Term Trades (right) ──
+  // Both columns respect the currently selected market-cap filter above.
+  // All the detailed column tables (Overview/Quality/Value/Momentum/etc.)
+  // have moved to the new Stock Data top-level tab — this page is now a
+  // compact picker of "what to trade now" vs "what to hold long".
+  var scopeLbl = (stockRecFilter==='ALL' ? 'All Stocks' : stockRecFilter);
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:flex-start">';
+
+  // ----- LEFT COLUMN: SWING TRADES (fallen angels / quality on sale) -----
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
+  html += '<div><div style="font-weight:800;font-size:14px;color:#f59e0b">🔥 Swing Trades <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Fallen Angels — quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2</div></div>';
+  html += '<span style="background:rgba(245,158,11,.12);color:#f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+swingPicks.length+'</span>';
+  html += '</div>';
+  if(swingPicks.length){
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead><tr style="color:var(--text3);text-align:right;background:var(--bg3)">'
+      + '<th style="text-align:left;padding:6px 8px">#</th>'
+      + '<th style="text-align:left;padding:6px 8px">Stock</th>'
+      + '<th style="padding:6px 8px">Score</th>'
+      + '<th style="padding:6px 8px">Price</th>'
+      + '<th style="padding:6px 8px" title="% from 52-week high">FrHi%</th>'
+      + '<th style="padding:6px 8px">RSI</th>'
+      + '<th style="padding:6px 8px">ROE%</th>'
+      + '</tr></thead><tbody>';
+    swingPicks.slice(0, 25).forEach(function(s, i){
+      var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
+      var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+      var fh = s.pctFromHigh;
+      var fhCol = fh==null?'var(--text4)':fh>=-25?'#f59e0b':fh>=-35?'#f97316':'var(--red)';
+      var rsiCol = s.rsi==null?'var(--text4)':s.rsi<35?'var(--green)':s.rsi<50?'#f59e0b':'var(--red)';
+      var roe = s.roe;
+      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#f59e0b':'var(--text)';
+      var bg = i%2===0?'var(--bg)':'var(--bg2)';
+      html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
+        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+s.score+'</td>'
+        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+fhCol+';font-weight:600">'+(fh!=null?fh.toFixed(1)+'%':'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
+        + '</tr>';
     });
-    var oversold = fallenAngels.filter(function(s){return (s.rsi||50)<=35;});
-    html += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">';
-    [{l:'Total fallen',v:fallenAngels.length},{l:'Down 35%+',v:deepFallen.length},{l:'Near 200DMA',v:nearDma200.length},{l:'RSI Oversold',v:oversold.length}]
-      .forEach(function(p){ html+='<div style="background:rgba(245,158,11,.15);border-radius:6px;padding:4px 12px;font-size:11px"><b style="color:#f59e0b">'+p.v+'</b> <span style="color:var(--text3)">'+p.l+'</span></div>'; });
-    html += '</div></div>';
+    html += '</tbody></table></div>';
+    if(swingPicks.length>25){
+      html += '<div style="text-align:center;padding:8px;font-size:10px;color:var(--text4)">Showing top 25 of '+swingPicks.length+' · see full data in <b>Stock Data</b> tab</div>';
+    }
+  } else {
+    html += '<div style="padding:30px;text-align:center;color:var(--text4);font-size:11px">No swing candidates in this universe slice right now.</div>';
   }
+  html += '</div>'; // end swing column
 
-  // ── Flex layout: Top Picks sidebar (left) + table (right) ──
-  html += '<div style="display:flex;gap:16px;align-items:flex-start">';
-
-  // ── Left sidebar: Top Picks ──
-  if(top3.length){
-    html += '<div style="width:300px;flex-shrink:0;position:sticky;top:10px">';
-    html += '<div style="font-weight:700;font-size:13px;margin-bottom:10px;color:#f59e0b">🏆 Top Picks - '
-      +(stockRecFilter==='ALL'?'Overall':stockRecFilter)+'</div>';
-    var medals=['🥇','🥈','🥉'];
-    top3.forEach(function(s,i){ html += buildStockCard(s, medals[i]); html += '<div style="height:12px"></div>'; });
-    html += '</div>';
+  // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
+  html += '<div><div style="font-weight:800;font-size:14px;color:#22d3ee">🏛 Long Term Trades <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth · Not down >35%</div></div>';
+  html += '<div style="display:flex;gap:6px;align-items:center">';
+  html += '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+longTermPicks.length+'</span>';
+  html += '<button onclick="_psTab=\'longterm\';setMode(\'psuggest\')" style="padding:4px 10px;border-radius:6px;border:1px solid #22d3ee;background:rgba(34,211,238,.12);color:#22d3ee;font-size:10px;cursor:pointer;font-weight:700;white-space:nowrap">Build Portfolio →</button>';
+  html += '</div></div>';
+  if(longTermPicks.length){
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    html += '<thead><tr style="color:var(--text3);text-align:right;background:var(--bg3)">'
+      + '<th style="text-align:left;padding:6px 8px">#</th>'
+      + '<th style="text-align:left;padding:6px 8px">Stock</th>'
+      + '<th style="padding:6px 8px">Score</th>'
+      + '<th style="padding:6px 8px">Price</th>'
+      + '<th style="padding:6px 8px">ROE%</th>'
+      + '<th style="padding:6px 8px">D/E</th>'
+      + '<th style="padding:6px 8px" title="Revenue growth YoY">RevGr%</th>'
+      + '</tr></thead><tbody>';
+    longTermPicks.slice(0, 25).forEach(function(s, i){
+      var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
+      var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+      var roe = s.roe;
+      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#10b981':'var(--text)';
+      var de = s.debtToEq;
+      var deCol = de==null?'var(--text4)':de<1?'var(--green)':de<2?'var(--text)':'var(--red)';
+      var rg = s.revGrowth;
+      var rgCol = rg==null?'var(--text4)':rg>=15?'var(--green)':rg>=5?'#10b981':rg>=0?'var(--text)':'var(--red)';
+      var bg = i%2===0?'var(--bg)':'var(--bg2)';
+      html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
+        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+s.score+'</td>'
+        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+deCol+'">'+(de!=null?de.toFixed(2)+'x':'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;color:'+rgCol+'">'+(rg!=null?rg.toFixed(1)+'%':'-')+'</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if(longTermPicks.length>25){
+      html += '<div style="text-align:center;padding:8px;font-size:10px;color:var(--text4)">Showing top 25 of '+longTermPicks.length+' · see full data in <b>Stock Data</b> tab</div>';
+    }
+  } else {
+    html += '<div style="padding:30px;text-align:center;color:var(--text4);font-size:11px">No long-term candidates in this universe slice right now.</div>';
   }
+  html += '</div>'; // end long term column
 
-  // ── Right: stock table (grows to fill) ──
-  html += '<div style="flex:1;min-width:0">';
+  html += '</div>'; // end 2-column grid
 
-  var SHOW_INITIAL = 20;
-  var showCount = stockRecShowAll ? filtered.length : Math.min(SHOW_INITIAL, filtered.length);
 
-  html += '<div style="font-weight:700;font-size:13px;margin-bottom:8px">All Stocks - '
-    +filtered.length+' shown'+(stockRecFilter!=='ALL'?' ('+stockRecFilter+')':'')+'</div>';
-
-  // ── Tab definitions: each tab has groups of columns ──
-  var TAB_DEFS = [
-    { id:'overview', label:'Overview', icon:'📊' },
-    { id:'longterm', label:'Long-Term', icon:'🏛️' },
-    { id:'quality',  label:'Quality',  icon:'⭐' },
-    { id:'value',    label:'Value',    icon:'💰' },
-    { id:'momentum', label:'Momentum', icon:'🚀' },
-    { id:'growth',   label:'Growth',   icon:'📈' },
-    { id:'technical',label:'Technical',icon:'🔧' },
-    { id:'financials',label:'Financials',icon:'🏦' },
-    { id:'ownership',label:'Ownership',icon:'👥' },
-    { id:'signals',  label:'Signals',  icon:'⚡' },
+  html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg2);margin-top:16px">';
+  html += '<div style="font-weight:600;font-size:12px;margin-bottom:10px">Scoring Methodology - 100 Points</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+  var pillars=[
+    {name:'Quality',pts:25,c:'#f59e0b',factors:'ROE · ROA/ROCE · Debt/Equity · Operating Margin · Percentile vs sector peers'},
+    {name:'Value',pts:20,c:'var(--green)',factors:'P/E ratio · P/B ratio · PEG (growth-adj value) · Dividend Yield · NSE Value 50 methodology'},
+    {name:'Momentum',pts:20,c:'var(--blue)',factors:'52-week price return · % from 52w high · Beta · NSE Momentum index methodology'},
+    {name:'Growth',pts:20,c:'#8b5cf6',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (Kite + Screener.in)'},
+    {name:'Technical',pts:15,c:'var(--red)',factors:'Price vs 50 DMA · Price vs 200 DMA · Golden/Death Cross · Volume accumulation'},
   ];
+  pillars.forEach(function(p){
+    html += '<div style="background:var(--bg3);border-radius:8px;padding:8px 12px;flex:1;min-width:150px">'
+      +'<div style="color:'+p.c+';font-weight:700;font-size:11px">'+p.name+' <span style="opacity:.7">'+p.pts+' pts</span></div>'
+      +'<div style="color:var(--text3);font-size:10px;margin-top:4px;line-height:1.5">'+p.factors+'</div>'
+      +'</div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: Kite + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
+  html += '</div>';
+
+  html += '</div>';
+  cont.innerHTML = html;
+}
+
+// ========================================================================
+// STOCK DATA tab — all the detailed column tables (Overview, Quality, Value,
+// Momentum, Growth, Technical, Financials, Ownership, Signals) with:
+//   · Market-cap filter (ALL/NIFTY50/NEXT50/MIDCAP/SMALLCAP)
+//   · Stock-symbol search
+//   · Click-to-sort column headers
+// The Long-Term sub-tab lives in Portfolio Manager → Long Term Portfolio
+// and is intentionally NOT duplicated here.
+// ========================================================================
+async function renderStockDataPage(){
+  var cont = document.getElementById('main-content');
+  if(!cont) return;
+
+  // Fetch data if not already loaded (reuses stockRecData cache)
+  if(!stockRecData || !stockRecData.stocks){
+    cont.innerHTML = '<div style="padding:40px;text-align:center">'
+      +'<div style="font-size:13px;color:var(--text2);margin-bottom:8px">Loading stock data...</div>'
+      +'<div style="font-size:11px;color:var(--text3)">Fetching scored universe from server</div>'
+      +'</div>';
+    try{
+      var r = await fetch('/api/stocks/score');
+      stockRecData = await r.json();
+    }catch(e){
+      cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--red)">Failed to load: '+(e&&e.message||e)+'</div>';
+      return;
+    }
+  }
+
+  var data = stockRecData;
+  var allStocks = data.stocks || [];
 
   // ── Column renderer helpers ──
   function _rv(v, dec, suffix, col){
@@ -4207,104 +4345,38 @@ function renderStockRecPage(){
   function _price(v){ return v?'₹'+parseFloat(v).toFixed(1):'-'; }
   function _fa(v){ return v?'<span style="color:#f59e0b;font-weight:700">🔥 Yes</span>':'<span style="color:var(--text4)">No</span>'; }
 
-  // ── Per-tab column configs: { key, label, hdrColor, render(s) } ──
+  // ── Tab definitions (NO longterm — that lives in Portfolio Manager) ──
+  var TAB_DEFS = [
+    { id:'overview',  label:'Overview',   icon:'📊' },
+    { id:'quality',   label:'Quality',    icon:'⭐' },
+    { id:'value',     label:'Value',      icon:'💰' },
+    { id:'momentum',  label:'Momentum',   icon:'🚀' },
+    { id:'growth',    label:'Growth',     icon:'📈' },
+    { id:'technical', label:'Technical',  icon:'🔧' },
+    { id:'financials',label:'Financials', icon:'🏦' },
+    { id:'ownership', label:'Ownership',  icon:'👥' },
+    { id:'signals',   label:'Signals',    icon:'⚡' },
+  ];
+
   var TAB_COLS = {
     overview: [
-      // Quality
       {k:'roe',l:'ROE%',hc:'#f59e0b',r:function(s){return _roe(s.roe);}},
       {k:'debtToEq',l:'D/E',hc:'#f59e0b',r:function(s){return _de(s.debtToEq);}},
       {k:'opMargin',l:'OpMgn%',hc:'#f59e0b',r:function(s){return _pct(s.opMargin);},br:true},
-      // Value
       {k:'pe',l:'P/E',hc:'var(--green)',r:function(s){return _pe(s.pe);}},
       {k:'peg',l:'PEG',hc:'var(--green)',r:function(s){return s.pe!=null&&s.earGrowth!=null&&s.earGrowth>0?_rv(+(s.pe/s.earGrowth).toFixed(2),2,'',s.pe/s.earGrowth<1?'var(--green)':s.pe/s.earGrowth<2?'var(--text)':'var(--red)'):'<span style="color:var(--text4)">-</span>';}},
       {k:'pctFromHigh',l:'FrHi%',hc:'var(--green)',r:function(s){return _fromHi(s.pctFromHigh);},br:true},
-      // Momentum
       {k:'wk52Change',l:'52W%',hc:'var(--blue)',r:function(s){return _pct(s.wk52Change);}},
       {k:'change6m',l:'6M%',hc:'var(--blue)',r:function(s){return _pct(s.change6m);}},
       {k:'rsi',l:'RSI',hc:'var(--blue)',r:function(s){return _rsi(s.rsi);}},
       {k:'beta',l:'Beta',hc:'var(--blue)',r:function(s){return _ratio(s.beta);},br:true},
-      // Growth
       {k:'revGrowth',l:'RevGr%',hc:'#8b5cf6',r:function(s){return _pct(s.revGrowth);}},
       {k:'earGrowth',l:'EpsGr%',hc:'#8b5cf6',r:function(s){return _pct(s.earGrowth);},br:true},
-      // Technical
       {k:'dma50',l:'50DMA',hc:'var(--red)',r:function(s){return _dma(s.dma50,s.price);}},
       {k:'dma200',l:'200DMA',hc:'var(--red)',r:function(s){return _dma(s.dma200,s.price);}},
       {k:'goldenCross',l:'GldCrs',hc:'var(--red)',r:function(s){return _gc(s.goldenCross);},br:true},
-      // Target
       {k:'target',l:'Target',hc:'var(--text3)',r:function(s){return _price(s.target);}},
       {k:'rewardPct',l:'Upside',hc:'var(--text3)',r:function(s){return _pct(s.rewardPct);}},
-    ],
-    // ── Long-Term tab (Varsity M3 fundamentals-first picker) ──
-    // Rendered only when the server returns score_version=2. Shows the
-    // Varsity-aligned long-term view: score_v2 decomposition + expected
-    // return + risk + why-this-stock rationale. Technicals deliberately
-    // excluded — they live in the Technical tab.
-    longterm: [
-      {k:'scoreV2',l:'Score v2',hc:'#f59e0b',r:function(s){
-        if(s.scoreV2==null) return '<span style="color:var(--text4)">-</span>';
-        var v=parseFloat(s.scoreV2);
-        var c=v>=80?'var(--green)':v>=65?'#10b981':v>=50?'#f59e0b':'var(--red)';
-        return '<span style="color:'+c+';font-weight:700">'+v.toFixed(1)+'</span>';
-      }},
-      {k:'scoreBucket',l:'Bucket',hc:'#f59e0b',r:function(s){
-        if(!s.scoreBucket) return '-';
-        var c=s.scoreBucket==='A'?'var(--green)':s.scoreBucket==='B'?'#10b981':s.scoreBucket==='C'?'#f59e0b':'var(--red)';
-        return '<span style="color:'+c+';font-weight:700">'+s.scoreBucket+'</span>';
-      }},
-      {k:'expectedReturn',l:'Exp Ret',hc:'#10b981',r:function(s){
-        if(s.expectedReturn==null) return '-';
-        var v=parseFloat(s.expectedReturn)*100;
-        var c=v>15?'var(--green)':v>5?'#10b981':v>0?'var(--text)':'var(--red)';
-        return '<span style="color:'+c+'">'+(v>0?'+':'')+v.toFixed(1)+'%</span>';
-      }},
-      {k:'expectedReturnHorizon',l:'Horizon',hc:'#10b981',r:function(s){return s.expectedReturnHorizon||'-';}},
-      {k:'confidence',l:'Conf',hc:'#10b981',r:function(s){
-        if(s.confidence==null) return '-';
-        var v=parseFloat(s.confidence);
-        var c=v>=0.7?'var(--green)':v>=0.5?'#f59e0b':'var(--red)';
-        var note=s.usingPrior?' *':'';
-        return '<span style="color:'+c+'">'+(v*100).toFixed(0)+'%'+note+'</span>';
-      },br:true},
-      // Sub-score breakout
-      {k:'subQuality',l:'Q/40',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.quality,1):'-';}},
-      {k:'subGrowth',l:'G/25',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.growth,1):'-';}},
-      {k:'subValuation',l:'V/20',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.valuation,1):'-';}},
-      {k:'subBusiness',l:'B/15',hc:'#8b5cf6',r:function(s){return s.subScores?_num(s.subScores.business,1):'-';},br:true},
-      // Risk + valuation label
-      {k:'riskLevel',l:'Risk',hc:'var(--red)',r:function(s){
-        if(!s.riskLevel) return '-';
-        var c=s.riskLevel==='LOW'?'var(--green)':s.riskLevel==='MEDIUM'?'#f59e0b':'var(--red)';
-        return '<span style="color:'+c+'">'+s.riskLevel+'</span>';
-      }},
-      {k:'valuationLabel',l:'Value',hc:'var(--red)',r:function(s){
-        if(!s.valuationLabel||s.valuationLabel==='UNKNOWN') return '-';
-        var c=s.valuationLabel==='UNDERVALUED'?'var(--green)':s.valuationLabel==='FAIR'?'var(--text)':'var(--red)';
-        return '<span style="color:'+c+'">'+s.valuationLabel+'</span>';
-      }},
-      {k:'sectorTemplate',l:'Template',hc:'var(--red)',r:function(s){return s.sectorTemplate?'<span style="color:var(--text3)">'+s.sectorTemplate+'</span>':'-';}},
-      {k:'dataCompleteness',l:'Data',hc:'var(--red)',r:function(s){
-        if(s.dataCompleteness==null) return '-';
-        var v=parseFloat(s.dataCompleteness);
-        var c=v>=0.75?'var(--green)':v>=0.5?'#f59e0b':'var(--red)';
-        return '<span style="color:'+c+'">'+(v*100).toFixed(0)+'%</span>';
-      },br:true},
-      // Timing overlay (NOT part of scoreV2 — shown separately)
-      {k:'timingLabel',l:'Timing',hc:'var(--blue)',r:function(s){
-        if(!s.timingOverlay) return '-';
-        var lbl=s.timingOverlay.label;
-        var c=lbl==='GOOD'?'var(--green)':lbl==='EXTENDED'?'#f59e0b':lbl==='WAIT_FOR_DIP'?'#f59e0b':'var(--red)';
-        return '<span style="color:'+c+'">'+lbl+'</span>';
-      }},
-      {k:'timingScore',l:'TimScr',hc:'var(--blue)',r:function(s){return s.timingOverlay?_num(s.timingOverlay.timingScore,0):'-';},br:true},
-      // Why this stock? deterministic explainer
-      {k:'whyStrengths',l:'Strengths',hc:'var(--green)',r:function(s){
-        if(!s.whyStrengths||!s.whyStrengths.length) return '<span style="color:var(--text4)">-</span>';
-        return '<span style="color:var(--green);font-size:0.85em">'+s.whyStrengths.join('<br>')+'</span>';
-      }},
-      {k:'whyRisks',l:'Risks',hc:'var(--red)',r:function(s){
-        if(!s.whyRisks||!s.whyRisks.length) return '<span style="color:var(--text4)">-</span>';
-        return '<span style="color:var(--red);font-size:0.85em">'+s.whyRisks.join('<br>')+'</span>';
-      }},
     ],
     quality: [
       {k:'roe',l:'ROE%',hc:'#f59e0b',r:function(s){return _roe(s.roe);}},
@@ -4319,12 +4391,10 @@ function renderStockRecPage(){
       {k:'intCov',l:'IntCov',hc:'var(--text)',r:function(s){return _ratio(s.intCov);}},
       {k:'currentRatio',l:'CurRat',hc:'var(--text)',r:function(s){return _ratio(s.currentRatio);}},
       {k:'quickRatio',l:'QuickR',hc:'var(--text)',r:function(s){return _ratio(s.quickRatio);},br:true},
-      // DuPont ROE Decomposition (Varsity M3)
       {k:'dupontNetMargin',l:'DuPont NM%',hc:'#10b981',r:function(s){return _pct(s.dupontNetMargin);}},
       {k:'dupontAssetTurnover',l:'DuPont AT',hc:'#10b981',r:function(s){return _ratio(s.dupontAssetTurnover);}},
       {k:'dupontEquityMultiplier',l:'DuPont EM',hc:'#10b981',r:function(s){return _ratio(s.dupontEquityMultiplier);}},
       {k:'dupontROE',l:'DuPont ROE%',hc:'#10b981',r:function(s){return _roe(s.dupontROE);},br:true},
-      // Sharpe & Working Capital
       {k:'sharpeRatio',l:'Sharpe',hc:'var(--blue)',r:function(s){return _rv(s.sharpeRatio,2,'',s.sharpeRatio!=null&&s.sharpeRatio>1?'var(--green)':s.sharpeRatio!=null&&s.sharpeRatio>0?'var(--text)':'var(--red)');}},
       {k:'cashConversionCycle',l:'CCC Days',hc:'var(--blue)',r:function(s){return _num(s.cashConversionCycle,0);}},
       {k:'workingCapitalHealth',l:'WC Health',hc:'var(--blue)',r:function(s){return _trend(s.workingCapitalHealth);}},
@@ -4384,26 +4454,8 @@ function renderStockRecPage(){
       {k:'stochK',l:'StochK',hc:'var(--blue)',r:function(s){return _num(s.stochK,1);}},
       {k:'adx',l:'ADX',hc:'var(--blue)',r:function(s){return _num(s.adx,1);},br:true},
       {k:'volRatio',l:'VolRat',hc:'var(--text)',r:function(s){return _vol(s.volRatio);}},
-      {k:'obvRising',l:'OBV',hc:'var(--text)',r:function(s){return _bool(s.obvRising,'<span style="color:var(--green)">Rising</span>','<span style="color:var(--red)">Falling</span>');}},
-      {k:'dma200Trend',l:'200Trend',hc:'var(--text)',r:function(s){return _trend(s.dma200Trend);}},
-      {k:'weeklyTrend',l:'WkTrend',hc:'var(--text)',r:function(s){return _trend(s.weeklyTrend);}},
-      {k:'weeklyTrendConfirmed',l:'WkConf',hc:'var(--text)',r:function(s){return _bool(s.weeklyTrendConfirmed,'<span style="color:var(--green)">✓</span>','<span style="color:var(--text4)">✗</span>');},br:true},
-      {k:'fib382',l:'Fib38.2',hc:'#a78bfa',r:function(s){return _price(s.fib382);}},
-      {k:'fib500',l:'Fib50',hc:'#a78bfa',r:function(s){return _price(s.fib500);}},
-      {k:'fib618',l:'Fib61.8',hc:'#a78bfa',r:function(s){return _price(s.fib618);}},
-      {k:'nearestFib',l:'NrFib',hc:'#a78bfa',r:function(s){return _price(s.nearestFib);}},
-      {k:'nearFibDist',l:'FibDist%',hc:'#a78bfa',r:function(s){return _pct(s.nearFibDist);},br:true},
       {k:'support',l:'Support',hc:'var(--green)',r:function(s){return _price(s.support);}},
-      {k:'resistance',l:'Resist',hc:'var(--red)',r:function(s){return _price(s.resistance);},br:true},
-      {k:'ichimokuSignal',l:'Ichimoku',hc:'#06b6d4',r:function(s){var v=s.ichimokuSignal;if(!v)return '<span style="color:var(--text4)">-</span>';var c=v==='above'?'var(--green)':v==='below'?'var(--red)':'#f59e0b';return '<span style="color:'+c+'">'+v.charAt(0).toUpperCase()+v.slice(1)+'</span>';}},
-      {k:'ichimokuTenkan',l:'Tenkan',hc:'#06b6d4',r:function(s){return _price(s.ichimokuTenkan);}},
-      {k:'ichimokuKijun',l:'Kijun',hc:'#06b6d4',r:function(s){return _price(s.ichimokuKijun);},br:true},
-      {k:'pivot',l:'Pivot',hc:'#d946ef',r:function(s){return _price(s.pivot);}},
-      {k:'pivotR1',l:'R1',hc:'#d946ef',r:function(s){return _price(s.pivotR1);}},
-      {k:'pivotR2',l:'R2',hc:'#d946ef',r:function(s){return _price(s.pivotR2);}},
-      {k:'pivotS1',l:'S1',hc:'#d946ef',r:function(s){return _price(s.pivotS1);}},
-      {k:'pivotS2',l:'S2',hc:'#d946ef',r:function(s){return _price(s.pivotS2);},br:true},
-      {k:'dowTheoryTrend',l:'DowTrend',hc:'#eab308',r:function(s){var v=s.dowTheoryTrend;if(!v)return '<span style="color:var(--text4)">-</span>';var c=v==='uptrend'?'var(--green)':v==='downtrend'?'var(--red)':'#f59e0b';return '<span style="color:'+c+'">'+v.charAt(0).toUpperCase()+v.slice(1)+'</span>';}},
+      {k:'resistance',l:'Resist',hc:'var(--red)',r:function(s){return _price(s.resistance);}},
     ],
     financials: [
       {k:'mktCap',l:'MktCap Cr',hc:'var(--text)',r:function(s){return _crore(s.mktCap);}},
@@ -4444,121 +4496,165 @@ function renderStockRecPage(){
     ],
   };
 
-  var activeCols = TAB_COLS[stockRecTab] || TAB_COLS.overview;
+  var activeCols = TAB_COLS[stockDataTab] || TAB_COLS.overview;
 
-  // ── Tab bar ──
-  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">';
-  TAB_DEFS.forEach(function(t){
-    var isActive = stockRecTab === t.id;
-    var colCount = (TAB_COLS[t.id]||[]).length;
-    // Tab switch now re-fetches because Long-Term hits /api/stocks/score?scoreVersion=2
-    // (v2 payload) while every other tab uses the v1 payload. We need fresh data
-    // when crossing the v1/v2 boundary in either direction.
-    var onClick = "stockRecTab='"+t.id+"';renderStockRec();pollStockRec()";
-    html += '<button onclick="'+onClick+'" style="padding:5px 12px;border-radius:8px;border:1px solid '
-      +(isActive?'#f59e0b':'var(--border)')+';background:'+(isActive?'rgba(245,158,11,0.15)':'var(--bg2)')
-      +';color:'+(isActive?'#f59e0b':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'400')
-      +';transition:all .15s;white-space:nowrap">'
-      +t.icon+' '+t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
+  // ── Filter by market cap ──
+  var filtered = allStocks.filter(function(s){
+    if(stockDataFilter==='ALL') return true;
+    return s.grp===stockDataFilter;
+  });
+
+  // ── Search by symbol/name ──
+  var q = (stockDataSearch||'').trim().toUpperCase();
+  if(q){
+    filtered = filtered.filter(function(s){
+      return (s.sym && s.sym.toUpperCase().indexOf(q)>=0)
+          || (s.name && s.name.toUpperCase().indexOf(q)>=0)
+          || (s.sector && s.sector.toUpperCase().indexOf(q)>=0);
+    });
+  }
+
+  // ── Sort ──
+  // Supported sort keys: sym, grp, score, price + all active column keys.
+  var sk = stockDataSortKey;
+  var sdir = stockDataSortDir==='asc' ? 1 : -1;
+  function _sortVal(s){
+    if(sk==='sym')   return (s.sym||'').toUpperCase();
+    if(sk==='grp')   return (s.grp||'').toUpperCase();
+    if(sk==='sector')return (s.sector||'').toUpperCase();
+    var v = s[sk];
+    if(v==null) return sdir>0 ? Infinity : -Infinity; // push nulls to end
+    var n = parseFloat(v);
+    if(!isNaN(n)) return n;
+    return String(v).toUpperCase();
+  }
+  filtered.sort(function(a,b){
+    var av=_sortVal(a), bv=_sortVal(b);
+    if(av<bv) return -1*sdir;
+    if(av>bv) return  1*sdir;
+    return 0;
+  });
+
+  // ── Header ──
+  var html = '<div style="padding:16px">';
+  html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
+  html += '<div>'
+    + '<div style="font-weight:800;font-size:18px;letter-spacing:-.3px;color:#a78bfa">📊 Stock Data</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:3px">Full universe · '+allStocks.length+' stocks · sortable columns · search by symbol</div>'
+    + '</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockDataPage()">↻ Refresh</button>';
+  html += '</div></div>';
+
+  // ── Search box + market cap filters ──
+  html += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">';
+  html += '<input id="sd-search" type="text" placeholder="🔍 Search stock symbol, name or sector..." '
+    + 'value="'+((stockDataSearch||'').replace(/"/g,'&quot;'))+'" '
+    + 'oninput="stockDataSearch=this.value;clearTimeout(window._sdSearchT);window._sdSearchT=setTimeout(renderStockDataPage,180)" '
+    + 'style="flex:1;min-width:240px;max-width:420px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:13px;box-sizing:border-box"/>';
+  var mcFilters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
+  mcFilters.forEach(function(f){
+    var active = stockDataFilter===f;
+    html += '<button onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:20px;border:1px solid '
+      + (active?'#a78bfa':'var(--border)')+';background:'
+      + (active?'rgba(167,139,250,0.2)':'var(--bg2)')
+      + ';color:'+(active?'#a78bfa':'var(--text2)')+';font-size:12px;cursor:pointer;font-weight:'+(active?'700':'500')+'">'
+      + f+'</button>';
   });
   html += '</div>';
 
-  // ── Long-Term tab intro (portfolio construction moved to Portfolio Manager) ──
-  // The Long-Term tab here is now a pure Varsity v2 scores screener.
-  // Portfolio *construction* (constrained 15-stock model, sector caps, DC floor,
-  // allocation) lives in Portfolio Manager → Long Term Portfolio. Keeping the
-  // two concerns separate: Stocks = scan/screen, Portfolio Manager = build/hold.
-  if (stockRecTab === 'longterm') {
-    html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:10px;background:var(--bg2);display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
-      + '<span style="font-size:12px;color:#f59e0b;font-weight:700">🏛 Varsity v2 scores (fundamentals-first)</span>'
-      + '<span style="font-size:10px;color:var(--text3);flex:1">Every stock in the universe, ranked by 4-pillar Varsity score. Quality 40 · Growth 25 · Valuation 20 · Business 15.</span>'
-      + '<button onclick="_psTab=\'longterm\';setMode(\'psuggest\')" '
-      + 'style="padding:5px 12px;border-radius:6px;border:1px solid #f59e0b;background:rgba(245,158,11,0.15);color:#f59e0b;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">Build portfolio →</button>'
-      + '</div>';
+  // ── Sub-tab bar ──
+  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px">';
+  TAB_DEFS.forEach(function(t){
+    var isActive = stockDataTab === t.id;
+    var colCount = (TAB_COLS[t.id]||[]).length;
+    html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:8px;border:1px solid '
+      + (isActive?'#a78bfa':'var(--border)')+';background:'+(isActive?'rgba(167,139,250,0.18)':'var(--bg2)')
+      + ';color:'+(isActive?'#a78bfa':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'400')
+      + ';white-space:nowrap">'
+      + t.icon+' '+t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
+  });
+  html += '</div>';
+
+  // Result count
+  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
+    + (q?' matching "'+q+'"':'')
+    + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
+    + ' · sorted by <b>'+sk+'</b> ('+stockDataSortDir+')</div>';
+
+  // ── Sortable header helper ──
+  function sortableHeader(key, label, align, extraStyle){
+    extraStyle = extraStyle || '';
+    var isSorted = stockDataSortKey===key;
+    var arrow = isSorted ? (stockDataSortDir==='asc'?' ▲':' ▼') : '';
+    var col = isSorted ? '#a78bfa' : 'var(--text3)';
+    var onclick = 'if(stockDataSortKey===\''+key+'\'){stockDataSortDir=stockDataSortDir===\'asc\'?\'desc\':\'asc\';}else{stockDataSortKey=\''+key+'\';stockDataSortDir=\'desc\';}renderStockDataPage()';
+    return '<th onclick="'+onclick+'" style="text-align:'+(align||'right')+';padding:6px 8px;color:'+col+';cursor:pointer;user-select:none;white-space:nowrap;'+extraStyle+'">'
+      + label+arrow+'</th>';
   }
 
   // ── Table ──
   html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
-    +'<table style="width:100%;border-collapse:collapse;font-size:11px">';
+    + '<table style="width:100%;border-collapse:collapse;font-size:11px">';
 
-  // ── Header row ──
-  html += '<thead><tr style="background:var(--bg2)">'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>'
-    +'<th style="text-align:left;padding:5px 8px;color:var(--text3);position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px">Stock</th>'
-    +'<th style="text-align:center;padding:5px 8px;color:var(--text3)">Grp</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3)">Score</th>'
-    +'<th style="text-align:right;padding:5px 8px;color:var(--text3);border-right:2px solid var(--border3)">Price</th>';
+  // Header row
+  html += '<thead><tr style="background:var(--bg2)">';
+  html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>';
+  html += sortableHeader('sym',   'Stock', 'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
+  html += sortableHeader('grp',   'Grp',   'center');
+  html += sortableHeader('score', 'Score', 'right');
+  html += sortableHeader('price', 'Price', 'right', 'border-right:2px solid var(--border3)');
   activeCols.forEach(function(col){
-    html += '<th style="text-align:right;padding:5px 8px;color:'+col.hc+';white-space:nowrap'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
-      +col.l+'</th>';
+    var isSorted = stockDataSortKey===col.k;
+    var arrow = isSorted ? (stockDataSortDir==='asc'?' ▲':' ▼') : '';
+    var hc = isSorted ? '#a78bfa' : col.hc;
+    var onclick = 'if(stockDataSortKey===\''+col.k+'\'){stockDataSortDir=stockDataSortDir===\'asc\'?\'desc\':\'asc\';}else{stockDataSortKey=\''+col.k+'\';stockDataSortDir=\'desc\';}renderStockDataPage()';
+    html += '<th onclick="'+onclick+'" style="text-align:right;padding:6px 8px;color:'+hc+';cursor:pointer;user-select:none;white-space:nowrap'
+      + (col.br?';border-right:1px solid var(--border2)':'')+'">'
+      + col.l+arrow+'</th>';
   });
   html += '</tr></thead>';
 
-  // ── Body rows ──
+  // Body rows
   html += '<tbody>';
   var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'};
-
-  filtered.slice(0, showCount).forEach(function(s, idx){
+  if(filtered.length===0){
+    html += '<tr><td colspan="'+(5+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
+  }
+  filtered.forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
-    var isTop3 = idx < 3 && stockRecFilter!=='ALL' || allStocks.indexOf(s)<3;
-    var rowBorder = isTop3 ? 'border-left:3px solid #f59e0b;' : '';
     var gc = grpCol[s.grp]||'var(--text3)';
     var scoreCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
-
-    html += '<tr data-ri="'+idx+'" style="'+rowBorder+'border-bottom:1px solid var(--border2);background:'+bg+'">'
-      +'<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(s.rank)+'</td>'
-      +'<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3;border-right:0">'
-        +'<div style="font-weight:600">'+s.sym+'</div>'
-        +'<div style="font-size:10px;color:var(--text3)">'+s.sector+'</div>'
-      +'</td>'
-      +'<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
-      +'<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+scoreCol+'">'+s.score+'</td>'
-      +'<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
-
+    html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
+      + '<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(idx+1)+'</td>'
+      + '<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3">'
+        + '<div style="font-weight:600">'+s.sym+'</div>'
+        + '<div style="font-size:10px;color:var(--text3)">'+(s.sector||'')+'</div>'
+      + '</td>'
+      + '<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+scoreCol+'">'+(s.score!=null?s.score:'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
     activeCols.forEach(function(col){
       html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
-        +col.r(s)+'</td>';
+        + col.r(s)+'</td>';
     });
     html += '</tr>';
   });
   html += '</tbody></table></div>';
 
-  if(filtered.length > SHOW_INITIAL && !stockRecShowAll){
-    html += '<div style="text-align:center;padding:12px 0">'
-      +'<span onclick="stockRecShowAll=true;renderStockRec()" style="cursor:pointer;font-size:11px;color:#f59e0b;font-weight:600;padding:6px 22px;border:1px solid #f59e0b60;border-radius:20px;display:inline-block;background:var(--bg2)">'
-      +'Show all '+(filtered.length-SHOW_INITIAL)+' more ▾</span></div>';
-  } else if(stockRecShowAll && filtered.length > SHOW_INITIAL){
-    html += '<div style="text-align:center;padding:12px 0">'
-      +'<span onclick="stockRecShowAll=false;renderStockRec()" style="cursor:pointer;font-size:11px;color:#f59e0b;font-weight:600;padding:6px 22px;border:1px solid #f59e0b60;border-radius:20px;display:inline-block;background:var(--bg2)">'
-      +'Show less ▴</span></div>';
-  }
+  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Tip: click any column header to sort. Click again to flip ascending/descending. Data from /api/stocks/score · refreshed daily 7AM IST.</div>';
+  html += '</div>'; // end padding wrapper
 
-  html += '</div>'; // end left (table) column
-
-  html += '</div>'; // end flex row
-
-  html += '<div style="border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg2);margin-top:16px">';
-  html += '<div style="font-weight:600;font-size:12px;margin-bottom:10px">Scoring Methodology - 100 Points</div>';
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px">';
-  var pillars=[
-    {name:'Quality',pts:25,c:'#f59e0b',factors:'ROE · ROA/ROCE · Debt/Equity · Operating Margin · Percentile vs sector peers'},
-    {name:'Value',pts:20,c:'var(--green)',factors:'P/E ratio · P/B ratio · PEG (growth-adj value) · Dividend Yield · NSE Value 50 methodology'},
-    {name:'Momentum',pts:20,c:'var(--blue)',factors:'52-week price return · % from 52w high · Beta · NSE Momentum index methodology'},
-    {name:'Growth',pts:20,c:'#8b5cf6',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (Kite + Screener.in)'},
-    {name:'Technical',pts:15,c:'var(--red)',factors:'Price vs 50 DMA · Price vs 200 DMA · Golden/Death Cross · Volume accumulation'},
-  ];
-  pillars.forEach(function(p){
-    html += '<div style="background:var(--bg3);border-radius:8px;padding:8px 12px;flex:1;min-width:150px">'
-      +'<div style="color:'+p.c+';font-weight:700;font-size:11px">'+p.name+' <span style="opacity:.7">'+p.pts+' pts</span></div>'
-      +'<div style="color:var(--text3);font-size:10px;margin-top:4px;line-height:1.5">'+p.factors+'</div>'
-      +'</div>';
-  });
-  html += '</div>';
-  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: Kite + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
-  html += '</div>';
-
-  html += '</div>';
   cont.innerHTML = html;
+
+  // Keep search box focused + caret at end after re-render
+  try{
+    var sb = document.getElementById('sd-search');
+    if(sb && stockDataSearch){
+      sb.focus();
+      var v = sb.value; sb.value=''; sb.value=v;
+    }
+  }catch(e){}
 }
 
 function buildStockCard(s, medal){
