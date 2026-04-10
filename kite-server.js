@@ -10813,6 +10813,11 @@ function buildPortfolioSuggestion(amount) {
       composite: s.composite, faScore: s.faScore, taScore: s.taScore,
       momScore: s.momScore, valScore: s.valScore, riskScore: s.riskScore,
       checkCount: s.checkCount,
+      // fallenScore = canonical Varsity Fallen Angel quality-on-sale score
+      // (the "SWING SCORE" shown in Stock Picks + Stock Data). Pass it
+      // through so the Swing Trade Portfolio renders the same number for
+      // the same stock.
+      fallenScore: s.fallenScore != null ? s.fallenScore : null,
       isFallenAngel: s.isFallenAngel, fallenVerdict: s.fallenVerdict || null,
       stopLoss: s.stopLoss, target: s.target,
       rrRatio: s.rrRatio, riskPct: s.riskPct, rewardPct: s.rewardPct,
@@ -10839,6 +10844,8 @@ function buildPortfolioSuggestion(amount) {
       composite: s.composite, faScore: s.faScore, taScore: s.taScore,
       momScore: s.momScore, valScore: s.valScore, riskScore: s.riskScore,
       checkCount: s.checkCount,
+      // fallenScore passed through — see active-portfolio comment above
+      fallenScore: s.fallenScore != null ? s.fallenScore : null,
       isFallenAngel: s.isFallenAngel, fallenVerdict: s.fallenVerdict || null,
       stopLoss: s.stopLoss, target: s.target,
       rrRatio: s.rrRatio, riskPct: s.riskPct, rewardPct: s.rewardPct,

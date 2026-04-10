@@ -3105,19 +3105,20 @@ var stockRecRetries = 0;
 
 // ── Stock Picks table sort state (Swing + Long Term columns) ──
 // Swing table defaults to SWING SCORE (fallenScore — the quality-on-sale
-// ranking specific to fallen-angel swing setups); Long Term table defaults
-// to the 100-pt composite LONGTERM SCORE. Each table's top-25 slice is
-// ordered by the column visible to the user, and users can click any
-// header to re-sort.
+// Fallen Angel ranking); Long Term table defaults to LONG TERM SCORE
+// (scoreV2 — the fundamentals-only Varsity 4-pillar composite). These
+// two keys are the canonical scores used EVERYWHERE in the app — Stock
+// Picks, Stock Data, and both Portfolio Manager tabs all read the same
+// fallenScore / scoreV2 fields.
 var srSwingSortKey = 'fallenScore';
 var srSwingSortDir = 'desc';
-var srLongSortKey  = 'score';
+var srLongSortKey  = 'scoreV2';
 var srLongSortDir  = 'desc';
 
 // ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
 var stockDataTab      = 'overview';
 var stockDataSearch   = '';
-var stockDataSortKey  = 'score';   // column key to sort by
+var stockDataSortKey  = 'scoreV2'; // default sort = LONGTERM SCORE (Varsity v2)
 var stockDataSortDir  = 'desc';    // 'asc' | 'desc'
 var stockDataFilter   = 'ALL';     // market-cap slice (ALL/NIFTY50/NEXT50/MIDCAP/SMALLCAP)
 
@@ -3291,9 +3292,14 @@ async function pollStockRec(){
   var cont = document.getElementById('main-content');
   if(!cont || window._currentMode !== 'stockrec') return;
   try {
-    // Long-Term tab uses the v2 endpoint (Varsity long-term scoring);
-    // every other tab keeps the v1 contract for backward compatibility.
-    var url = stockRecTab === 'longterm' ? '/api/stocks/score?scoreVersion=2' : '/api/stocks/score';
+    // Always fetch v2 — it's a strict superset of v1, returning both the
+    // legacy `score` (kept for any v1 consumer) AND scoreV2 + subScores +
+    // timingOverlay + fallenScore on every row. Using v2 universally means
+    // every tab sees the same numbers:
+    //   · SWING SCORE    = fallenScore (quality-on-sale ranking)
+    //   · LONG TERM SCORE = scoreV2     (fundamentals-only Varsity 4-pillar)
+    // which is the Varsity FA/TA separation the invariants test enforces.
+    var url = '/api/stocks/score?scoreVersion=2';
     var r = await fetch(url);
     var d = await r.json();
     var msgEl = document.getElementById('srec-loading-msg');
@@ -4093,18 +4099,20 @@ function renderStockRecPage(){
     srSwingSortDir
   );
 
-  // Long-Term Trades column = quality stocks not collapsing. Use v1 signals
-  // (score, ROE, D/E, earnings growth, not deeply fallen) to pre-rank until
-  // Deep Review / Portfolio Manager v2 provides scoreV2. This keeps the screen
-  // useful without an extra fetch — the authoritative long-term builder lives
-  // in Portfolio Manager → Long Term Portfolio.
+  // Long-Term Trades column = quality stocks worth buying-and-holding. Now
+  // that the Stock Picks fetch uses ?scoreVersion=2, every row carries the
+  // authoritative Varsity 4-pillar `scoreV2` (Quality 40 + Growth 25 +
+  // Valuation 20 + Business 15, fundamentals-only per the FA/TA separation
+  // invariant in test/v2-invariants.js). This is the SAME number Portfolio
+  // Manager → Long Term Portfolio uses, so a stock's LONG TERM SCORE is
+  // identical across every tab.
   var longTermPicks = _srSortBy(
     filtered.filter(function(s){
       var roeOk = (s.roe==null) || s.roe>=12;
       var deOk  = (s.debtToEq==null) || s.debtToEq<=2;
       var grOk  = (s.earGrowth==null) || s.earGrowth>=0;
       var notCollapsing = (s.pctFromHigh==null) || s.pctFromHigh>=-35;
-      return (s.score||0)>=60 && roeOk && deOk && grOk && notCollapsing;
+      return (s.scoreV2||0)>=60 && roeOk && deOk && grOk && notCollapsing;
     }),
     srLongSortKey,
     srLongSortDir
@@ -4149,7 +4157,7 @@ function renderStockRecPage(){
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
   html += '<span style="font-size:10px;color:var(--text3);align-self:center">'+(marketOpen?'🟢 Live':'🔴 Closed')+'</span>';
   html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockRec(true)">↻ Refresh</button>';
-  html += '<button class="btn btn-sm" onclick="fetch(\'/api/stocks/score\').then(function(r){return r.json();}).then(function(d){stockRecData=d;renderStockRec();})">⟳ Rescore</button>';
+  html += '<button class="btn btn-sm" onclick="fetch(\'/api/stocks/score?scoreVersion=2\').then(function(r){return r.json();}).then(function(d){stockRecData=d;renderStockRec();})">⟳ Rescore</button>';
   html += '<button class="btn btn-sm" title="Force re-scrape Yahoo Finance then rescore" onclick="'
     +'fetch(\'/api/fundamentals/refresh\',{method:\'POST\'}).then(function(){'
     +'setTimeout(function(){stockRecData=null;renderStockRec(true);},5000)'
@@ -4197,6 +4205,22 @@ function renderStockRecPage(){
       +f+'</button>';
   });
   html += '</div>';
+
+  // ── Score legend — unified, Varsity-aligned ───────────────────────────
+  // Two scores answer two different questions. The same stock has the same
+  // SWING SCORE and LONG TERM SCORE on every tab (Stock Picks, Stock Data,
+  // Portfolio Manager) so there's no mental-model drift between screens.
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:14px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:11px">'
+    + '<div style="font-weight:800;color:var(--text2);font-size:11px">How to read the scores</div>'
+    + '<div style="display:flex;align-items:center;gap:6px">'
+      + '<span style="background:rgba(245,158,11,.18);color:#f59e0b;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">SWING SCORE</span>'
+      + '<span style="color:var(--text3)">Varsity Fallen Angel — quality business pulled back ≥20% with RSI ≤52. Answers <i>&ldquo;is this a tradeable pullback setup?&rdquo;</i></span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;gap:6px">'
+      + '<span style="background:rgba(34,211,238,.18);color:#22d3ee;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">LONG TERM SCORE</span>'
+      + '<span style="color:var(--text3)">Varsity 4-pillar — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only. Answers <i>&ldquo;how good is this business to own for 12M?&rdquo;</i></span>'
+    + '</div>'
+    + '</div>';
 
   // ── 2-column split view: Swing Trades (left) | Long Term Trades (right) ──
   // Both columns respect the currently selected market-cap filter above.
@@ -4266,7 +4290,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('long','sym',        'Stock', 'left')
-      + _srHdr('long','score',      'LONGTERM SCORE','right','Long-term composite score (Quality + Value + Momentum + Growth + Technical, 100 pts)')
+      + _srHdr('long','scoreV2',    'LONGTERM SCORE','right','Varsity 4-pillar long-term score — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only (TA lives in the timing overlay).')
       + _srHdr('long','price',      'Price')
       + _srHdr('long','roe',        'ROE%')
       + _srHdr('long','debtToEq',   'D/E')
@@ -4274,7 +4298,8 @@ function renderStockRecPage(){
       + '</tr></thead><tbody>';
     longTermPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
-      var sc = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
+      var ltS = s.scoreV2;
+      var sc = ltS==null?'var(--text4)':ltS>=75?'var(--green)':ltS>=60?'#f59e0b':'var(--red)';
       var roe = s.roe;
       var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#10b981':'var(--text)';
       var de = s.debtToEq;
@@ -4285,7 +4310,7 @@ function renderStockRecPage(){
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+s.score+'</td>'
+        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+(ltS!=null?(+ltS).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+deCol+'">'+(de!=null?de.toFixed(2)+'x':'-')+'</td>'
@@ -4348,7 +4373,10 @@ async function renderStockDataPage(){
       +'<div style="font-size:11px;color:var(--text3)">Fetching scored universe from server</div>'
       +'</div>';
     try{
-      var r = await fetch('/api/stocks/score');
+      // v2 endpoint: returns both legacy `score` and Varsity `scoreV2` —
+      // Stock Data needs scoreV2 for the LONGTERM SCORE column so all tabs
+      // show the same number for the same stock.
+      var r = await fetch('/api/stocks/score?scoreVersion=2');
       stockRecData = await r.json();
     }catch(e){
       cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--red)">Failed to load: '+(e&&e.message||e)+'</div>';
@@ -4622,7 +4650,7 @@ async function renderStockDataPage(){
   html += '</div>';
 
   // Result count — pretty-print the internal sort key for the user
-  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'SWING SCORE',score:'LONGTERM SCORE',price:'Price'}[sk] || sk;
+  var _sortLabel = {sym:'Stock',grp:'Group',fallenScore:'SWING SCORE',scoreV2:'LONGTERM SCORE',score:'LONGTERM SCORE (legacy)',price:'Price'}[sk] || sk;
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
@@ -4658,7 +4686,7 @@ async function renderStockDataPage(){
   html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
   html += sortableHeader('grp',         'Grp',     'center');
   html += sortableHeader('fallenScore', 'SWING SCORE',    'right');
-  html += sortableHeader('score',       'LONGTERM SCORE', 'right');
+  html += sortableHeader('scoreV2',     'LONGTERM SCORE', 'right');
   html += sortableHeader('price',       'Price',   'right', 'border-right:2px solid var(--border3)');
   activeCols.forEach(function(col){
     var isSorted = stockDataSortKey===col.k;
@@ -4684,9 +4712,12 @@ async function renderStockDataPage(){
   filtered.forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
     var gc = grpCol[s.grp]||'var(--text3)';
-    // Long-term composite score color
-    var ltCol = s.score>=75?'var(--green)':s.score>=55?'#f59e0b':'var(--red)';
-    // Swing (fallen-angel) score — amber when present, dim dash when not
+    // LONG TERM SCORE = Varsity 4-pillar scoreV2 (fundamentals-only, matches
+    // Portfolio Manager → Long Term Portfolio).
+    var lt = s.scoreV2;
+    var ltCol = lt==null?'var(--text4)':lt>=75?'var(--green)':lt>=60?'#f59e0b':'var(--red)';
+    // SWING SCORE = Fallen Angel score (quality-on-sale ranking). Only
+    // populated when the stock passes the size-aware Fallen Angel filter.
     var fs = s.fallenScore;
     var swCol = fs==null?'var(--text4)':fs>=75?'var(--green)':fs>=55?'#f59e0b':'var(--red)';
     html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
@@ -4697,7 +4728,7 @@ async function renderStockDataPage(){
       + '</td>'
       + '<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
-      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(s.score!=null?s.score:'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(lt!=null?(+lt).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
     activeCols.forEach(function(col){
       html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
@@ -5991,10 +6022,20 @@ function psRenderModelResults(data){
       h+='<span style="font-size:8px;color:var(--text4)">—</span>';
     }
     h+='</td>';
-    // SWING TRADE SCORE — the 5-factor composite the portfolio manager
-    // ranks on (FA 30 + TA 25 + Val 15 + Mom 15 + Risk 15). Shown right
-    // after AI Reviews so the buy rationale (AI + score) reads left-to-right.
-    h+='<td style="padding:5px;font-weight:700;font-size:13px;color:'+(stk.composite>=60?'#22c55e':stk.composite>=45?'#f59e0b':'#ef4444')+'">'+stk.composite+'</td>';
+    // SWING SCORE — the canonical Varsity Fallen Angel score (quality-on-
+    // sale ranking). Same `fallenScore` field used in Stock Picks and
+    // Stock Data, so one stock = one SWING SCORE across every tab. The
+    // portfolio manager's internal 5-factor composite (FA 30 + TA 25 +
+    // Val 15 + Mom 15 + Risk 15) still drives WHICH stocks get picked and
+    // HOW MUCH capital each gets — that's an allocation decision, not a
+    // quality score — but the number displayed is the Fallen Angel score.
+    var _sSwing = (stk.fallenScore!=null) ? stk.fallenScore : null;
+    var _sSwingCol = _sSwing==null
+      ? 'var(--text4)'
+      : _sSwing>=75 ? '#22c55e'
+      : _sSwing>=55 ? '#f59e0b' : '#ef4444';
+    h+='<td style="padding:5px;font-weight:700;font-size:13px;color:'+_sSwingCol+'">'
+        +(_sSwing!=null?_sSwing:'-')+'</td>';
     h+='<td style="padding:5px;font-weight:600">₹'+(stk.currentPrice||stk.price).toFixed(0)+'</td>';
     h+='<td style="padding:5px;font-weight:600">'+stk.shares+'</td>';
     h+='<td style="padding:5px;font-size:10px">'+psFmt(stk.allocAmt)+' <span style="color:var(--text4)">('+stk.allocPct+'%)</span></td>';
