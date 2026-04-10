@@ -3132,15 +3132,17 @@ async function importScreenerCSV(csvText) {
   const lines = csvText.split('\n').filter(l => l.trim());
   if (lines.length < 2) throw new Error('CSV too short');
 
-  // Parse header — normalize: lowercase, strip units like "rs.cr.", "%", "(rs cr)", etc.
+  // Parse header — normalize: lowercase, strip units like "Rs.Cr.", "%", "(rs cr)", etc.
+  // CAREFUL: only strip standalone units, not substrings (e.g. don't strip "rs" from "shareholders")
   const rawHeaders = parseCSVLine(lines[0]);
   const headers = rawHeaders.map(h => h.toLowerCase().trim()
-    .replace(/\s*rs\.?\s*cr\.?/g, '')    // remove "Rs.Cr." / "Rs Cr"
-    .replace(/\s*rs\.?/g, '')            // remove "Rs."
+    .replace(/\brs\.?\s*cr\.?\b/g, '')   // remove standalone "Rs.Cr." / "Rs Cr"
+    .replace(/\brs\.\s*/g, '')           // remove "Rs." (require the dot to avoid matching "...rs" in words)
     .replace(/\s*%\s*/g, '')             // remove "%"
     .replace(/\s*\(.*?\)\s*/g, '')       // remove parenthetical like "(in cr)"
-    .replace(/\s*cr\.?\s*$/g, '')        // remove trailing "Cr" / "Cr."
+    .replace(/\s*\bcr\.?\s*$/g, '')      // remove trailing standalone "Cr" / "Cr."
     .replace(/\s+/g, ' ')               // collapse multiple spaces
+    .replace(/\.\s*$/, '')               // remove trailing dot
     .trim()
   );
   console.log(`📊 CSV headers (${rawHeaders.length} cols): ${rawHeaders.join(' | ')}`);
