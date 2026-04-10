@@ -8827,7 +8827,7 @@ function computeStopAndTarget(s) {
   if (s.wk52Hi && s.wk52Hi > px * 1.08) {
     // Cap at 50% upside for conservatism — if 52W high implies >50%, use 50%
     const cappedHigh = Math.min(s.wk52Hi, px * 1.50);
-    targets.push({ val: cappedHigh, reason: '52W High recovery (Fallen Angel mean reversion)' });
+    targets.push({ val: cappedHigh, reason: '52W High recovery (Rebound Pick mean reversion)' });
   }
 
   // Fallback: +15% minimum target
@@ -10803,7 +10803,7 @@ function buildPortfolioSuggestion(amount) {
     const investedAmt = +(shares * s.price).toFixed(0);
 
     let reason = `${s.conviction} — composite ${s.composite} (FA:${s.faScore} TA:${s.taScore} Mom:${s.momScore} Val:${s.valScore} Risk:${s.riskScore})`;
-    if (s.isFallenAngel) reason = `Fallen Angel — ${reason}`;
+    if (s.isFallenAngel) reason = `Rebound Pick — ${reason}`;
 
     return {
       sym: s.sym, name: s.name, grp: s.grp, sector: s.sector,
