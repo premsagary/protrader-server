@@ -6090,6 +6090,26 @@ function scoreOneStock(f, peers) {
   if(na(f.revGrowth)&&f.revGrowth<-15){ s-=8;  hits['⚠ Revenue declining sharply']=-8; }
   if(na(f.debtToEq)&&f.debtToEq>4)   { s-=5;  hits['⚠ Extreme leverage (D/E > 4x)']=-5; }
 
+  // DuPont ROE Decomposition (M3: quality-of-ROE check — is it margin, efficiency, or leverage-driven?)
+  if(na(f.dupontNetMargin)){
+    if(f.dupontNetMargin>=10){ s+=3; hits[`DuPont NM: ${f.dupontNetMargin}% (strong profitability quality)`]=3; }
+    else if(f.dupontNetMargin<3){ s-=2; hits[`⚠ DuPont NM: ${f.dupontNetMargin}% (thin margins)`]=-2; }
+  }
+  if(na(f.dupontAssetTurnover)){
+    if(f.dupontAssetTurnover>=1.2){ s+=2; hits[`DuPont AT: ${f.dupontAssetTurnover}x (efficient asset use)`]=2; }
+  }
+  if(na(f.dupontEquityMultiplier)){
+    if(f.dupontEquityMultiplier<2.0){ s+=2; hits[`DuPont EM: ${f.dupontEquityMultiplier}x (not leverage-dependent)`]=2; }
+    else if(f.dupontEquityMultiplier>4.0){ s-=2; hits[`⚠ DuPont EM: ${f.dupontEquityMultiplier}x (leverage-heavy ROE)`]=-2; }
+  }
+
+  // Cash Conversion Cycle (M13: how fast cash rotates through the business)
+  if(na(f.cashConversionCycle)){
+    if(f.cashConversionCycle<60){ s+=3; hits[`CCC: ${f.cashConversionCycle} days (fast cash generation)`]=3; }
+    else if(f.cashConversionCycle<=90){ s+=1; hits[`CCC: ${f.cashConversionCycle} days (normal)`]=1; }
+    else{ s-=2; hits[`⚠ CCC: ${f.cashConversionCycle} days (slow cash conversion)`]=-2; }
+  }
+
   return { score: Math.min(Math.round(s*10)/10, 100), hits };
 }
 
@@ -6816,6 +6836,16 @@ function scoreStockForPortfolio(f) {
   else if (f.supertrendSig === 'SELL') taScore -= 5;
   // Volume ratio (unusual volume = institutional interest)
   if (na(f.volRatio) && f.volRatio > 1.5) taScore += 4;
+  // Ichimoku Cloud (M2: Japanese institutional framework — complete trend system)
+  if (f.ichimokuSignal === 'above_cloud') taScore += 8;       // fully bullish
+  else if (f.ichimokuSignal === 'below_cloud') taScore -= 8;  // fully bearish
+  // inside_cloud = no-trade zone, 0 pts
+  // Dow Theory trend (M2 Ch2: higher highs/lows = primary uptrend)
+  if (f.dowTheoryTrend === 'uptrend') taScore += 4;
+  else if (f.dowTheoryTrend === 'downtrend') taScore -= 4;
+  // Weekly trend multi-timeframe confirmation (M2: weekly aligns with daily)
+  if (f.weeklyTrendConfirmed === true || f.weeklyTrendConfirmed === 'bullish') taScore += 5;
+  else if (f.weeklyTrendConfirmed === 'bearish') taScore -= 3;
   taScore = Math.max(0, Math.min(100, taScore));
 
   // === PILLAR 4: MOMENTUM SCORE (0-100) (Varsity M9 Ch6: relative strength vs Nifty) ===
@@ -6833,6 +6863,12 @@ function scoreStockForPortfolio(f) {
   momScore += clamp(rs52w, 1.5) * 15;  // cap at ±150% RS for 52W
   // Absolute momentum bonus
   if (na(f.change6m) && f.change6m > 0 && rs6m > 0) momScore += 5;
+  // Sharpe Ratio — risk-adjusted return quality (M9/M10: not just returns, returns PER UNIT of risk)
+  if (na(f.sharpeRatio)) {
+    if (f.sharpeRatio > 1.0) momScore += 4;       // excellent risk-adjusted returns
+    else if (f.sharpeRatio >= 0.5) momScore += 2;  // decent
+    else if (f.sharpeRatio < 0) momScore -= 5;     // negative = losing money relative to risk taken
+  }
   momScore = Math.max(0, Math.min(100, momScore));
 
   // === PILLAR 5: RISK SCORE (0-100, higher = SAFER) (Varsity M9) ===
@@ -6877,6 +6913,10 @@ function scoreStockForPortfolio(f) {
     if (f.volRatio < 0.3) riskScore -= 8;       // very thin trading volume
     else if (f.volRatio < 0.5) riskScore -= 4;  // below average volume
   }
+  // Working Capital Health (M3/M13: liquidity buffer against business shocks)
+  if (f.workingCapitalHealth === 'strong') riskScore += 3;
+  else if (f.workingCapitalHealth === 'adequate') riskScore += 1;
+  else if (f.workingCapitalHealth === 'weak') riskScore -= 3;
   riskScore = Math.max(0, Math.min(100, riskScore));
 
   // === COMPOSITE SCORE (Varsity-aligned: FA-heavy for long-term investing) ===
@@ -6900,6 +6940,15 @@ function scoreStockForPortfolio(f) {
   if (f.goldenCross) checkCount += 0.5;
   if (na(f.roe) && f.roe >= 15) checkCount += 0.5;
   if (stopData?.acceptable) checkCount += 0.5;
+  // Multi-signal trend confirmation bonus (Ichimoku + Weekly + Dow all bullish)
+  const _trendConfs = [
+    f.ichimokuSignal === 'above_cloud',
+    f.weeklyTrendConfirmed === true || f.weeklyTrendConfirmed === 'bullish',
+    f.dowTheoryTrend === 'uptrend',
+  ].filter(Boolean).length;
+  if (_trendConfs >= 2) checkCount += 0.5;  // 2+ trend confirmations = conviction boost
+  // Sharpe ratio quality bonus
+  if (na(f.sharpeRatio) && f.sharpeRatio > 1.0) checkCount += 0.5;
 
   let conviction, convColor;
   if (composite >= 65 && checkCount >= 4) { conviction = 'Strong Buy'; convColor = '#10b981'; }
@@ -7072,6 +7121,26 @@ function buildPortfolioSuggestion(amount) {
     if (s.beta && s.beta > 1.6) w *= 0.75;
     // Fallen angel bonus
     if (s.isFallenAngel && s.goodRR) w *= 1.15;
+    // Sharpe Ratio factor — reward better risk-adjusted returns (M9/M10)
+    if (s.sharpeRatio != null) {
+      if (s.sharpeRatio > 1.0) w *= 1.10;       // 10% boost — great risk-adjusted performer
+      else if (s.sharpeRatio < 0) w *= 0.85;    // 15% penalty — negative risk-adjusted return
+    }
+    // Multi-signal trend confirmation — boost allocation when Ichimoku + Weekly + Dow all agree
+    const trendSignals = [
+      s.ichimokuSignal === 'above_cloud',
+      s.weeklyTrendConfirmed === true || s.weeklyTrendConfirmed === 'bullish',
+      s.dowTheoryTrend === 'uptrend',
+    ].filter(Boolean).length;
+    if (trendSignals >= 3) w *= 1.12;           // all 3 bullish = 12% allocation boost
+    else if (trendSignals >= 2) w *= 1.05;      // 2 of 3 = 5% boost
+    // Conversely: all bearish = reduce allocation
+    const bearSignals = [
+      s.ichimokuSignal === 'below_cloud',
+      s.weeklyTrendConfirmed === 'bearish',
+      s.dowTheoryTrend === 'downtrend',
+    ].filter(Boolean).length;
+    if (bearSignals >= 2) w *= 0.85;            // multiple bearish confirmations = reduce exposure
     return Math.max(w, 1);
   });
 
