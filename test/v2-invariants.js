@@ -35,17 +35,23 @@
  *      Options:
  *        HOST=http://localhost:3001   (default)
  *        SYMBOL=INFY                  (symbol to use for test #1, default TCS)
+ *        TOKEN=xxxxxxxx               (session token; required when the
+ *                                      server sits behind authMiddleware,
+ *                                      e.g. a Railway deploy. Sent as a
+ *                                      Bearer header on every request.)
  *
  * Each test is independent; a failure in one does not stop the others.
  * Exit code is 0 if every test passed, 1 otherwise.
  * =====================================================================
  */
 
-const http = require('http');
+const http  = require('http');
+const https = require('https');
 const { URL } = require('url');
 
 const HOST   = process.env.HOST   || 'http://localhost:3001';
 const SYMBOL = (process.env.SYMBOL || 'TCS').toUpperCase();
+const TOKEN  = process.env.TOKEN  || '';
 
 let passed = 0;
 let failed = 0;
@@ -55,16 +61,20 @@ const failures = [];
 function request(method, path, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(path, HOST);
+    const isHttps = u.protocol === 'https:';
+    const headers = { 'Content-Type': 'application/json' };
+    if (TOKEN) headers['Authorization'] = `Bearer ${TOKEN}`;
     const opts = {
       method,
       hostname: u.hostname,
-      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      port: u.port || (isHttps ? 443 : 80),
       path: u.pathname + u.search,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
     };
     const payload = body ? JSON.stringify(body) : null;
     if (payload) opts.headers['Content-Length'] = Buffer.byteLength(payload);
-    const req = http.request(opts, (res) => {
+    const transport = isHttps ? https : http;
+    const req = transport.request(opts, (res) => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
@@ -122,14 +132,27 @@ async function preflight() {
     console.error(`  Start with: V2_TEST_HOOKS=1 node kite-server.js`);
     process.exit(2);
   }
+  if (health.status === 401) {
+    console.error('✖ Server returned 401 Authentication required.');
+    console.error('  The deploy is behind authMiddleware. Pass a session token:');
+    console.error('    TOKEN=<your-session-token> HOST=' + HOST + ' node test/v2-invariants.js');
+    console.error('  Get the token from your browser devtools (cookie "session_token").');
+    process.exit(2);
+  }
   const hookProbe = await request('GET', '/api/test/snapshot-count');
   if (hookProbe.status === 404) {
     console.error('✖ V2_TEST_HOOKS is NOT enabled on the server.');
     console.error('  Restart with: V2_TEST_HOOKS=1 node kite-server.js');
+    console.error('  (On Railway: Dashboard → Variables → add V2_TEST_HOOKS=1 → redeploy)');
+    process.exit(2);
+  }
+  if (hookProbe.status === 401) {
+    console.error('✖ Test hooks returned 401. TOKEN is missing or expired.');
     process.exit(2);
   }
   console.log(`✓ Server reachable at ${HOST}`);
   console.log(`✓ V2_TEST_HOOKS enabled`);
+  console.log(`✓ Auth:  ${TOKEN ? 'Bearer token sent' : 'none (localhost mode)'}`);
   console.log(`✓ Health status: ${health.body?.status || 'unknown'}`);
   console.log('');
 }
