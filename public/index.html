@@ -9130,14 +9130,14 @@ function renderArchitecturePage(){
       _archSrc('Kite Connect', 'Live price, volume, day change, OHLC. Zerodha broker API — primary for real-time quotes.')
     + _archSrc('Yahoo Finance', 'Fundamentals (P/E, P/B, ROE, ROA, D/E, margins, EPS, 52w high/low, beta, FCF, fwd P/E, gross margin, annual vol) + trailing returns.')
     + _archSrc('Screener.in', 'Fills gaps Yahoo misses: ROCE, PEG, EV/EBITDA, pledged %, promoter change, FII/DII holding, shareholder count, 3Y/5Y ROE averages, interest coverage, current/quick ratio, cash conversion cycle, DuPont decomposition, working-capital health. Kept in <code>global.FUND_EXT</code>.')
-    + _archSrc('Tickertape CSV', 'Mutual fund dataset — AUM, expense ratio, rolling returns, Sharpe, Sortino, vs-category ratios, drawdown, volatility, UCR/DCR, tracking error, concentration, style drift %. Loaded into <code>mf_tickertape</code> table.')
+    + _archSrc('Tickertape CSV', 'Mutual fund dataset — AUM, expense ratio, rolling returns, Sharpe, Sortino, vs-category ratios, drawdown, volatility, UCR/DCR, tracking error, concentration, style drift %. Imported through the Admin tab: drop all 6 Tickertape facet CSVs onto <b>📤 Upload Tickertape CSVs</b> → server detects each facet, joins on (Name, Sub Category, Plan), TRUNCATEs + bulk-INSERTs into <code>mf_tickertape</code>, bumps the <code>dataSource</code> label (<code>app_config.mf_data_source</code>), and rebuilds the scored cache. Endpoint: <code>POST /api/mf/import</code> with <code>{files:[{name,text}]}</code>.')
     + _archSrc('Computed in-process', 'All TA indicators — RSI-14, MACD + histogram, ADX/DI, Bollinger %B, Stochastic, OBV trend, Supertrend, Ichimoku (Tenkan/Kijun/Cloud), DMAs (20/50/200), Fibonacci retracements, Dow Theory trend, weekly trend confirmation, RSI divergences, golden cross. Cached in <code>_taSignalCache</code>.')
     + _archSrc('Macro (cached)', 'India VIX, RBI repo, crude, USD/INR, FII/DII flows, breadth. Used only by AI validation prompts, not by scoring.')
   );
 
   // ── MF PICKS ──
   h += _archCard('💰', 'MF Picks — how mutual funds are ranked',
-      'Source: <code>scoreMFTickertape()</code> in kite-server.js (~line 4455). Data from the Tickertape CSV snapshot (Apr 2026), refreshed quarterly via <code>mf_load_v2.sql</code>.',
+      'Source: <code>scoreMFTickertape()</code> in kite-server.js (~line 4455). Data from the Tickertape CSV snapshot, refreshed on demand via <b>Admin → 📤 Upload Tickertape CSVs</b> (multi-file drop — one CSV per facet, server joins them). <code>mf_load_v2.sql</code> is still available as a manual fallback for direct Railway psql runs.',
       '<div style="margin-bottom:10px">Ranking runs in two phases. <b>Phase 1 — eligibility gate</b> (<code>checkEligible</code>): any fund failing AUM ≥ ₹1,000 Cr, age ≥ 60 months, 3Y rolling-return data present, or expense ratio &lt; 2% is labelled "Not Eligible" and never scored. <b>Phase 2 — scoring</b>: eligible funds are ranked within their sub-category (Small Cap / Mid Cap / Flexi Cap) using sector-relative percentiles. Max ~120 points, normalised to 100. The pillars are Varsity Module 11 derived:</div>'
     + _archPillar('Rolling 3Y Consistency', '25 pts', 'Varsity Ch19 + Morningstar research: "the single best predictor of future fund returns." Point-to-point CAGR has date bias; rolling return removes it. Percentile-ranked within sub-category.')
     + _archPillar('Risk-Adjusted Returns', '20 pts', 'Sortino weighted more than Sharpe (13 vs 7 pts). Varsity Ch23: Sortino measures downside-only volatility, which is what a long-term SIP investor actually cares about — upside variance is not "risk".')
@@ -9423,9 +9423,12 @@ async function renderAdmin() {
           <div>
             <div style="font-size:11px;font-weight:600;color:#8b5cf6">💰 MF Recommendations</div>
             <div style="font-size:10px;color:var(--text4)">Tickertape → Varsity Module 11 scoring</div>
-            <div style="font-size:10px;color:var(--text4)">Auto-refreshes every 6 hours</div>
+            <div style="font-size:10px;color:var(--text4)">Drop all 6 Tickertape CSV facets together</div>
           </div>
-          <button onclick="adminForceRefresh('mf')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
+          <div style="display:flex;gap:4px;flex-direction:column;align-items:flex-end">
+            <label style="background:#8b5cf622;color:#8b5cf6;border:1px solid #8b5cf644;border-radius:4px;padding:3px 10px;font-size:10px;cursor:pointer;white-space:nowrap;text-align:center">📤 Upload Tickertape CSVs<input type="file" accept=".csv,.txt" multiple style="display:none" onchange="adminUploadMFCSVs(this)"></label>
+            <button onclick="adminForceRefresh('mf')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Rescore</button>
+          </div>
         </div>
       </div>
       <div id="admin-force-msg" style="font-size:10px;color:var(--text3);margin-top:8px"></div>
@@ -9671,6 +9674,51 @@ async function adminForceRefresh(what) {
     setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 8000);
   } catch(e) {
     if (msgEl) { msgEl.textContent = '❌ ' + e.message; msgEl.style.color = '#ef4444'; }
+  }
+}
+
+// ── Tickertape MF CSV Upload (multi-file) ──────────────────────────────────
+// Drop all 6 Tickertape facet CSVs at once. The server detects each file's
+// facet from its header, joins them on (Name, Sub Category, Plan), TRUNCATEs
+// mf_tickertape, bulk-INSERTs, and rebuilds the scored MF cache.
+async function adminUploadMFCSVs(inputEl) {
+  var files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+  inputEl.value = ''; // reset so same batch can be re-uploaded
+  var msgEl = document.getElementById('admin-force-msg');
+  var totalKB = files.reduce(function(s,f){return s+f.size;},0)/1024;
+  if (msgEl) { msgEl.textContent = '⏳ Reading ' + files.length + ' Tickertape CSV' + (files.length>1?'s':'') + ' (' + totalKB.toFixed(0) + ' KB)...'; msgEl.style.color = '#f59e0b'; }
+  try {
+    var payload = [];
+    for (var i = 0; i < files.length; i++) {
+      var text = await files[i].text();
+      payload.push({ name: files[i].name, text: text });
+    }
+    if (msgEl) msgEl.textContent = '⏳ Uploading + joining facets on server...';
+    var r = await fetch('/api/mf/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: payload })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    var lines = [];
+    lines.push('✅ Imported <b>' + d.inserted + '</b> funds · dataSource: <b>' + (d.dataSource||'?') + '</b>');
+    lines.push('<span style="font-size:9px;color:var(--text4)">Facets merged: ' + (d.facets||[]).join(', ') + '</span>');
+    if (d.missingFacets && d.missingFacets.length) {
+      lines.push('<span style="color:#f59e0b;font-size:9px">⚠ Missing facets: ' + d.missingFacets.join(', ') + ' (those columns will be NULL)</span>');
+    }
+    if (d.unknownFiles && d.unknownFiles.length) {
+      lines.push('<span style="color:#f59e0b;font-size:9px">⚠ Unrecognised files: ' + d.unknownFiles.join(', ') + '</span>');
+    }
+    if (d.duplicateFiles && d.duplicateFiles.length) {
+      lines.push('<span style="color:var(--text4);font-size:9px">Dropped duplicate facets: ' + d.duplicateFiles.join(', ') + '</span>');
+    }
+    if (msgEl) { msgEl.innerHTML = lines.join('<br>'); msgEl.style.color = '#10b981'; }
+    setTimeout(adminLoadStatus, 3000);
+    setTimeout(function(){ if (msgEl) msgEl.textContent = ''; }, 20000);
+  } catch(e) {
+    if (msgEl) { msgEl.textContent = '❌ MF import failed: ' + e.message; msgEl.style.color = '#ef4444'; }
   }
 }
 
