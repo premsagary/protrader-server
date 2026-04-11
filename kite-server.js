@@ -657,7 +657,7 @@ async function initDB() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS mf_ai_reviews (
         id                SERIAL PRIMARY KEY,
-        category          VARCHAR(20) NOT NULL,   -- largecap / smallcap / midcap / flexicap
+        category          VARCHAR(20) NOT NULL,   -- largecap / midcap / smallcap / flexicap
         fund_name         VARCHAR(200) NOT NULL,
         model_id          VARCHAR(40) NOT NULL,
         model_name        VARCHAR(80),
@@ -4435,17 +4435,18 @@ async function discoverMFUniverse() {
       // Order matters: "large cap" must be checked before "mid cap" because
       // "large mid cap" doesn't exist but some AMC names overlap. Small/mid
       // keywords are narrow enough that ordering is not load-bearing, but
-      // largecap is listed first for defensiveness.
+      // largecap is listed first for defensiveness. Bucket order below is
+      // largecap → midcap → smallcap → flexicap (risk-ascending, flexi last).
       largecap: ["large cap","large-cap","largecap","bluechip","blue chip","top 100","top-100"],
-      smallcap: ["small cap","small-cap","smaller companies","smallcap"],
       midcap:   ["mid cap","mid-cap","midcap","growth fund","emerging equity","prima fund"],
+      smallcap: ["small cap","small-cap","smaller companies","smallcap"],
       flexicap: ["flexi cap","flexi-cap","flexicap","flexible"],
     };
     // Only direct + growth plans
     const isDirect = (name) => /direct/i.test(name);
     const isGrowth = (name) => /growth/i.test(name) && !/dividend|idcw|bonus/i.test(name);
 
-    const discovered = {largecap:[], smallcap:[], midcap:[], flexicap:[]};
+    const discovered = {largecap:[], midcap:[], smallcap:[], flexicap:[]};
     for (const scheme of all) {
       const name = (scheme.schemeName || "").toLowerCase();
       if (!isDirect(name) || !isGrowth(name)) continue;
@@ -4466,7 +4467,7 @@ async function discoverMFUniverse() {
     }
 
     const total = Object.values(discovered).reduce((s,a)=>s+a.length,0);
-    console.log(`✅ Discovered ${total} funds: ${discovered.largecap.length} large + ${discovered.smallcap.length} small + ${discovered.midcap.length} mid + ${discovered.flexicap.length} flexi`);
+    console.log(`✅ Discovered ${total} funds: ${discovered.largecap.length} large + ${discovered.midcap.length} mid + ${discovered.smallcap.length} small + ${discovered.flexicap.length} flexi`);
 
     // Use discovered if we got reasonable counts, else fall back to seed.
     // largecap gate is separate (and permissive) because the MFAPI naming for
@@ -4474,7 +4475,7 @@ async function discoverMFUniverse() {
     // accept a shorter largecap list than regress the other three buckets to
     // the seed fallback.
     if (discovered.smallcap.length >= 10 && discovered.midcap.length >= 10 && discovered.flexicap.length >= 10) {
-      MF_UNIVERSE_SERVER = [...discovered.largecap, ...discovered.smallcap, ...discovered.midcap, ...discovered.flexicap];
+      MF_UNIVERSE_SERVER = [...discovered.largecap, ...discovered.midcap, ...discovered.smallcap, ...discovered.flexicap];
     } else {
       console.log("⚠️ Discovery returned low counts, using seed list");
       MF_UNIVERSE_SERVER = dedupeSeed();
@@ -4601,8 +4602,8 @@ function getAmcQual(amcFull) {
 // ₹30-70K Cr with no alpha erosion; ceiling is set at ₹2L Cr.
 const CAT_AUM = {
   'Large Cap Fund':  [3000, 200000],
-  'Small Cap Fund':  [1000, 15000],
   'Mid Cap Fund':    [1000, 40000],
+  'Small Cap Fund':  [1000, 15000],
   'Flexi Cap Fund':  [2000, 100000],
 };
 
@@ -4652,13 +4653,15 @@ function scoreMFTickertape(f) {
   // =============================================================================
   const subcat  = f.sub_category || '';
   // 4-bucket derivation: Large Cap Fund → largecap (new 2026-04-11), then
-  // Small/Mid substring match, then default bucket is flexicap. Order matters —
-  // "Large" must be checked before the default flexicap fallthrough so the
-  // bucket percentile distributions, AUM sweet spot, and AI prompts all see
-  // Large Cap as a distinct category rather than silently merging into flexi.
+  // Mid → midcap, then Small → smallcap, then default bucket is flexicap.
+  // Order matters — "Large" must be checked before the default flexicap
+  // fallthrough so the bucket percentile distributions, AUM sweet spot, and
+  // AI prompts all see Large Cap as a distinct category rather than silently
+  // merging into flexi. Bucket order follows the display order:
+  // largecap → midcap → smallcap → flexicap.
   const cat     = subcat.includes('Large') ? 'largecap'
-                 : subcat.includes('Small') ? 'smallcap'
                  : subcat.includes('Mid')   ? 'midcap'
+                 : subcat.includes('Small') ? 'smallcap'
                  : 'flexicap';
   const dist    = CAT_DIST[subcat] || {};
   const months  = parseFloat(f.months_inception) || 0;
@@ -5133,11 +5136,13 @@ async function buildMFCache() {
     // Mark ineligible (no score, but keep for display)
     const scoredIneligible = ineligible.map(f => {
       const subcat = f.sub_category || '';
-      // 4-bucket: Large → largecap, then Small → smallcap, then Mid → midcap,
-      // else flexicap. Mirrors scoreMFTickertape() above — keep in lock-step.
+      // 4-bucket: Large → largecap, then Mid → midcap, then Small → smallcap,
+      // else flexicap. Order is cosmetic here (substring checks are mutually
+      // exclusive) but kept as largecap → midcap → smallcap → flexicap to
+      // match the frontend display order. Mirrors scoreMFTickertape() above.
       const cat = subcat.includes('Large')?'largecap'
-                : subcat.includes('Small')?'smallcap'
                 : subcat.includes('Mid')?'midcap'
+                : subcat.includes('Small')?'smallcap'
                 : 'flexicap';
       const {reasons} = checkEligible(f);
       const qual = getAmcQual(f.amc||'');
@@ -19313,7 +19318,7 @@ app.get('/api/picks/ai-review', async (req, res) => {
 // MUTUAL FUND AI REVIEW (5 council + 1 judge) — Varsity Module 11 grounded
 // =============================================================================
 // Parallel to runPicksAIReview but scoped to the top 5 eligible funds per
-// category (smallcap / midcap / flexicap). Sends EVERY MF data point the
+// category (largecap / midcap / smallcap / flexicap). Sends EVERY MF data point the
 // client has — identity, returns, vs-category, risk, portfolio, concentration,
 // the ProTrader score with full pillar hit breakdown, DNI flags, and the
 // Varsity-aligned category rubric — then runs the exact same dual-opinion
@@ -19474,14 +19479,14 @@ async function runMFAIReview(category) {
   const startTime = Date.now();
   const categoryLabels = {
     largecap: 'Large Cap MF Picks (top 5 by Varsity M11 score)',
-    smallcap: 'Small Cap MF Picks (top 5 by Varsity M11 score)',
     midcap:   'Mid Cap MF Picks (top 5 by Varsity M11 score)',
+    smallcap: 'Small Cap MF Picks (top 5 by Varsity M11 score)',
     flexicap: 'Flexi Cap MF Picks (top 5 by Varsity M11 score)',
   };
   const categoryFraming = {
     largecap: 'These are the top 5 Large Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is CORE STABILITY ALLOCATION in the Nifty 100 universe. For each fund answer: is the manager genuinely stock-picking or closet-indexing the Nifty 100? Is the tracking error high enough to justify active fees over a 0.20% Nifty 100 index fund? Is the rolling 3Y consistency ahead of Nifty 100 TRI? Is the expense ratio disciplined? Decide CONFIRM (valid active large-cap pick), CAUTION (specific concern — closet indexer / weak alpha / expense not justified), or AVOID (investor is better off in a pure Nifty 100 index fund). Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst) — you are allowed to disagree with the quantitative score ordering if your analysis warrants it.',
-    smallcap: 'These are the top 5 Small Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM SIP/LUMPSUM allocation to the small-cap slice of an equity portfolio. For each fund answer: is this a valid long-horizon small-cap allocation? Is the rolling 3Y consistency real? Are capture ratios asymmetric? Is the AUM still in the sweet spot? Decide CONFIRM (invest), CAUTION (specific concern — size bloat / closet indexer / high expense / weak Sortino), or AVOID (better alternatives exist). Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst) — you are allowed to disagree with the quantitative score ordering if your analysis warrants it.',
     midcap:   'These are the top 5 Mid Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM CORE ALLOCATION to the mid-cap slice. For each fund answer: is the risk-adjusted return (Sortino prioritised) compensating for mid-cap vol? Has the fund beaten its category in 3Y/5Y/10Y buckets consistently? Is the portfolio truly mid-cap (not drifting)? Decide CONFIRM, CAUTION, or AVOID. Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst).',
+    smallcap: 'These are the top 5 Small Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM SIP/LUMPSUM allocation to the small-cap slice of an equity portfolio. For each fund answer: is this a valid long-horizon small-cap allocation? Is the rolling 3Y consistency real? Are capture ratios asymmetric? Is the AUM still in the sweet spot? Decide CONFIRM (invest), CAUTION (specific concern — size bloat / closet indexer / high expense / weak Sortino), or AVOID (better alternatives exist). Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst) — you are allowed to disagree with the quantitative score ordering if your analysis warrants it.',
     flexicap: 'These are the top 5 Flexi Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is CORE DO-IT-ALL EQUITY allocation. For each fund answer: is the manager actually using the flexi mandate or hiding in large-caps? Is alpha from skill or just beta? Are expense/rolling/capture ratios disciplined? Decide CONFIRM, CAUTION, or AVOID. Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst).',
   };
   const label = categoryLabels[category];
@@ -19778,12 +19783,12 @@ FINAL CHECK: signal_reviews length = ${pickCount}, ranking length = ${pickCount}
   };
 }
 
-// POST /api/mf/ai-review?category=largecap|smallcap|midcap|flexicap
+// POST /api/mf/ai-review?category=largecap|midcap|smallcap|flexicap
 app.post('/api/mf/ai-review', async (req, res) => {
   try {
     const category = (req.query.category || req.body?.category || '').toLowerCase();
-    if (!['largecap', 'smallcap', 'midcap', 'flexicap'].includes(category)) {
-      return res.status(400).json({ error: 'category must be largecap, smallcap, midcap, or flexicap' });
+    if (!['largecap', 'midcap', 'smallcap', 'flexicap'].includes(category)) {
+      return res.status(400).json({ error: 'category must be largecap, midcap, smallcap, or flexicap' });
     }
     const result = await runMFAIReview(category);
     res.json(result);
@@ -19807,8 +19812,8 @@ app.post('/api/mf/ai-review', async (req, res) => {
 app.get('/api/mf/ai-review', async (req, res) => {
   try {
     const category = (req.query.category || '').toLowerCase();
-    if (!['largecap', 'smallcap', 'midcap', 'flexicap'].includes(category)) {
-      return res.status(400).json({ error: 'category must be largecap, smallcap, midcap, or flexicap' });
+    if (!['largecap', 'midcap', 'smallcap', 'flexicap'].includes(category)) {
+      return res.status(400).json({ error: 'category must be largecap, midcap, smallcap, or flexicap' });
     }
     const [reviewRowsResp, rankingRowsResp] = await Promise.all([
       pool.query(
