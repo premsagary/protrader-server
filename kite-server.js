@@ -1895,8 +1895,41 @@ const CONFIG = {
   SCAN_DELAY_MS:  250,
 };
 
+// NSE trading holidays — update annually.
+// Source: NSE India holiday calendar. Format: "YYYY-MM-DD" (IST date).
+// Muhurat trading (Diwali evening) is intentionally EXCLUDED — those are
+// special short sessions; treating them as closed is safer than opening
+// positions through the hour-only gate.
+const NSE_HOLIDAYS = new Set([
+  // 2026
+  "2026-01-26", // Republic Day
+  "2026-03-04", // Mahashivratri
+  "2026-03-23", // Holi
+  "2026-03-31", // Eid-ul-Fitr
+  "2026-04-03", // Good Friday
+  "2026-04-14", // Dr. Ambedkar Jayanti
+  "2026-05-01", // Maharashtra Day
+  "2026-05-27", // Eid-ul-Adha (Bakri Id)
+  "2026-08-15", // Independence Day
+  "2026-08-26", // Ganesh Chaturthi
+  "2026-10-02", // Gandhi Jayanti
+  "2026-10-20", // Diwali Laxmi Pujan (regular session closed)
+  "2026-10-21", // Balipratipada
+  "2026-11-04", // Guru Nanak Jayanti
+  "2026-12-25", // Christmas
+]);
+
 function isMarketOpen() {
   const ist = new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+  // Weekend gate (Saturday/Sunday are always closed).
+  const dow = ist.getDay();                        // 0 = Sun, 6 = Sat
+  if (dow === 0 || dow === 6) return false;
+  // Holiday gate — format as IST YYYY-MM-DD to match the set keys.
+  const y  = ist.getFullYear();
+  const mo = String(ist.getMonth()+1).padStart(2,'0');
+  const da = String(ist.getDate()).padStart(2,'0');
+  if (NSE_HOLIDAYS.has(`${y}-${mo}-${da}`)) return false;
+  // Regular session 9:15 – 15:30 IST.
   const h=ist.getHours(),m=ist.getMinutes();
   return (h>9||(h===9&&m>=15))&&(h<15||(h===15&&m<=30));
 }

@@ -5085,6 +5085,61 @@ async function renderStockDataPage(){
   function _price(v){ return v?'₹'+parseFloat(v).toFixed(1):'-'; }
   function _fa(v){ return v?'<span style="color:#f59e0b;font-weight:700">🔥 Yes</span>':'<span style="color:var(--text4)">No</span>'; }
 
+  // ── Valuation classifier ──
+  // Returns { label, color, rank } where rank is a numeric key for sorting
+  // (lower rank = cheaper). Logic blends P/E, PEG and industry-P/E relative
+  // position so a stock with a high absolute P/E but growing earnings can
+  // still be classified Fair/Undervalued.
+  function _valuationInfo(s){
+    var pe  = s && s.pe  != null ? parseFloat(s.pe)  : null;
+    var peg = (s && s.pe != null && s.earGrowth != null && s.earGrowth > 0)
+              ? (s.pe / s.earGrowth) : null;
+    var ipe = s && s.industryPE != null ? parseFloat(s.industryPE) : null;
+    if (pe == null || !isFinite(pe) || pe <= 0) {
+      return { label:'-', color:'var(--text4)', rank: 99 };
+    }
+    // Score: 0 = cheapest, 100 = most expensive
+    var score = 0;
+    // P/E absolute contribution (0..50)
+    if      (pe < 12) score += 5;
+    else if (pe < 18) score += 15;
+    else if (pe < 25) score += 28;
+    else if (pe < 35) score += 38;
+    else if (pe < 50) score += 45;
+    else              score += 50;
+    // PEG contribution (0..25)
+    if (peg != null && isFinite(peg)) {
+      if      (peg < 0.8) score += 3;
+      else if (peg < 1.2) score += 10;
+      else if (peg < 1.8) score += 17;
+      else if (peg < 2.5) score += 22;
+      else                score += 25;
+    } else {
+      score += 14; // neutral when PEG not computable
+    }
+    // Industry P/E relative contribution (0..25)
+    if (ipe != null && isFinite(ipe) && ipe > 0) {
+      var rel = pe / ipe;
+      if      (rel < 0.70) score += 3;
+      else if (rel < 0.90) score += 9;
+      else if (rel < 1.10) score += 14;
+      else if (rel < 1.40) score += 20;
+      else                 score += 25;
+    } else {
+      score += 14;
+    }
+    // Classify
+    if (score <= 22) return { label:'Undervalued', color:'var(--green)', rank: score };
+    if (score <= 42) return { label:'Fair',        color:'var(--text)',  rank: score };
+    if (score <= 65) return { label:'Overvalued',  color:'#f59e0b',      rank: score };
+    return              { label:'Expensive',   color:'var(--red)',   rank: score };
+  }
+  function _valuationCell(s){
+    var v = _valuationInfo(s);
+    if (v.label === '-') return '<span style="color:var(--text4)">-</span>';
+    return '<span style="background:'+v.color+'22;color:'+v.color+';border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;white-space:nowrap">'+v.label+'</span>';
+  }
+
   // ── Tab definitions (NO longterm — that lives in Portfolio Manager) ──
   var TAB_DEFS = [
     { id:'overview',  label:'Overview',   icon:'📊' },
@@ -5262,6 +5317,12 @@ async function renderStockDataPage(){
     if(sk==='sym')   return (s.sym||'').toUpperCase();
     if(sk==='grp')   return (s.grp||'').toUpperCase();
     if(sk==='sector')return (s.sector||'').toUpperCase();
+    if(sk==='valuation'){
+      // Sort by the computed valuation rank (0 cheapest → 100 most expensive).
+      // Nulls (rank 99) land at the end either way.
+      var vi = _valuationInfo(s);
+      return vi.rank;
+    }
     var v = s[sk];
     if(v==null) return sdir>0 ? Infinity : -Infinity; // push nulls to end
     var n = parseFloat(v);
@@ -5317,7 +5378,7 @@ async function renderStockDataPage(){
   html += '</div>';
 
   // Result count — pretty-print the internal sort key for the user
-  var _sortLabel = {sym:'Stock',grp:'Group',composite:'MOMENTUM SCORE',fallenScore:'REBOUND SCORE',scoreV2:'INVESTMENT SCORE',score:'INVESTMENT SCORE (legacy)',price:'Price'}[sk] || sk;
+  var _sortLabel = {sym:'Stock',grp:'Group',composite:'MOMENTUM SCORE',fallenScore:'REBOUND SCORE',scoreV2:'INVESTMENT SCORE',score:'INVESTMENT SCORE (legacy)',price:'Price',valuation:'Valuation'}[sk] || sk;
   html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
@@ -5355,7 +5416,8 @@ async function renderStockDataPage(){
   html += sortableHeader('composite',   'MOMENTUM SCORE',   'right');
   html += sortableHeader('fallenScore', 'REBOUND SCORE',    'right');
   html += sortableHeader('scoreV2',     'INVESTMENT SCORE', 'right');
-  html += sortableHeader('price',       'Price',   'right', 'border-right:2px solid var(--border3)');
+  html += sortableHeader('price',       'Price',   'right');
+  html += sortableHeader('valuation',   'Valuation','center', 'border-right:2px solid var(--border3)');
   activeCols.forEach(function(col){
     var isSorted = stockDataSortKey===col.k;
     var arrow = isSorted
@@ -5375,7 +5437,7 @@ async function renderStockDataPage(){
   html += '<tbody>';
   var grpCol = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'};
   if(filtered.length===0){
-    html += '<tr><td colspan="'+(7+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
+    html += '<tr><td colspan="'+(8+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
   }
   filtered.forEach(function(s, idx){
     var bg = idx%2===0?'var(--bg)':'var(--bg2)';
@@ -5403,7 +5465,8 @@ async function renderStockDataPage(){
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+mcCol+'">'+(mc!=null?(+mc).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(lt!=null?(+lt).toFixed(1):'-')+'</td>'
-      + '<td style="padding:5px 8px;text-align:right;border-right:2px solid var(--border3)">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>';
+      + '<td style="padding:5px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:center;border-right:2px solid var(--border3)">'+_valuationCell(s)+'</td>';
     activeCols.forEach(function(col){
       html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
         + col.r(s)+'</td>';
