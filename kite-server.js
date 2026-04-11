@@ -16571,10 +16571,14 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
         },
         body: JSON.stringify({
           model: modelDef.model,
-          // max_tokens bumped for the same reason as OpenAI/Mistral: multi-
-          // stock dual-opinion JSON truncates well under 4K. 16K comfortably
-          // fits 10+ holdings × dual opinion without silently dropping rows.
-          max_tokens: 16000,
+          // max_tokens default lowered from 16000 → 4000. OpenRouter reserves
+          // WORST-CASE cost upfront (input_tokens × in_rate + max_tokens ×
+          // out_rate), so a high max_tokens on expensive models can 402 even
+          // when real responses are 1-2K tokens. 4K comfortably fits single-
+          // stock and most multi-stock dual-opinion JSON; bump via env var
+          // if you ever see truncation on 10+ holdings reviews without a
+          // redeploy. Env: OR_MAX_TOKENS.
+          max_tokens: parseInt(process.env.OR_MAX_TOKENS || '4000', 10),
           temperature: 0.3,
           messages: [
             { role: 'system', content: systemPrompt },
