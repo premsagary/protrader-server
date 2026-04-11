@@ -652,7 +652,32 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category ON picks_ai_reviews(category)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category_symbol ON picks_ai_reviews(category, symbol)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews tables included)");
+    // ── Mutual Fund AI review persistence (5 council + 1 judge) ──
+    // Fund names can be long (full scheme names 100+ chars) so VARCHAR(200) for fund_name.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mf_ai_reviews (
+        id                SERIAL PRIMARY KEY,
+        category          VARCHAR(20) NOT NULL,   -- smallcap / midcap / flexicap
+        fund_name         VARCHAR(200) NOT NULL,
+        model_id          VARCHAR(40) NOT NULL,
+        model_name        VARCHAR(80),
+        verdict           VARCHAR(32),            -- CONSENSUS verdict (AGREE / CAUTION / DISAGREE / NO_REVIEW)
+        confidence        INTEGER,
+        varsity_module    VARCHAR(80),
+        varsity_reasoning TEXT,
+        varsity_verdict   VARCHAR(32),
+        pure_reasoning    TEXT,
+        pure_verdict      VARCHAR(32),
+        recommendation    TEXT,
+        risk_flag         VARCHAR(32),
+        reviewed_at       TIMESTAMP DEFAULT NOW(),
+        UNIQUE(category, fund_name, model_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_reviews_category ON mf_ai_reviews(category)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_reviews_category_fund ON mf_ai_reviews(category, fund_name)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -18659,6 +18684,431 @@ app.get('/api/picks/ai-review', async (req, res) => {
     res.json({ category, reviews: bySym });
   } catch (e) {
     console.error('GET /api/picks/ai-review error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// =============================================================================
+// MUTUAL FUND AI REVIEW (5 council + 1 judge) — Varsity Module 11 grounded
+// =============================================================================
+// Parallel to runPicksAIReview but scoped to the top 3 eligible funds per
+// category (smallcap / midcap / flexicap). Sends EVERY MF data point the
+// client has — identity, returns, vs-category, risk, portfolio, concentration,
+// the ProTrader score with full pillar hit breakdown, DNI flags, and the
+// Varsity-aligned category rubric — then runs the exact same dual-opinion
+// (Varsity + Pure) council fan-out + Judge synthesis + _hardenedReviewRow
+// persistence used for Picks. Writes into mf_ai_reviews.
+// =============================================================================
+
+// Serialize ALL available fields for one MF into a compact text block the AI
+// prompts consume. Leads with "WHY WE PICKED" showing the ProTrader score +
+// pillar-hit breakdown so the AI can agree/disagree with the methodology AND
+// the specific pick.
+function _buildFullMFBlock(fund, category, rank) {
+  const _n = (v, suf) => (v == null || v === '' || Number.isNaN(v)) ? '?' : (suf ? v + suf : v);
+  const _b = (v, t, f) => v == null ? '?' : (v ? (t || 'Yes') : (f || 'No'));
+  const rk = rank ? `#${rank} ` : '';
+  const lines = [];
+  lines.push(`━━ ${rk}${fund.name || '?'} [${fund.sub_category || '?'}] ━━`);
+
+  // ── WHY WE PICKED — show score and pillar-hit breakdown so the AI can
+  // agree or disagree with the methodology, not just the fund.
+  const h = fund.hits || {};
+  const pillarHits = [];
+  if (h.rollA != null) pillarHits.push(`Roll3Y=${h.rollA}/25`);
+  if (h.sharpeB != null) pillarHits.push(`Sharpe=${h.sharpeB}/7`);
+  if (h.sortinoB != null) pillarHits.push(`Sortino=${h.sortinoB}/13`);
+  if (h.vsCat3C != null) pillarHits.push(`VsCat3Y=${h.vsCat3C}/8`);
+  if (h.vsCat5C != null) pillarHits.push(`VsCat5Y=${h.vsCat5C}/8`);
+  if (h.vsCat10C != null) pillarHits.push(`VsCat10Y=${h.vsCat10C}/4`);
+  if (h.mddD != null) pillarHits.push(`MDD=${h.mddD}/10`);
+  if (h.volD != null) pillarHits.push(`Vol=${h.volD}/5`);
+  if (h.expenseE != null) pillarHits.push(`Expense=${h.expenseE}/12`);
+  if (h.cagr3F != null) pillarHits.push(`CAGR3Y=${h.cagr3F}/3`);
+  if (h.cagr5F != null) pillarHits.push(`CAGR5Y=${h.cagr5F}/3`);
+  if (h.cagr10F != null) pillarHits.push(`CAGR10Y=${h.cagr10F}/2`);
+  if (h.peG != null) pillarHits.push(`PE=${h.peG}/3`);
+  if (h.concG != null) pillarHits.push(`Conc=${h.concG}/3`);
+  if (h.captureH != null) pillarHits.push(`Capture=${h.captureH}/6`);
+  if (h.rollFloorI != null) pillarHits.push(`RollFloor=${h.rollFloorI}/3`);
+  if (h.teJ != null) pillarHits.push(`TrackErr=${h.teJ}/4`);
+  if (h.recordK != null) pillarHits.push(`Track=${h.recordK}/9`);
+  if (h.aumK != null) pillarHits.push(`AUM=${h.aumK}/3`);
+  if (h.amcL != null) pillarHits.push(`AMC=${h.amcL}/10`);
+  lines.push(`  WHY WE PICKED: ${rk}${(category || '').toUpperCase()} — ProTrader Score=${_n(fund.score)} (Varsity M11-aligned, max ~120). Pillar hits: ${pillarHits.join(' ') || '?'}. Category percentile scoring vs peers in ${fund.sub_category || '?'}.`);
+  if (fund.dni && fund.dni.level) {
+    lines.push(`  DNI FLAG: level=${fund.dni.level} reason="${fund.dni.reason || '?'}"`);
+  }
+
+  // ── IDENTITY ──
+  lines.push(`  IDENTITY: AMC="${fund.amc || '?'}" Benchmark="${fund.benchmark || '?'}" Manager="${fund.fund_manager || '?'}" SEBI_Risk=${fund.sebi_risk || '?'} Inception=${_n(fund.months_inception)}mo`);
+  lines.push(`  AMC_QUALITY: SEBI=${fund.amc_sebi || '?'} Warning=${fund.amc_warning || '?'}`);
+
+  // ── SIZE & COST ──
+  lines.push(`  SIZE: AUM=₹${_n(fund.aum_cr)}Cr NAV=${_n(fund.nav)} MinLumpsum=${_n(fund.min_lumpsum)} MinSIP=${_n(fund.min_sip)} SIP_Allowed=${_b(fund.sip_allowed)} ExitLoad=${_n(fund.exit_load,'%')}`);
+  lines.push(`  COST: Expense=${_n(fund.expense_ratio,'%')}`);
+
+  // ── RETURNS (short + CAGR) ──
+  lines.push(`  ST_RETURNS: 3m=${_n(fund.ret_3m,'%')} 6m=${_n(fund.ret_6m,'%')} 1y=${_n(fund.ret_1y,'%')}`);
+  lines.push(`  CAGR: 3Y=${_n(fund.cagr_3y,'%')} 5Y=${_n(fund.cagr_5y,'%')} 10Y=${_n(fund.cagr_10y,'%')}`);
+  lines.push(`  ROLLING: 3Y_avg=${_n(fund.rolling_3y,'%')}  (Varsity M11 Ch19 — rolling > point-to-point)`);
+
+  // ── VS CATEGORY (peer-beat, M11 Ch21) ──
+  lines.push(`  VS_CATEGORY: 1Y=${_n(fund.vs_cat_1y,'%')} 3Y=${_n(fund.vs_cat_3y,'%')} 5Y=${_n(fund.vs_cat_5y,'%')} 10Y=${_n(fund.vs_cat_10y,'%')}`);
+
+  // ── RISK-ADJUSTED (M11 Ch22-23) ──
+  lines.push(`  RISK_ADJUSTED: Sharpe=${_n(fund.sharpe)} Sortino=${_n(fund.sortino)} (Sortino weighted higher — M11 Ch23 SIP guidance)`);
+  lines.push(`  VOLATILITY: StdDev=${_n(fund.volatility,'%')} CategoryStdDev=${_n(fund.category_stddev,'%')} MaxDrawdown=${_n(fund.max_drawdown,'%')} PctFromATH=${_n(fund.pct_from_ath,'%')}`);
+  lines.push(`  TRACKING: TrackingError=${_n(fund.tracking_error,'%')} (M11 Ch16 — low TE = closet indexer risk)`);
+
+  // ── PORTFOLIO QUALITY ──
+  lines.push(`  PE: Portfolio=${_n(fund.pe_ratio)} CategoryAvg=${_n(fund.category_pe)}`);
+  lines.push(`  ALLOCATION: Equity=${_n(fund.pct_equity,'%')} Large=${_n(fund.pct_largecap,'%')} Mid=${_n(fund.pct_midcap,'%')} Small=${_n(fund.pct_smallcap,'%')} Cash=${_n(fund.pct_cash,'%')} Debt=${_n(fund.pct_debt,'%')}`);
+  lines.push(`  CONCENTRATION: Top3=${_n(fund.top3_conc,'%')} Top5=${_n(fund.top5_conc,'%')} Top10=${_n(fund.top10_conc,'%')}`);
+
+  return lines.join('\n');
+}
+
+// Shared Varsity-grounded context block sent ONCE per review (not per fund).
+// Explains how ProTrader's MF selection works so the AI can judge the PICK,
+// not just the fund.
+function _buildMFCategoryContextBlock(category) {
+  const common = `
+PROTRADER MF ELIGIBILITY (hard gates — Varsity M11 Ch24 Stage-1 Hygiene):
+  • AUM ≥ ₹1,000 Cr (liquidity + not-too-small)
+  • Inception ≥ 60 months (minimum 5Y track record)
+  • rolling_3Y present AND cagr_3Y > 0
+  • Expense ratio < 2.0% (Varsity M11 Ch20 — expense compounds)
+
+PROTRADER MF SCORING PILLARS (Varsity M11 aligned, ~120 pts total):
+  • Rolling 3Y Consistency — 25 pts (M11 Ch19: rolling returns > point-to-point)
+  • Risk-adjusted Sharpe + Sortino — 20 pts (M11 Ch22-23: Sortino weighted higher)
+  • Vs Category Peer Beat 3Y/5Y/10Y — 20 pts (M11 Ch21: beat benchmark 7/10 years)
+  • Downside Protection (MDD + Vol) — 15 pts (M11 Ch23)
+  • Expense Ratio — 12 pts (M11 Ch20)
+  • Absolute CAGR 3Y/5Y/10Y — 8 pts
+  • PE + Concentration discipline — 6 pts
+  • Capture Ratios UCR>100, DCR<90-100 — 6 pts (M11 Ch23)
+  • Rolling-Return Floor — 3 pts
+  • Tracking Error (closet indexer check) — 4 pts (M11 Ch16)
+  • Track record length — up to 9 pts
+  • AUM size (sweet spot by sub-category) — up to 3 pts
+  • AMC governance + SEBI flags — 10 pts (Varsity AMC stewardship)
+
+Percentile-based: each pillar scores relative to PEERS in the same sub_category, NOT absolute numbers — so the rank is always "best in its Varsity bucket".
+
+Rating agency stars are deliberately IGNORED (Varsity M11 Ch24 directive: "do NOT invest based on fund rankings from rating agencies").`;
+
+  if (category === 'smallcap') {
+    return `PROTRADER SMALL-CAP MF CATEGORY — DEFINITION & SELECTION
+${common}
+
+Sub-category: "Small Cap Fund". AUM sweet spot: ₹1,000 Cr to ₹15,000 Cr (size can erode alpha in small-cap — cap = liquidity risk, floor = viability).
+
+What the user is asking from you: agree or disagree that these are VALID long-horizon small-cap allocations. Is the manager still nimble at this AUM? Is the concentration disciplined? Is the rolling 3Y consistency real or cherry-picked? Are capture ratios asymmetric (up > down)? Decide CONFIRM (valid small-cap pick), CAUTION (specific concern), or AVOID (better alternatives / size bloat / closet indexer / high expense).`;
+  }
+  if (category === 'midcap') {
+    return `PROTRADER MID-CAP MF CATEGORY — DEFINITION & SELECTION
+${common}
+
+Sub-category: "Mid Cap Fund". AUM sweet spot: ₹1,000 Cr to ₹40,000 Cr.
+
+What the user is asking from you: agree or disagree that these are VALID mid-cap core allocations. Is the risk-adjusted return (Sortino) compensating for the mid-cap vol? Has the fund consistently beaten its category in 3Y/5Y/10Y buckets? Is the portfolio truly mid-cap (not drifting into large-cap for safety)? Decide CONFIRM, CAUTION, or AVOID.`;
+  }
+  if (category === 'flexicap') {
+    return `PROTRADER FLEXI-CAP MF CATEGORY — DEFINITION & SELECTION
+${common}
+
+Sub-category: "Flexi Cap Fund". AUM sweet spot: ₹2,000 Cr to ₹1,00,000 Cr (flexi caps can absorb more AUM because they can go anywhere across the cap curve).
+
+What the user is asking from you: agree or disagree that these are VALID core "do-it-all" equity allocations. Is the manager actually USING the flexi mandate or hiding in large-caps? Is the alpha coming from skill (rolling returns, capture) or just beta? Decide CONFIRM, CAUTION, or AVOID.`;
+  }
+  return '';
+}
+
+// Pull top-3 eligible funds for a category from the live mfScoreCache.
+// Uses the SAME filter/sort the UI renders so the AI review sees exactly what
+// the user sees. Drops any DNI=red (Do Not Invest) funds — they should never
+// be AI-promoted.
+function _getTop3MFForCategory(category) {
+  const src = Array.isArray(mfScoreCache) ? mfScoreCache : [];
+  if (!src.length) return [];
+  const filtered = src
+    .filter(f => f.cat === category && f.eligible && !(f.dni && f.dni.level === 'red'))
+    .sort((a, b) => (b.score || 0) - (a.score || 0));
+  return filtered.slice(0, 3);
+}
+
+async function runMFAIReview(category) {
+  const startTime = Date.now();
+  const categoryLabels = {
+    smallcap: 'Small Cap MF Picks (top 3 by Varsity M11 score)',
+    midcap:   'Mid Cap MF Picks (top 3 by Varsity M11 score)',
+    flexicap: 'Flexi Cap MF Picks (top 3 by Varsity M11 score)',
+  };
+  const categoryFraming = {
+    smallcap: 'These are the top 3 Small Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM SIP/LUMPSUM allocation to the small-cap slice of an equity portfolio. For each fund answer: is this a valid long-horizon small-cap allocation? Is the rolling 3Y consistency real? Are capture ratios asymmetric? Is the AUM still in the sweet spot? Decide CONFIRM (invest), CAUTION (specific concern — size bloat / closet indexer / high expense / weak Sortino), or AVOID (better alternatives exist).',
+    midcap:   'These are the top 3 Mid Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM CORE ALLOCATION to the mid-cap slice. For each fund answer: is the risk-adjusted return (Sortino prioritised) compensating for mid-cap vol? Has the fund beaten its category in 3Y/5Y/10Y buckets consistently? Is the portfolio truly mid-cap (not drifting)? Decide CONFIRM, CAUTION, or AVOID.',
+    flexicap: 'These are the top 3 Flexi Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is CORE DO-IT-ALL EQUITY allocation. For each fund answer: is the manager actually using the flexi mandate or hiding in large-caps? Is alpha from skill or just beta? Are expense/rolling/capture ratios disciplined? Decide CONFIRM, CAUTION, or AVOID.',
+  };
+  const label = categoryLabels[category];
+  if (!label) throw new Error('Invalid MF category: ' + category);
+
+  const top3 = _getTop3MFForCategory(category);
+  if (!top3.length) {
+    const msg = (!Array.isArray(mfScoreCache) || !mfScoreCache.length)
+      ? 'MF score cache not built yet — wait for startup buildMFCache() to complete, then retry.'
+      : 'No eligible funds matched the filter for this category right now.';
+    return { ok: false, error: msg, category };
+  }
+
+  // Use fund name as the "symbol" key for buildConsensus / persistence.
+  const fundNames = top3.map(f => f.name);
+  const fundBlocks = top3.map((f, i) => _buildFullMFBlock(f, category, i + 1)).join('\n\n');
+  const categoryContextBlock = _buildMFCategoryContextBlock(category);
+
+  // Macro context — same feed as Picks but light-touch for MF horizon
+  const vix = _marketDataCache.vix;
+  const macroSummary = [
+    `India VIX: ${vix ? vix.value + ' (' + (vix.change>0?'+':'') + vix.change + '%)' : '?'}`,
+    `RBI Repo Rate: ${_marketDataCache.rbiRepoRate || '?'}%`,
+    `Crude Oil: $${_marketDataCache.crude || '?'}/barrel`,
+    `USD/INR: ₹${_marketDataCache.usdInr || '?'}`,
+    `Market Regime: ${marketRegime || 'NEUTRAL'}`,
+  ].join('\n');
+
+  const pickCount = top3.length;
+  const fundList = fundNames.join(' | ');
+  const userPrompt = `⚠ TASK-SPECIFIC OVERRIDE — READ FIRST ⚠
+Ignore any earlier system instruction that mentions "15 stocks", "PORTFOLIO POSITIONS", "MODEL PORTFOLIO", or any STOCK-review schema. Those do NOT apply here. This is a MUTUAL FUND review.
+
+SYMBOLS TO REVIEW (these are FUND NAMES, not ticker symbols — use the full name as the "sym" value in your response). n=${pickCount}, exact order:
+${fundNames.map((n, i) => `  ${i+1}. ${n}`).join('\n')}
+
+You MUST return EXACTLY ${pickCount} entries in signal_reviews — one per fund above, in the same order. The "sym" field for each entry MUST be the full fund name exactly as shown. A response with fewer than ${pickCount} entries is INVALID.
+
+════════════════════════════════════════
+PROTRADER MF CATEGORY DEFINITION — READ BEFORE SCORING:
+════════════════════════════════════════
+${categoryContextBlock}
+
+════════════════════════════════════════
+MACRO CONTEXT (light-touch — MF horizon is multi-year):
+════════════════════════════════════════
+${macroSummary}
+
+════════════════════════════════════════
+TOP ${pickCount} ${label.toUpperCase()} — FULL DATA:
+════════════════════════════════════════
+Each fund starts with a "WHY WE PICKED" line showing its ProTrader score and the per-pillar hit breakdown so you can agree or disagree with the METHODOLOGY as well as the pick.
+
+${fundBlocks}
+
+════════════════════════════════════════
+TASK — DUAL-OPINION Mutual Fund review:
+════════════════════════════════════════
+${categoryFraming[category]}
+
+For EACH of the ${pickCount} funds you must produce TWO independent opinions:
+
+1. VARSITY OPINION — grounded in Zerodha Varsity Module 11 (Personal Finance — Mutual Funds), especially chapters Ch16 (closet indexer), Ch19 (rolling returns), Ch20 (TER), Ch21 (benchmarking), Ch22-23 (Sharpe/Sortino/Capture), Ch24 (4-stage fund analysis). Cite which chapter(s) drove your call.
+2. PURE OPINION — a completely independent MF analysis that IGNORES Varsity framing. Use first-principles thinking: manager tenure risk, factor exposure honesty, fee drag, downside behaviour in 2020/2022 drawdowns, category drift, fund flow / redemption risk. Do NOT cite Varsity here.
+
+The two opinions should be formed INDEPENDENTLY — agreement = strong conviction; disagreement should be called out explicitly.
+
+Respond in JSON with a "signal_reviews" array that contains EXACTLY ${pickCount} elements, one per fund in order. Each element has:
+  - sym: the FULL FUND NAME exactly as given above
+  - verdict: one of "BUY_CONFIRM" (confirm the pick), "HOLD" (neutral), "MODIFY" (caution — size smaller / wait), "EXIT" (avoid / better alternatives). This is your CONSENSUS verdict.
+  - confidence: 0-100
+  - varsity_module: which M11 chapter(s) drove the varsity opinion (e.g. "M11 Ch19, Ch23")
+  - varsity_reasoning: 1-2 sentence rationale from the VARSITY lens (cite chapters)
+  - varsity_verdict: verdict from the Varsity lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
+  - pure_reasoning: 1-2 sentence rationale from the PURE lens (NO Varsity citations)
+  - pure_verdict: verdict from the pure lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
+  - recommendation: a concrete action sentence
+  - risk_flag: short red-flag tag if any (e.g. "SIZE_BLOAT", "CLOSET_INDEXER", "WEAK_SORTINO", "HIGH_EXPENSE", "MANAGER_RISK", "CATEGORY_DRIFT"), or empty string
+
+FINAL CHECK: Your signal_reviews array must be exactly ${pickCount}, and each "sym" must match a fund name in [${fundList}]. Both varsity_reasoning and pure_reasoning must be populated.`;
+
+  // Fan out to the 5 council models in parallel. Endpoint tag 'mf_<cat>' so
+  // per-endpoint budget caps apply separately to each MF category.
+  const modelPromises = AI_MODELS.map(m =>
+    callAIModel(m, VARSITY_KNOWLEDGE_PROMPT, userPrompt, 'mf_' + category)
+      .then(r => ({ ...r, id: m.id, name: m.name }))
+      .catch(err => ({ id: m.id, name: m.name, error: err.message || 'unknown' }))
+  );
+  const modelResults = await Promise.all(modelPromises);
+  modelResults.forEach(m => {
+    if (m.error || m.skipped) {
+      console.error(`  ❌ MF(${category}) council model ${m.name} (${m.id}): ${m.error || 'skipped'}`);
+    } else if (m.result?.parse_error) {
+      console.error(`  ⚠ MF(${category}) council model ${m.name} (${m.id}): JSON parse error — raw_response head: ${(m.result.raw_response || '').slice(0, 150)}`);
+    } else {
+      const cnt = m.result?.signal_reviews?.length || 0;
+      console.log(`  ✓ MF(${category}) council model ${m.name} (${m.id}): ${cnt}/${top3.length} funds reviewed`);
+    }
+  });
+
+  const consensus = buildConsensus(modelResults, fundNames);
+
+  // ── 6th AI: THE JUDGE ── same synthesis step used for Picks / Holdings.
+  const judge = await runAIJudge('mf_' + category, userPrompt, modelResults, fundNames)
+    .catch(err => ({ error: err.message || 'judge-error', skipped: true }));
+  const judgeReviews = (judge && !judge.error && !judge.skipped && judge.result?.signal_reviews) || [];
+  const judgeBySym = {};
+  judgeReviews.forEach(jr => { if (jr && jr.sym) judgeBySym[(jr.sym || '').toUpperCase()] = jr; });
+  (consensus.signal_reviews || []).forEach(rev => {
+    const jr = judgeBySym[(rev.sym || '').toUpperCase()];
+    if (!jr) return;
+    rev.judge_verdict = _normalizeHoldingsVerdict(jr.verdict);
+    rev.judge_confidence = jr.confidence || 0;
+    rev.judge_varsity_reasoning = jr.varsity_reasoning || '';
+    rev.judge_pure_reasoning = jr.pure_reasoning || '';
+    rev.judge_recommendation = jr.recommendation || '';
+    rev.judge_risk_flag = jr.risk_flag || '';
+    rev.judge_council_agreement = jr.council_agreement || '';
+    rev.per_model = rev.per_model || {};
+    rev.per_model['ai-judge'] = {
+      verdict: rev.judge_verdict,
+      confidence: rev.judge_confidence,
+      varsity_module: 'Judge synthesis',
+      varsity_reasoning: rev.judge_varsity_reasoning,
+      varsity_verdict: rev.judge_verdict,
+      pure_reasoning: rev.judge_pure_reasoning,
+      pure_verdict: rev.judge_verdict,
+      recommendation: rev.judge_recommendation,
+      risk_flag: rev.judge_risk_flag,
+      council_agreement: rev.judge_council_agreement,
+    };
+  });
+
+  // Per-row persist with try/catch — one bad row must not abort the batch.
+  // Stickiness: skip NO_REVIEW so a run that couldn't cover a fund does not
+  // overwrite a previous good review.
+  let _mDbOk = 0, _mDbFail = 0;
+  for (const rev of (consensus.signal_reviews || [])) {
+    if (!rev.per_model) continue;
+    for (const [mid, mv] of Object.entries(rev.per_model)) {
+      const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+      if (normVerdict === 'NO_REVIEW') continue;
+      try {
+        const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
+        const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
+        const modelName = mid === 'ai-judge'
+          ? AI_JUDGE_MODEL.name
+          : (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        const row = _hardenedReviewRow(mv, { modelName, normVerdict, normVarsityVerdict, normPureVerdict });
+        // fund_name column is VARCHAR(200) — truncate to be safe.
+        const fundName = String(rev.sym || '').slice(0, 200);
+        await pool.query(
+          `INSERT INTO mf_ai_reviews
+             (category, fund_name, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict, recommendation, risk_flag, reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+           ON CONFLICT (category, fund_name, model_id) DO UPDATE SET
+             model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
+             varsity_reasoning=$8, varsity_verdict=$9, pure_reasoning=$10,
+             pure_verdict=$11, recommendation=$12, risk_flag=$13, reviewed_at=NOW()`,
+          [category, fundName, mid, row.modelName, row.verdict, row.confidence,
+           row.varsityModule, row.varsityReasoning,
+           row.varsityVerdict, row.pureReasoning, row.pureVerdict,
+           row.recommendation, row.riskFlag]
+        );
+        _mDbOk++;
+      } catch (rowErr) {
+        _mDbFail++;
+        console.error(`⚠ MF DB upsert failed for ${category}/${(rev.sym||'').slice(0,60)}/${mid}: ${rowErr.message}`);
+      }
+    }
+  }
+  if (_mDbFail > 0) {
+    console.error(`⚠ MF [${category}] AI reviews persisted with errors: ${_mDbOk} ok, ${_mDbFail} failed`);
+  } else {
+    console.log(`✓ MF [${category}] AI reviews persisted: ${_mDbOk} rows upserted`);
+  }
+
+  const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
+  const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
+  console.log(`🤖 MF AI review [${category}]: ${okCount}/${AI_MODELS.length} council + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} funds reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+
+  const councilStatus = AI_MODELS.map(m => {
+    const mr = modelResults.find(x => x.id === m.id) || {};
+    const status = mr.error ? 'error' : mr.skipped ? 'skipped' : mr.result?.parse_error ? 'parse_error' : 'ok';
+    return {
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      status,
+      error: mr.error || null,
+      stocks_reviewed: mr.result?.signal_reviews?.length || 0,
+      took_ms: mr.took_ms || 0,
+      tokens: mr.tokens || null,
+    };
+  });
+  const judgeStatusEntry = {
+    id: AI_JUDGE_MODEL.id,
+    name: AI_JUDGE_MODEL.name,
+    provider: AI_JUDGE_MODEL.provider,
+    status: judge?.skipped ? 'skipped' : judge?.error ? 'error' : judge?.result?.parse_error ? 'parse_error' : 'ok',
+    error: judge?.error || judge?.reason || null,
+    stocks_reviewed: judge?.result?.signal_reviews?.length || 0,
+    took_ms: judge?.took_ms || 0,
+    tokens: judge?.tokens || null,
+  };
+
+  return {
+    ok: true,
+    category,
+    symbols: fundNames,
+    models_responded: okCount,
+    models_total: AI_MODELS.length,
+    judge_status: judgeStatus,
+    judge_took_ms: judge?.took_ms || 0,
+    took_ms: Date.now() - startTime,
+    signal_reviews: consensus.signal_reviews || [],
+    model_details: consensus.model_details || [],
+    council_status: councilStatus,
+    judge_status_detail: judgeStatusEntry,
+  };
+}
+
+// POST /api/mf/ai-review?category=smallcap|midcap|flexicap
+app.post('/api/mf/ai-review', async (req, res) => {
+  try {
+    const category = (req.query.category || req.body?.category || '').toLowerCase();
+    if (!['smallcap', 'midcap', 'flexicap'].includes(category)) {
+      return res.status(400).json({ error: 'category must be smallcap, midcap, or flexicap' });
+    }
+    const result = await runMFAIReview(category);
+    res.json(result);
+  } catch (e) {
+    console.error('POST /api/mf/ai-review error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/mf/ai-review?category=... — read cached reviews from mf_ai_reviews.
+// Returns { category, reviews: { FUND_NAME: [ {model_id, verdict, ...}, ... ] } }.
+app.get('/api/mf/ai-review', async (req, res) => {
+  try {
+    const category = (req.query.category || '').toLowerCase();
+    if (!['smallcap', 'midcap', 'flexicap'].includes(category)) {
+      return res.status(400).json({ error: 'category must be smallcap, midcap, or flexicap' });
+    }
+    const rows = (await pool.query(
+      `SELECT fund_name, model_id, model_name, verdict, confidence, varsity_module,
+              varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict,
+              recommendation, risk_flag, reviewed_at
+         FROM mf_ai_reviews WHERE category=$1 ORDER BY fund_name, model_id`,
+      [category]
+    )).rows;
+    const byFund = {};
+    rows.forEach(r => {
+      if (!byFund[r.fund_name]) byFund[r.fund_name] = [];
+      byFund[r.fund_name].push(r);
+    });
+    res.json({ category, reviews: byFund });
+  } catch (e) {
+    console.error('GET /api/mf/ai-review error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

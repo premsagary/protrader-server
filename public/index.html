@@ -2481,11 +2481,25 @@ async function renderMFPage(){
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
-      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> · '+(catFunds.length-eligibleFunds.length)+' not eligible · top 5 cards · show more available</span></div>';
+      html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> · '+(catFunds.length-eligibleFunds.length)+' not eligible · top 5 cards · show more available</span>';
+      html+='<span style="margin-left:8px">'+_mfAIButton(cat)+'</span>';
+      html+='</div>';
+      // Deep AI Review progress/status panel — shown while a run is in-flight
+      // AND after it completes (so the user can see which council models
+      // reviewed the top 3). Mirrors the Picks category panel pattern.
+      if (_mfCouncilStatus[cat]) {
+        html += _renderCouncilProgressPanel(_mfCouncilStatus[cat], { running: !!_mfCouncilStatus[cat].running, scopeLabel: cfg.label + ' MF Deep AI Review (top 3)' });
+      }
+      // Kick off the DB-cache load for this category on first render so the
+      // cached badges show up without a button click. Guarded by _mfAILoading
+      // + _mfAIReviews so it only fires once per page load.
+      if (_mfAIReviews[cat] == null && !_mfAILoading[cat]) {
+        try { loadMFAIReviews(cat); } catch(e) {}
+      }
       html+='<div id="cards-'+catId+'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px"></div>';
       html+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">'+catFunds.length+' total funds · <b>'+eligibleFunds.length+' eligible</b> (AUM ≥₹1K Cr, age ≥5Y, 3Y data) · scroll right for all columns · Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-lg)">';
-      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2800px;width:100%">';
+      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:3050px;width:100%">';
       var colGroups = [
         {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
         {label:"RETURNS",cols:["1Y%","3M%","6M%","3Y CAGR","5Y CAGR","10Y CAGR","Roll 3Y"]},
@@ -2494,6 +2508,7 @@ async function renderMFPage(){
         {label:"PORTFOLIO",cols:["PE","Cat PE","Equity%","LgCap%","MidCap%","SmCap%","Cash%","Debt%"]},
         {label:"CONCENTRATION",cols:["Top3%","Top5%","Top10%"]},
         {label:"SCORE",cols:["SEBI","Score"]},
+        {label:"AI REVIEW (top 3)",cols:["Council","Judge"]},
       ];
       var groupEndIdx = {};
       var colIdx = 0;
@@ -2505,7 +2520,7 @@ async function renderMFPage(){
       html+='<thead>';
       html+='<tr>';
       colGroups.forEach(function(g){
-        var grpColor = g.label==="RETURNS"?"var(--green)":g.label==="RISK"?"var(--red)":g.label==="vs CATEGORY"?"#2dd4bf":g.label==="SCORE"?"var(--blue)":"var(--text3)";
+        var grpColor = g.label==="RETURNS"?"var(--green)":g.label==="RISK"?"var(--red)":g.label==="vs CATEGORY"?"#2dd4bf":g.label==="SCORE"?"var(--blue)":g.label==="AI REVIEW (top 3)"?"#a78bfa":"var(--text3)";
         var isIdentity = g.label==="IDENTITY";
         html+='<th colspan="'+g.cols.length+'" style="background:var(--bg3);color:'+grpColor+';font-size:10px;letter-spacing:.8px;text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);border-right:2px solid var(--border3);'+(isIdentity?'position:sticky;left:0;z-index:10;background:var(--bg3);':'')+' ">'+g.label+'</th>';
       });
@@ -2519,11 +2534,23 @@ async function renderMFPage(){
         html+='<th style="padding:5px 8px;text-align:'+(i<2?"left":"right")+';background:var(--bg3);color:var(--text3);font-weight:600;font-size:10px;border-bottom:2px solid var(--border3);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
       });
       html+='</tr></thead><tbody>';
+      // Build the "top 3 for AI review" subset ONCE per category, outside the
+      // row loop — mirrors _getTop3MFForCategory on the server: eligible AND
+      // not DNI-red, sorted by score desc. We then match each row by fund
+      // name so the REVIEWS + JUDGE cells only light up for those 3 funds.
+      var aiEligibleTop3 = (eligibleFunds || [])
+        .filter(function(f){ return !(f.dni && f.dni.level==='red'); })
+        .sort(function(a,b){ return (b.score||0) - (a.score||0); })
+        .slice(0,3);
+      var topAIRankByName = {};
+      aiEligibleTop3.forEach(function(f,i){ topAIRankByName[f.name] = i+1; });
+
       catFunds.forEach(function(f,i){
         var isEligible = f.eligible !== false;
         var eligibleRank = 0;
         if(isEligible){ eligibleFunds.forEach(function(ef,ei){if(ef.name===f.name)eligibleRank=ei+1;}); }
         var isTop = isEligible && eligibleRank <= 5;
+        var topAIRank = topAIRankByName[f.name] || 0;
         var rowTopBg = isTop ? 'var(--bg2)' : 'var(--bg)';
         var rowHighlight = isTop ? 'border-left:3px solid '+cfg.color+';' : '';
         function rv(v,dec){ 
@@ -2605,16 +2632,27 @@ async function renderMFPage(){
           {s:'text-align:right;', v:rv(f.top5_conc,1)+'%'},
           {s:'text-align:right;color:'+(top10<45?'var(--green)':top10>65?'var(--red)':'var(--amber)')+';border-right:2px solid var(--border3);', v:rv(top10,1)+'%'},
           {s:'text-align:center;font-size:14px;', v: isEligible ? sebiIcon : '-'},
-          {s:'text-align:right;font-weight:700;font-size:'+(isEligible?'13':'10')+'px;color:'+(isEligible?(f.dni?(f.dni.level==='red'?'var(--red)':'var(--amber)'):cfg.color):'var(--text4)')+';max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
+          {s:'text-align:right;font-weight:700;font-size:'+(isEligible?'13':'10')+'px;color:'+(isEligible?(f.dni?(f.dni.level==='red'?'var(--red)':'var(--amber)'):cfg.color):'var(--text4)')+';max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-right:2px solid var(--border3);',
            v: isEligible
              ? (f.dni ? (f.dni.level==='red'?'🚫 ':' ⚠️ ')+f.score : f.score)
              : (f.filter_reasons&&f.filter_reasons[0] ? f.filter_reasons[0] : 'Not eligible')},
+          // AI REVIEW cells — only populated for the top-3 ELIGIBLE (non-DNI-red) funds,
+          // since the server's runMFAIReview only scores those three. topAIRank is 1-3
+          // for the top 3 eligible funds, or 0 otherwise.
+          {s:'text-align:center;min-width:140px;', v: _mfAIReviewsCell(cat, f.name, topAIRank)},
+          {s:'text-align:center;min-width:80px;', v: _mfJudgeCell(cat, f.name, topAIRank)},
         ];
         html+='<tr data-ri="'+i+'" style="'+(isEligible?'':'opacity:0.45;')+rowHighlight+'border-bottom:1px solid var(--border2);">';
         cells.forEach(function(c){
           html+='<td style="padding:5px 8px;'+c.s+'">'+c.v+'</td>';
         });
         html+='</tr>';
+        // Expanded per-model panel row — inserted under a top-3 row when the
+        // user has toggled it open via _mfAIReviewsCell's ▸ button. Spans all
+        // columns (allCols.length) so it stretches across the wide table.
+        if (topAIRank && _mfAIExpanded[cat+':'+f.name]) {
+          html += '<tr style="background:var(--bg3)"><td colspan="'+allCols.length+'" style="padding:10px 14px">' + _mfAIExpandedPanel(cat, f.name) + '</td></tr>';
+        }
       });
       html+='</tbody></table></div>';
       html+='<div id="tbl-showmore-'+cat+'" style="display:none;text-align:center;padding:10px 0 6px">'
@@ -3143,6 +3181,17 @@ var _picksAIReviews = { rebound: null, momentum: null, longterm: null };
 var _picksAILoading = { rebound: false, momentum: false, longterm: false };
 var _picksAIRunning = { rebound: false, momentum: false, longterm: false };
 var _picksAIExpanded = {}; // key: category+':'+sym → true when per-model panel open
+
+// ── MF AI review cache ── Populated from GET /api/mf/ai-review?category=...
+// once per category on MF Recommendations page load. Shape mirrors picks:
+//   _mfAIReviews = { smallcap: { "Fund Name": [{model_id, verdict, ...}, ...], ... }, midcap: {...}, flexicap: {...} }
+// Only the top-3 eligible funds per category are AI-reviewed (MF horizon is
+// multi-year; sending the full ranked list would dilute the signal).
+var _mfAIReviews = { smallcap: null, midcap: null, flexicap: null };
+var _mfAILoading = { smallcap: false, midcap: false, flexicap: false };
+var _mfAIRunning = { smallcap: false, midcap: false, flexicap: false };
+var _mfAIExpanded = {}; // key: category+':'+fundName → true when per-model panel open
+var _mfCouncilStatus = {}; // category → { council:[], judge:{}, running, at }
 
 // ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
 var stockDataTab      = 'overview';
@@ -5017,6 +5066,240 @@ async function runPicksAIReview(category) {
     // Force-refresh the cache from DB so the new verdicts show up.
     _picksAIReviews[category] = null;
     await loadPicksAIReviews(category);
+  }
+}
+
+// =============================================================================
+// MF AI REVIEW HELPERS (client) — mirrors the Picks AI review flow, scoped to
+// the top-3 eligible funds per category (smallcap / midcap / flexicap). Each
+// function is a direct sibling of its _picksXxx counterpart so the two flows
+// stay in lock-step — any fix made to one should generally apply to both.
+// =============================================================================
+var _MF_CAT_META = {
+  smallcap: { label: 'Small Cap', color: '#ef4444', icon: '🔥' },
+  midcap:   { label: 'Mid Cap',   color: '#8b5cf6', icon: '💎' },
+  flexicap: { label: 'Flexi Cap', color: '#22d3ee', icon: '🏛' },
+};
+
+// The "🧠 Deep AI Review" button that sits next to each MF category header.
+function _mfAIButton(category) {
+  var meta = _MF_CAT_META[category];
+  var running = _mfAIRunning[category];
+  var btnLabel = running ? '🧠 Running…' : '🧠 Deep AI Review';
+  var disabled = running ? 'disabled' : '';
+  var onclick = running ? '' : 'runMFAIReview(\''+category+'\')';
+  return '<button '+disabled+' onclick="'+onclick+'" title="Run Deep AI Review on the top 3 '+meta.label+' funds across all 5 council models + 1 judge. Full MF payload + Varsity M11 knowledge." '
+    + 'style="background:linear-gradient(135deg,#8b5cf6,'+meta.color+');color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:10px;font-weight:800;cursor:'+(running?'wait':'pointer')+';opacity:'+(running?'0.7':'1')+';box-shadow:0 2px 8px rgba(139,92,246,.25);white-space:nowrap">'
+    + btnLabel + '</button>';
+}
+
+// REVIEWS column cell for a single MF row — shows council badges only on the
+// top 3 eligible rows of the category table (the server only scores top 3).
+// `fundName` is the full fund name (acts as the DB key).
+function _mfAIReviewsCell(category, fundName, topRank) {
+  if (!topRank || topRank > 3) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var cache = _mfAIReviews[category];
+  if (_mfAILoading[category] && !cache) {
+    return '<span style="font-size:9px;color:var(--text4)">loading…</span>';
+  }
+  if (!cache || !cache[fundName] || !cache[fundName].length) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">no review</span>';
+  }
+  var revs = cache[fundName];
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
+  var counts = { AGREE:0, CAUTION:0, DISAGREE:0, NO_REVIEW:0 };
+  council.forEach(function(r){
+    var v = (r.verdict||'NO_REVIEW').toUpperCase();
+    if (counts[v]!=null) counts[v]++;
+    else counts.CAUTION++;
+  });
+  var h = '<div style="display:flex;flex-direction:column;gap:3px">';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">';
+  function badge(count, col, label) {
+    if (!count) return '';
+    return '<span title="'+label+'" style="background:'+col+'22;color:'+col+';border:1px solid '+col+'55;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+count+' AI '+label+'</span>';
+  }
+  h += badge(counts.AGREE, '#10b981', '✓ Agree');
+  h += badge(counts.CAUTION, '#f59e0b', '⚠ Caution');
+  h += badge(counts.DISAGREE, '#ef4444', '✗ Disagree');
+  h += badge(counts.NO_REVIEW, '#64748b', '— N/A');
+  var key = category+':'+fundName;
+  var expanded = !!_mfAIExpanded[key];
+  // Use JSON.stringify to safely escape single/double quotes in fund names.
+  var safeKey = JSON.stringify(fundName).replace(/"/g, '&quot;');
+  h += '<button onclick="togglemfAIDetail(\''+category+'\','+safeKey+')" style="background:none;border:none;color:#22d3ee;font-size:9px;cursor:pointer;text-decoration:underline;padding:0 2px">'
+    + (expanded?'▾':'▸') + '</button>';
+  h += '</div>';
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+    var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
+    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Dedicated JUDGE column cell for MF — compact final-call chip.
+function _mfJudgeCell(category, fundName, topRank) {
+  if (!topRank || topRank > 3) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var cache = _mfAIReviews[category];
+  if (!cache || !cache[fundName] || !cache[fundName].length) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var judge = cache[fundName].find(function(r){ return r.model_id === 'ai-judge'; });
+  if (!judge || !judge.verdict) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var jv = (judge.verdict||'').toUpperCase();
+  var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+  var jl = jv==='AGREE'?'✓ BUY':jv==='CAUTION'?'⚠ HOLD':jv==='DISAGREE'?'✗ AVOID':'— N/A';
+  var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
+  var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
+  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
+  if (conf!=null){
+    h += '<div style="font-size:8px;color:var(--text4);font-weight:600">'+conf+'%</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Per-model expanded panel for a single fund — council grid + judge card.
+// Visually identical to _picksAIExpandedPanel but keyed on fundName.
+function _mfAIExpandedPanel(category, fundName) {
+  var cache = _mfAIReviews[category];
+  if (!cache || !cache[fundName]) return '<div style="color:var(--text4);font-size:10px">No reviews cached</div>';
+  var revs = cache[fundName];
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
+  function verdictColor(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'#10b981':v==='CAUTION'?'#f59e0b':v==='DISAGREE'?'#ef4444':'#64748b';
+  }
+  function verdictIcon(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'✓':v==='CAUTION'?'⚠':v==='DISAGREE'?'✗':'‼';
+  }
+  var h = '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;letter-spacing:.5px;text-transform:uppercase">Council Verdicts · '+_escHtml(fundName)+'  <span style="color:var(--text4);font-weight:500;text-transform:none">(each AI gives TWO opinions: Varsity M11-grounded + pure financial)</span></div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px;margin-bottom:10px">';
+  council.forEach(function(rv){
+    var v = (rv.verdict||'NO_REVIEW').toUpperCase();
+    var vCol = verdictColor(v);
+    var vIcon = verdictIcon(v);
+    h += '<div style="background:var(--bg2);border:1px solid '+vCol+'33;border-left:3px solid '+vCol+';border-radius:6px;padding:8px 10px">';
+    h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">';
+    h += '<span style="color:'+vCol+';font-weight:800;font-size:11px">'+vIcon+' '+v+'</span>';
+    h += '<span style="color:var(--text4);font-size:9px">· '+_escHtml(rv.model_name||rv.model_id)+'</span>';
+    if (rv.confidence!=null) h += '<span style="margin-left:auto;font-size:9px;color:var(--text3)">'+rv.confidence+'%</span>';
+    h += '</div>';
+    var vv = (rv.varsity_verdict||v).toUpperCase();
+    var vvCol = verdictColor(vv);
+    h += '<div style="background:rgba(34,211,238,.05);border-radius:4px;padding:5px 7px;margin-bottom:4px">';
+    h += '<div style="font-size:8px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:2px">📘 WITH VARSITY M11 KNOWLEDGE <span style="color:'+vvCol+'">· '+verdictIcon(vv)+' '+vv+'</span></div>';
+    if (rv.varsity_module)    h += '<div style="font-size:9px;color:#22d3ee;margin-bottom:2px">'+_escHtml(rv.varsity_module)+'</div>';
+    if (rv.varsity_reasoning) h += '<div style="font-size:10px;color:var(--text2);line-height:1.4">'+_escHtml(rv.varsity_reasoning)+'</div>';
+    else                      h += '<div style="font-size:9px;color:var(--text4);font-style:italic">(no varsity reasoning returned)</div>';
+    h += '</div>';
+    var pv = (rv.pure_verdict||'').toUpperCase();
+    var pvCol = verdictColor(pv || v);
+    h += '<div style="background:rgba(167,139,250,.05);border-radius:4px;padding:5px 7px;margin-bottom:4px">';
+    h += '<div style="font-size:8px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:2px">🧠 PURE FINANCIAL (no Varsity) ' + (pv?'<span style="color:'+pvCol+'">· '+verdictIcon(pv)+' '+pv+'</span>':'') + '</div>';
+    if (rv.pure_reasoning)  h += '<div style="font-size:10px;color:var(--text2);line-height:1.4">'+_escHtml(rv.pure_reasoning)+'</div>';
+    else                    h += '<div style="font-size:9px;color:var(--text4);font-style:italic">(no pure reasoning returned)</div>';
+    h += '</div>';
+    if (rv.recommendation) h += '<div style="font-size:9px;color:var(--text3);margin-top:3px"><b style="color:var(--text2)">Rec:</b> '+_escHtml(rv.recommendation)+'</div>';
+    if (rv.risk_flag)      h += '<div style="margin-top:3px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px">⚠ '+_escHtml(rv.risk_flag)+'</div>';
+    h += '</div>';
+  });
+  h += '</div>';
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jCol = verdictColor(jv);
+    var jIcon = verdictIcon(jv);
+    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
+    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+    h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="color:var(--text4);font-size:9px">· '+_escHtml(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
+    if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
+    h += '</div>';
+    if (judge.varsity_reasoning) {
+      h += '<div style="background:rgba(34,211,238,.07);border-radius:4px;padding:6px 8px;margin-bottom:4px">';
+      h += '<div style="font-size:8px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:2px">📘 SYNTHESIS WITH VARSITY M11 KNOWLEDGE</div>';
+      h += '<div style="font-size:10px;color:var(--text2);line-height:1.45">'+_escHtml(judge.varsity_reasoning)+'</div>';
+      h += '</div>';
+    }
+    if (judge.pure_reasoning) {
+      h += '<div style="background:rgba(167,139,250,.07);border-radius:4px;padding:6px 8px;margin-bottom:4px">';
+      h += '<div style="font-size:8px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:2px">🧠 SYNTHESIS WITHOUT VARSITY (pure financial)</div>';
+      h += '<div style="font-size:10px;color:var(--text2);line-height:1.45">'+_escHtml(judge.pure_reasoning)+'</div>';
+      h += '</div>';
+    }
+    if (judge.recommendation) h += '<div style="font-size:9px;color:var(--text3);margin-top:4px"><b style="color:var(--text2)">Judge Recommendation:</b> '+_escHtml(judge.recommendation)+'</div>';
+    if (judge.risk_flag)      h += '<div style="margin-top:4px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px">⚠ '+_escHtml(judge.risk_flag)+'</div>';
+    h += '</div>';
+  }
+  return h;
+}
+
+// Toggle the per-model expanded panel for a single MF row.
+function togglemfAIDetail(category, fundName) {
+  var k = category+':'+fundName;
+  if (_mfAIExpanded[k]) delete _mfAIExpanded[k];
+  else _mfAIExpanded[k] = true;
+  try { renderMFPage(); } catch(e) {}
+}
+
+// Load cached MF reviews from DB (no AI call). Called automatically on the
+// first render of the MF Recommendations page per category.
+async function loadMFAIReviews(category) {
+  if (_mfAILoading[category]) return;
+  _mfAILoading[category] = true;
+  try {
+    var r = await fetch('/api/mf/ai-review?category=' + category);
+    var d = await r.json();
+    _mfAIReviews[category] = d.reviews || {};
+  } catch(e) {
+    _mfAIReviews[category] = {};
+  } finally {
+    _mfAILoading[category] = false;
+    try { renderMFPage(); } catch(e) {}
+  }
+}
+
+// Trigger the Deep AI Review on the top 3 of the given MF category. Fans out
+// to all 5 council models + Judge on the server, then reloads the cache and
+// re-renders the page so the freshly-written badges show up.
+async function runMFAIReview(category) {
+  if (_mfAIRunning[category]) return;
+  _mfAIRunning[category] = true;
+  _mfCouncilStatus[category] = { running: true, at: Date.now() };
+  try { renderMFPage(); } catch(e) {}
+  try {
+    var r = await fetch('/api/mf/ai-review?category=' + category, { method: 'POST' });
+    var d = await r.json();
+    if (d.error) {
+      alert('MF Deep AI Review failed: ' + d.error);
+    }
+    if (d.council_status || d.judge_status_detail) {
+      _mfCouncilStatus[category] = {
+        council: d.council_status || [],
+        judge:   d.judge_status_detail || null,
+        at:      Date.now(),
+      };
+    }
+  } catch(e) {
+    alert('MF Deep AI Review failed: ' + e.message);
+    _mfCouncilStatus[category] = null;
+  } finally {
+    _mfAIRunning[category] = false;
+    _mfAIReviews[category] = null;
+    await loadMFAIReviews(category);
   }
 }
 
@@ -8240,6 +8523,7 @@ function renderArchitecturePage(){
     + _archPillar('AMC Quality', '10 pts', 'Hand-curated AMC scores (governance, stewardship, fund-manager tenure). SEBI enforcement action → -15%; active SEBI probe → capped at 15. Inspired by Morningstar Stewardship Pillar.')
     + _archPillar('Rolling 3Y Floor', '3 pts', 'Varsity Ch19: "high average AND low variance." Fund whose minimum rolling 3Y return never went negative = consistency. Deeply negative minimum (< −3%) = −1 penalty.')
     + _archPillar('Tracking Error + Closet Indexer Detection', '4 pts', 'Active fund (expense > 0.5%) with low TE + near-zero alpha = closet indexer paying active fees for index returns → −3. High TE + positive alpha = genuine stock-picking → +3.')
+    + _archPillar('Deep AI Review (top 3 per category)', '5 council + 1 judge', 'On top of the pure-quant ranking, each category exposes a "🧠 Deep AI Review" button that runs the top-3 eligible funds through the same 5-council + 1-judge pipeline used by Stock Picks. Sends EVERY MF data point (identity, AUM, expense, all return buckets, vs-category ratios, Sharpe/Sortino, drawdown, tracking error, portfolio + concentration, and the per-pillar hit breakdown so the AI can agree/disagree with the METHODOLOGY) plus a Varsity Module 11 category context block citing Ch16 (closet indexer), Ch19 (rolling returns), Ch20 (TER), Ch21 (benchmarking), Ch22-23 (Sharpe/Sortino/Capture), and Ch24 (4-stage fund analysis). Persisted in <code>mf_ai_reviews</code>, cached by category + fund_name + model_id.')
     + '<div style="margin-top:12px"><b>Style-drift penalties:</b> small-cap fund with &lt; 50% in small caps, mid-cap fund with > 27% in small caps, large-cap fund with > 15% in small caps, flexi cap concentrated > 72% in one segment — each is flagged as a mandate breach and penalised.</div>'
     + '<div style="margin-top:10px"><b>Credibility caps:</b> young-and-small funds cannot outrank established ones regardless of recent numbers. If AUM &lt; ₹5K Cr AND age &lt; 7Y AND raw score &gt; 70, the score is capped at 70. "No 5Y data" + age &lt; 7Y caps at 75.</div>'
     + _archNote('The ranking is pure quant — no LLM involvement. The cache rebuilds every 6 hours via cron and at server startup.')
@@ -8385,12 +8669,12 @@ function renderArchitecturePage(){
   );
 
   // ── DEEP AI REVIEW — DUAL OPINION + JUDGE ──
-  h += _archCard('🧠', 'Deep AI Review — 5-model council + 6th AI judge, dual opinion per stock',
-      'Both the Stock Picks columns (Rebound / Momentum / Long-Term) and the Holdings tab use the same Deep AI Review engine. The server fans out to a COUNCIL of 5 fast/cheap models in parallel, then runs a 6th expensive JUDGE (Claude Opus 4.6 by default) that synthesises all 5 council outputs into one final verdict per stock. Every model — council and judge — produces TWO opinions per stock: one WITH Varsity knowledge (Zerodha Varsity modules cited) and one WITHOUT (pure first-principles financial analysis). The UI shows the council tally in the REVIEWS column and a separate judge badge, with an expand toggle that reveals all council cards (each showing both lenses) plus a distinct full-width judge synthesis card.',
+  h += _archCard('🧠', 'Deep AI Review — 5-model council + 6th AI judge, dual opinion per stock/fund',
+      'Stock Picks columns (Rebound / Momentum / Long-Term), the Holdings tab, and the Mutual Fund Recommendations tab (top 3 per category: small-cap / mid-cap / flexi-cap) all share the same Deep AI Review engine. The server fans out to a COUNCIL of 5 fast/cheap models in parallel, then runs a 6th expensive JUDGE (Claude Opus 4.6 by default) that synthesises all 5 council outputs into one final verdict per stock. Every model — council and judge — produces TWO opinions per stock: one WITH Varsity knowledge (Zerodha Varsity modules cited) and one WITHOUT (pure first-principles financial analysis). The UI shows the council tally in the REVIEWS column and a separate judge badge, with an expand toggle that reveals all council cards (each showing both lenses) plus a distinct full-width judge synthesis card.',
       '<div style="margin-bottom:10px"><b>What the AI sees per stock (100+ data fields):</b></div>'
-    + _archPillar('Shared builder', '_buildFullStockBlock', 'One helper used by both Holdings and Picks. Merges raw <code>stockFundamentals</code> + <code>FUND_EXT</code> + the scored row from <code>_lastScoredV2</code> and emits the full field set organised by section: IDENTITY, PRICE + 52W + DMA + RETURNS, VALUATION, PROFITABILITY, DUPONT, GROWTH, QUARTERLY, BALANCE SHEET, CASH FLOW, OWNERSHIP, RSI, MACD, TREND, VOLUME, S/R + FIB + PIVOTS, RISK, SCORES (ReboundScore + MomentumScore + InvestmentScoreV2 + sub-scores + bucket + expected return), FLAGS. Missing values emit "?" explicitly so the model knows "unknown" vs zero.')
+    + _archPillar('Shared builders', '_buildFullStockBlock / _buildFullMFBlock', 'Stocks (Holdings + Picks) use <code>_buildFullStockBlock</code>; MF uses a parallel <code>_buildFullMFBlock</code> that serialises the full MF field set — identity + AMC governance, AUM + cost + min SIP, short-term returns + CAGR + rolling 3Y, vs-category 1Y/3Y/5Y/10Y ratios, Sharpe + Sortino + volatility + max drawdown + tracking error, portfolio PE + allocation split + top-3/5/10 concentration, plus the ProTrader score with a per-pillar hit breakdown (Roll3Y/Sharpe/Sortino/VsCat/MDD/Expense/…/AMC) so the AI can agree or disagree with the METHODOLOGY. Merges raw <code>stockFundamentals</code> + <code>FUND_EXT</code> + the scored row from <code>_lastScoredV2</code> and emits the full field set organised by section: IDENTITY, PRICE + 52W + DMA + RETURNS, VALUATION, PROFITABILITY, DUPONT, GROWTH, QUARTERLY, BALANCE SHEET, CASH FLOW, OWNERSHIP, RSI, MACD, TREND, VOLUME, S/R + FIB + PIVOTS, RISK, SCORES (ReboundScore + MomentumScore + InvestmentScoreV2 + sub-scores + bucket + expected return), FLAGS. Missing values emit "?" explicitly so the model knows "unknown" vs zero.')
     + _archPillar('WHY-WE-PICKED lead line', 'per stock', 'For Stock Picks, the first line under each stock header names the exact rule that qualified it for the category: "WHY WE PICKED #3 MOMENTUM — MomentumScore=72/100 (≥55 required, our 5-factor composite)…". For Holdings, a HOLDING lead line emits quantity + avg buy + invested + current + P&L instead. This tells the AI what to agree or disagree with.')
-    + _archPillar('Category definitions + criteria', '_buildCategoryContextBlock', 'Sent ONCE per Picks review (not per stock). A full block that defines Momentum / Rebound / Long-Term, names the hard gates a stock must pass to enter each list, and explains our scoring formula. Without this the AI does not know what ProTrader means by "momentum" vs "rebound" and cannot judge the pick intent — only the stock in isolation.')
+    + _archPillar('Category definitions + criteria', '_buildCategoryContextBlock / _buildMFCategoryContextBlock', 'Sent ONCE per review (not per stock/fund). Stocks: a full block that defines Momentum / Rebound / Long-Term, names the hard gates, and explains the scoring formula. MF: an equivalent block citing the Varsity M11 chapters (Ch16/19/20/21/22-23/24), the eligibility gates (AUM ≥ ₹1K Cr, age ≥ 5Y, expense < 2%), the per-pillar weight breakdown, and the AUM sweet-spot per sub-category. Without this the AI does not know what ProTrader means by "small-cap pick" vs "flexi-cap pick" and cannot judge the methodology — only the fund in isolation.')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">Council fan-out (5 fast models, parallel)</div>'
     + _archPillar('AI_MODELS', '5 models', 'Groq Llama 3.3 70B · GPT-4.1-nano · DeepSeek V3 · Claude Haiku 4.5 · Mistral Small. Same fan-out pattern as <code>validateSignalsWithAI</code>, using the shared <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt and per-endpoint <code>LLM_DAILY_CAP</code> budget.')
     + _archPillar('Dual opinion per stock', 'varsity_* + pure_*', 'User prompt instructs each model to form TWO independent opinions: (1) VARSITY OPINION — cite Zerodha Varsity modules M1-M17; (2) PURE OPINION — first-principles financial analysis with NO Varsity citations. If the two agree = strong conviction, if they disagree the user sees the disagreement explicitly. JSON schema: <code>verdict</code> (consensus) + <code>varsity_verdict</code> + <code>varsity_reasoning</code> + <code>varsity_module</code> + <code>pure_verdict</code> + <code>pure_reasoning</code> + <code>recommendation</code> + <code>risk_flag</code>.')
@@ -8399,7 +8683,7 @@ function renderArchitecturePage(){
     + _archPillar('AI_JUDGE_MODEL', 'Claude Opus 4.6', '<code>runAIJudge</code> runs AFTER the council. Sees the original stock data blocks + a transcript of every council model\'s per-stock verdict and dual reasoning, and is instructed to synthesise ONE final verdict per stock. Can overrule the council majority when the data supports it. Env override: <code>AI_JUDGE_MODEL</code>. Non-fatal: if the judge errors/skips, the council consensus still stands.')
     + _archPillar('Judge output', 'per_model[\'ai-judge\']', 'Persisted as a row in the same <code>holdings_ai_reviews</code> / <code>picks_ai_reviews</code> table with <code>model_id = \'ai-judge\'</code>, so the existing upsert + GET paths work unchanged. UI special-cases this row as the "AI JUDGE · FINAL DECISION" card at the bottom of the expanded panel. Judge fields: <code>judge_verdict</code>, <code>judge_confidence</code>, <code>judge_varsity_reasoning</code>, <code>judge_pure_reasoning</code>, <code>judge_council_agreement</code> (UNANIMOUS / MAJORITY / SPLIT / OVERRULED).')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">DB schema</div>'
-    + _archPillar('holdings_ai_reviews + picks_ai_reviews', 'dual opinion + judge', 'Columns: verdict (consensus) + confidence + varsity_module + varsity_reasoning + <b>varsity_verdict</b> + <b>pure_reasoning</b> + <b>pure_verdict</b> + recommendation + risk_flag. Added via ALTER TABLE IF NOT EXISTS so existing deployments migrate cleanly. The judge occupies a row with model_id=\'ai-judge\' next to the 5 council rows per (user/category, symbol). Re-running the review overwrites the rows for just that scope.')
+    + _archPillar('holdings_ai_reviews + picks_ai_reviews + mf_ai_reviews', 'dual opinion + judge', 'Columns: verdict (consensus) + confidence + varsity_module + varsity_reasoning + <b>varsity_verdict</b> + <b>pure_reasoning</b> + <b>pure_verdict</b> + recommendation + risk_flag. Added via ALTER TABLE IF NOT EXISTS so existing deployments migrate cleanly. The judge occupies a row with model_id=\'ai-judge\' next to the 5 council rows. Key is (user/category, symbol) for Holdings/Picks, and (category, fund_name) for MF (VARCHAR(200) since scheme names can be long). Re-running the review overwrites rows for just that scope.')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">UI</div>'
     + _archPillar('REVIEWS column tally', 'per row', 'Council vote tally in the format "2 AI ✓ Agree / 2 AI ✗ Disagree / 1 AI ⚠ Caution" — only the 5 council models count here. Below the council tally, a separate JUDGE badge with gradient border shows the 6th AI\'s final call. Clicking ▸ expands the full detail panel.')
     + _archPillar('Expanded panel', 'council grid + judge card', 'Council grid: 5 cards, each with the model name + consensus verdict and TWO reasoning blocks — 📘 WITH VARSITY KNOWLEDGE (cyan) and 🧠 PURE FINANCIAL (purple). Below the grid a full-width gradient Judge card shows the synthesis with the same two lenses, the judge recommendation, risk flag, and council-agreement tag. Holdings reuses <code>_holdingsAIExpandedPanel</code>; Picks uses <code>_picksAIExpandedPanel</code> — same visual shape.')
