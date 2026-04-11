@@ -2481,8 +2481,8 @@ async function renderMFPage(){
       html+='<div style="width:3px;height:18px;background:'+cfg.color+';border-radius:2px"></div>';
       html+='<div style="font-weight:700;font-size:14px;letter-spacing:-.2px">'+cfg.label+'</div>';
       html+='<span style="background:'+cfg.bg+';color:'+cfg.color+';border:1px solid '+cfg.color+'40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600">'+cfg.desc+'</span>';
+      html+='<span style="margin-left:6px">'+_mfAIButton(cat)+'</span>';
       html+='<span style="font-size:10px;color:var(--text3);margin-left:auto"><b style="color:'+cfg.color+'">'+eligibleFunds.length+' rated</b> · '+(catFunds.length-eligibleFunds.length)+' not eligible · top 5 cards · show more available</span>';
-      html+='<span style="margin-left:8px">'+_mfAIButton(cat)+'</span>';
       html+='</div>';
       // Deep AI Review progress/status panel — shown while a run is in-flight
       // AND after it completes (so the user can see which council models
@@ -2688,12 +2688,21 @@ async function renderMFPage(){
       });
     });
 
+    // Remove any prior DNI container left over from a previous render pass —
+    // renderMFPage() can be called multiple times (auto-load, toggles, etc.)
+    // and each call used to append a fresh dniContainer as a sibling of
+    // catsEl without clearing the old ones, producing duplicate "Do Not
+    // Invest (32 funds flagged)" blocks. Fix: stable id + removal.
+    var _priorDni = document.getElementById('mf-dni-container');
+    if (_priorDni && _priorDni.parentNode) _priorDni.parentNode.removeChild(_priorDni);
+
     if(allDni.length>0){
       var sortedDni = allDni.sort(function(a,b){
-        var lvl={'red':0,'amber':1}; 
+        var lvl={'red':0,'amber':1};
         return (lvl[a.dni.level]||2)-(lvl[b.dni.level]||2);
       });
       var dniContainer=document.createElement('div');
+      dniContainer.id='mf-dni-container';
       dniContainer.style.cssText='margin-bottom:24px;border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-lg);overflow:hidden;background:var(--bg2)';
       var dniHeader=document.createElement('div');
       dniHeader.style.cssText='display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.2)';
