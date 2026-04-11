@@ -2336,6 +2336,7 @@ const MF_FUNDS = [
 ];
 
 var MF_CAT = {
+  largecap:  {label:"Large Cap Funds", color:"#b45309",bg:"#fef3c7",desc:"Core stability · Nifty 100 universe",  bm3:13,bm5:11},
   smallcap:  {label:"Small Cap Funds", color:"#7c3aed",bg:"#ede9fe",desc:"High risk · 7+ year horizon",         bm3:18,bm5:16},
   midcap:    {label:"Mid Cap Funds",   color:"#1d4ed8",bg:"#dbeafe",desc:"Moderate-high risk · 5+ year horizon", bm3:16,bm5:14},
   flexicap:  {label:"Flexi Cap Funds", color:"#0f766e",bg:"#ccfbf1",desc:"Dynamic allocation · 3+ year horizon", bm3:14,bm5:12}
@@ -2458,7 +2459,7 @@ async function renderMFPage(){
       updEl.textContent = (mins<2?"Just updated":mins+"m ago")+" · "+data.funds.length+" funds";
     }
 
-    var grouped={smallcap:[],midcap:[],flexicap:[]};
+    var grouped={largecap:[],smallcap:[],midcap:[],flexicap:[]};
     data.funds.forEach(function(f){if(f&&f.cat&&grouped[f.cat])grouped[f.cat].push(f);});
     Object.keys(grouped).forEach(function(cat){
       grouped[cat].sort(function(a,b){
@@ -2474,7 +2475,7 @@ async function renderMFPage(){
 
     var catsEl=document.getElementById("mf-cats");
     var html="";
-    ["smallcap","midcap","flexicap"].forEach(function(cat){
+    ["largecap","smallcap","midcap","flexicap"].forEach(function(cat){
       var catFunds=grouped[cat],cfg=MF_CAT[cat];
       if(!catFunds||catFunds.length===0){
         html+='<div style="margin-bottom:24px;padding:16px;background:var(--bg2);border-radius:var(--radius-lg);border:1px solid var(--border)">';
@@ -2675,7 +2676,7 @@ async function renderMFPage(){
     catsEl.innerHTML=html;
 
     var TABLE_INITIAL = 10;
-    ["smallcap","midcap","flexicap"].forEach(function(cat){
+    ["largecap","smallcap","midcap","flexicap"].forEach(function(cat){
       var catFunds2=grouped[cat];
       if(!catFunds2||!catFunds2.length) return;
       var catId2='cat-'+cat.replace(/\s/g,'-');
@@ -2758,7 +2759,7 @@ async function renderMFPage(){
       catsEl.parentNode.insertBefore(dniContainer, catsEl);
     }
 
-    ["smallcap","midcap","flexicap"].forEach(function(cat){
+    ["largecap","smallcap","midcap","flexicap"].forEach(function(cat){
       var catFunds2=grouped[cat], cfg2=MF_CAT[cat];
       if(!catFunds2||!catFunds2.length) return;
       var catId2='cat-'+cat.replace(/\s/g,'-');
@@ -3470,21 +3471,22 @@ var _picksAIExpanded = {}; // key: category+':'+sym → true when per-model pane
 
 // ── MF AI review cache ── Populated from GET /api/mf/ai-review?category=...
 // once per category on MF Recommendations page load. Shape mirrors picks:
-//   _mfAIReviews = { smallcap: { "Fund Name": [{model_id, verdict, ...}, ...], ... }, midcap: {...}, flexicap: {...} }
+//   _mfAIReviews = { largecap: { "Fund Name": [{model_id, verdict, ...}, ...], ... }, smallcap: {...}, midcap: {...}, flexicap: {...} }
 // Only the top-5 eligible funds per category are AI-reviewed (bumped from
 // top-3 on 2026-04-11 so the council has a meaningful re-ranking space).
-var _mfAIReviews = { smallcap: null, midcap: null, flexicap: null };
-var _mfAILoading = { smallcap: false, midcap: false, flexicap: false };
-var _mfAIRunning = { smallcap: false, midcap: false, flexicap: false };
+// 4-category bucketing (added largecap 2026-04-11).
+var _mfAIReviews = { largecap: null, smallcap: null, midcap: null, flexicap: null };
+var _mfAILoading = { largecap: false, smallcap: false, midcap: false, flexicap: false };
+var _mfAIRunning = { largecap: false, smallcap: false, midcap: false, flexicap: false };
 var _mfAIExpanded = {}; // key: category+':'+fundName → true when per-model panel open
 var _mfCouncilStatus = {}; // category → { council:[], judge:{}, running, at }
 // Judge final_ranking per category — sorted rank 1..N with why_choose / why_not
 // / confidence / council_ranking_divergence. Populated by loadMFAIReviews().
-var _mfAIJudgeRanking = { smallcap: [], midcap: [], flexicap: [] };
+var _mfAIJudgeRanking = { largecap: [], smallcap: [], midcap: [], flexicap: [] };
 // Per-council rankings per category — { model_id: [{rank, fund_name, reason}, ...] }
 // Currently used as a tooltip / "council agreement" badge source on the judge
 // rows. Populated by loadMFAIReviews().
-var _mfAICouncilRankings = { smallcap: {}, midcap: {}, flexicap: {} };
+var _mfAICouncilRankings = { largecap: {}, smallcap: {}, midcap: {}, flexicap: {} };
 
 // ── Stock Data page state (separate top-level tab: Overview/Quality/Value/etc.) ──
 var stockDataTab      = 'overview';
@@ -5373,11 +5375,14 @@ async function runPicksAIReview(category) {
 
 // =============================================================================
 // MF AI REVIEW HELPERS (client) — mirrors the Picks AI review flow, scoped to
-// the top-5 eligible funds per category (smallcap / midcap / flexicap). Each
-// function is a direct sibling of its _picksXxx counterpart so the two flows
-// stay in lock-step — any fix made to one should generally apply to both.
+// the top-5 eligible funds per category (largecap / smallcap / midcap / flexicap).
+// Each function is a direct sibling of its _picksXxx counterpart so the two
+// flows stay in lock-step — any fix made to one should generally apply to both.
+// 4th bucket (largecap) was added 2026-04-11 when the Tickertape upload started
+// shipping Large Cap Fund rows.
 // =============================================================================
 var _MF_CAT_META = {
+  largecap: { label: 'Large Cap', color: '#f59e0b', icon: '🏦' },
   smallcap: { label: 'Small Cap', color: '#ef4444', icon: '🔥' },
   midcap:   { label: 'Mid Cap',   color: '#8b5cf6', icon: '💎' },
   flexicap: { label: 'Flexi Cap', color: '#22d3ee', icon: '🏛' },
@@ -9138,7 +9143,7 @@ function renderArchitecturePage(){
   // ── MF PICKS ──
   h += _archCard('💰', 'MF Picks — how mutual funds are ranked',
       'Source: <code>scoreMFTickertape()</code> in kite-server.js (~line 4455). Data from the Tickertape CSV snapshot, refreshed on demand via <b>Admin → 📤 Upload Tickertape CSVs</b> (multi-file drop — one CSV per facet, server joins them). <code>mf_load_v2.sql</code> is still available as a manual fallback for direct Railway psql runs.',
-      '<div style="margin-bottom:10px">Ranking runs in two phases. <b>Phase 1 — eligibility gate</b> (<code>checkEligible</code>): any fund failing AUM ≥ ₹1,000 Cr, age ≥ 60 months, 3Y rolling-return data present, or expense ratio &lt; 2% is labelled "Not Eligible" and never scored. <b>Phase 2 — scoring</b>: eligible funds are ranked within their sub-category (Small Cap / Mid Cap / Flexi Cap) using sector-relative percentiles. Max ~120 points, normalised to 100. The pillars are Varsity Module 11 derived:</div>'
+      '<div style="margin-bottom:10px">Ranking runs in two phases. <b>Phase 1 — eligibility gate</b> (<code>checkEligible</code>): any fund failing AUM ≥ ₹1,000 Cr, age ≥ 60 months, 3Y rolling-return data present, or expense ratio &lt; 2% is labelled "Not Eligible" and never scored. <b>Phase 2 — scoring</b>: eligible funds are ranked within their sub-category (Large Cap / Small Cap / Mid Cap / Flexi Cap — Large Cap added 2026-04-11 as a 4th bucket with its own AUM sweet spot ₹3K–₹2L Cr and its own "closet indexer" prompt for the AI council) using sector-relative percentiles. Max ~120 points, normalised to 100. The pillars are Varsity Module 11 derived:</div>'
     + _archPillar('Rolling 3Y Consistency', '25 pts', 'Varsity Ch19 + Morningstar research: "the single best predictor of future fund returns." Point-to-point CAGR has date bias; rolling return removes it. Percentile-ranked within sub-category.')
     + _archPillar('Risk-Adjusted Returns', '20 pts', 'Sortino weighted more than Sharpe (13 vs 7 pts). Varsity Ch23: Sortino measures downside-only volatility, which is what a long-term SIP investor actually cares about — upside variance is not "risk".')
     + _archPillar('Beats Peers Consistently', '20 pts', 'vs-category ratios at 3Y (8 pts), 5Y (8 pts), 10Y (4 pts). Varsity Ch21: "beat benchmark in 7/10 years = skill, not luck." Alpha bonus of +2 when fund beats peers on 3Y AND 5Y simultaneously.')
