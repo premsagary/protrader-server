@@ -7054,6 +7054,16 @@ const stockFundamentals  = {};
 let   stockFundLastFetch = 0;
 let   stockFundLoading   = false;
 let   stockFundReady     = false;
+// Cache of the last `/api/stocks/score?scoreVersion=2` result — an array of
+// fully-scored row objects (with isFallenAngel / fallenScore / composite /
+// scoreV2 / grp / sector / ... all materialised). `stockFundamentals` stores
+// RAW fundamentals only; the scored rows are computed fresh per request and
+// never written back. The Stock Picks → Deep AI Review button needs the same
+// top 10 the UI shows, so `_getTop10ForCategory` reads this cache instead of
+// `stockFundamentals` (which lacks all the score fields and would return an
+// empty filter). Populated at the bottom of the /api/stocks/score handler.
+let   _lastScoredV2      = null;
+let   _lastScoredV2Ts    = 0;
 let   niftyBenchmark     = { '52w':0, '6m':0, '3m':0, '1m':0 }; // Varsity: benchmark for relative strength
 
 // -- Sector map ---------------------------------------------------------------
@@ -10331,6 +10341,15 @@ app.get('/api/stocks/score', async(req,res)=>{
       scored.sort((a,b)=>b.score-a.score);
     }
     scored.forEach((s,i)=>{s.rank=i+1;});
+
+    // Cache the fully-scored rows so Stock Picks → Deep AI Review can compute
+    // the top 10 per category using the SAME filter/sort the client just ran.
+    // Only cache the v2 payload since every tab that uses these picks calls
+    // with scoreVersion=2; v1 callers are legacy and not in the picks pipeline.
+    if (scoreVersion === 2) {
+      _lastScoredV2   = scored;
+      _lastScoredV2Ts = Date.now();
+    }
 
     // Fire Telegram alerts for new Fallen Angels (async, non-blocking)
     checkAndSendAlerts(scored).catch(e=>console.log('Alert error:',e.message));
@@ -17518,11 +17537,17 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
 // used by Holdings — `_normalizeHoldingsVerdict` is reused.
 
 // Build a full-data stock block for the AI prompt — same shape Holdings uses
-// but WITHOUT the personal P&L block (picks are global, not per-user).
-function _buildPickStockBlock(sym) {
-  const mf = stockFundamentals[sym] || {};
+// but WITHOUT the personal P&L block (picks are global, not per-user). Takes
+// the SCORED row (which has fallenScore/composite/scoreV2 materialised) and
+// merges it with the raw `stockFundamentals` entry + FUND_EXT fallback so the
+// prompt sees every field the client sees.
+function _buildPickStockBlock(row) {
+  const sym = row.sym;
+  const raw = stockFundamentals[sym] || {};
   const ext = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
-  const px = (livePrices && livePrices[sym]?.price) || mf.price || ext.price || 0;
+  // Prefer the scored row (has formatted numbers), fall back to raw, then ext.
+  const mf = { ...raw, ...ext, ...row };
+  const px = (livePrices && livePrices[sym]?.price) || mf.price || 0;
   return `━━ ${sym} (${mf.name||sym}) [${mf.sector||'?'}] ━━\n` +
     `  PRICE: CMP=₹${px} 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}% %FromHigh=${mf.pctFromHigh||'?'}%\n` +
     `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}%\n` +
@@ -17533,22 +17558,30 @@ function _buildPickStockBlock(sym) {
     `  SCORES: ReboundScore=${mf.fallenScore||'-'} MomentumScore=${mf.composite||'-'} InvestmentScore=${mf.scoreV2||'-'}`;
 }
 
-// Pick the top-10 symbols for a category using the SAME filters the client
+// Pick the top-10 ROWS for a category using the SAME filter/sort the client
 // applies on the Stock Picks page, so the server review matches what the user
-// sees. Operates on the in-memory scored universe (stockFundamentals map).
+// sees. Reads from `_lastScoredV2` — the cached output of the most recent
+// `/api/stocks/score?scoreVersion=2` call. That cache is populated whenever
+// the Stock Picks tab loads, so by the time the user clicks Deep AI Review
+// the data is there. Returns full row objects (not just symbols) so callers
+// can pass them into `_buildPickStockBlock` without re-hydrating.
 function _getTop10ForCategory(category) {
-  const all = Object.values(stockFundamentals || {}).filter(s => s && s.sym);
+  const src = Array.isArray(_lastScoredV2) ? _lastScoredV2 : [];
+  if (!src.length) return [];
   let filtered;
   if (category === 'rebound') {
-    filtered = all
-      .filter(s => s.isFallenAngel && s.fallenScore != null)
+    // Matches client: filtered.filter(s => s.isFallenAngel), sorted by fallenScore desc
+    filtered = src
+      .filter(s => s.isFallenAngel)
       .sort((a, b) => (b.fallenScore || 0) - (a.fallenScore || 0));
   } else if (category === 'momentum') {
-    filtered = all
+    // Matches client: composite != null && composite >= 55, sorted by composite desc
+    filtered = src
       .filter(s => s.composite != null && s.composite >= 55)
       .sort((a, b) => (b.composite || 0) - (a.composite || 0));
   } else if (category === 'longterm') {
-    filtered = all
+    // Matches client: scoreV2 >= 60 + roe/de/growth/notCollapsing gates, sorted by scoreV2 desc
+    filtered = src
       .filter(s => {
         const roeOk = s.roe == null || s.roe >= 12;
         const deOk = s.debtToEq == null || s.debtToEq <= 2;
@@ -17560,7 +17593,7 @@ function _getTop10ForCategory(category) {
   } else {
     return [];
   }
-  return filtered.slice(0, 10).map(s => s.sym);
+  return filtered.slice(0, 10);
 }
 
 async function runPicksAIReview(category) {
@@ -17578,12 +17611,19 @@ async function runPicksAIReview(category) {
   const label = categoryLabels[category];
   if (!label) throw new Error('Invalid category: ' + category);
 
-  const top10 = _getTop10ForCategory(category);
-  if (!top10.length) {
-    return { ok: false, error: 'No stocks matched the filter for this category right now.', category };
+  const top10Rows = _getTop10ForCategory(category);
+  if (!top10Rows.length) {
+    // Empty cache = Stock Picks has never been loaded this session, OR the
+    // cache is populated but no stock matched the category filter. Give a
+    // specific hint for the cache-empty case so the user knows to refresh.
+    const msg = (!Array.isArray(_lastScoredV2) || !_lastScoredV2.length)
+      ? 'Scored universe not loaded yet — open the Stock Picks tab once to prime the cache, then retry.'
+      : 'No stocks matched the filter for this category right now.';
+    return { ok: false, error: msg, category };
   }
+  const top10 = top10Rows.map(r => r.sym);
 
-  const stockBlocks = top10.map(_buildPickStockBlock).join('\n');
+  const stockBlocks = top10Rows.map(_buildPickStockBlock).join('\n');
 
   // Macro + breadth context — same as Holdings/signals validation
   const vix = _marketDataCache.vix;
