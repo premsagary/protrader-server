@@ -4515,6 +4515,7 @@ function renderStockRecPage(){
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('swing','sym',        'Stock', 'left')
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('swing','fallenScore','REBOUND SCORE','right','Rebound Score — quality-on-sale ranking for pullback entries (ROE/D-E/margin 40 + Depth of Fall 15 + Oversold 20 + Valuation 12 + Recovery Signals 13)')
       + _srHdr('swing','price',      'Price')
       + _srHdr('swing','pctFromHigh','FrHi%','right','% from 52-week high')
@@ -4535,6 +4536,7 @@ function renderStockRecPage(){
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
         + '<td style="padding:6px 8px">'+_picksAIReviewsCell('rebound', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('rebound', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+fhCol+';font-weight:600">'+(fh!=null?fh.toFixed(1)+'%':'-')+'</td>'
@@ -4543,7 +4545,7 @@ function renderStockRecPage(){
         + '</tr>';
       // Expanded per-model panel for this row (spans all cols)
       if (_picksAIExpanded['rebound:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="8" style="padding:10px 14px">' + _picksAIExpandedPanel('rebound', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('rebound', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -4574,6 +4576,7 @@ function renderStockRecPage(){
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('mom','sym',       'Stock', 'left')
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('mom','composite', 'MOMENTUM SCORE','right','Momentum Score — 5-factor composite (FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%) used by Portfolio Manager → Momentum Picks to pick and allocate stocks. Same number on every tab.')
       + _srHdr('mom','price',     'Price')
       + _srHdr('mom','change6m',  '6M%',  'right','6-month return')
@@ -4594,6 +4597,7 @@ function renderStockRecPage(){
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
         + '<td style="padding:6px 8px">'+_picksAIReviewsCell('momentum', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('momentum', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+msCol+'">'+(ms!=null?(+ms).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+c6Col+';font-weight:600">'+(c6!=null?c6.toFixed(1)+'%':'-')+'</td>'
@@ -4601,7 +4605,7 @@ function renderStockRecPage(){
         + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
         + '</tr>';
       if (_picksAIExpanded['momentum:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="8" style="padding:10px 14px">' + _picksAIExpandedPanel('momentum', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('momentum', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -4632,6 +4636,7 @@ function renderStockRecPage(){
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('long','sym',        'Stock', 'left')
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('long','scoreV2',    'INVESTMENT SCORE','right','Varsity 4-pillar Investment Score — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only (TA lives in the timing overlay).')
       + _srHdr('long','price',      'Price')
       + _srHdr('long','roe',        'ROE%')
@@ -4653,6 +4658,7 @@ function renderStockRecPage(){
         + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
         + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
         + '<td style="padding:6px 8px">'+_picksAIReviewsCell('longterm', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('longterm', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+(ltS!=null?(+ltS).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
@@ -4660,7 +4666,7 @@ function renderStockRecPage(){
         + '<td style="padding:6px 8px;text-align:right;color:'+rgCol+'">'+(rg!=null?rg.toFixed(1)+'%':'-')+'</td>'
         + '</tr>';
       if (_picksAIExpanded['longterm:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="8" style="padding:10px 14px">' + _picksAIExpandedPanel('longterm', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('longterm', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -4871,6 +4877,35 @@ function _picksAIReviewsCell(category, sym, rowIdx) {
     var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
     h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Dedicated "⚖ JUDGE" column cell for the Picks tables. Pulls the Claude
+// Opus 4.6 final synthesis (stored as model_id='ai-judge') and renders it
+// as a compact verdict chip + confidence so the user sees the final call
+// without expanding. Falls back to "—" if the judge has not run yet.
+function _picksJudgeCell(category, sym, rowIdx) {
+  if (rowIdx >= 10) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var cache = _picksAIReviews[category];
+  if (!cache || !cache[sym] || !cache[sym].length) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var judge = cache[sym].find(function(r){ return r.model_id === 'ai-judge'; });
+  if (!judge || !judge.verdict) {
+    return '<span style="font-size:9px;color:var(--text4);font-style:italic">—</span>';
+  }
+  var jv = (judge.verdict||'').toUpperCase();
+  var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+  var jl = jv==='AGREE'?'✓ BUY':jv==='CAUTION'?'⚠ HOLD':jv==='DISAGREE'?'✗ AVOID':'— N/A';
+  var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
+  var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
+  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
+  if (conf!=null){
+    h += '<div style="font-size:8px;color:var(--text4);font-weight:600">'+conf+'%</div>';
   }
   h += '</div>';
   return h;
@@ -6308,6 +6343,7 @@ function _holdingsRenderTable(){
     + '<th style="padding:10px 12px;text-align:left;color:var(--text3);font-size:10px;letter-spacing:.5px">#</th>'
     + '<th style="padding:10px 12px;text-align:left;color:var(--text3);font-size:10px;letter-spacing:.5px">STOCK</th>'
     + '<th style="padding:10px 12px;text-align:left;color:var(--text3);font-size:10px;letter-spacing:.5px">AI REVIEWS</th>'
+    + '<th style="padding:10px 12px;text-align:center;color:#a78bfa;font-size:10px;letter-spacing:.5px">⚖ JUDGE</th>'
     + '<th style="padding:10px 12px;text-align:right;color:var(--text3);font-size:10px;letter-spacing:.5px">QTY</th>'
     + '<th style="padding:10px 12px;text-align:right;color:var(--text3);font-size:10px;letter-spacing:.5px">AVG BUY</th>'
     + '<th style="padding:10px 12px;text-align:right;color:var(--text3);font-size:10px;letter-spacing:.5px">CMP</th>'
@@ -6326,6 +6362,7 @@ function _holdingsRenderTable(){
       + '<td style="padding:10px 12px"><div style="font-weight:700">'+h0.symbol+'</div>'
       +   '<div style="font-size:10px;color:var(--text3)">'+(h0.name||'')+(h0.sector?' · '+h0.sector:'')+'</div></td>'
       + '<td style="padding:10px 12px;min-width:240px">' + _holdingsRenderAIReviewsCell(h0) + '</td>'
+      + '<td style="padding:10px 12px;text-align:center;min-width:110px">' + _holdingsRenderJudgeCell(h0) + '</td>'
       + '<td style="padding:10px 12px;text-align:right;font-family:monospace">'+h0.quantity+'</td>'
       + '<td style="padding:10px 12px;text-align:right">₹'+(+h0.avg_price).toFixed(2)+'</td>'
       + '<td style="padding:10px 12px;text-align:right">'+(h0.cmp?'₹'+(+h0.cmp).toFixed(2):'—')+'</td>'
@@ -6341,7 +6378,7 @@ function _holdingsRenderTable(){
       + '</tr>';
     // Expanded per-model detail row
     if (_holdingsExpandedAI[h0.symbol] && h0.ai_reviews && h0.ai_reviews.length){
-      h += '<tr style="background:var(--bg3)"><td colspan="10" style="padding:14px 18px">';
+      h += '<tr style="background:var(--bg3)"><td colspan="11" style="padding:14px 18px">';
       h += _holdingsAIExpandedPanel(h0);
       h += '</td></tr>';
     }
@@ -6385,6 +6422,29 @@ function _holdingsRenderAIReviewsCell(h0){
     var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
     h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Dedicated "⚖ JUDGE" column cell for the Holdings table. Pulls the Claude
+// Opus 4.6 final synthesis (stored as model_id='ai-judge') and renders it as
+// a big verdict chip with confidence so the user sees the final call at a
+// glance without expanding. Falls back to "—" if the judge has not run yet.
+function _holdingsRenderJudgeCell(h0){
+  var revs = h0.ai_reviews || [];
+  var judge = revs.find(function(r){ return r.model_id === 'ai-judge'; });
+  if (!judge || !judge.verdict){
+    return '<div style="font-size:10px;color:var(--text4);font-style:italic">—</div>';
+  }
+  var jv = (judge.verdict||'').toUpperCase();
+  var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+  var jl = jv==='AGREE'?'✓ HOLD':jv==='CAUTION'?'⚠ CAUTION':jv==='DISAGREE'?'✗ EXIT':'— N/A';
+  var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
+  var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:3px">';
+  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">'+jl+'</span>';
+  if (conf!=null){
+    h += '<div style="font-size:9px;color:var(--text4);font-weight:600">'+conf+'% conf</div>';
   }
   h += '</div>';
   return h;

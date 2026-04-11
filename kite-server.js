@@ -16403,9 +16403,11 @@ Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGR
       const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
-        // max_tokens bumped — see OpenAI branch for rationale. Groq Llama 3.3
-        // 70B supports up to 32K output tokens.
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 16000, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
+        // max_tokens lowered from 16000 → 8000: Groq's llama-3.3-70b-versatile
+        // returns HTTP 413 "Request too large" when the combined prompt +
+        // max_tokens exceeds the per-request TPM envelope. 8K output is still
+        // plenty for our JSON response schema.
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 8000, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -17879,6 +17881,35 @@ function _buildHoldingStockBlock(h) {
   return _buildFullStockBlock(h.symbol, mf, leadLines);
 }
 
+// Coerce an AI-model review object into DB-safe column values.
+// Why: PostgreSQL `confidence INTEGER` and VARCHAR(80)/VARCHAR(32) limits
+// will throw if a model returns a float, a string, or an oversized field,
+// and in the old outer-try/catch design a single throw aborted the entire
+// upsert loop (only the first stock got badges). This helper guarantees
+// every column value is a valid, truncated, type-correct primitive so
+// Postgres will not reject the row.
+function _hardenedReviewRow(mv, meta) {
+  meta = meta || {};
+  const rawConf = (mv && (mv.confidence ?? mv.conf)) || 0;
+  const confNum = Number(rawConf);
+  const confidence = Number.isFinite(confNum)
+    ? Math.max(0, Math.min(100, Math.round(confNum)))
+    : 0;
+  const trunc = (s, n) => String(s == null ? '' : s).slice(0, n);
+  return {
+    modelName:        trunc(meta.modelName || (mv && mv.model_name) || '', 80),
+    verdict:          trunc(meta.normVerdict || '', 32),
+    confidence,
+    varsityModule:    trunc(mv && mv.varsity_module, 80),
+    varsityReasoning: String((mv && mv.varsity_reasoning) || '').slice(0, 4000),
+    varsityVerdict:   trunc(meta.normVarsityVerdict || '', 32),
+    pureReasoning:    String((mv && mv.pure_reasoning) || '').slice(0, 4000),
+    pureVerdict:      trunc(meta.normPureVerdict || '', 32),
+    recommendation:   String((mv && mv.recommendation) || '').slice(0, 500),
+    riskFlag:         trunc(mv && mv.risk_flag, 32),
+  };
+}
+
 // Map the raw model verdict (BUY_CONFIRM / HOLD / MODIFY / EXIT / etc.) to
 // the Holdings-tab vocabulary (AGREE / CAUTION / DISAGREE / NO_REVIEW) that
 // renders as ✓ Agreed / ⚠ Caution / ✗ Disagree in the UI.
@@ -18040,21 +18071,24 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
   // that failed to cover a stock on THIS run does not wipe out the good
   // review it produced on a PREVIOUS run. The judge row is persisted under
   // model_id='ai-judge' and follows the same stickiness rule.
-  try {
-    for (const rev of (consensus.signal_reviews || [])) {
-      if (!rev.per_model) continue;
-      for (const [mid, mv] of Object.entries(rev.per_model)) {
-        const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
-        // Stickiness: don't overwrite previous good reviews with placeholders.
-        if (normVerdict === 'NO_REVIEW') continue;
-        // Normalize the per-lens verdicts too so the Holdings UI vocab is
-        // consistent (AGREE / CAUTION / DISAGREE / NO_REVIEW) across the
-        // consensus column, the Varsity lens, and the Pure lens.
+  // PER-ROW try/catch: a single bad row (e.g. malformed confidence that
+  // PostgreSQL rejects for INTEGER, or a text field overflow) must NOT
+  // poison the whole batch — previously a single throw would abort every
+  // remaining insert, which is why only the first stock's badges showed up.
+  let _hDbOk = 0, _hDbFail = 0;
+  for (const rev of (consensus.signal_reviews || [])) {
+    if (!rev.per_model) continue;
+    for (const [mid, mv] of Object.entries(rev.per_model)) {
+      const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+      // Stickiness: don't overwrite previous good reviews with placeholders.
+      if (normVerdict === 'NO_REVIEW') continue;
+      try {
         const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
         const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
         const modelName = mid === 'ai-judge'
           ? AI_JUDGE_MODEL.name
           : (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        const row = _hardenedReviewRow(mv, { modelName, normVerdict, normVarsityVerdict, normPureVerdict });
         await pool.query(
           `INSERT INTO holdings_ai_reviews
              (username, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict, recommendation, risk_flag, reviewed_at)
@@ -18063,15 +18097,22 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
              model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
              varsity_reasoning=$8, varsity_verdict=$9, pure_reasoning=$10,
              pure_verdict=$11, recommendation=$12, risk_flag=$13, reviewed_at=NOW()`,
-          [username, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
-           mv.varsity_module || '', mv.varsity_reasoning || '',
-           normVarsityVerdict, mv.pure_reasoning || '', normPureVerdict,
-           mv.recommendation || '', mv.risk_flag || '']
+          [username, rev.sym, mid, row.modelName, row.verdict, row.confidence,
+           row.varsityModule, row.varsityReasoning,
+           row.varsityVerdict, row.pureReasoning, row.pureVerdict,
+           row.recommendation, row.riskFlag]
         );
+        _hDbOk++;
+      } catch (rowErr) {
+        _hDbFail++;
+        console.error(`⚠ Holdings DB upsert failed for ${rev.sym}/${mid}: ${rowErr.message}`);
       }
     }
-  } catch (dbErr) {
-    console.error('⚠ Failed to save holdings AI reviews to DB:', dbErr.message);
+  }
+  if (_hDbFail > 0) {
+    console.error(`⚠ Holdings AI reviews persisted with errors: ${_hDbOk} ok, ${_hDbFail} failed`);
+  } else {
+    console.log(`✓ Holdings AI reviews persisted: ${_hDbOk} rows upserted`);
   }
 
   const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
@@ -18434,17 +18475,23 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
   // so a model that couldn't cover a stock on this run does not overwrite a
   // previous good review for the same stock. The judge row follows the same
   // stickiness rule.
-  try {
-    for (const rev of (consensus.signal_reviews || [])) {
-      if (!rev.per_model) continue;
-      for (const [mid, mv] of Object.entries(rev.per_model)) {
-        const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
-        if (normVerdict === 'NO_REVIEW') continue;  // stickiness
+  // PER-ROW try/catch: a single bad row (e.g. malformed confidence or a
+  // text field overflow that Postgres rejects) must NOT poison the whole
+  // batch. Previously a single throw aborted every remaining insert — that
+  // is why only the first stock's badges showed up in the UI.
+  let _pDbOk = 0, _pDbFail = 0;
+  for (const rev of (consensus.signal_reviews || [])) {
+    if (!rev.per_model) continue;
+    for (const [mid, mv] of Object.entries(rev.per_model)) {
+      const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+      if (normVerdict === 'NO_REVIEW') continue;  // stickiness
+      try {
         const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
         const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
         const modelName = mid === 'ai-judge'
           ? AI_JUDGE_MODEL.name
           : (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        const row = _hardenedReviewRow(mv, { modelName, normVerdict, normVarsityVerdict, normPureVerdict });
         await pool.query(
           `INSERT INTO picks_ai_reviews
              (category, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict, recommendation, risk_flag, reviewed_at)
@@ -18453,15 +18500,22 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
              model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
              varsity_reasoning=$8, varsity_verdict=$9, pure_reasoning=$10,
              pure_verdict=$11, recommendation=$12, risk_flag=$13, reviewed_at=NOW()`,
-          [category, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
-           mv.varsity_module || '', mv.varsity_reasoning || '',
-           normVarsityVerdict, mv.pure_reasoning || '', normPureVerdict,
-           mv.recommendation || '', mv.risk_flag || '']
+          [category, rev.sym, mid, row.modelName, row.verdict, row.confidence,
+           row.varsityModule, row.varsityReasoning,
+           row.varsityVerdict, row.pureReasoning, row.pureVerdict,
+           row.recommendation, row.riskFlag]
         );
+        _pDbOk++;
+      } catch (rowErr) {
+        _pDbFail++;
+        console.error(`⚠ Picks DB upsert failed for ${category}/${rev.sym}/${mid}: ${rowErr.message}`);
       }
     }
-  } catch (dbErr) {
-    console.error('⚠ Failed to save picks AI reviews to DB:', dbErr.message);
+  }
+  if (_pDbFail > 0) {
+    console.error(`⚠ Picks [${category}] AI reviews persisted with errors: ${_pDbOk} ok, ${_pDbFail} failed`);
+  } else {
+    console.log(`✓ Picks [${category}] AI reviews persisted: ${_pDbOk} rows upserted`);
   }
 
   const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
