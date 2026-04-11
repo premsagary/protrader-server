@@ -5030,6 +5030,16 @@ app.post("/api/mf/refresh", async(req,res) => {
 // -- MF scored cache (pre-computed so tab loads in <1s) -----------------------
 let mfScoreCache = null;
 let mfScoreCachedAt = null;
+// Label shown in the "source" column of every scored MF row. Default value is a
+// cold-start fallback; the real label is loaded from app_config.mf_data_source
+// on startup and rewritten by POST /api/mf/import on every successful import.
+let mfDataSourceLabel = 'Tickertape - Apr 11 2026';
+(async () => {
+  try {
+    const v = await dbGet('mf_data_source');
+    if (v) mfDataSourceLabel = v;
+  } catch(e) {}
+})();
 
 async function buildMFCache() {
   try {
@@ -5061,7 +5071,7 @@ async function buildMFCache() {
       pct_midcap:pf(f.pct_midcap), pct_smallcap:pf(f.pct_smallcap),
       pct_cash:pf(f.pct_cash), pct_debt:pf(f.pct_debt),
       top3_conc:pf(f.top3_conc), top5_conc:pf(f.top5_conc), top10_conc:pf(f.top10_conc),
-      dataSource:'Tickertape - Apr 4 2026',
+      dataSource:mfDataSourceLabel,
     }));
 
     // Run the FULL scoring pipeline (same as /api/mf/funds)
@@ -5731,6 +5741,341 @@ app.get('/api/fundamentals/screener-status', async (req, res) => {
     });
   } catch(e) {
     res.json({ total: 0, error: e.message });
+  }
+});
+
+// =============================================================================
+// TICKERTAPE MF IMPORT — admin UI drops 6 Tickertape CSV facets in one go
+// Each facet shares (Name, Sub Category, Plan, AUM) and contributes a
+// different subset of the 43 mf_tickertape columns. We detect each file's
+// facet from its header, join across facets, TRUNCATE + bulk-INSERT, then
+// rebuild the scored MF cache so the UI reflects the new snapshot on the
+// next poll.
+// =============================================================================
+
+// Tickertape field → mf_tickertape column mapping, per facet. Key is the
+// Tickertape CSV header (trimmed, case-sensitive as it appears in the export).
+const TT_FACETS = [
+  { id:'base',    signature:['AMC','NAV','Expense Ratio'], map:{
+      'AMC':'amc', 'Benchmark':'benchmark', 'Fund Manager':'fund_manager',
+      'SIP Investment':'sip_allowed', 'NAV':'nav', 'AUM':'aum',
+      'Expense Ratio':'expense_ratio', 'Minimum Lumpsum':'min_lumpsum',
+      'Minimum SIP':'min_sip', 'Exit Load':'exit_load',
+      'Time since inception':'months_inception',
+  }},
+  { id:'returns', signature:['CAGR 3Y','Absolute Returns - 1Y'], map:{
+      'Absolute Returns - 1Y':'ret_1y', 'Absolute Returns - 3M':'ret_3m',
+      'Absolute Returns - 6M':'ret_6m', 'CAGR 3Y':'cagr_3y',
+      'CAGR 5Y':'cagr_5y', 'CAGR 10Y':'cagr_10y',
+      '3Y Avg Annual Rolling Return':'rolling_3y',
+      '3Y Avg Annual Rolling Return ':'rolling_3y', // trailing-space variant seen in exports
+  }},
+  { id:'risk',    signature:['SEBI Risk Category','Tracking Error'], map:{
+      'Category St Dev':'category_stddev', 'Tracking Error':'tracking_error',
+      'Maximum Drawdown':'max_drawdown', 'Volatility':'volatility',
+      'SEBI Risk Category':'sebi_risk',
+  }},
+  { id:'holdings', signature:['% Concentration - Top 3 Holdings','% Largecap Holding'], map:{
+      '% Debt Holding':'pct_debt', '% Equity Holding':'pct_equity',
+      '% Largecap Holding':'pct_largecap', '% Midcap Holding':'pct_midcap',
+      '% Smallcap Holding':'pct_smallcap',
+      '% Concentration - Top 3 Holdings':'top3_conc',
+      '% Concentration - Top 5 Holdings':'top5_conc',
+      '% Concentration - Top 10 Holdings':'top10_conc',
+  }},
+  { id:'ratios',  signature:['Sharpe Ratio','% Cash Holding'], map:{
+      '% Cash Holding':'pct_cash', 'Sharpe Ratio':'sharpe',
+      'Sortino Ratio':'sortino', 'PE Ratio':'pe_ratio',
+  }},
+  { id:'vs_cat',  signature:['Returns vs sub-category - 1Y','% Away from ATH'], map:{
+      '% Away from ATH':'pct_from_ath',
+      'Returns vs sub-category - 1Y':'vs_cat_1y',
+      'Returns vs sub-category - 3Y':'vs_cat_3y',
+      'Returns vs sub-category - 5Y':'vs_cat_5y',
+      'Returns vs sub-category - 10Y':'vs_cat_10y',
+      'Category PE Ratio':'category_pe',
+  }},
+];
+
+const MF_TEXT_COLS = new Set(['name','sub_category','amc','benchmark','fund_manager','sip_allowed','sebi_risk']);
+const MF_NUM_COLS = [
+  'nav','aum','expense_ratio','min_lumpsum','min_sip','exit_load','months_inception',
+  'ret_1y','ret_3m','ret_6m','cagr_3y','cagr_5y','cagr_10y','rolling_3y',
+  'vs_cat_1y','vs_cat_3y','vs_cat_5y','vs_cat_10y',
+  'sharpe','sortino','volatility','category_stddev','max_drawdown','pct_from_ath','tracking_error',
+  'pe_ratio','category_pe',
+  'pct_equity','pct_largecap','pct_midcap','pct_smallcap','pct_cash','pct_debt',
+  'top3_conc','top5_conc','top10_conc',
+];
+const MF_ALL_COLS = [
+  'name','sub_category','amc','benchmark','fund_manager','sip_allowed','sebi_risk',
+  ...MF_NUM_COLS,
+];
+
+function parseTickertapeCSV(text) {
+  // Line-based parse. Handles quoted fields with embedded commas (the only
+  // Tickertape quirk — no embedded newlines in any column we care about).
+  //
+  // Robustness notes:
+  //  - Strips BOM from the first byte if present.
+  //  - Deduplicates repeated header names: if the same column appears more
+  //    than once in the header row (Tickertape occasionally does this when a
+  //    user picks the same field twice, or on merged exports), every row will
+  //    surface the *first non-empty* value across all positions with that
+  //    header. This means `row['% Debt Holding']` is always the best
+  //    non-null reading we have, even if the export contains two or three
+  //    `% Debt Holding` columns.
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length < 2) return { headers:[], rows:[] };
+
+  const rawHeaders = parseCSVLine(lines[0]).map(h => h.replace(/^"|"$/g,'').trim());
+  // hdr -> [col index, col index, ...]  (preserves insertion order of first sighting)
+  const headerIndices = {};
+  const headers = [];
+  rawHeaders.forEach((h, i) => {
+    if (!h) return;
+    if (headerIndices[h]) {
+      headerIndices[h].push(i);
+    } else {
+      headerIndices[h] = [i];
+      headers.push(h);
+    }
+  });
+
+  const rows = lines.slice(1).map(line => {
+    const cells = parseCSVLine(line).map(c => c.replace(/^"|"$/g,'').trim());
+    const o = {};
+    for (const hdr of headers) {
+      // Walk every position that had this header name and take the first
+      // non-empty value. If they're all empty, the field ends up as ''.
+      let v = '';
+      for (const idx of headerIndices[hdr]) {
+        const cell = cells[idx];
+        if (cell != null && cell !== '') { v = cell; break; }
+      }
+      o[hdr] = v;
+    }
+    return o;
+  });
+  return { headers, rows };
+}
+
+function detectFacet(headers) {
+  // First facet whose entire signature appears in this file's headers wins.
+  return TT_FACETS.find(f => f.signature.every(s => headers.includes(s))) || null;
+}
+
+async function importTickertapeMFCSVs(files) {
+  // files: [{ name: 'xxx.csv', text: '...' }]
+  if (!Array.isArray(files) || files.length === 0) {
+    throw new Error('No files provided');
+  }
+
+  // 1. Parse + classify each file
+  const parsed = [];
+  const facetCount = {};
+  for (const f of files) {
+    if (!f || !f.text) continue;
+    const { headers, rows } = parseTickertapeCSV(f.text);
+    if (!headers.length || !rows.length) {
+      parsed.push({ name:f.name, facet:null, error:'empty' });
+      continue;
+    }
+    const facet = detectFacet(headers);
+    if (!facet) {
+      parsed.push({ name:f.name, facet:null, headers, error:'unknown facet' });
+      continue;
+    }
+    // Dedupe: if we already have this facet, keep the larger file (more rows).
+    if (facetCount[facet.id]) {
+      const prev = parsed.find(p => p.facet && p.facet.id === facet.id && !p.duplicate);
+      if (prev && prev.rows.length >= rows.length) {
+        parsed.push({ name:f.name, facet, rows:[], duplicate:true });
+        continue;
+      }
+      if (prev) prev.duplicate = true;
+    }
+    facetCount[facet.id] = (facetCount[facet.id]||0) + 1;
+    parsed.push({ name:f.name, facet, headers, rows });
+  }
+
+  const activeFacets = parsed.filter(p => p.facet && !p.duplicate && !p.error);
+  const gotFacetIds = activeFacets.map(p => p.facet.id);
+  const missingFacets = TT_FACETS.filter(f => !gotFacetIds.includes(f.id)).map(f => f.id);
+
+  // Base facet is mandatory — it's the only one with name/amc/nav etc.
+  const baseEntry = activeFacets.find(p => p.facet.id === 'base');
+  if (!baseEntry) {
+    throw new Error('Missing "base" facet CSV (the one with AMC + NAV + Expense Ratio columns).');
+  }
+
+  // 2. Build joined records, indexed on (Name, Sub Category, Plan)
+  const key = r => `${r['Name']||''}|${r['Sub Category']||''}|${r['Plan']||''}`;
+  const records = new Map();
+
+  // Seed from base
+  for (const row of baseEntry.rows) {
+    const rec = {
+      name: row['Name'] || null,
+      sub_category: row['Sub Category'] || null,
+    };
+    // Apply base map
+    for (const [hdr, col] of Object.entries(baseEntry.facet.map)) {
+      if (row[hdr] == null || row[hdr] === '') continue;
+      rec[col] = MF_TEXT_COLS.has(col) ? String(row[hdr]) : parseNum(row[hdr]);
+    }
+    if (!rec.name || !rec.sub_category) continue;
+    records.set(key(row), rec);
+  }
+
+  // 3. Merge in every other facet.
+  // Policy: first non-null wins. If a target column is already set (by base
+  // or by a previously merged facet), we don't overwrite it. This protects
+  // against two facets declaring the same target column — e.g. `holdings`
+  // and `ratios` both carry `% Debt Holding`/`% Equity Holding` in their raw
+  // Tickertape exports — and also means duplicate facet uploads (same
+  // facet, different snapshot) converge on the earlier value rather than
+  // silently flip-flopping.
+  const mergeStats = { base: records.size };
+  for (const entry of activeFacets) {
+    if (entry.facet.id === 'base') continue;
+    let hits = 0;
+    for (const row of entry.rows) {
+      const rec = records.get(key(row));
+      if (!rec) continue;
+      hits++;
+      for (const [hdr, col] of Object.entries(entry.facet.map)) {
+        if (rec[col] != null) continue; // first-write wins
+        if (row[hdr] == null || row[hdr] === '') continue;
+        const val = MF_TEXT_COLS.has(col) ? String(row[hdr]) : parseNum(row[hdr]);
+        if (val != null) rec[col] = val;
+      }
+    }
+    mergeStats[entry.facet.id] = hits;
+  }
+
+  // 4. Persist — CREATE TABLE IF NOT EXISTS + TRUNCATE + bulk INSERT
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Create table if it doesn't yet exist (matches mf_load_v2.sql schema).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mf_tickertape (
+        name TEXT NOT NULL,
+        sub_category TEXT,
+        amc TEXT,
+        benchmark TEXT,
+        fund_manager TEXT,
+        sip_allowed TEXT,
+        sebi_risk TEXT,
+        nav NUMERIC, aum NUMERIC,
+        expense_ratio NUMERIC, min_lumpsum NUMERIC, min_sip NUMERIC,
+        exit_load NUMERIC, months_inception NUMERIC,
+        ret_1y NUMERIC, ret_3m NUMERIC, ret_6m NUMERIC,
+        cagr_3y NUMERIC, cagr_5y NUMERIC, cagr_10y NUMERIC, rolling_3y NUMERIC,
+        vs_cat_1y NUMERIC, vs_cat_3y NUMERIC, vs_cat_5y NUMERIC, vs_cat_10y NUMERIC,
+        sharpe NUMERIC, sortino NUMERIC, volatility NUMERIC, category_stddev NUMERIC,
+        max_drawdown NUMERIC, pct_from_ath NUMERIC, tracking_error NUMERIC,
+        pe_ratio NUMERIC, category_pe NUMERIC,
+        pct_equity NUMERIC, pct_largecap NUMERIC, pct_midcap NUMERIC, pct_smallcap NUMERIC,
+        pct_cash NUMERIC, pct_debt NUMERIC,
+        top3_conc NUMERIC, top5_conc NUMERIC, top10_conc NUMERIC,
+        PRIMARY KEY (name, sub_category)
+      )
+    `);
+    await client.query('TRUNCATE TABLE mf_tickertape');
+
+    // Bulk insert in chunks to stay under PG's 65535 parameter limit
+    const rowArr = Array.from(records.values()).filter(r => r.name && r.sub_category);
+    const colCount = MF_ALL_COLS.length;
+    const chunkSize = Math.floor(60000 / colCount); // ~1395 rows at 43 cols
+    let inserted = 0;
+    for (let start = 0; start < rowArr.length; start += chunkSize) {
+      const chunk = rowArr.slice(start, start + chunkSize);
+      const values = [];
+      const params = [];
+      let p = 1;
+      for (const rec of chunk) {
+        const placeholders = [];
+        for (const col of MF_ALL_COLS) {
+          placeholders.push('$' + p++);
+          params.push(rec[col] ?? null);
+        }
+        values.push('(' + placeholders.join(',') + ')');
+      }
+      const sql = `INSERT INTO mf_tickertape (${MF_ALL_COLS.join(',')}) VALUES ${values.join(',')}`;
+      await client.query(sql, params);
+      inserted += chunk.length;
+    }
+
+    await client.query('COMMIT');
+
+    // 5. Update dataSource label and persist it in app_config
+    const nowLabel = 'Tickertape - ' +
+      new Date().toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric', timeZone:'Asia/Kolkata' });
+    mfDataSourceLabel = nowLabel;
+    await dbSet('mf_data_source', nowLabel);
+    await dbSet('mf_last_import_at', String(Date.now()));
+
+    // 6. Rebuild the scored cache so the UI sees the new snapshot
+    await buildMFCache();
+
+    return {
+      inserted,
+      total: rowArr.length,
+      missingFacets,
+      facets: gotFacetIds,
+      mergeStats,
+      dataSource: nowLabel,
+      unknownFiles: parsed.filter(p => p.error === 'unknown facet').map(p => p.name),
+      duplicateFiles: parsed.filter(p => p.duplicate).map(p => p.name),
+    };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(()=>{});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// POST /api/mf/import — accepts { files: [{ name, text }] } from the admin UI.
+app.post('/api/mf/import', async (req, res) => {
+  try {
+    const files = req.body?.files;
+    if (!Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: 'Send JSON { files: [{name, text}] } — drop at least the base Tickertape CSV.' });
+    }
+    // Sanity: reject if total payload is absurdly large
+    const totalBytes = files.reduce((s,f) => s + (f.text?.length||0), 0);
+    if (totalBytes > 5 * 1024 * 1024) {
+      return res.status(413).json({ error: `Payload too large (${Math.round(totalBytes/1024)} KB). Upload smaller batches.` });
+    }
+    console.log(`📥 MF import: ${files.length} file(s), ${Math.round(totalBytes/1024)} KB total`);
+    const result = await importTickertapeMFCSVs(files);
+    console.log(`✅ MF import done: ${result.inserted} funds inserted, facets=${result.facets.join(',')}, missing=${result.missingFacets.join(',')||'none'}`);
+    res.json({ success:true, ...result });
+  } catch (e) {
+    console.error('MF import error:', e.message);
+    res.status(500).json({ success:false, error: e.message });
+  }
+});
+
+// GET /api/mf/import-status — count + last import + dataSource label
+app.get('/api/mf/import-status', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM mf_tickertape');
+    const lastAt = await dbGet('mf_last_import_at');
+    res.json({
+      funds: rows[0]?.n || 0,
+      dataSource: mfDataSourceLabel,
+      lastImportAt: lastAt ? parseInt(lastAt) : null,
+      cached: mfScoreCache?.length || 0,
+      cachedAt: mfScoreCachedAt,
+    });
+  } catch (e) {
+    res.json({ funds: 0, dataSource: mfDataSourceLabel, error: e.message });
   }
 });
 
