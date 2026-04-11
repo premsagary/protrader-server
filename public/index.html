@@ -5849,7 +5849,20 @@ async function renderStockDataPage(){
       {k:'adx',l:'ADX',hc:'var(--blue)',r:function(s){return _num(s.adx,1);},br:true},
       {k:'volRatio',l:'VolRat',hc:'var(--text)',r:function(s){return _vol(s.volRatio);}},
       {k:'support',l:'Support',hc:'var(--green)',r:function(s){return _price(s.support);}},
-      {k:'resistance',l:'Resist',hc:'var(--red)',r:function(s){return _price(s.resistance);}},
+      {k:'resistance',l:'Resist',hc:'var(--red)',r:function(s){return _price(s.resistance);},br:true},
+      // ── Ichimoku Cloud (Varsity M2 Ch21 — Japanese institutional framework) ──
+      // Server emits these in /api/stocks/score. Signal = cloud position
+      // (above/inside/below), Tenkan-sen = 9-period conversion line, Kijun-sen
+      // = 26-period base line. Tenkan/Kijun are colored green when price is
+      // above the line (bullish) and red when below (via _dma helper).
+      {k:'ichimokuSignal',l:'Ichi',hc:'#d4a017',r:function(s){
+        var v=s.ichimokuSignal; if(!v) return '<span style="color:var(--text4)">-</span>';
+        var c=v==='above_cloud'?'var(--green)':v==='below_cloud'?'var(--red)':'#f59e0b';
+        var lbl=v==='above_cloud'?'☁️Above':v==='below_cloud'?'☁️Below':'☁️Inside';
+        return '<span style="color:'+c+'">'+lbl+'</span>';
+      }},
+      {k:'ichimokuTenkan',l:'Tenkan',hc:'#d4a017',r:function(s){return _dma(s.ichimokuTenkan,s.price);}},
+      {k:'ichimokuKijun',l:'Kijun',hc:'#d4a017',r:function(s){return _dma(s.ichimokuKijun,s.price);}},
     ],
     financials: [
       {k:'mktCap',l:'MktCap Cr',hc:'var(--text)',r:function(s){return _crore(s.mktCap);}},
@@ -9286,7 +9299,7 @@ function renderArchitecturePage(){
     + _archPillar('MOMENTUM SCORE', 'composite', 'Same <code>composite</code> used by PM Momentum Picks and the Stock Picks → Momentum Picks column. Color-coded ≥70 green / ≥55 amber / &lt;55 red. "-" for stocks that fail the portfolio quality gate in <code>scoreStockForPortfolio()</code>.')
     + _archPillar('REBOUND SCORE', 'fallenScore', 'Same Rebound Score from <code>scoreFallenAngel()</code>. Only populated for stocks that pass the Fallen Angel eligibility gate — everything else shows "-".')
     + _archPillar('INVESTMENT SCORE', 'scoreV2', 'Same Varsity 4-pillar <code>scoreV2</code> from <code>scoreOneStockV2()</code>. Populated for every stock in the universe.')
-    + '<div style="margin-top:12px"><b>Sub-tab panels</b> below the score columns surface the underlying raw inputs in logical groups: Overview (valuation + quality), Quality (ROE/ROCE/DuPont/margins/debt), Value (PE/PB/PEG/EV-EBITDA), Momentum (returns + RSI + MACD), Growth (rev/EPS/sales), Technical (200DMA/golden cross/Supertrend/Ichimoku), Financials (revenue/PAT/FCF), Ownership (promoter/FII/DII/pledge), and Signals (flags). Switching sub-tabs changes only the right-hand columns — score columns stay fixed.</div>'
+    + '<div style="margin-top:12px"><b>Sub-tab panels</b> below the score columns surface the underlying raw inputs in logical groups: Overview (valuation + quality), Quality (ROE/ROCE/DuPont/margins/debt), Value (PE/PB/PEG/EV-EBITDA), Momentum (returns + RSI + MACD), Growth (rev/EPS/sales), Technical (200DMA/golden cross/Supertrend/MACD/ADX/VolRat/S&R, and the Ichimoku Cloud trio — Signal/Tenkan/Kijun — added 2026-04-11 so the Varsity M2 Ch21 Japanese framework shows up in the raw table, not just on Picks), Financials (revenue/PAT/FCF), Ownership (promoter/FII/DII/pledge), and Signals (flags). Switching sub-tabs changes only the right-hand columns — score columns stay fixed.</div>'
     + _archNote('This tab is a read-only window into the same scored universe every other tab uses. It has no scoring logic of its own — if the Momentum Score here ever disagrees with PM Momentum Picks, it is a bug because both come from the same <code>scoreStockForPortfolio()</code> call inside the <code>/api/stocks/score</code> handler.')
   );
 
