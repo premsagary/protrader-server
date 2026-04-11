@@ -258,6 +258,7 @@ select option{background:var(--bg3)}
     <button class="mode-tab stocks" onclick="setMode('stocks')" id="mode-stocks">Stocks RoboTrade</button>
     <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">Crypto RoboTrade</button>
     <button class="mode-tab" onclick="setMode('holdings')" id="mode-holdings" style="background:linear-gradient(135deg,#0a1a2e,#0a0f1e);color:#22d3ee;border-color:#22d3ee40">💼 Holdings</button>
+    <button class="mode-tab" onclick="setMode('mirofish')" id="mode-mirofish" style="color:#22d3ee;border:1px dashed #22d3ee66" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata" style="color:#a78bfa">📊 Stock Data</button>
     <button class="mode-tab" onclick="setMode('architecture')" id="mode-architecture" style="color:#f0abfc">🏛 Architecture</button>
     <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
@@ -539,6 +540,7 @@ function setMode(mode){
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockanalyzer").className="mode-tab"   +(mode==="stockanalyzer"?" active":""); }catch(e){}
   try{ document.getElementById("mode-holdings").className ="mode-tab"      +(mode==="holdings"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-mirofish").className ="mode-tab"      +(mode==="mirofish"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab"   +(mode==="architecture"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab"         +(mode==="admin"    ?" active":""); }catch(e){}
@@ -570,6 +572,12 @@ function setMode(mode){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){}
     renderStockDataPage();
+    return;
+  }
+  if(mode==="mirofish"){
+    try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
+    try{ renderTopBar(); }catch(e){}
+    renderMiroFishLabPage();
     return;
   }
   if(mode==="architecture"){
@@ -2265,6 +2273,7 @@ function render(){
   if(S.mode==="stockdata") return; // don't wipe Stock Data tab on auto-refresh
   if(S.mode==="architecture") return; // don't wipe Architecture tab on auto-refresh
   if(S.mode==="holdings") return;  // don't wipe Holdings on auto-refresh
+  if(S.mode==="mirofish") return;  // don't wipe MiroFish Lab on auto-refresh (sim results are expensive)
   if(S.mode==="admin") return;     // don't wipe Admin tab on auto-refresh
   renderTopBar();
   const tab = S.mode==="stocks" ? S.stocksTab : S.cryptoTab;
@@ -8502,6 +8511,235 @@ function _archSrc(label, detail) {
 function _archNote(text) {
   return '<div style="background:rgba(245,158,11,.08);border-left:3px solid #f59e0b;padding:10px 14px;margin:10px 0;border-radius:0 6px 6px 0;font-size:12px;color:var(--text2);line-height:1.55">'
     + '<span style="font-weight:800;color:#f59e0b">Note — </span>'+text+'</div>';
+}
+
+// =============================================================================
+// MIROFISH LAB (experimental)
+// ----------------------------------------------------------------------------
+// Separate tab between Holdings and Stock Data. Reuses the Long-Term picks
+// list (scoreV2 >= 60) from stockRecData and lets the user run each pick
+// through the real MiroFish 56-agent crowd-reaction sim
+// (https://github.com/666ghj/MiroFish). This is an EXPERIMENT — no other tab
+// is changed, no scoring logic is touched, and results are kept in a page-
+// scoped in-memory store so auto-refresh does not wipe them.
+// =============================================================================
+var _miroFishResults = {};     // { symbol: { status:'idle|running|done|error', data, error } }
+var _miroFishExpanded = {};    // { symbol: true } — which rows have their result panel open
+
+function _miroFishRun(sym){
+  if(!sym) return;
+  _miroFishResults[sym] = { status:'running', ts: Date.now() };
+  _miroFishExpanded[sym] = true;
+  try{ renderMiroFishLabPage(); }catch(e){}
+
+  // Build a compact seed block from whatever we know about this stock on the client.
+  var s = null;
+  try{
+    if(stockRecData && Array.isArray(stockRecData.stocks)){
+      s = stockRecData.stocks.find(function(x){ return x.sym===sym; }) || null;
+    }
+  }catch(e){}
+  var seed = s ? {
+    symbol: s.sym,
+    name: s.name || s.sym,
+    sector: s.sector || null,
+    grp: s.grp || null,
+    price: s.price || null,
+    scoreV2: s.scoreV2 || null,
+    pe: s.pe || null, pb: s.pb || null, roe: s.roe || null, roce: s.roce || null,
+    de: s.de || null, eps_growth: s.eps_growth || null, rev_growth: s.rev_growth || null,
+    promoter: s.promoter || null, pledged: s.pledged || null,
+    pct_from_high: s.pct_from_high || null, rsi: s.rsi || null
+  } : { symbol: sym };
+
+  fetch('/api/mirofish-lab/simulate', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ symbol: sym, seed: seed })
+  })
+  .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, status:r.status, body:j }; }); })
+  .then(function(res){
+    if(res.ok && res.body && res.body.ok){
+      _miroFishResults[sym] = { status:'done', data: res.body, ts: Date.now() };
+    } else {
+      _miroFishResults[sym] = {
+        status:'error',
+        error: (res.body && (res.body.error || res.body.message)) || ('HTTP '+res.status),
+        hint:  (res.body && res.body.hint) || null,
+        ts: Date.now()
+      };
+    }
+    try{ renderMiroFishLabPage(); }catch(e){}
+  })
+  .catch(function(e){
+    _miroFishResults[sym] = { status:'error', error: e.message || 'network error', ts: Date.now() };
+    try{ renderMiroFishLabPage(); }catch(e2){}
+  });
+}
+
+function _miroFishToggle(sym){
+  _miroFishExpanded[sym] = !_miroFishExpanded[sym];
+  try{ renderMiroFishLabPage(); }catch(e){}
+}
+
+function _miroFishResultPanel(sym){
+  var r = _miroFishResults[sym];
+  if(!r) return '';
+  if(r.status==='running'){
+    return '<div style="padding:14px 16px;background:var(--bg3);border-radius:8px;color:#22d3ee;font-size:12px">🐟 Running 56-agent simulation on '+sym+' … this can take 30–120 s on a real MiroFish instance.</div>';
+  }
+  if(r.status==='error'){
+    var hint = r.hint ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.55">'+r.hint+'</div>' : '';
+    return '<div style="padding:14px 16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#ef4444;font-size:12px">'
+      + '<b>MiroFish error:</b> '+(r.error||'unknown')+hint
+      + '</div>';
+  }
+  if(r.status==='done' && r.data){
+    var d = r.data;
+    var body = '';
+    if(d.summary){
+      body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px"><b style="color:#22d3ee">Summary — </b>'+_esc(d.summary)+'</div>';
+    }
+    if(d.personas && Array.isArray(d.personas) && d.personas.length){
+      body += '<div style="font-weight:700;color:var(--text);font-size:11px;margin:10px 0 6px 0">Agent distribution ('+d.personas.length+' personas)</div>';
+      body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px">';
+      d.personas.slice(0, 56).forEach(function(p){
+        var v = (p.verdict||'').toUpperCase();
+        var col = v.indexOf('BUY')>=0 ? '#22c55e' : v.indexOf('HOLD')>=0 ? '#f59e0b' : v.indexOf('SELL')>=0||v.indexOf('EXIT')>=0 ? '#ef4444' : '#94a3b8';
+        body += '<div style="background:var(--bg3);border-left:3px solid '+col+';padding:6px 8px;border-radius:0 6px 6px 0">'
+          + '<div style="font-size:10px;font-weight:700;color:var(--text)">'+_esc(p.name||p.id||'Agent')+' <span style="color:'+col+'">· '+_esc(p.verdict||'-')+'</span></div>'
+          + '<div style="font-size:10px;color:var(--text3);line-height:1.5">'+_esc(p.reason||'')+'</div>'
+          + '</div>';
+      });
+      body += '</div>';
+    }
+    if(d.distribution){
+      body += '<div style="font-size:11px;color:var(--text3);margin-top:10px">Consensus tally: '+_esc(JSON.stringify(d.distribution))+'</div>';
+    }
+    if(!body){
+      // Fall back to raw JSON if we didn't recognize any known keys.
+      body = '<pre style="font-size:10px;color:var(--text3);background:var(--bg3);padding:10px 14px;border-radius:6px;overflow-x:auto;max-height:320px">'+_esc(JSON.stringify(d, null, 2))+'</pre>';
+    }
+    return '<div style="padding:14px 16px;background:var(--bg3);border:1px solid #22d3ee44;border-radius:8px">'+body+'</div>';
+  }
+  return '';
+}
+
+function _esc(v){
+  if(v==null) return '';
+  return String(v).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function renderMiroFishLabPage(){
+  var cont = document.getElementById("main-content");
+  if(!cont) return;
+
+  // Reuse the same scored universe the Stock Picks tab uses — no separate fetch.
+  var stocks = (stockRecData && Array.isArray(stockRecData.stocks)) ? stockRecData.stocks : null;
+  if(!stocks){
+    cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3);font-size:12px">'
+      + '<div style="font-size:26px;margin-bottom:10px">🐟</div>'
+      + '<div>Loading scored universe…</div>'
+      + '<div style="margin-top:14px"><button class="btn btn-sm" onclick="(function(){ fetch(\'/api/stocks/score?scoreVersion=2\').then(function(r){return r.json();}).then(function(d){stockRecData=d;renderMiroFishLabPage();}); })()">Fetch Stock Picks data</button></div>'
+      + '</div>';
+    return;
+  }
+
+  // Same filter the Stock Picks → Long-Term column uses.
+  var longTerm = stocks.filter(function(s){
+    if(!s || (s.scoreV2||0) < 60) return false;
+    var roeOk = (s.roe==null) || s.roe >= 8;
+    var deOk  = (s.de==null)  || s.de  <= 3;
+    return roeOk && deOk;
+  }).sort(function(a,b){ return (b.scoreV2||0) - (a.scoreV2||0); }).slice(0, 25);
+
+  var h = '<div style="padding:20px 24px;max-width:1200px">';
+
+  // Header
+  h += '<div style="margin-bottom:16px">'
+    + '<div style="display:flex;align-items:center;gap:10px">'
+    +   '<div style="font-weight:800;font-size:22px;letter-spacing:-.4px;color:#22d3ee">🐟 MiroFish Lab</div>'
+    +   '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border:1px dashed #22d3ee88;border-radius:4px;padding:2px 10px;font-size:10px;font-weight:700;letter-spacing:.5px">EXPERIMENT</span>'
+    + '</div>'
+    + '<div style="font-size:12px;color:var(--text3);margin-top:6px;line-height:1.6;max-width:900px">'
+    +   'Takes the Long-Term Investments list (the same <code>scoreV2 ≥ 60</code> rows from Stock Picks — nothing is re-scored here) and lets you run each pick through the real '
+    +   '<a href="https://github.com/666ghj/MiroFish" target="_blank" rel="noopener" style="color:#22d3ee;text-decoration:none;border-bottom:1px dashed #22d3ee88">MiroFish</a>'
+    +   ' — an OASIS-based multi-agent simulator that spawns 56 investor personas and reports how each would react to the stock. No other tab is touched by this lab.'
+    + '</div>'
+    + '</div>';
+
+  // Config banner (tells the user what the server needs)
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:11px;color:var(--text3);line-height:1.6">'
+    + '<b style="color:var(--text)">Setup —</b> the server proxies each sim call to your MiroFish instance. Set these env vars on Railway (or locally) before clicking Run Sim:'
+    + '<div style="margin-top:6px">'
+    +   '<code style="background:var(--bg3);padding:1px 6px;border-radius:4px;color:#22d3ee">MIROFISH_BASE_URL</code> — e.g. <code>http://localhost:5001</code> or your deployed MiroFish URL &nbsp;·&nbsp; '
+    +   '<code style="background:var(--bg3);padding:1px 6px;border-radius:4px;color:#22d3ee">MIROFISH_API_PATH</code> — defaults to <code>/api/predict</code> &nbsp;·&nbsp; '
+    +   '<code style="background:var(--bg3);padding:1px 6px;border-radius:4px;color:#22d3ee">MIROFISH_API_KEY</code> — optional bearer token'
+    + '</div>'
+    + '<div style="margin-top:6px;color:var(--text4)">MiroFish needs Python 3.11+, LLM API credentials (Alibaba Qwen recommended per its README), and Zep Cloud to run. Until those are wired, Run Sim will return a clear "not configured" error — nothing else in ProTrader is affected.</div>'
+    + '</div>';
+
+  // Quick stats
+  h += '<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
+    + '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:700">'+longTerm.length+' long-term picks</span>'
+    + '<span style="background:var(--bg3);color:var(--text3);border-radius:6px;padding:5px 14px;font-size:12px">top 25 shown · sorted by Investment Score desc</span>'
+    + '</div>';
+
+  if(!longTerm.length){
+    h += '<div style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No Long-Term Investments in the current universe slice.</div>';
+    h += '</div>';
+    cont.innerHTML = h;
+    return;
+  }
+
+  // Table
+  h += '<div style="overflow-x:auto;background:var(--bg2);border:1px solid var(--border);border-radius:10px">';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  h += '<thead><tr style="background:var(--bg3)">'
+    +    '<th style="text-align:left;padding:8px 10px;color:var(--text3)">#</th>'
+    +    '<th style="text-align:left;padding:8px 10px;color:var(--text3)">Stock</th>'
+    +    '<th style="text-align:center;padding:8px 10px;color:#22d3ee" title="Varsity 4-pillar Investment Score">INVESTMENT<br/>SCORE</th>'
+    +    '<th style="text-align:center;padding:8px 10px;color:var(--text3)">Price</th>'
+    +    '<th style="text-align:center;padding:8px 10px;color:#22d3ee">🐟 MiroFish</th>'
+    +  '</tr></thead><tbody>';
+
+  longTerm.forEach(function(s, i){
+    var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
+    var ltS = s.scoreV2;
+    var sc = ltS==null?'var(--text4)':ltS>=75?'var(--green)':ltS>=60?'#f59e0b':'var(--red)';
+    var bg = i%2===0?'var(--bg)':'var(--bg2)';
+    var r = _miroFishResults[s.sym];
+    var btnLabel = '🐟 Run Sim';
+    var btnDisabled = false;
+    if(r && r.status==='running'){ btnLabel='⏳ Running…'; btnDisabled=true; }
+    else if(r && r.status==='done'){ btnLabel='↻ Re-run'; }
+    else if(r && r.status==='error'){ btnLabel='↻ Retry'; }
+
+    h += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
+      + '<td style="padding:8px 10px;color:var(--text4)">'+(i+1)+'</td>'
+      + '<td style="padding:8px 10px">'
+      +   '<div style="font-weight:700">'+_esc(s.sym)+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+_esc(s.grp||'')+'</span></div>'
+      +   '<div style="font-size:9px;color:var(--text3)">'+_esc(s.sector||'')+'</div>'
+      + '</td>'
+      + '<td style="padding:8px 10px;text-align:center;font-weight:700;color:'+sc+'">'+(ltS!=null?(+ltS).toFixed(1):'-')+'</td>'
+      + '<td style="padding:8px 10px;text-align:center">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+      + '<td style="padding:8px 10px;text-align:center">'
+      +   '<button '+(btnDisabled?'disabled':'')+' onclick="_miroFishRun(\''+_esc(s.sym)+'\')" style="background:'+(btnDisabled?'var(--bg3)':'#22d3ee22')+';color:#22d3ee;border:1px solid #22d3ee66;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:'+(btnDisabled?'not-allowed':'pointer')+'">'+btnLabel+'</button>'
+      +   (r ? ' <button onclick="_miroFishToggle(\''+_esc(s.sym)+'\')" style="background:transparent;border:none;color:var(--text3);cursor:pointer;font-size:11px">'+(_miroFishExpanded[s.sym]?'▾':'▸')+'</button>' : '')
+      + '</td>'
+      + '</tr>';
+    if(r && _miroFishExpanded[s.sym]){
+      h += '<tr style="background:var(--bg3)"><td colspan="5" style="padding:10px 14px">'+_miroFishResultPanel(s.sym)+'</td></tr>';
+    }
+  });
+  h += '</tbody></table></div>';
+
+  h += '<div style="margin-top:14px;font-size:11px;color:var(--text4);line-height:1.55">This is a read-only experiment: nothing written back to any other tab, no database persistence, nothing cached between sessions. Results live in a single in-memory object and are cleared on a hard refresh.</div>';
+
+  h += '</div>';
+  cont.innerHTML = h;
 }
 
 function renderArchitecturePage(){

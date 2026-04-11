@@ -14112,6 +14112,121 @@ app.post('/api/mirofish/mf-predict', express.json(), (req, res) => {
   }
 });
 
+// ── MiroFish Lab proxy ──────────────────────────────────────────────────────
+// Proxies a single-stock prediction request to the REAL MiroFish service
+// (https://github.com/666ghj/MiroFish). This is NOT the in-process MF
+// compounder above — it is a thin HTTP proxy to a self-hosted MiroFish
+// instance. Configuration via env vars:
+//   MIROFISH_BASE_URL   (required) e.g. http://localhost:5001 or deployed URL
+//   MIROFISH_API_PATH   (optional) defaults to /api/predict
+//   MIROFISH_API_KEY    (optional) bearer token, passed as Authorization header
+//   MIROFISH_TIMEOUT_MS (optional) defaults to 120000 (agent sims are slow)
+//
+// The endpoint is intentionally forgiving about the exact response shape —
+// the MiroFish README does not document a stable API, so we pass through
+// whatever JSON the service returns and let the client render known fields
+// (summary / personas[] / distribution) plus a raw-JSON fallback.
+app.post('/api/mirofish-lab/simulate', express.json(), async (req, res) => {
+  try {
+    const { symbol, seed } = req.body || {};
+    if (!symbol) return res.status(400).json({ ok:false, error:'missing symbol' });
+
+    const base = (process.env.MIROFISH_BASE_URL || '').replace(/\/+$/, '');
+    if (!base) {
+      return res.status(503).json({
+        ok: false,
+        error: 'MiroFish service not configured',
+        hint: 'Set MIROFISH_BASE_URL on the server (e.g. http://localhost:5001 or your deployed MiroFish URL). The real MiroFish lives at https://github.com/666ghj/MiroFish and needs Python 3.11+, an LLM API key, and Zep Cloud credentials to run.'
+      });
+    }
+
+    const path = process.env.MIROFISH_API_PATH || '/api/predict';
+    const url = base + (path.startsWith('/') ? path : '/' + path);
+    const timeoutMs = parseInt(process.env.MIROFISH_TIMEOUT_MS || '120000', 10);
+
+    // Build a natural-language prediction request + seed block. MiroFish is
+    // trained to accept "seed materials + prediction prompt" per its README.
+    const predictionPrompt =
+      `You are a 56-agent crowd-reaction simulator. The user is considering ${symbol} ` +
+      `(${(seed && seed.name) || symbol}, ${(seed && seed.sector) || 'unknown sector'}) ` +
+      `as a 12-month long-term investment. Simulate how 56 diverse retail and institutional ` +
+      `investor personas would react to this pick given the financial snapshot below, and ` +
+      `return their individual verdicts (BUY / HOLD / SELL / EXIT), the aggregate distribution, ` +
+      `and a short summary of consensus vs dissent. Use the provided fundamentals as ground truth.`;
+
+    const payload = {
+      symbol,
+      seed: seed || {},
+      prompt: predictionPrompt,
+      // Some MiroFish forks use these alternate field names — send both so the
+      // proxy works regardless of which build the user is running.
+      seed_materials: seed || {},
+      query: predictionPrompt,
+      agent_count: 56
+    };
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.MIROFISH_API_KEY) {
+      headers['Authorization'] = 'Bearer ' + process.env.MIROFISH_API_KEY;
+    }
+
+    // Node 18+ has global fetch + AbortController.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let upstream;
+    try {
+      upstream = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: ctrl.signal
+      });
+    } catch (netErr) {
+      clearTimeout(timer);
+      const isAbort = netErr && netErr.name === 'AbortError';
+      return res.status(504).json({
+        ok: false,
+        error: isAbort ? ('MiroFish timed out after ' + timeoutMs + 'ms') : ('MiroFish network error: ' + (netErr.message || 'unknown')),
+        hint: 'Check that MIROFISH_BASE_URL points at a reachable MiroFish instance. Try curl $MIROFISH_BASE_URL' + path + ' to confirm.'
+      });
+    }
+    clearTimeout(timer);
+
+    let body = null;
+    const ct = upstream.headers.get('content-type') || '';
+    try {
+      body = ct.indexOf('application/json') >= 0 ? await upstream.json() : { raw: await upstream.text() };
+    } catch (e) {
+      body = { raw: '(unparseable response)' };
+    }
+
+    if (!upstream.ok) {
+      return res.status(502).json({
+        ok: false,
+        error: 'MiroFish returned HTTP ' + upstream.status,
+        hint: 'The MiroFish endpoint ' + path + ' exists but errored. Check the MiroFish logs or set MIROFISH_API_PATH to the correct route for your build.',
+        upstream_status: upstream.status,
+        upstream_body: body
+      });
+    }
+
+    // Pass-through: the client will try to render summary / personas / distribution
+    // and fall back to a raw JSON dump for anything else.
+    return res.json({
+      ok: true,
+      symbol,
+      fetched_at: new Date().toISOString(),
+      summary: body && (body.summary || body.report || body.prediction) || null,
+      personas: body && (body.personas || body.agents || body.results) || null,
+      distribution: body && (body.distribution || body.tally || body.consensus) || null,
+      raw: body
+    });
+  } catch (e) {
+    console.error('MiroFish Lab proxy error:', e.message);
+    res.status(500).json({ ok:false, error: e.message });
+  }
+});
+
 // Test: run bulk query filtered to ONE stock to verify Apify + field mapping
 app.get('/api/screener/test/:sym', async (req, res) => {
   const sym = req.params.sym.toUpperCase();
