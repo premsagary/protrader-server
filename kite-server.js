@@ -677,7 +677,34 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_reviews_category ON mf_ai_reviews(category)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_reviews_category_fund ON mf_ai_reviews(category, fund_name)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews tables included)");
+    // ── MF AI RANKINGS ──
+    // Each row is ONE (category, model_id, rank) placement from either a
+    // council model (model_id = 'groq-llama' / 'gpt-41' / ...) or the judge
+    // (model_id = 'ai-judge'). Primary key is (category, model_id, rank) so
+    // re-running the review cleanly UPSERTs the whole ordered set. The
+    // judge rows additionally populate why_choose / why_not / confidence /
+    // council_ranking_divergence — council rows only populate reason.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mf_ai_rankings (
+        id                          SERIAL PRIMARY KEY,
+        category                    VARCHAR(20) NOT NULL,
+        model_id                    VARCHAR(40) NOT NULL,
+        model_name                  VARCHAR(80),
+        rank                        INTEGER NOT NULL,
+        fund_name                   VARCHAR(200) NOT NULL,
+        reason                      TEXT,      -- council rows only
+        why_choose                  TEXT,      -- judge rows only
+        why_not                     TEXT,      -- judge rows only
+        confidence                  INTEGER,   -- judge rows only
+        council_ranking_divergence  TEXT,      -- judge rows only
+        reviewed_at                 TIMESTAMP DEFAULT NOW(),
+        UNIQUE(category, model_id, rank)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_rankings_category ON mf_ai_rankings(category)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_rankings_cat_model ON mf_ai_rankings(category, model_id)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -16911,7 +16938,14 @@ function buildConsensus(modelResults, allowedSymbols) {
 // holdings_ai_reviews table with model_id='ai-judge', so the existing upsert
 // and GET paths work unchanged; the UI then special-cases that row as the
 // "Final Synthesis" card in the expanded panel.
-async function runAIJudge(endpoint, originalUserPrompt, modelResults, allowedSymbols) {
+async function runAIJudge(endpoint, originalUserPrompt, modelResults, allowedSymbols, options = {}) {
+  // options.includeRanking — when true, the judge is also required to emit a
+  // `final_ranking` array with (rank, sym, why_choose, why_not, confidence),
+  // and the council transcript includes each council model's per-model
+  // ranking. Used by MF Deep Review where an ordered top-N decision is the
+  // primary output. Stocks/Picks/Holdings leave this off.
+  const includeRanking = !!options.includeRanking;
+  const rankingAssetLabel = options.rankingLabel || 'items';
   if (!ANTHROPIC_API_KEY) {
     return { skipped: true, reason: 'no-anthropic-key' };
   }
@@ -16940,17 +16974,35 @@ async function runAIJudge(endpoint, originalUserPrompt, modelResults, allowedSym
       if (r.recommendation) transcriptLines.push(`    recommendation: ${r.recommendation}`);
       if (r.risk_flag) transcriptLines.push(`    risk_flag: ${r.risk_flag}`);
     });
+    // Per-model ordered ranking (only when includeRanking is on and the
+    // council model actually returned one)
+    if (includeRanking && Array.isArray(m.result?.ranking) && m.result.ranking.length) {
+      transcriptLines.push(`  RANKING BY ${m.id}:`);
+      m.result.ranking.forEach(r => {
+        transcriptLines.push(`    #${r.rank || '?'}  ${r.sym || '?'}  — ${r.reason || ''}`);
+      });
+    }
     transcriptLines.push('');
   });
   const councilTranscript = transcriptLines.join('\n');
 
-  const judgeSystemPrompt = `You are the JUDGE — a final-stage synthesiser sitting above a council of five AI stock analysts. The council has already reviewed the stocks using both a Zerodha Varsity lens and a pure first-principles lens. Your job is NOT to re-run their analysis; your job is to:
-1. Read the original stock data and the council's per-model opinions.
+  const judgeSystemPrompt = `You are the JUDGE — a final-stage synthesiser sitting above a council of five AI ${includeRanking ? 'mutual-fund' : 'stock'} analysts. The council has already reviewed the ${includeRanking ? 'funds' : 'stocks'} using both a Zerodha Varsity lens and a pure first-principles lens. Your job is NOT to re-run their analysis; your job is to:
+1. Read the original ${includeRanking ? 'fund' : 'stock'} data and the council's per-model opinions.
 2. Identify where the council agrees (strong conviction) and where it disagrees (low conviction).
 3. Fact-check any claim that looks weak against the underlying data.
-4. Produce ONE final verdict per stock that represents your independent judgment, informed by — but not bound to — the council's majority.
+4. Produce ONE final verdict per ${includeRanking ? 'fund' : 'stock'} that represents your independent judgment, informed by — but not bound to — the council's majority.${includeRanking ? '\n5. Produce a FINAL ORDERED RANKING (1..N) of the funds, reconciling where the 5 council rankings agreed and where they disagreed, using the raw datapoints as the tie-breaker. For every fund explain WHY you would choose it at that rank AND WHY someone might NOT choose it (the honest downside).' : ''}
 
 You speak in short, decisive language. You are allowed to overrule a council majority if the data supports it. Cite the council by model id (e.g. "deepseek flagged D/E stress I agree with") when relevant.`;
+
+  const rankingBlock = includeRanking ? `
+
+3) "final_ranking" — exactly ${symCount} elements, each rank 1..${symCount} used exactly once. This is YOUR final ordered decision, synthesising the 5 council rankings + the raw datapoints. Each element:
+  - rank: integer 1..${symCount}
+  - sym: the full ${rankingAssetLabel} name exactly as given
+  - why_choose: 1-2 sentences, concrete — why this ${rankingAssetLabel.replace(/s$/,'')} deserves this rank. Reference specific numbers (Sortino, rolling 3Y, expense, capture, AUM, drawdown etc.) AND cite which council model(s) agreed/disagreed with this placement.
+  - why_not: 1 sentence — the honest downside or caveat. What would make someone skip this ${rankingAssetLabel.replace(/s$/,'')} even at this rank? (If rank=1, why might someone still not buy it? If rank=N, why is it still on the top-${symCount}?) NEVER leave this empty.
+  - confidence: 0-100 — how strongly you hold this placement
+  - council_ranking_divergence: short string — e.g. "all 5 agreed", "3 council ranked it #2", "overruled council-majority #1" — describes how your placement relates to the council's rankings` : '';
 
   const judgeUserPrompt = `${originalUserPrompt}
 
@@ -16962,19 +17014,21 @@ ${councilTranscript}
 ════════════════════════════════════════
 JUDGE TASK:
 ════════════════════════════════════════
-For EACH of the ${symCount} symbols in [${symList}], produce a final synthesised verdict. You must return EXACTLY ${symCount} entries in signal_reviews.
+For EACH of the ${symCount} symbols in [${symList}], produce a final synthesised verdict. You must return EXACTLY ${symCount} entries in signal_reviews.${includeRanking ? ' You MUST ALSO produce a "final_ranking" array with your independent ordered ranking.' : ''}
 
-Respond in JSON with a "signal_reviews" array. Each element has:
-  - sym: the stock symbol
+Respond in JSON with ${includeRanking ? 'a "signal_reviews" array, a "final_ranking" array' : 'a "signal_reviews" array'}.
+
+1) "signal_reviews" — exactly ${symCount} elements. Each:
+  - sym: the ${includeRanking ? 'full fund name' : 'stock symbol'}
   - verdict: your FINAL call, one of "BUY_CONFIRM" / "HOLD" / "MODIFY" / "EXIT"
   - confidence: 0-100 (your conviction, NOT the council's)
   - varsity_reasoning: 1-2 sentence synthesis from the Varsity lens, noting any council disagreement
   - pure_reasoning: 1-2 sentence synthesis from the pure lens, noting any council disagreement
   - recommendation: concrete action sentence
   - risk_flag: short red-flag tag or empty string
-  - council_agreement: one of "UNANIMOUS" / "MAJORITY" / "SPLIT" / "OVERRULED" — describes how your call relates to the council (OVERRULED means you disagreed with the council majority)
+  - council_agreement: one of "UNANIMOUS" / "MAJORITY" / "SPLIT" / "OVERRULED" — describes how your call relates to the council (OVERRULED means you disagreed with the council majority)${rankingBlock}
 
-FINAL CHECK: exactly ${symCount} entries. Each must have both varsity_reasoning and pure_reasoning.`;
+FINAL CHECK: signal_reviews has exactly ${symCount} entries${includeRanking ? `, final_ranking has exactly ${symCount} entries with each rank 1..${symCount} used exactly once, every why_choose AND why_not populated` : ''}. Each signal_review must have both varsity_reasoning and pure_reasoning.`;
 
   const judgeStart = Date.now();
   const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt, endpoint + '_judge')
@@ -18887,7 +18941,7 @@ app.get('/api/picks/ai-review', async (req, res) => {
 // =============================================================================
 // MUTUAL FUND AI REVIEW (5 council + 1 judge) — Varsity Module 11 grounded
 // =============================================================================
-// Parallel to runPicksAIReview but scoped to the top 3 eligible funds per
+// Parallel to runPicksAIReview but scoped to the top 5 eligible funds per
 // category (smallcap / midcap / flexicap). Sends EVERY MF data point the
 // client has — identity, returns, vs-category, risk, portfolio, concentration,
 // the ProTrader score with full pillar hit breakdown, DNI flags, and the
@@ -19022,36 +19076,38 @@ What the user is asking from you: agree or disagree that these are VALID core "d
   return '';
 }
 
-// Pull top-3 eligible funds for a category from the live mfScoreCache.
+// Pull top-N eligible funds for a category from the live mfScoreCache.
 // Uses the SAME filter/sort the UI renders so the AI review sees exactly what
 // the user sees. Drops any DNI=red (Do Not Invest) funds — they should never
-// be AI-promoted.
-function _getTop3MFForCategory(category) {
+// be AI-promoted. Default N=5 (was 3 before 2026-04-11 — bumped so the
+// council has a meaningful re-ranking space, not just a 3-way which is often
+// trivial).
+function _getTopNMFForCategory(category, n = 5) {
   const src = Array.isArray(mfScoreCache) ? mfScoreCache : [];
   if (!src.length) return [];
   const filtered = src
     .filter(f => f.cat === category && f.eligible && !(f.dni && f.dni.level === 'red'))
     .sort((a, b) => (b.score || 0) - (a.score || 0));
-  return filtered.slice(0, 3);
+  return filtered.slice(0, n);
 }
 
 async function runMFAIReview(category) {
   const startTime = Date.now();
   const categoryLabels = {
-    smallcap: 'Small Cap MF Picks (top 3 by Varsity M11 score)',
-    midcap:   'Mid Cap MF Picks (top 3 by Varsity M11 score)',
-    flexicap: 'Flexi Cap MF Picks (top 3 by Varsity M11 score)',
+    smallcap: 'Small Cap MF Picks (top 5 by Varsity M11 score)',
+    midcap:   'Mid Cap MF Picks (top 5 by Varsity M11 score)',
+    flexicap: 'Flexi Cap MF Picks (top 5 by Varsity M11 score)',
   };
   const categoryFraming = {
-    smallcap: 'These are the top 3 Small Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM SIP/LUMPSUM allocation to the small-cap slice of an equity portfolio. For each fund answer: is this a valid long-horizon small-cap allocation? Is the rolling 3Y consistency real? Are capture ratios asymmetric? Is the AUM still in the sweet spot? Decide CONFIRM (invest), CAUTION (specific concern — size bloat / closet indexer / high expense / weak Sortino), or AVOID (better alternatives exist).',
-    midcap:   'These are the top 3 Mid Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM CORE ALLOCATION to the mid-cap slice. For each fund answer: is the risk-adjusted return (Sortino prioritised) compensating for mid-cap vol? Has the fund beaten its category in 3Y/5Y/10Y buckets consistently? Is the portfolio truly mid-cap (not drifting)? Decide CONFIRM, CAUTION, or AVOID.',
-    flexicap: 'These are the top 3 Flexi Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is CORE DO-IT-ALL EQUITY allocation. For each fund answer: is the manager actually using the flexi mandate or hiding in large-caps? Is alpha from skill or just beta? Are expense/rolling/capture ratios disciplined? Decide CONFIRM, CAUTION, or AVOID.',
+    smallcap: 'These are the top 5 Small Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM SIP/LUMPSUM allocation to the small-cap slice of an equity portfolio. For each fund answer: is this a valid long-horizon small-cap allocation? Is the rolling 3Y consistency real? Are capture ratios asymmetric? Is the AUM still in the sweet spot? Decide CONFIRM (invest), CAUTION (specific concern — size bloat / closet indexer / high expense / weak Sortino), or AVOID (better alternatives exist). Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst) — you are allowed to disagree with the quantitative score ordering if your analysis warrants it.',
+    midcap:   'These are the top 5 Mid Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is LONG-TERM CORE ALLOCATION to the mid-cap slice. For each fund answer: is the risk-adjusted return (Sortino prioritised) compensating for mid-cap vol? Has the fund beaten its category in 3Y/5Y/10Y buckets consistently? Is the portfolio truly mid-cap (not drifting)? Decide CONFIRM, CAUTION, or AVOID. Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst).',
+    flexicap: 'These are the top 5 Flexi Cap mutual funds by ProTrader\'s Varsity M11-aligned score. The thesis is CORE DO-IT-ALL EQUITY allocation. For each fund answer: is the manager actually using the flexi mandate or hiding in large-caps? Is alpha from skill or just beta? Are expense/rolling/capture ratios disciplined? Decide CONFIRM, CAUTION, or AVOID. Then PRODUCE YOUR OWN ORDERED RANKING of all 5 funds (1=best, 5=worst).',
   };
   const label = categoryLabels[category];
   if (!label) throw new Error('Invalid MF category: ' + category);
 
-  const top3 = _getTop3MFForCategory(category);
-  if (!top3.length) {
+  const topFunds = _getTopNMFForCategory(category, 5);
+  if (!topFunds.length) {
     const msg = (!Array.isArray(mfScoreCache) || !mfScoreCache.length)
       ? 'MF score cache not built yet — wait for startup buildMFCache() to complete, then retry.'
       : 'No eligible funds matched the filter for this category right now.';
@@ -19059,8 +19115,8 @@ async function runMFAIReview(category) {
   }
 
   // Use fund name as the "symbol" key for buildConsensus / persistence.
-  const fundNames = top3.map(f => f.name);
-  const fundBlocks = top3.map((f, i) => _buildFullMFBlock(f, category, i + 1)).join('\n\n');
+  const fundNames = topFunds.map(f => f.name);
+  const fundBlocks = topFunds.map((f, i) => _buildFullMFBlock(f, category, i + 1)).join('\n\n');
   const categoryContextBlock = _buildMFCategoryContextBlock(category);
 
   // Macro context — same feed as Picks but light-touch for MF horizon
@@ -19073,7 +19129,7 @@ async function runMFAIReview(category) {
     `Market Regime: ${marketRegime || 'NEUTRAL'}`,
   ].join('\n');
 
-  const pickCount = top3.length;
+  const pickCount = topFunds.length;
   const fundList = fundNames.join(' | ');
   const userPrompt = `⚠ TASK-SPECIFIC OVERRIDE — READ FIRST ⚠
 Ignore any earlier system instruction that mentions "15 stocks", "PORTFOLIO POSITIONS", "MODEL PORTFOLIO", or any STOCK-review schema. Those do NOT apply here. This is a MUTUAL FUND review.
@@ -19112,7 +19168,9 @@ For EACH of the ${pickCount} funds you must produce TWO independent opinions:
 
 The two opinions should be formed INDEPENDENTLY — agreement = strong conviction; disagreement should be called out explicitly.
 
-Respond in JSON with a "signal_reviews" array that contains EXACTLY ${pickCount} elements, one per fund in order. Each element has:
+Respond in JSON with BOTH a "signal_reviews" array AND a "ranking" array.
+
+1) "signal_reviews" — exactly ${pickCount} elements, one per fund IN THE ORDER GIVEN ABOVE (not your own ranking). Each element has:
   - sym: the FULL FUND NAME exactly as given above
   - verdict: one of "BUY_CONFIRM" (confirm the pick), "HOLD" (neutral), "MODIFY" (caution — size smaller / wait), "EXIT" (avoid / better alternatives). This is your CONSENSUS verdict.
   - confidence: 0-100
@@ -19124,7 +19182,12 @@ Respond in JSON with a "signal_reviews" array that contains EXACTLY ${pickCount}
   - recommendation: a concrete action sentence
   - risk_flag: short red-flag tag if any (e.g. "SIZE_BLOAT", "CLOSET_INDEXER", "WEAK_SORTINO", "HIGH_EXPENSE", "MANAGER_RISK", "CATEGORY_DRIFT"), or empty string
 
-FINAL CHECK: Your signal_reviews array must be exactly ${pickCount}, and each "sym" must match a fund name in [${fundList}]. Both varsity_reasoning and pure_reasoning must be populated.`;
+2) "ranking" — exactly ${pickCount} elements. THIS IS YOUR INDEPENDENT RE-RANKING of the funds (1=best, ${pickCount}=worst). You ARE ALLOWED AND ENCOURAGED to disagree with the score order above if your dual-lens analysis warrants it. Each element has:
+  - rank: integer 1..${pickCount} (unique, no ties)
+  - sym: the FULL FUND NAME exactly as given above
+  - reason: 1 concise sentence explaining why this fund is at this rank position (reference specific datapoints: rolling 3Y, Sortino, expense, capture, AUM, drawdown, etc.)
+
+FINAL CHECK: signal_reviews length = ${pickCount}, ranking length = ${pickCount}, every sym matches a fund name in [${fundList}], ranking uses each rank 1..${pickCount} exactly once, both varsity_reasoning and pure_reasoning populated for every review.`;
 
   // Fan out to the 5 council models in parallel. Endpoint tag 'mf_<cat>' so
   // per-endpoint budget caps apply separately to each MF category.
@@ -19141,16 +19204,20 @@ FINAL CHECK: Your signal_reviews array must be exactly ${pickCount}, and each "s
       console.error(`  ⚠ MF(${category}) council model ${m.name} (${m.id}): JSON parse error — raw_response head: ${(m.result.raw_response || '').slice(0, 150)}`);
     } else {
       const cnt = m.result?.signal_reviews?.length || 0;
-      console.log(`  ✓ MF(${category}) council model ${m.name} (${m.id}): ${cnt}/${top3.length} funds reviewed`);
+      console.log(`  ✓ MF(${category}) council model ${m.name} (${m.id}): ${cnt}/${topFunds.length} funds reviewed`);
     }
   });
 
   const consensus = buildConsensus(modelResults, fundNames);
 
-  // ── 6th AI: THE JUDGE ── same synthesis step used for Picks / Holdings.
-  const judge = await runAIJudge('mf_' + category, userPrompt, modelResults, fundNames)
+  // ── 6th AI: THE JUDGE ── same synthesis step used for Picks / Holdings,
+  // PLUS a required final_ranking array for MF (see runAIJudge options).
+  const judge = await runAIJudge('mf_' + category, userPrompt, modelResults, fundNames,
+    { includeRanking: true, rankingLabel: 'mutual funds' })
     .catch(err => ({ error: err.message || 'judge-error', skipped: true }));
   const judgeReviews = (judge && !judge.error && !judge.skipped && judge.result?.signal_reviews) || [];
+  const judgeFinalRanking = (judge && !judge.error && !judge.skipped && Array.isArray(judge.result?.final_ranking))
+    ? judge.result.final_ranking : [];
   const judgeBySym = {};
   judgeReviews.forEach(jr => { if (jr && jr.sym) judgeBySym[(jr.sym || '').toUpperCase()] = jr; });
   (consensus.signal_reviews || []).forEach(rev => {
@@ -19222,6 +19289,69 @@ FINAL CHECK: Your signal_reviews array must be exactly ${pickCount}, and each "s
     console.log(`✓ MF [${category}] AI reviews persisted: ${_mDbOk} rows upserted`);
   }
 
+  // ── Persist rankings ──
+  // Wipe this category's previous ranking rows in one statement so a re-run
+  // doesn't leave orphaned ranks behind (e.g. if the top-5 set changed).
+  // Then upsert one row per council ranking element + one row per judge
+  // final_ranking element. Guard each row individually so a single bad
+  // element can't abort the whole ranking persist.
+  try { await pool.query(`DELETE FROM mf_ai_rankings WHERE category = $1`, [category]); }
+  catch (e) { console.error(`⚠ MF [${category}] ranking DELETE failed: ${e.message}`); }
+  let _rDbOk = 0, _rDbFail = 0;
+  const _upsertRanking = async (modelId, modelName, rank, fundName, fields) => {
+    try {
+      await pool.query(
+        `INSERT INTO mf_ai_rankings
+           (category, model_id, model_name, rank, fund_name, reason, why_choose, why_not, confidence, council_ranking_divergence, reviewed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+         ON CONFLICT (category, model_id, rank) DO UPDATE SET
+           model_name=$3, fund_name=$5, reason=$6, why_choose=$7, why_not=$8,
+           confidence=$9, council_ranking_divergence=$10, reviewed_at=NOW()`,
+        [category, modelId, modelName, rank, fundName,
+         fields.reason || null, fields.why_choose || null, fields.why_not || null,
+         fields.confidence != null ? fields.confidence : null,
+         fields.council_ranking_divergence || null]
+      );
+      _rDbOk++;
+    } catch (e) {
+      _rDbFail++;
+      console.error(`⚠ MF ranking upsert failed ${category}/${modelId}/#${rank}: ${e.message}`);
+    }
+  };
+  // Council rankings
+  for (const m of modelResults) {
+    if (m.error || m.skipped || !Array.isArray(m.result?.ranking)) continue;
+    for (const r of m.result.ranking) {
+      const rank = parseInt(r.rank, 10);
+      if (!Number.isFinite(rank) || rank < 1 || rank > fundNames.length) continue;
+      const name = String(r.sym || '').slice(0, 200);
+      if (!name) continue;
+      await _upsertRanking(m.id, m.name, rank, name, { reason: r.reason || '' });
+    }
+  }
+  // Judge final_ranking
+  if (Array.isArray(judgeFinalRanking) && judgeFinalRanking.length) {
+    for (const r of judgeFinalRanking) {
+      const rank = parseInt(r.rank, 10);
+      if (!Number.isFinite(rank) || rank < 1 || rank > fundNames.length) continue;
+      const name = String(r.sym || '').slice(0, 200);
+      if (!name) continue;
+      await _upsertRanking('ai-judge', AI_JUDGE_MODEL.name, rank, name, {
+        why_choose: r.why_choose || '',
+        why_not: r.why_not || '',
+        confidence: (r.confidence != null ? parseInt(r.confidence, 10) : null),
+        council_ranking_divergence: r.council_ranking_divergence || '',
+      });
+    }
+  }
+  if (_rDbFail > 0) {
+    console.error(`⚠ MF [${category}] rankings persisted with errors: ${_rDbOk} ok, ${_rDbFail} failed`);
+  } else if (_rDbOk > 0) {
+    console.log(`✓ MF [${category}] rankings persisted: ${_rDbOk} rows upserted (${judgeFinalRanking.length} judge + ${_rDbOk - judgeFinalRanking.length} council)`);
+  } else {
+    console.warn(`⚠ MF [${category}] no rankings produced (council may not have returned ranking arrays, judge may have skipped final_ranking)`);
+  }
+
   const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
   const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
   console.log(`🤖 MF AI review [${category}]: ${okCount}/${AI_MODELS.length} council + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} funds reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
@@ -19282,27 +19412,55 @@ app.post('/api/mf/ai-review', async (req, res) => {
   }
 });
 
-// GET /api/mf/ai-review?category=... — read cached reviews from mf_ai_reviews.
-// Returns { category, reviews: { FUND_NAME: [ {model_id, verdict, ...}, ... ] } }.
+// GET /api/mf/ai-review?category=... — read cached reviews from mf_ai_reviews
+// AND cached rankings from mf_ai_rankings in parallel. Returns:
+//   {
+//     category,
+//     reviews:  { FUND_NAME: [ {model_id, verdict, ...}, ... ] },
+//     rankings: { [model_id]: [ {rank, fund_name, reason|why_choose|why_not, confidence}, ... ] },
+//     judge_ranking: [ {rank, fund_name, why_choose, why_not, confidence, council_ranking_divergence}, ... ]
+//   }
+// The judge_ranking is a convenience copy of rankings['ai-judge'] sorted by
+// rank — it's what the frontend's AI summary panel renders as the primary
+// "final decision" view.
 app.get('/api/mf/ai-review', async (req, res) => {
   try {
     const category = (req.query.category || '').toLowerCase();
     if (!['smallcap', 'midcap', 'flexicap'].includes(category)) {
       return res.status(400).json({ error: 'category must be smallcap, midcap, or flexicap' });
     }
-    const rows = (await pool.query(
-      `SELECT fund_name, model_id, model_name, verdict, confidence, varsity_module,
-              varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict,
-              recommendation, risk_flag, reviewed_at
-         FROM mf_ai_reviews WHERE category=$1 ORDER BY fund_name, model_id`,
-      [category]
-    )).rows;
+    const [reviewRowsResp, rankingRowsResp] = await Promise.all([
+      pool.query(
+        `SELECT fund_name, model_id, model_name, verdict, confidence, varsity_module,
+                varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict,
+                recommendation, risk_flag, reviewed_at
+           FROM mf_ai_reviews WHERE category=$1 ORDER BY fund_name, model_id`,
+        [category]
+      ),
+      pool.query(
+        `SELECT model_id, model_name, rank, fund_name, reason, why_choose, why_not,
+                confidence, council_ranking_divergence, reviewed_at
+           FROM mf_ai_rankings WHERE category=$1 ORDER BY model_id, rank`,
+        [category]
+      ),
+    ]);
     const byFund = {};
-    rows.forEach(r => {
+    reviewRowsResp.rows.forEach(r => {
       if (!byFund[r.fund_name]) byFund[r.fund_name] = [];
       byFund[r.fund_name].push(r);
     });
-    res.json({ category, reviews: byFund });
+    const rankingsByModel = {};
+    rankingRowsResp.rows.forEach(r => {
+      if (!rankingsByModel[r.model_id]) rankingsByModel[r.model_id] = [];
+      rankingsByModel[r.model_id].push(r);
+    });
+    const judgeRanking = (rankingsByModel['ai-judge'] || []).slice().sort((a, b) => a.rank - b.rank);
+    res.json({
+      category,
+      reviews: byFund,
+      rankings: rankingsByModel,
+      judge_ranking: judgeRanking,
+    });
   } catch (e) {
     console.error('GET /api/mf/ai-review error:', e.message);
     res.status(500).json({ error: e.message });
