@@ -4553,11 +4553,15 @@ function renderStockRecPage(){
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:flex-start">';
 
   // ----- LEFT COLUMN: REBOUND PICKS (quality-on-sale) -----
+  // Header layout: vertically stacked — title → description → (button + count)
+  // row. This guarantees all three picks columns look identical regardless of
+  // how long the description is (old flex-wrap:wrap approach would leave the
+  // button inline next to the title if the description was short enough).
   html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
-  html += '<div><div style="font-weight:800;font-size:14px;color:#f59e0b">🔥 Rebound Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2 — ranked by Rebound Score</div></div>';
-  html += '<div style="display:flex;align-items:center;gap:6px">';
+  html += '<div style="margin-bottom:10px">';
+  html += '<div style="font-weight:800;font-size:14px;color:#f59e0b">🔥 Rebound Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2 — ranked by Rebound Score</div>';
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('rebound');
   html += '<span style="background:rgba(245,158,11,.12);color:#f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+swingPicks.length+'</span>';
   html += '</div>';
@@ -4604,11 +4608,13 @@ function renderStockRecPage(){
   html += '</div>'; // end rebound-picks column
 
   // ----- MIDDLE COLUMN: MOMENTUM PICKS (5-factor composite, Buy+ tier) -----
+  // Same vertically stacked header layout as Rebound Picks (title → desc →
+  // button+count row) — identical to all three picks columns.
   html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
-  html += '<div><div style="font-weight:800;font-size:14px;color:#10b981">📈 Momentum Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%, ranked by Momentum Score</div></div>';
-  html += '<div style="display:flex;align-items:center;gap:6px">';
+  html += '<div style="margin-bottom:10px">';
+  html += '<div style="font-weight:800;font-size:14px;color:#10b981">📈 Momentum Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%, ranked by Momentum Score</div>';
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('momentum');
   html += '<span style="background:rgba(16,185,129,.12);color:#10b981;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+momentumPicks.length+'</span>';
   html += '</div>';
@@ -4651,11 +4657,12 @@ function renderStockRecPage(){
   html += '</div>'; // end momentum-picks column
 
   // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
+  // Same vertically stacked header layout as the other two picks columns.
   html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
-  html += '<div><div style="font-weight:800;font-size:14px;color:#22d3ee">🏛 Long-Term Investments <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth · Not down >35% — ranked by Investment Score</div></div>';
-  html += '<div style="display:flex;align-items:center;gap:6px">';
+  html += '<div style="margin-bottom:10px">';
+  html += '<div style="font-weight:800;font-size:14px;color:#22d3ee">🏛 Long-Term Investments <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth · Not down >35% — ranked by Investment Score</div>';
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('longterm');
   html += '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+longTermPicks.length+'</span>';
   html += '</div>';
