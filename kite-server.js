@@ -16571,14 +16571,21 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
         },
         body: JSON.stringify({
           model: modelDef.model,
-          // max_tokens default lowered from 16000 → 4000. OpenRouter reserves
-          // WORST-CASE cost upfront (input_tokens × in_rate + max_tokens ×
-          // out_rate), so a high max_tokens on expensive models can 402 even
-          // when real responses are 1-2K tokens. 4K comfortably fits single-
-          // stock and most multi-stock dual-opinion JSON; bump via env var
-          // if you ever see truncation on 10+ holdings reviews without a
-          // redeploy. Env: OR_MAX_TOKENS.
-          max_tokens: parseInt(process.env.OR_MAX_TOKENS || '4000', 10),
+          // max_tokens: OpenRouter reserves WORST-CASE cost upfront
+          // (input_tokens × in_rate + max_tokens × out_rate), so a huge
+          // max_tokens on expensive models can 402 when credits are tight.
+          // Current settings (credits topped up 2026-04-11):
+          //   - Council models: 8000 (bumped from 4000 after DeepSeek V3
+          //     returned truncated "Unexpected end of JSON input" on the
+          //     28-stock Rebound Picks review).
+          //   - Judge (Claude Sonnet 4.6): 16000 (bumped from 4000 after
+          //     the judge parse_error'd on the 155-stock Long-Term
+          //     Investments review — 4000 was truncating dual-opinion JSON
+          //     mid-stock).
+          // Override without redeploy via OR_MAX_TOKENS / OR_JUDGE_MAX_TOKENS.
+          max_tokens: (modelDef.id === 'ai-judge')
+            ? parseInt(process.env.OR_JUDGE_MAX_TOKENS || '16000', 10)
+            : parseInt(process.env.OR_MAX_TOKENS       || '8000',  10),
           temperature: 0.3,
           messages: [
             { role: 'system', content: systemPrompt },
