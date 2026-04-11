@@ -12940,7 +12940,7 @@ app.get('/api/test/snapshot-count', async (req, res) => {
 app.get('/api/test/llm-budget', (req, res) => {
   if (!_v2TestGate(req, res)) return;
   const endpoint = String(req.query.endpoint || 'default');
-  const modelId = String(req.query.modelId || 'gpt-nano');
+  const modelId = String(req.query.modelId || 'gemini-flash');
   const today = _llmTodayISO();
   const key = `${today}|${endpoint}|${modelId}`;
   res.json({
@@ -12956,7 +12956,7 @@ app.get('/api/test/llm-budget', (req, res) => {
 app.post('/api/test/llm-budget/force-cap', (req, res) => {
   if (!_v2TestGate(req, res)) return;
   const endpoint = String(req.query.endpoint || 'default');
-  const modelId = String(req.query.modelId || 'gpt-nano');
+  const modelId = String(req.query.modelId || 'gemini-flash');
   const today = _llmTodayISO();
   if (_llmCostMemDate !== today) {
     for (const k in _llmCostMem) delete _llmCostMem[k];
@@ -12980,9 +12980,11 @@ app.post('/api/test/llm-call', async (req, res) => {
   try {
     const endpoint = String(req.query.endpoint || 'default');
     // Use the cheapest model in the registry so a forgotten test doesn't burn
-    // budget even if it somehow slips past the force-cap.
+    // budget even if it somehow slips past the force-cap. In the OpenRouter
+    // lineup that's Gemini 2.5 Flash (~$0.09 / 60 calls) — falls back to the
+    // first entry if the ID ever drifts.
     const model = (typeof AI_MODELS !== 'undefined' && AI_MODELS.length)
-      ? (AI_MODELS.find(m => m.id === 'gpt-nano') || AI_MODELS[0])
+      ? (AI_MODELS.find(m => m.id === 'gemini-flash') || AI_MODELS[0])
       : { id: 'dummy', name: 'dummy', provider: 'none' };
     const result = await callAIModel(model, 'test', 'test', endpoint);
     res.json({ ok: true, endpoint, result });
@@ -13165,7 +13167,9 @@ app.get('/api/health/stockrec', async (req, res) => {
 // Calling this at use time guarantees the registry is initialised.
 function _getFAModel() {
   if (typeof AI_MODELS === 'undefined' || !AI_MODELS.length) return null;
-  return AI_MODELS.find(m => m.id === 'gpt-nano') || AI_MODELS[0];
+  // Cheapest council model in the current OpenRouter lineup (Gemini 2.5 Flash
+  // at ~$0.09 per 60 calls). Falls back to the first entry if the ID drifts.
+  return AI_MODELS.find(m => m.id === 'gemini-flash') || AI_MODELS[0];
 }
 const FA_CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
 const FA_HOURLY_CAP = 3;
@@ -16379,42 +16383,69 @@ start();
 // Runs once daily at 3:00PM IST + manual /api/ai/validate endpoint
 // =============================================================================
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || '';
+// All LLM traffic is now unified behind a single OpenRouter account. One key,
+// one billing surface, one provider branch in callAIModel() — this replaces
+// the six per-provider keys we used to juggle (Anthropic, OpenAI, Google,
+// DeepSeek, Groq, Mistral). Legacy env vars are still read so an operator can
+// pin a specific model to a direct-provider fallback later, but every entry
+// in AI_MODELS + AI_JUDGE_MODEL below defaults to provider: 'openrouter'.
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY  || '';
+const OPENAI_API_KEY     = process.env.OPENAI_API_KEY     || '';
+const GOOGLE_AI_API_KEY  = process.env.GOOGLE_AI_API_KEY  || '';
+const DEEPSEEK_API_KEY   = process.env.DEEPSEEK_API_KEY   || '';
+const GROQ_API_KEY       = process.env.GROQ_API_KEY       || '';
+const MISTRAL_API_KEY    = process.env.MISTRAL_API_KEY    || '';
 
-// ── AI MODEL DEFINITIONS (5 cheap models — ~$2/month at 1x/day) ──
+// ── AI COUNCIL (5 models, all routed through OpenRouter) ──
+// Six distinct provider labs, zero overlap, selected for maximum reasoning
+// diversity on dense FA+TA financial blocks. Approx cost per 60 calls at the
+// 8K-in / 3K-out envelope this app sends:
+//   Groq Llama 3.3 70B  — $0.43   (Meta open-weights voice)
+//   GPT-4.1             — $2.40   (OpenAI flagship, strong non-reasoning)
+//   DeepSeek V3         — $0.12   (Chinese lab #1, excellent numerical)
+//   Gemini 2.5 Flash    — $0.09   (Google long-context)
+//   Qwen 3 Max          — $1.92   (Chinese lab #2, Alibaba flagship)
+// Total council ≈ $4.96 / 60 calls. Each model slug is env-overridable so
+// OpenRouter naming shifts or provider preferences can be tuned from Railway
+// without a redeploy.
 const AI_MODELS = [
-  { id: 'groq-llama', name: 'Groq Llama 3.3 70B', provider: 'groq', model: 'llama-3.3-70b-versatile' },
-  { id: 'gpt-nano', name: 'GPT-4.1-nano', provider: 'openai', model: 'gpt-4.1-nano' },
-  { id: 'deepseek', name: 'DeepSeek V3', provider: 'deepseek', model: 'deepseek-chat' },
-  { id: 'claude-haiku', name: 'Claude Haiku 4.5', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
+  { id: 'groq-llama',  name: 'Groq Llama 3.3 70B', provider: 'openrouter', model: process.env.OR_MODEL_LLAMA    || 'meta-llama/llama-3.3-70b-instruct' },
+  { id: 'gpt-41',      name: 'GPT-4.1',            provider: 'openrouter', model: process.env.OR_MODEL_GPT41    || 'openai/gpt-4.1' },
+  { id: 'deepseek',    name: 'DeepSeek V3',        provider: 'openrouter', model: process.env.OR_MODEL_DEEPSEEK || 'deepseek/deepseek-chat' },
+  { id: 'gemini-flash',name: 'Gemini 2.5 Flash',   provider: 'openrouter', model: process.env.OR_MODEL_GEMINI   || 'google/gemini-2.5-flash' },
+  { id: 'qwen-max',    name: 'Qwen 3 Max',         provider: 'openrouter', model: process.env.OR_MODEL_QWEN     || 'qwen/qwen3-max' },
 ];
 
 // ── 6th AI: THE JUDGE ──
 // The five models above are the "council" — fast/cheap per-model opinions.
-// The judge is a separate, deliberately-expensive frontier model that sees
-// all five council outputs and synthesises one final verdict per stock. It
-// runs ONCE per review (not per stock × model), so the cost premium is
-// bounded. Uses model_id='ai-judge' when persisted so the UI can special-
-// case it as the "Final Synthesis" row next to the council cards.
-// Override with AI_JUDGE_MODEL env var; defaults to Claude Opus 4.6.
+// The judge is a separate, more-capable frontier model that sees all five
+// council outputs and synthesises one final verdict per stock. It runs ONCE
+// per review (not per stock × model), so the cost premium is bounded. Uses
+// model_id='ai-judge' when persisted so the UI can special-case it as the
+// "Final Synthesis" row next to the council cards.
+//
+// Primary judge: Claude Sonnet 4.6 via OpenRouter. 95% of Opus quality at
+// ~20% of the cost (≈ $4.14 / 60 calls at this app's token envelope), same
+// rock-solid JSON output, ~6s latency. Fast, careful with hedged financial
+// language, and isolated from the council so there's no correlation with
+// any council voice. Override the model slug with AI_JUDGE_MODEL.
 const AI_JUDGE_MODEL = {
   id: 'ai-judge',
-  name: 'Claude Opus 4.6 (Judge)',
-  provider: 'anthropic',
-  model: process.env.AI_JUDGE_MODEL || 'claude-opus-4-6',
+  name: 'Claude Sonnet 4.6 (Judge)',
+  provider: 'openrouter',
+  model: process.env.AI_JUDGE_MODEL || 'anthropic/claude-sonnet-4.6',
 };
 
 // One-shot startup visibility: show which AI provider keys are actually loaded
 // so Railway deploys surface misconfiguration immediately instead of failing
-// silently mid-review. Only logs presence, not the key itself.
+// silently mid-review. Only logs presence, not the key itself. OpenRouter is
+// the only key the default lineup actually needs — the legacy direct-provider
+// keys are shown for parity so an operator can see what's available as a
+// fallback.
 (function _logAIKeyPresence() {
   const flags = {
+    openrouter: !!OPENROUTER_API_KEY,
     anthropic:  !!ANTHROPIC_API_KEY,
     openai:     !!OPENAI_API_KEY,
     google:     !!GOOGLE_AI_API_KEY,
@@ -16425,8 +16456,11 @@ const AI_JUDGE_MODEL = {
   const have = Object.entries(flags).filter(([, v]) => v).map(([k]) => k);
   const miss = Object.entries(flags).filter(([, v]) => !v).map(([k]) => k);
   console.log(`🔑 AI keys present: [${have.join(', ') || 'NONE'}]${miss.length ? '  missing: [' + miss.join(', ') + ']' : ''}`);
-  console.log(`🤖 Council models: ${AI_MODELS.map(m => `${m.name}(${m.provider})`).join(', ')}`);
-  console.log(`⚖ Judge model: ${AI_JUDGE_MODEL.name} → ${AI_JUDGE_MODEL.model}`);
+  console.log(`🤖 Council models: ${AI_MODELS.map(m => `${m.name}(${m.provider}:${m.model})`).join(', ')}`);
+  console.log(`⚖ Judge model: ${AI_JUDGE_MODEL.name} → ${AI_JUDGE_MODEL.provider}:${AI_JUDGE_MODEL.model}`);
+  if (!OPENROUTER_API_KEY) {
+    console.warn('⚠ OPENROUTER_API_KEY is missing — every council + judge call will be skipped until the key is set on Railway.');
+  }
 })();
 
 // =============================================================================
@@ -16518,8 +16552,44 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
     let raw = '';
     let tokens = { input: 0, output: 0 };
 
-    // ── Provider: Anthropic (requires max_tokens) ──
-    if (modelDef.provider === 'anthropic') {
+    // ── Provider: OpenRouter (unified gateway, OpenAI-compatible) ──
+    // This is the default route for every model in AI_MODELS + AI_JUDGE_MODEL.
+    // One API key, one billing surface, one branch. The request shape is
+    // OpenAI chat/completions — OpenRouter normalises it across Anthropic,
+    // Google, DeepSeek, Qwen, Meta, etc. transparently. HTTP-Referer and
+    // X-Title are recommended by OpenRouter for attribution and rate-limit
+    // isolation; they are not required.
+    if (modelDef.provider === 'openrouter') {
+      if (!OPENROUTER_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No OpenRouter API key', skipped: true };
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://protrader-server.up.railway.app',
+          'X-Title': 'ProTrader Deep AI Review',
+        },
+        body: JSON.stringify({
+          model: modelDef.model,
+          // max_tokens bumped for the same reason as OpenAI/Mistral: multi-
+          // stock dual-opinion JSON truncates well under 4K. 16K comfortably
+          // fits 10+ holdings × dual opinion without silently dropping rows.
+          max_tokens: 16000,
+          temperature: 0.3,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user',   content: userPrompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (!resp.ok) throw new Error(`OpenRouter ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      raw = data.choices?.[0]?.message?.content || '';
+      tokens = { input: data.usage?.prompt_tokens || 0, output: data.usage?.completion_tokens || 0 };
+
+    // ── Provider: Anthropic (direct, legacy fallback — requires max_tokens) ──
+    } else if (modelDef.provider === 'anthropic') {
       if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       // Anthropic's TPM rate limit (30K input tokens/minute on lower tiers)
       // is the #1 reason the judge fails — running Claude Haiku 4.5 on the

@@ -3668,7 +3668,7 @@ function buildUI(d){
   html+='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">';
   html+='<div>';
   html+='<div style="font-weight:700;font-size:13px;color:#8b5cf6">🤖 AI Second Opinion</div>';
-  html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">5-model AI council (Varsity + Pure lenses) → ⚖ Claude Opus 4.6 judge → final BUY/HOLD/ACCUMULATE/AVOID verdict with score</div>';
+  html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">5-model AI council (Varsity + Pure lenses) → ⚖ Claude Sonnet 4.6 judge → final BUY/HOLD/ACCUMULATE/AVOID verdict with score</div>';
   html+='</div>';
   html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px">';
   html+='<span>🚀 Run AI Review</span></button></div>';
@@ -4197,7 +4197,7 @@ function buildAIReviewUI(d) {
   // Individual model cards — each now shows BOTH verdicts (Varsity / Pure)
   h += '<div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:6px;letter-spacing:.03em">🧠 PER-MODEL DUAL OPINIONS</div>';
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  var mn = {'groq-llama':'Groq Llama','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek','claude-haiku':'Claude Haiku','mistral':'Mistral'};
+  var mn = {'groq-llama':'Groq Llama','gpt-41':'GPT-4.1','deepseek':'DeepSeek V3','gemini-flash':'Gemini Flash','qwen-max':'Qwen Max'};
   (d.models || []).forEach(function(m) {
     var sn = mn[m.id] || m.name || m.id;
     if (m.error || m.skipped) {
@@ -4586,7 +4586,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + _srHdr('swing','sym',        'Stock', 'left')
       + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
-      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Sonnet 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('swing','fallenScore','REBOUND<br/>SCORE','center','Rebound Score — quality-on-sale ranking for pullback entries (ROE/D-E/margin 40 + Depth of Fall 15 + Oversold 20 + Valuation 12 + Recovery Signals 13)')
       + _srHdr('swing','price',      'Price','center')
       + '</tr></thead><tbody>';
@@ -4636,7 +4636,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + _srHdr('mom','sym',       'Stock', 'left')
       + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
-      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Sonnet 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('mom','composite', 'MOMENTUM<br/>SCORE','center','Momentum Score — 5-factor composite (FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%) used by Portfolio Manager → Momentum Picks to pick and allocate stocks. Same number on every tab.')
       + _srHdr('mom','price',     'Price','center')
       + '</tr></thead><tbody>';
@@ -4684,7 +4684,7 @@ function renderStockRecPage(){
     html += '<thead><tr style="background:var(--bg3)">'
       + _srHdr('long','sym',        'Stock', 'left')
       + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
-      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Sonnet 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
       + _srHdr('long','scoreV2',    'INVESTMENT<br/>SCORE','center','Varsity 4-pillar Investment Score — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only (TA lives in the timing overlay).')
       + _srHdr('long','price',      'Price','center')
       + '</tr></thead><tbody>';
@@ -4763,14 +4763,16 @@ var _picksCouncilStatus    = {};
 
 // The 5 fixed council models (mirrors AI_MODELS on the server, IDs only).
 // Used when showing the "Running…" state before the response comes back.
+// All routed via OpenRouter — provider label here is the *origin lab* so the
+// UI can still show a meaningful "voice" tag, not the underlying gateway.
 var _COUNCIL_MODELS = [
-  { id: 'groq-llama',   name: 'Groq Llama 3.3 70B', provider: 'groq' },
-  { id: 'gpt-nano',     name: 'GPT-4.1-nano',       provider: 'openai' },
+  { id: 'groq-llama',   name: 'Groq Llama 3.3 70B', provider: 'meta' },
+  { id: 'gpt-41',       name: 'GPT-4.1',            provider: 'openai' },
   { id: 'deepseek',     name: 'DeepSeek V3',        provider: 'deepseek' },
-  { id: 'claude-haiku', name: 'Claude Haiku 4.5',   provider: 'anthropic' },
-  { id: 'mistral',      name: 'Mistral Small',      provider: 'mistral' },
+  { id: 'gemini-flash', name: 'Gemini 2.5 Flash',   provider: 'google' },
+  { id: 'qwen-max',     name: 'Qwen 3 Max',         provider: 'alibaba' },
 ];
-var _JUDGE_MODEL = { id: 'ai-judge', name: 'Claude Opus 4.6 (Judge)', provider: 'anthropic' };
+var _JUDGE_MODEL = { id: 'ai-judge', name: 'Claude Sonnet 4.6 (Judge)', provider: 'anthropic' };
 
 // Maps a status enum from the server to a {label, color, icon} tuple.
 function _councilStatusStyle(status, running) {
@@ -4911,7 +4913,7 @@ function _picksAIReviewsCell(category, sym, rowIdx) {
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -4938,7 +4940,7 @@ function _picksJudgeCell(category, sym, rowIdx) {
   var jl = jv==='AGREE'?'✓ BUY':jv==='CAUTION'?'⚠ HOLD':jv==='DISAGREE'?'✗ AVOID':'— N/A';
   var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
   var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
-  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
+  h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
   if (conf!=null){
     h += '<div style="font-size:8px;color:var(--text4);font-weight:600">'+conf+'%</div>';
   }
@@ -5010,7 +5012,7 @@ function _picksAIExpandedPanel(category, sym) {
     h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
     h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
     h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
-    h += '<span style="color:var(--text4);font-size:9px">· '+(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:var(--text4);font-size:9px">· '+(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
     h += '</div>';
@@ -5162,7 +5164,7 @@ function _mfAIReviewsCell(category, fundName, topRank) {
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -5186,7 +5188,7 @@ function _mfJudgeCell(category, fundName, topRank) {
   var jl = jv==='AGREE'?'✓ BUY':jv==='CAUTION'?'⚠ HOLD':jv==='DISAGREE'?'✗ AVOID':'— N/A';
   var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
   var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:2px">';
-  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
+  h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap">'+jl+'</span>';
   if (conf!=null){
     h += '<div style="font-size:8px;color:var(--text4);font-weight:600">'+conf+'%</div>';
   }
@@ -5249,7 +5251,7 @@ function _mfAIExpandedPanel(category, fundName) {
     h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
     h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
     h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
-    h += '<span style="color:var(--text4);font-size:9px">· '+_escHtml(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:var(--text4);font-size:9px">· '+_escHtml(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
     h += '</div>';
@@ -6753,7 +6755,7 @@ function _holdingsRenderAIReviewsCell(h0){
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -6774,7 +6776,7 @@ function _holdingsRenderJudgeCell(h0){
   var jl = jv==='AGREE'?'✓ HOLD':jv==='CAUTION'?'⚠ CAUTION':jv==='DISAGREE'?'✗ EXIT':'— N/A';
   var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
   var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:3px">';
-  h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">'+jl+'</span>';
+  h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(135deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">'+jl+'</span>';
   if (conf!=null){
     h += '<div style="font-size:9px;color:var(--text4);font-weight:600">'+conf+'% conf</div>';
   }
@@ -6842,7 +6844,7 @@ function _holdingsAIExpandedPanel(h0){
     h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:8px;padding:12px 14px">';
     h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
     h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:12px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
-    h += '<span style="color:var(--text4);font-size:10px">· '+(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:var(--text4);font-size:10px">· '+(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:13px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:10px;color:var(--text3)">'+judge.confidence+'%</span>';
     h += '</div>';
@@ -7305,7 +7307,7 @@ function psRenderLongTermResults(d){
       var ltPmKeys=Object.keys(ltPm);
       var _ltAiAgree=0,_ltAiDisagree=0,_ltAiModify=0,_ltAiTotal=ltPmKeys.length;
       var _ltAiAgreeNames=[],_ltAiModifyNames=[],_ltAiDisagreeNames=[],_ltAiSkipNames=[];
-      var _ltMn={'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','mistral':'Mistral'};
+      var _ltMn={'groq-llama':'Groq','gpt-41':'GPT-4.1','deepseek':'DeepSeek','gemini-flash':'Gemini','qwen-max':'Qwen'};
       ltPmKeys.forEach(function(mid){
         var v=ltPm[mid].verdict;var sn=_ltMn[mid]||mid;
         if(v==='AGREE'){_ltAiAgree++;_ltAiAgreeNames.push(sn);}
@@ -7356,7 +7358,7 @@ function psRenderLongTermResults(d){
       var ltAiR2=_ltAIStockReview;
       var ltPm2=ltAiR2.per_model||ltAiR2.models||{};
       var ltPmKeys2=Object.keys(ltPm2);
-      var _ltMn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
+      var _ltMn2={'groq-llama':'Groq Llama 3.3 70B','gpt-41':'GPT-4.1','deepseek':'DeepSeek V3','gemini-flash':'Gemini 2.5 Flash','qwen-max':'Qwen 3 Max'};
       h+='<tr id="ai-row-lt-'+p.sym+'" style="display:none;background:var(--bg2)">';
       // colspan = 12 columns in the LT table (Stock/Bucket/ScoreV2/Alloc%/Shares/
       // Invested/Exp 12M/Risk/Value/Timing/AI Reviews/Track)
@@ -7561,7 +7563,7 @@ function psRenderModelResults(data){
       var pmKeys=Object.keys(pm);
       var _aiAgree=0,_aiDisagree=0,_aiModify=0,_aiTotal=pmKeys.length;
       var _aiAgreeNames=[],_aiModifyNames=[],_aiDisagreeNames=[],_aiSkipNames=[];
-      var _mn={'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','mistral':'Mistral'};
+      var _mn={'groq-llama':'Groq','gpt-41':'GPT-4.1','deepseek':'DeepSeek','gemini-flash':'Gemini','qwen-max':'Qwen'};
       pmKeys.forEach(function(mid){var v=pm[mid].verdict;var sn=_mn[mid]||mid;if(v==='AGREE'){_aiAgree++;_aiAgreeNames.push(sn);}else if(v==='DISAGREE'){_aiDisagree++;_aiDisagreeNames.push(sn);}else if(v==='MODIFY'){_aiModify++;_aiModifyNames.push(sn);}else{_aiSkipNames.push(sn);}});
       h+='<div style="font-size:8px;font-weight:700;line-height:1.6">';
       if(_aiAgree>0) h+='<div style="color:#22c55e">✅'+_aiAgree+' Agreed <span style="font-weight:500;opacity:0.8">('+_aiAgreeNames.join(', ')+')</span></div>';
@@ -7623,7 +7625,7 @@ function psRenderModelResults(data){
       var aiR2=_aiStockReview;
       var pm2=aiR2.per_model||aiR2.models||{};
       var pmKeys2=Object.keys(pm2);
-      var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek V3','claude-haiku':'Claude Haiku 4.5','mistral':'Mistral Small'};
+      var _mn2={'groq-llama':'Groq Llama 3.3 70B','gpt-41':'GPT-4.1','deepseek':'DeepSeek V3','gemini-flash':'Gemini 2.5 Flash','qwen-max':'Qwen 3 Max'};
       h+='<tr id="ai-row-'+stk.sym+'" style="display:none;background:var(--bg2)">';
       h+='<td colspan="13" style="padding:8px 12px;border-bottom:1px solid var(--border)">';
       h+='<div style="font-size:10px;font-weight:700;color:#22d3ee;margin-bottom:6px">🤖 AI Model Reviews for '+stk.sym+'</div>';
@@ -8804,12 +8806,12 @@ function renderArchitecturePage(){
     +   '<text x="24" y="460" class="h">5 \u2022 DEEP AI REVIEW \u2014 5-model council + 6th AI judge</text>'
     // Council + judge
     +   '<g>'
-    +   '<rect x="24" y="470"  width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="36" y="490" class="t">Groq Llama 3.3 70B</text><text x="36" y="508" class="s">council \u2022 varsity + pure</text>'
-    +   '<rect x="204" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="216" y="490" class="t">GPT-4.1-nano</text><text x="216" y="508" class="s">council \u2022 varsity + pure</text>'
-    +   '<rect x="384" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="396" y="490" class="t">DeepSeek V3</text><text x="396" y="508" class="s">council \u2022 varsity + pure</text>'
-    +   '<rect x="564" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="576" y="490" class="t">Claude Haiku 4.5</text><text x="576" y="508" class="s">council \u2022 varsity + pure</text>'
-    +   '<rect x="744" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="756" y="490" class="t">Mistral Small</text><text x="756" y="508" class="s">council \u2022 varsity + pure</text>'
-    +   '<rect x="924" y="470" width="132" height="54" rx="8" fill="#0f172a" stroke="url(#judgeGrad)" stroke-width="2"/><text x="936" y="490" class="t">\u2696 AI JUDGE</text><text x="936" y="508" class="s">Claude Opus 4.6</text>'
+    +   '<rect x="24" y="470"  width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="36" y="490" class="t">Groq Llama 3.3 70B</text><text x="36" y="508" class="s">council \u2022 meta (open)</text>'
+    +   '<rect x="204" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="216" y="490" class="t">GPT-4.1</text><text x="216" y="508" class="s">council \u2022 openai</text>'
+    +   '<rect x="384" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="396" y="490" class="t">DeepSeek V3</text><text x="396" y="508" class="s">council \u2022 deepseek</text>'
+    +   '<rect x="564" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="576" y="490" class="t">Gemini 2.5 Flash</text><text x="576" y="508" class="s">council \u2022 google</text>'
+    +   '<rect x="744" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="756" y="490" class="t">Qwen 3 Max</text><text x="756" y="508" class="s">council \u2022 alibaba</text>'
+    +   '<rect x="924" y="470" width="132" height="54" rx="8" fill="#0f172a" stroke="url(#judgeGrad)" stroke-width="2"/><text x="936" y="490" class="t">\u2696 AI JUDGE</text><text x="936" y="508" class="s">Claude Sonnet 4.6</text>'
     +   '</g>'
     // Arrows council → judge
     +   '<g stroke="#a78bfa" stroke-width="1.1" fill="none" opacity="0.55" marker-end="url(#arr)">'
@@ -8865,12 +8867,12 @@ function renderArchitecturePage(){
     + _archPillar('Deep AI Review (top 3 per category)', '5 council + 1 judge', 'On top of the pure-quant ranking, each category exposes a "🧠 Deep AI Review" button that runs the top-3 eligible funds through the same 5-council + 1-judge pipeline used by Stock Picks. Sends EVERY MF data point (identity, AUM, expense, all return buckets, vs-category ratios, Sharpe/Sortino, drawdown, tracking error, portfolio + concentration, and the per-pillar hit breakdown so the AI can agree/disagree with the METHODOLOGY) plus a Varsity Module 11 category context block citing Ch16 (closet indexer), Ch19 (rolling returns), Ch20 (TER), Ch21 (benchmarking), Ch22-23 (Sharpe/Sortino/Capture), and Ch24 (4-stage fund analysis). Persisted in <code>mf_ai_reviews</code>, cached by category + fund_name + model_id.')
     + '<div style="margin-top:12px"><b>Style-drift penalties:</b> small-cap fund with &lt; 50% in small caps, mid-cap fund with > 27% in small caps, large-cap fund with > 15% in small caps, flexi cap concentrated > 72% in one segment — each is flagged as a mandate breach and penalised.</div>'
     + '<div style="margin-top:10px"><b>Credibility caps:</b> young-and-small funds cannot outrank established ones regardless of recent numbers. If AUM &lt; ₹5K Cr AND age &lt; 7Y AND raw score &gt; 70, the score is capped at 70. "No 5Y data" + age &lt; 7Y caps at 75.</div>'
-    + _archNote('The pure-quant <b>ranking</b> has zero LLM involvement — the cache rebuilds every 6 hours via cron and at server startup. The <b>Deep AI Review</b> layer above sits on top of that ranking as a separate call: click "🧠 Deep AI Review" on any MF category (Small / Mid / Flexi Cap) and the top-3 eligible funds are run through the same 5-model council + Claude Opus judge used by Stock Picks and Holdings. Council + judge rows are persisted per-(category, fund_name, model_id) in <code>mf_ai_reviews</code>, survive server restarts, and render as a verdict tally next to each fund in the top-3 area — identical UX to the Stock Picks REVIEWS column.')
+    + _archNote('The pure-quant <b>ranking</b> has zero LLM involvement — the cache rebuilds every 6 hours via cron and at server startup. The <b>Deep AI Review</b> layer above sits on top of that ranking as a separate call: click "🧠 Deep AI Review" on any MF category (Small / Mid / Flexi Cap) and the top-3 eligible funds are run through the same 5-model council + Claude Sonnet 4.6 judge used by Stock Picks and Holdings. Council + judge rows are persisted per-(category, fund_name, model_id) in <code>mf_ai_reviews</code>, survive server restarts, and render as a verdict tally next to each fund in the top-3 area — identical UX to the Stock Picks REVIEWS column.')
   );
 
   // ── DEEP STOCK ANALYZER ──
   h += _archCard('🧠', 'Deep Stock Analyzer — what data goes to AI',
-      'Lives in its own <b>🔍 Deep Stock Analyzer</b> top-level tab, right next to Stock Picks in the navbar — no longer embedded inside the Stock Picks page. Client entry point: <code>renderStockAnalyzerPage()</code> in index.html, which seeds the searchable NSE dropdown from <code>stockRecData</code> if present and always refreshes from <code>/api/universe/list</code> so the full universe is pickable even on a cold load. Server endpoint: <code>GET /api/stocks/analyze/:sym/ai</code> (kite-server.js ~line 14757). Fans out in parallel to 5 LLMs: Groq Llama 3.3 70B, GPT-4.1-nano, DeepSeek V3, Claude Haiku 4.5, Mistral Small. Each is told it has been trained on all 17 Varsity modules and must return a strict JSON verdict.',
+      'Lives in its own <b>🔍 Deep Stock Analyzer</b> top-level tab, right next to Stock Picks in the navbar — no longer embedded inside the Stock Picks page. Client entry point: <code>renderStockAnalyzerPage()</code> in index.html, which seeds the searchable NSE dropdown from <code>stockRecData</code> if present and always refreshes from <code>/api/universe/list</code> so the full universe is pickable even on a cold load. Server endpoint: <code>GET /api/stocks/analyze/:sym/ai</code> (kite-server.js ~line 14757). Fans out in parallel to 5 LLMs via OpenRouter: Groq Llama 3.3 70B, GPT-4.1, DeepSeek V3, Gemini 2.5 Flash, Qwen 3 Max. Each is told it has been trained on all 17 Varsity modules and must return a strict JSON verdict.',
       '<div style="margin-bottom:10px">The user prompt is literally the stock\'s entire feature row — every fundamental, every TA indicator, every ownership figure, every price level — assembled into labelled sections. Sections sent (only non-null fields included):</div>'
     + _archPillar('Valuation (M3, M13)', '12 fields', 'P/E, P/B, PEG, EV/EBITDA, P/Sales, P/FCF, Earnings Yield, Industry P/E, Dividend Yield, Graham Number, Book Value, % from 52W high.')
     + _archPillar('Profitability (M3)', '11 fields', 'ROE, ROA, ROCE, ROIC, CROIC, Operating Margin, EPS, ROE 3Y avg, ROE 5Y avg, ROCE 3Y avg, ROCE 5Y avg.')
@@ -8947,7 +8949,7 @@ function renderArchitecturePage(){
     + '<div style="margin-bottom:8px"><b>Step 5 — allocation weights.</b> Base = Momentum Score, then multipliers: Strong Buy ×1.5, Buy ×1.2, inverse-volatility scaling, beta &gt; 1.3 ×0.85 / beta &gt; 1.6 ×0.75, Rebound Pick + acceptable R:R ×1.15, Sharpe &gt; 1 ×1.10 / Sharpe &lt; 0 ×0.85, multi-signal trend (Ichimoku + Weekly + Dow all bullish) ×1.12. Clamped to 3%–20% per stock and iteratively rebalanced.</div>'
     + '<div style="margin:12px 0 8px 0"><b>The MOMENTUM SCORE column</b> shows <code>composite</code> — the actual number that picked the stock and drives its allocation. The list is sorted by <code>composite</code> desc so the highest-conviction momentum setups rank first.</div>'
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">AI validation payload — <code>validateSignalsWithAI()</code></div>'
-    + '<div>Triggered by clicking "🧠 AI Deep Review" in the Momentum Picks portfolio. Fans out to the same 5 LLMs in parallel (Groq Llama, GPT-nano, DeepSeek, Claude Haiku, Mistral), using the <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt. For each stock in the portfolio the prompt includes:</div>'
+    + '<div>Triggered by clicking "🧠 AI Deep Review" in the Momentum Picks portfolio. Fans out to the same 5 LLMs in parallel via OpenRouter (Groq Llama, GPT-4.1, DeepSeek V3, Gemini 2.5 Flash, Qwen 3 Max), using the <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt. For each stock in the portfolio the prompt includes:</div>'
     + _archPillar('Scoring breakdown', 'sent', 'Momentum Score (composite) + FA/TA/Mom/Val/Risk sub-scores, conviction tier, check-count, Rebound Pick flag + rebound verdict.')
     + _archPillar('Fundamentals block', 'sent', 'ROE, ROCE, D/E, P/E, PEG, operating margin, EPS growth, revenue growth, promoter, pledged, market cap, earnings yield, dividend yield, interest coverage, current/quick ratio, DuPont decomposition.')
     + _archPillar('Technical block', 'sent', 'RSI, MACD state, golden cross, OBV, % above 200DMA, % from high, beta, annual vol, volume ratio, ADX + DI, bullish/bearish divergence.')
@@ -9009,24 +9011,24 @@ function renderArchitecturePage(){
 
   // ── DEEP AI REVIEW — DUAL OPINION + JUDGE ──
   h += _archCard('🧠', 'Deep AI Review — 5-model council + 6th AI judge, dual opinion per stock/fund',
-      'Stock Picks columns (Rebound / Momentum / Long-Term), the Holdings tab, and the Mutual Fund Recommendations tab (top 3 per category: small-cap / mid-cap / flexi-cap) all share the same Deep AI Review engine. The server fans out to a COUNCIL of 5 fast/cheap models in parallel, then runs a 6th expensive JUDGE (Claude Opus 4.6 by default) that synthesises all 5 council outputs into one final verdict per stock. Every model — council and judge — produces TWO opinions per stock: one WITH Varsity knowledge (Zerodha Varsity modules cited) and one WITHOUT (pure first-principles financial analysis). The UI shows the council tally in the REVIEWS column and a separate judge badge, with an expand toggle that reveals all council cards (each showing both lenses) plus a distinct full-width judge synthesis card.',
+      'Stock Picks columns (Rebound / Momentum / Long-Term), the Holdings tab, and the Mutual Fund Recommendations tab (top 3 per category: small-cap / mid-cap / flexi-cap) all share the same Deep AI Review engine. The server fans out to a COUNCIL of 5 fast/cheap models in parallel, then runs a 6th expensive JUDGE (Claude Sonnet 4.6 by default) that synthesises all 5 council outputs into one final verdict per stock. Every model — council and judge — produces TWO opinions per stock: one WITH Varsity knowledge (Zerodha Varsity modules cited) and one WITHOUT (pure first-principles financial analysis). The UI shows the council tally in the REVIEWS column and a separate judge badge, with an expand toggle that reveals all council cards (each showing both lenses) plus a distinct full-width judge synthesis card.',
       '<div style="margin-bottom:10px"><b>What the AI sees per stock (100+ data fields):</b></div>'
     + _archPillar('Shared builders', '_buildFullStockBlock / _buildFullMFBlock', 'Stocks (Holdings + Picks) use <code>_buildFullStockBlock</code>; MF uses a parallel <code>_buildFullMFBlock</code> that serialises the full MF field set — identity + AMC governance, AUM + cost + min SIP, short-term returns + CAGR + rolling 3Y, vs-category 1Y/3Y/5Y/10Y ratios, Sharpe + Sortino + volatility + max drawdown + tracking error, portfolio PE + allocation split + top-3/5/10 concentration, plus the ProTrader score with a per-pillar hit breakdown (Roll3Y/Sharpe/Sortino/VsCat/MDD/Expense/…/AMC) so the AI can agree or disagree with the METHODOLOGY. Merges raw <code>stockFundamentals</code> + <code>FUND_EXT</code> + the scored row from <code>_lastScoredV2</code> and emits the full field set organised by section: IDENTITY, PRICE + 52W + DMA + RETURNS, VALUATION, PROFITABILITY, DUPONT, GROWTH, QUARTERLY, BALANCE SHEET, CASH FLOW, OWNERSHIP, RSI, MACD, TREND, VOLUME, S/R + FIB + PIVOTS, RISK, SCORES (ReboundScore + MomentumScore + InvestmentScoreV2 + sub-scores + bucket + expected return), FLAGS. Missing values emit "?" explicitly so the model knows "unknown" vs zero.')
     + _archPillar('WHY-WE-PICKED lead line', 'per stock', 'For Stock Picks, the first line under each stock header names the exact rule that qualified it for the category: "WHY WE PICKED #3 MOMENTUM — MomentumScore=72/100 (≥55 required, our 5-factor composite)…". For Holdings, a HOLDING lead line emits quantity + avg buy + invested + current + P&L instead. This tells the AI what to agree or disagree with.')
     + _archPillar('Category definitions + criteria', '_buildCategoryContextBlock / _buildMFCategoryContextBlock', 'Sent ONCE per review (not per stock/fund). Stocks: a full block that defines Momentum / Rebound / Long-Term, names the hard gates, and explains the scoring formula. MF: an equivalent block citing the Varsity M11 chapters (Ch16/19/20/21/22-23/24), the eligibility gates (AUM ≥ ₹1K Cr, age ≥ 5Y, expense < 2%), the per-pillar weight breakdown, and the AUM sweet-spot per sub-category. Without this the AI does not know what ProTrader means by "small-cap pick" vs "flexi-cap pick" and cannot judge the methodology — only the fund in isolation.')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">Council fan-out (5 fast models, parallel)</div>'
-    + _archPillar('AI_MODELS', '5 models', 'Groq Llama 3.3 70B · GPT-4.1-nano · DeepSeek V3 · Claude Haiku 4.5 · Mistral Small. Same fan-out pattern as <code>validateSignalsWithAI</code>, using the shared <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt and per-endpoint <code>LLM_DAILY_CAP</code> budget.')
+    + _archPillar('AI_MODELS', '5 models · all OpenRouter', 'Groq Llama 3.3 70B (Meta open-weights) · GPT-4.1 (OpenAI) · DeepSeek V3 (Chinese lab) · Gemini 2.5 Flash (Google) · Qwen 3 Max (Alibaba). <b>Six distinct provider labs, zero overlap</b> — maximum reasoning diversity on dense FA+TA blocks. Every council call is routed through a single <code>OPENROUTER_API_KEY</code> so the billing surface and rate-limit pool are unified. Same fan-out pattern as <code>validateSignalsWithAI</code>, using the shared <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt and per-endpoint <code>LLM_DAILY_CAP</code> budget. Model slugs are env-overridable (<code>OR_MODEL_LLAMA</code>, <code>OR_MODEL_GPT41</code>, <code>OR_MODEL_DEEPSEEK</code>, <code>OR_MODEL_GEMINI</code>, <code>OR_MODEL_QWEN</code>) so OpenRouter naming shifts can be tuned from Railway without a redeploy.')
     + _archPillar('Dual opinion per stock', 'varsity_* + pure_*', 'User prompt instructs each model to form TWO independent opinions: (1) VARSITY OPINION — cite Zerodha Varsity modules M1-M17; (2) PURE OPINION — first-principles financial analysis with NO Varsity citations. If the two agree = strong conviction, if they disagree the user sees the disagreement explicitly. JSON schema: <code>verdict</code> (consensus) + <code>varsity_verdict</code> + <code>varsity_reasoning</code> + <code>varsity_module</code> + <code>pure_verdict</code> + <code>pure_reasoning</code> + <code>recommendation</code> + <code>risk_flag</code>.')
     + _archPillar('Consensus', 'buildConsensus', 'Per-stock majority vote across the 5 council models. Picks best reasoning from the highest-confidence model for each lens separately (so the top Varsity quote and the top Pure quote can come from different council members). Fills in NO_REVIEW for models that did not return a row for a given stock.')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">6th AI: THE JUDGE</div>'
-    + _archPillar('AI_JUDGE_MODEL', 'Claude Opus 4.6', '<code>runAIJudge</code> runs AFTER the council. Sees the original stock data blocks + a transcript of every council model\'s per-stock verdict and dual reasoning, and is instructed to synthesise ONE final verdict per stock. Can overrule the council majority when the data supports it. Env override: <code>AI_JUDGE_MODEL</code>. Non-fatal: if the judge errors/skips, the council consensus still stands.')
+    + _archPillar('AI_JUDGE_MODEL', 'Claude Sonnet 4.6 · OpenRouter', '<code>runAIJudge</code> runs AFTER the council. Sees the original stock data blocks + a transcript of every council model\'s per-stock verdict and dual reasoning, and is instructed to synthesise ONE final verdict per stock. Can overrule the council majority when the data supports it. Routed through OpenRouter as <code>anthropic/claude-sonnet-4.6</code> — chosen for 95% of Opus-quality reasoning at ~20% of the cost, rock-solid JSON output, and ~6s latency. Anthropic is isolated to the judge seat (no Claude on council) so there is zero correlation between judge and any council voice. Env override: <code>AI_JUDGE_MODEL</code>. Non-fatal: if the judge errors/skips, the council consensus still stands.')
     + _archPillar('Judge output', 'per_model[\'ai-judge\']', 'Persisted as a row in the same <code>holdings_ai_reviews</code> / <code>picks_ai_reviews</code> table with <code>model_id = \'ai-judge\'</code>, so the existing upsert + GET paths work unchanged. UI special-cases this row as the "AI JUDGE · FINAL DECISION" card at the bottom of the expanded panel. Judge fields: <code>judge_verdict</code>, <code>judge_confidence</code>, <code>judge_varsity_reasoning</code>, <code>judge_pure_reasoning</code>, <code>judge_council_agreement</code> (UNANIMOUS / MAJORITY / SPLIT / OVERRULED).')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">DB schema</div>'
     + _archPillar('holdings_ai_reviews + picks_ai_reviews + mf_ai_reviews', 'dual opinion + judge', 'Columns: verdict (consensus) + confidence + varsity_module + varsity_reasoning + <b>varsity_verdict</b> + <b>pure_reasoning</b> + <b>pure_verdict</b> + recommendation + risk_flag. Added via ALTER TABLE IF NOT EXISTS so existing deployments migrate cleanly. The judge occupies a row with model_id=\'ai-judge\' next to the 5 council rows. Key is (user/category, symbol) for Holdings/Picks, and (category, fund_name) for MF (VARCHAR(200) since scheme names can be long). Re-running the review overwrites rows for just that scope.')
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">UI</div>'
     + _archPillar('REVIEWS column tally', 'per row', 'Council vote tally in the format "2 AI ✓ Agree / 2 AI ✗ Disagree / 1 AI ⚠ Caution" — only the 5 council models count here. Below the council tally, a separate JUDGE badge with gradient border shows the 6th AI\'s final call. Clicking ▸ expands the full detail panel.')
     + _archPillar('Expanded panel', 'council grid + judge card', 'Council grid: 5 cards, each with the model name + consensus verdict and TWO reasoning blocks — 📘 WITH VARSITY KNOWLEDGE (cyan) and 🧠 PURE FINANCIAL (purple). Below the grid a full-width gradient Judge card shows the synthesis with the same two lenses, the judge recommendation, risk flag, and council-agreement tag. Holdings reuses <code>_holdingsAIExpandedPanel</code>; Picks uses <code>_picksAIExpandedPanel</code> — same visual shape.')
-    + _archNote('Re-running Deep AI Review for a category/user overwrites rows for just that scope — other scopes stay cached. Judge calls are capped by the per-endpoint LLM budget under the <code>*_judge</code> tag (e.g. <code>holdings_judge</code>, <code>picks_rebound_judge</code>), so a runaway loop cannot burn more than the daily Opus quota.')
+    + _archNote('Re-running Deep AI Review for a category/user overwrites rows for just that scope — other scopes stay cached. Judge calls are capped by the per-endpoint LLM budget under the <code>*_judge</code> tag (e.g. <code>holdings_judge</code>, <code>picks_rebound_judge</code>), so a runaway loop cannot burn more than the daily Sonnet quota. Total cost envelope at this app\'s 8K-in / 3K-out per-call profile is approximately <b>$9.10 per 60 stocks</b> (council $4.96 + judge $4.14), down from ~$22.57 on the previous Opus-judge lineup.')
   );
 
   // ── CONFUSION CLARIFIER ──
