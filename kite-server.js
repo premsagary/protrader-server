@@ -14901,20 +14901,27 @@ app.get('/api/stocks/analyze/:sym/ai', async (req, res) => {
     const liveQuote = livePrices[sym] || {};
     const mktCap = _v(sf.mktCap, ext.mktCap);
 
-    // System prompt tailored for single-stock deep analysis
-    const singleStockSystemPrompt = `You are an expert Indian stock market analyst deeply trained on ALL 17 modules of Zerodha Varsity.
-Your task: Perform a comprehensive BUY/HOLD/AVOID analysis of a SINGLE stock.
+    // System prompt tailored for single-stock deep analysis — DUAL OPINION
+    // (Varsity-grounded + pure first-principles), matching the Holdings/Picks pattern.
+    const singleStockSystemPrompt = `You are an expert Indian stock market analyst. Your task: perform a TWO-LENS analysis of a SINGLE stock and return BOTH verdicts.
 
-KEY VARSITY PRINCIPLES TO APPLY:
-- Module 3 (FA): ROE>15% = quality. D/E<1 = safe. EPS growth = wealth engine. PEG<1 = value. Operating margin stability.
-- Module 2 (TA): Price vs 200DMA = long-term health. Golden Cross = bullish. RSI<30 = oversold. MACD alignment. Volume confirms price.
-- Module 9 (Risk): ATR-based stops. Position sizing. Beta assessment. Drawdown limits.
-- Module 13 (Valuation): PE vs sector. Intrinsic value. Margin of safety 20-30%.
+LENS 1 — VARSITY LENS (grounded in Zerodha Varsity's 17 modules):
+- M3 (FA): ROE>15% = quality. D/E<1 = safe. EPS growth = wealth engine. PEG<1 = value. Operating margin stability.
+- M2 (TA): Price vs 200DMA = long-term health. Golden Cross = bullish. RSI<30 = oversold. MACD alignment. Volume confirms price.
+- M9 (Risk): ATR-based stops. Position sizing. Beta assessment. Drawdown limits.
+- M13 (Valuation): PE vs sector. Intrinsic value. Margin of safety 20-30%.
+
+LENS 2 — PURE FIRST-PRINCIPLES LENS:
+- Forget the Varsity rulebook. Reason from the actual data: moat durability, unit economics, capital allocation, reinvestment rate, sector cyclicality, reflexivity of price, asymmetry of risk/reward.
+- You may disagree with the Varsity lens if the data warrants it — that disagreement is VALUABLE information.
 
 RESPOND ONLY IN THIS EXACT JSON FORMAT:
 {
   "sym": "SYMBOL",
-  "verdict": "BUY" | "HOLD" | "ACCUMULATE" | "AVOID" | "SELL",
+  "varsity_verdict": "BUY" | "ACCUMULATE" | "HOLD" | "AVOID" | "SELL",
+  "pure_verdict":    "BUY" | "ACCUMULATE" | "HOLD" | "AVOID" | "SELL",
+  "varsity_reasoning": "1-2 sentences citing specific Varsity module signals (ROE, D/E, 200DMA, RSI, etc.)",
+  "pure_reasoning":    "1-2 sentences from first principles — moat, unit economics, risk/reward asymmetry",
   "confidence": 0-100,
   "target_price": number_or_null,
   "stop_loss": number_or_null,
@@ -14922,11 +14929,13 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
   "bull_case": "Why this stock could go up — specific catalysts, data points",
   "bear_case": "What could go wrong — specific risks, red flags",
   "key_factors": [
-    {"factor": "Factor name", "assessment": "positive|negative|neutral", "detail": "Varsity-grounded explanation"}
+    {"factor": "Factor name", "assessment": "positive|negative|neutral", "detail": "short grounded explanation"}
   ],
   "varsity_modules_applied": ["M2: Technical Analysis", "M3: Fundamental Analysis", ...],
   "one_line_summary": "One clear sentence: should an investor buy this stock today and why/why not?"
-}`;
+}
+
+If your two lenses agree, say so briefly. If they disagree, make the disagreement explicit in the reasoning fields.`;
 
     // Build the user prompt with ALL available data (Varsity needs every field for proper analysis)
     const _f = (label, val, suffix='') => val != null && val !== '?' ? `${label}: ${val}${suffix}\n` : '';
@@ -15109,70 +15118,172 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT:
 
     dataPoints += `\nAnalyze this stock comprehensively using ALL Zerodha Varsity principles. Cross-reference fundamentals (M3), technicals (M2), risk (M9), valuation (M13), and sector context (M15). Be specific with numbers and data-driven reasoning. Respond ONLY in the JSON format specified.`;
 
-    // Call all AI models in parallel (direct API calls)
+    // Call all AI models in parallel (direct API calls) — tag endpoint for cost cap
     const modelResults = await Promise.allSettled(
-      AI_MODELS.map(m => callAIModel(m, singleStockSystemPrompt, dataPoints))
+      AI_MODELS.map(m => callAIModel(m, singleStockSystemPrompt, dataPoints, 'single_stock'))
     );
 
-    const results = modelResults.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason?.message || 'Failed' });
+    const results = modelResults.map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      const src = AI_MODELS[i] || {};
+      return { id: src.id, name: src.name, provider: src.provider, error: r.reason?.message || 'Failed' };
+    });
 
-    // Parse and aggregate
+    // Visible per-model outcome logging (matches Holdings/Picks pattern).
+    results.forEach(m => {
+      if (m.error || m.skipped) {
+        console.error(`  ❌ SingleStock ${sym} ${m.name} (${m.id}): ${m.error || 'skipped'}`);
+      } else if (m.result?.parse_error) {
+        console.error(`  ⚠ SingleStock ${sym} ${m.name} (${m.id}): JSON parse error — raw_response head: ${(m.result.raw_response || '').slice(0, 150)}`);
+      } else {
+        console.log(`  ✓ SingleStock ${sym} ${m.name} (${m.id}): ok`);
+      }
+    });
+
+    // Parse each model's dual-opinion response into a normalized card
+    const _normVerdict = (v) => {
+      const s = String(v || '').toUpperCase().trim();
+      if (!s) return 'N/A';
+      if (s.includes('BUY') && !s.includes('AVOID')) return 'BUY';
+      if (s.includes('ACCUMULATE')) return 'ACCUMULATE';
+      if (s.includes('HOLD')) return 'HOLD';
+      if (s.includes('SELL')) return 'SELL';
+      if (s.includes('AVOID')) return 'AVOID';
+      return s;
+    };
+
     const reviews = [];
-    let buyCount = 0, holdCount = 0, accCount = 0, avoidCount = 0, sellCount = 0;
+    // Separate vote tallies: one for varsity lens, one for pure lens
+    const tallyVarsity = { BUY: 0, ACCUMULATE: 0, HOLD: 0, AVOID: 0, SELL: 0 };
+    const tallyPure    = { BUY: 0, ACCUMULATE: 0, HOLD: 0, AVOID: 0, SELL: 0 };
     let totalConf = 0, confCount = 0;
 
     results.forEach(r => {
       if (r.error || r.skipped) {
-        reviews.push({ id: r.id, name: r.name, error: r.error || 'Skipped (no API key)', skipped: !!r.skipped });
+        reviews.push({ id: r.id, name: r.name, provider: r.provider, error: r.error || 'Skipped (no API key)', skipped: !!r.skipped });
         return;
       }
       const d = r.result || {};
-      const verdict = (d.verdict || '').toUpperCase();
-      if (verdict.includes('BUY') && !verdict.includes('AVOID')) buyCount++;
-      else if (verdict.includes('ACCUMULATE')) accCount++;
-      else if (verdict.includes('HOLD')) holdCount++;
-      else if (verdict.includes('SELL')) sellCount++;
-      else if (verdict.includes('AVOID')) avoidCount++;
+
+      // Back-compat: if a model returned only { verdict: ... }, mirror it into both lenses.
+      const vv = _normVerdict(d.varsity_verdict || d.verdict);
+      const pv = _normVerdict(d.pure_verdict || d.verdict);
+      if (tallyVarsity[vv] != null) tallyVarsity[vv]++;
+      if (tallyPure[pv]    != null) tallyPure[pv]++;
 
       if (d.confidence) { totalConf += d.confidence; confCount++; }
 
       reviews.push({
-        id: r.id, name: r.name,
-        verdict: d.verdict || 'N/A',
-        confidence: d.confidence || null,
-        target_price: d.target_price || null,
-        stop_loss: d.stop_loss || null,
-        timeframe: d.timeframe || null,
-        bull_case: d.bull_case || null,
-        bear_case: d.bear_case || null,
-        key_factors: d.key_factors || [],
+        id: r.id, name: r.name, provider: r.provider,
+        varsity_verdict: vv,
+        pure_verdict:    pv,
+        varsity_reasoning: d.varsity_reasoning || null,
+        pure_reasoning:    d.pure_reasoning    || null,
+        confidence:      d.confidence || null,
+        target_price:    d.target_price || null,
+        stop_loss:       d.stop_loss || null,
+        timeframe:       d.timeframe || null,
+        bull_case:       d.bull_case || null,
+        bear_case:       d.bear_case || null,
+        key_factors:     d.key_factors || [],
         one_line_summary: d.one_line_summary || null,
         varsity_modules: d.varsity_modules_applied || [],
-        tokens: r.tokens || {},
-        took_ms: r.took_ms || 0,
+        tokens:          r.tokens || {},
+        took_ms:         r.took_ms || 0,
       });
     });
 
     const respondedCount = reviews.filter(r => !r.error && !r.skipped).length;
     const avgConf = confCount > 0 ? Math.round(totalConf / confCount) : null;
 
-    // Overall consensus
-    let consensus = 'MIXED';
-    const total = buyCount + holdCount + accCount + avoidCount + sellCount;
-    if (total > 0) {
-      if ((buyCount + accCount) / total >= 0.6) consensus = 'BUY';
-      else if ((avoidCount + sellCount) / total >= 0.6) consensus = 'AVOID';
-      else if (holdCount / total >= 0.5) consensus = 'HOLD';
-    }
+    // Per-lens consensus (the council's own vote, before the judge weighs in)
+    const _consensusFrom = (tally) => {
+      const total = Object.values(tally).reduce((a, b) => a + b, 0);
+      if (!total) return 'NO_REVIEW';
+      const bullish = (tally.BUY + tally.ACCUMULATE) / total;
+      const bearish = (tally.AVOID + tally.SELL) / total;
+      if (bullish >= 0.6) return 'BUY';
+      if (bearish >= 0.6) return 'AVOID';
+      if (tally.HOLD / total >= 0.5) return 'HOLD';
+      if (bullish > bearish) return 'ACCUMULATE';
+      return 'MIXED';
+    };
+    const varsityConsensus = _consensusFrom(tallyVarsity);
+    const pureConsensus    = _consensusFrom(tallyPure);
 
-    console.log(`🤖 Single-stock AI review done for ${sym}: ${respondedCount}/${AI_MODELS.length} models, consensus=${consensus}`);
+    // Build council_status payload the client panel can render
+    const councilStatus = AI_MODELS.map(m => {
+      const mr = results.find(x => x.id === m.id) || {};
+      const status = mr.error ? 'error'
+                   : mr.skipped ? 'skipped'
+                   : mr.result?.parse_error ? 'parse_error'
+                   : 'ok';
+      return {
+        id: m.id, name: m.name, provider: m.provider,
+        status, error: mr.error || null,
+        stocks_reviewed: status === 'ok' ? 1 : 0,
+        took_ms: mr.took_ms || 0,
+        tokens: mr.tokens || null,
+      };
+    });
+
+    // ── JUDGE: single-stock synthesis using BUY/HOLD/ACCUMULATE/AVOID/SELL schema ──
+    const judgeOut = await runSingleStockJudge({
+      sym, meta, sector,
+      councilResults: results.filter(r => !r.error && !r.skipped && r.result),
+      originalUserPrompt: dataPoints,
+      varsityConsensus, pureConsensus,
+      tallyVarsity, tallyPure,
+    });
+
+    const judgeStatusDetail = {
+      id: AI_JUDGE_MODEL.id,
+      name: AI_JUDGE_MODEL.name,
+      provider: AI_JUDGE_MODEL.provider,
+      status: judgeOut.error ? 'error'
+            : judgeOut.skipped ? 'skipped'
+            : judgeOut.result?.parse_error ? 'parse_error'
+            : 'ok',
+      error: judgeOut.error || judgeOut.reason || null,
+      took_ms: judgeOut.took_ms || 0,
+      tokens: judgeOut.tokens || null,
+    };
+
+    const judgeVerdict = (judgeOut.result && !judgeOut.result.parse_error) ? {
+      verdict:      _normVerdict(judgeOut.result.verdict),
+      score:        typeof judgeOut.result.score === 'number' ? judgeOut.result.score : null,
+      criteria_passed: judgeOut.result.criteria_passed || null,
+      criteria_total:  judgeOut.result.criteria_total  || null,
+      tagline:      judgeOut.result.tagline || null,
+      action_line:  judgeOut.result.action_line || null,
+      target_price: judgeOut.result.target_price || null,
+      stop_loss:    judgeOut.result.stop_loss || null,
+      timeframe:    judgeOut.result.timeframe || null,
+      council_agreement: judgeOut.result.council_agreement || null,
+      varsity_reasoning: judgeOut.result.varsity_reasoning || null,
+      pure_reasoning:    judgeOut.result.pure_reasoning || null,
+      final_reasoning:   judgeOut.result.final_reasoning || null,
+      risk_flag:    judgeOut.result.risk_flag || null,
+    } : null;
+
+    // Overall consensus = judge verdict if we have one, else varsity consensus
+    const consensus = judgeVerdict?.verdict || varsityConsensus;
+
+    console.log(`🤖 Single-stock AI review done for ${sym}: ${respondedCount}/${AI_MODELS.length} models, varsity=${varsityConsensus}, pure=${pureConsensus}, judge=${judgeVerdict?.verdict || 'n/a'}`);
 
     res.json({
       sym, name: meta.n, sector,
-      consensus, avgConfidence: avgConf,
-      counts: { buy: buyCount, accumulate: accCount, hold: holdCount, avoid: avoidCount, sell: sellCount },
+      consensus,
+      varsity_consensus: varsityConsensus,
+      pure_consensus:    pureConsensus,
+      avgConfidence: avgConf,
+      counts_varsity: tallyVarsity,
+      counts_pure:    tallyPure,
       models: reviews,
       respondedCount, totalModels: AI_MODELS.length,
+      council_status: councilStatus,
+      judge_status_detail: judgeStatusDetail,
+      judge_verdict: judgeVerdict,
     });
   } catch (e) {
     console.error(`AI analyze error ${sym}:`, e.message);
@@ -16126,6 +16237,25 @@ const AI_JUDGE_MODEL = {
   model: process.env.AI_JUDGE_MODEL || 'claude-opus-4-6',
 };
 
+// One-shot startup visibility: show which AI provider keys are actually loaded
+// so Railway deploys surface misconfiguration immediately instead of failing
+// silently mid-review. Only logs presence, not the key itself.
+(function _logAIKeyPresence() {
+  const flags = {
+    anthropic:  !!ANTHROPIC_API_KEY,
+    openai:     !!OPENAI_API_KEY,
+    google:     !!GOOGLE_AI_API_KEY,
+    deepseek:   !!DEEPSEEK_API_KEY,
+    groq:       !!GROQ_API_KEY,
+    mistral:    !!MISTRAL_API_KEY,
+  };
+  const have = Object.entries(flags).filter(([, v]) => v).map(([k]) => k);
+  const miss = Object.entries(flags).filter(([, v]) => !v).map(([k]) => k);
+  console.log(`🔑 AI keys present: [${have.join(', ') || 'NONE'}]${miss.length ? '  missing: [' + miss.join(', ') + ']' : ''}`);
+  console.log(`🤖 Council models: ${AI_MODELS.map(m => `${m.name}(${m.provider})`).join(', ')}`);
+  console.log(`⚖ Judge model: ${AI_JUDGE_MODEL.name} → ${AI_JUDGE_MODEL.model}`);
+})();
+
 // =============================================================================
 // LLM COST CAP — daily budget discipline (Varsity M9: risk management applied
 // to API spend). Each LLM call is counted against a (date, endpoint, model)
@@ -16235,7 +16365,11 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        // max_tokens bumped: multi-stock dual-opinion JSON was truncating at
+        // provider default (~4K). 16000 comfortably fits 10+ holdings × dual
+        // opinion. Without this, models silently return JSON for only the
+        // first stock and later stocks get lost in buildConsensus.
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 16000, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -16249,7 +16383,8 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
       const resp = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        // max_tokens bumped — see OpenAI branch for rationale.
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 8000, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -16268,7 +16403,9 @@ Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGR
       const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
+        // max_tokens bumped — see OpenAI branch for rationale. Groq Llama 3.3
+        // 70B supports up to 32K output tokens.
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 16000, messages: [{ role: 'system', content: groqSystemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -16282,7 +16419,8 @@ Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGR
       const resp = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MISTRAL_API_KEY}` },
-        body: JSON.stringify({ model: modelDef.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
+        // max_tokens bumped — see OpenAI branch for rationale.
+        body: JSON.stringify({ model: modelDef.model, max_tokens: 16000, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }] }),
         signal: AbortSignal.timeout(180000),
       });
       if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -16299,7 +16437,9 @@ Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGR
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: userPrompt }] }],
-          generationConfig: { temperature: 0.3 },
+          // maxOutputTokens bumped — Gemini default is low enough to truncate
+          // multi-stock dual-opinion JSON and silently drop later stocks.
+          generationConfig: { temperature: 0.3, maxOutputTokens: 16000 },
         }),
         signal: AbortSignal.timeout(180000),
       });
@@ -16345,8 +16485,19 @@ function buildConsensus(modelResults, allowedSymbols) {
   // Set of allowed stock symbols (only model portfolio stocks)
   const allowedSet = allowedSymbols ? new Set(allowedSymbols.map(s => s.toUpperCase())) : null;
 
-  // Build per-stock consensus
+  // Build per-stock consensus. Pre-seed the stockMap with EVERY allowed
+  // symbol so a review row is guaranteed even if zero models returned it
+  // (e.g. all models truncated output after the first stock). Downstream
+  // code then fills in NO_REVIEW placeholders for models that didn't cover
+  // that symbol, and the UI still shows a row for the stock instead of
+  // silently dropping it.
   const stockMap = {};
+  if (allowedSymbols) {
+    allowedSymbols.forEach(s => {
+      const sym = (s || '').toUpperCase();
+      if (sym) stockMap[sym] = { sym, models: {} };
+    });
+  }
   validResults.forEach(m => {
     if (!m.result.signal_reviews) return;
     m.result.signal_reviews.forEach(rev => {
@@ -16405,16 +16556,26 @@ function buildConsensus(modelResults, allowedSymbols) {
       .filter(([,m]) => m.verdict !== 'NO_REVIEW' && m.pure_reasoning)
       .sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
 
+    // If zero models returned a verdict for this stock (e.g. all council
+    // models truncated before reaching it), degrade gracefully to a
+    // NO_REVIEW row instead of producing NaN confidence / empty majority.
+    const hasAnyVerdict = respondedCount > 0;
+    const safeMajority = hasAnyVerdict ? majority[0] : 'NO_REVIEW';
+    const safeMajorityCount = hasAnyVerdict ? majority[1] : 0;
+    const denom = modelsWithReviews > 0 ? modelsWithReviews : 1;
+    const confSum = Object.values(s.models).filter(m => m.verdict !== 'NO_REVIEW').reduce((a, m) => a + (m.confidence || 0), 0);
+    const avgConf = respondedCount > 0 ? Math.round(confSum / respondedCount) : 0;
+
     return {
       sym: s.sym,
       signal_type: bestModel?.[1]?.signal_type || '?',
-      consensus_verdict: majority[0],
-      consensus_score: `${majority[1]}/${modelsWithReviews}`,
-      consensus_pct: Math.round((majority[1] / modelsWithReviews) * 100),
+      consensus_verdict: safeMajority,
+      consensus_score: `${safeMajorityCount}/${modelsWithReviews}`,
+      consensus_pct: Math.round((safeMajorityCount / denom) * 100),
       models_responded: respondedCount,
       models_total: modelsWithReviews,
-      verdict: majority[0],   // backward compat
-      confidence: Math.round(Object.values(s.models).filter(m => m.verdict !== 'NO_REVIEW').reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
+      verdict: safeMajority,   // backward compat
+      confidence: avgConf,
       varsity_module: bestModel?.[1]?.varsity_module || '',
       varsity_reasoning: bestModel?.[1]?.varsity_reasoning || '',
       // Dual opinion — surfaced at the top level so the UI can render both
@@ -16539,6 +16700,115 @@ FINAL CHECK: exactly ${symCount} entries. Each must have both varsity_reasoning 
   const judgeStart = Date.now();
   const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt, endpoint + '_judge')
     .catch(err => ({ error: err.message || 'judge-error' }));
+
+  // Visible judge outcome in Railway logs.
+  if (judgeResult.error || judgeResult.skipped) {
+    console.error(`  ⚖ JUDGE (${endpoint}) ${AI_JUDGE_MODEL.name}: ${judgeResult.error || 'skipped'}`);
+  } else if (judgeResult.result?.parse_error) {
+    console.error(`  ⚖ JUDGE (${endpoint}) ${AI_JUDGE_MODEL.name}: JSON parse error — raw_response head: ${(judgeResult.result.raw_response || '').slice(0, 150)}`);
+  } else {
+    const cnt = judgeResult.result?.signal_reviews?.length || 0;
+    console.log(`  ⚖ JUDGE (${endpoint}) ${AI_JUDGE_MODEL.name}: ${cnt}/${symCount} stocks synthesised in ${Date.now() - judgeStart}ms`);
+  }
+
+  return {
+    ...judgeResult,
+    took_ms: Date.now() - judgeStart,
+    id: AI_JUDGE_MODEL.id,
+    name: AI_JUDGE_MODEL.name,
+  };
+}
+
+// Single-stock judge: synthesises the 5-model council's DUAL opinions into ONE
+// final verdict + 0-100 score, using the BUY/HOLD/ACCUMULATE/AVOID/SELL schema
+// the Deep Stock Analyzer already speaks. Returns { result, error, skipped, took_ms, tokens }.
+async function runSingleStockJudge({ sym, meta, sector, councilResults, originalUserPrompt, varsityConsensus, pureConsensus, tallyVarsity, tallyPure }) {
+  if (!ANTHROPIC_API_KEY) {
+    return { skipped: true, reason: 'no-anthropic-key' };
+  }
+  if (!councilResults.length) {
+    return { skipped: true, reason: 'no-council-output' };
+  }
+
+  // Compact transcript: one block per responding council model with both lenses.
+  const transcriptLines = [];
+  councilResults.forEach(m => {
+    const r = m.result || {};
+    transcriptLines.push(`━━━ ${m.name} (${m.id}) ━━━`);
+    transcriptLines.push(`  varsity_verdict=${r.varsity_verdict || r.verdict || '?'}  pure_verdict=${r.pure_verdict || r.verdict || '?'}  confidence=${r.confidence || '?'}`);
+    if (r.varsity_reasoning) transcriptLines.push(`  varsity_reasoning: ${r.varsity_reasoning}`);
+    if (r.pure_reasoning)    transcriptLines.push(`  pure_reasoning: ${r.pure_reasoning}`);
+    if (r.one_line_summary)  transcriptLines.push(`  one_liner: ${r.one_line_summary}`);
+    if (r.bull_case)         transcriptLines.push(`  bull_case: ${r.bull_case}`);
+    if (r.bear_case)         transcriptLines.push(`  bear_case: ${r.bear_case}`);
+    if (r.target_price)      transcriptLines.push(`  target=${r.target_price} stop=${r.stop_loss || '—'}`);
+    transcriptLines.push('');
+  });
+  const councilTranscript = transcriptLines.join('\n');
+
+  const varsityVotes = Object.entries(tallyVarsity || {}).filter(([,c]) => c > 0).map(([v,c]) => `${v}=${c}`).join(', ') || 'none';
+  const pureVotes    = Object.entries(tallyPure    || {}).filter(([,c]) => c > 0).map(([v,c]) => `${v}=${c}`).join(', ') || 'none';
+
+  const judgeSystemPrompt = `You are the JUDGE — a final-stage synthesiser sitting above a council of 5 AI stock analysts who have each reviewed ${sym} through TWO lenses (Zerodha Varsity grounded + pure first-principles).
+
+Your job:
+1. Read the original stock data and the council's dual-lens opinions.
+2. Identify where the lenses agree (strong conviction) and where they disagree (low conviction / caution).
+3. Fact-check weak claims against the raw data.
+4. Produce ONE final verdict + a 0-100 score that represents your independent judgment, informed by but not bound to the council's majority.
+5. If the two lenses fundamentally disagree, lean toward the more conservative call unless the data is overwhelming.
+
+You speak in short, decisive language. Overrule the council when the data warrants it.`;
+
+  const judgeUserPrompt = `════════════════════════════════════════
+ORIGINAL STOCK DATA (${sym} · ${meta?.n || ''} · ${sector || ''}):
+════════════════════════════════════════
+${originalUserPrompt}
+
+════════════════════════════════════════
+COUNCIL DUAL-LENS TRANSCRIPT:
+════════════════════════════════════════
+${councilTranscript}
+
+════════════════════════════════════════
+COUNCIL TALLIES:
+════════════════════════════════════════
+Varsity-lens votes: ${varsityVotes}   → lens consensus: ${varsityConsensus}
+Pure-lens votes:    ${pureVotes}      → lens consensus: ${pureConsensus}
+
+════════════════════════════════════════
+JUDGE TASK — return EXACTLY this JSON:
+════════════════════════════════════════
+{
+  "verdict": "BUY" | "ACCUMULATE" | "HOLD" | "AVOID" | "SELL",
+  "score": 0-100,
+  "criteria_passed": integer,
+  "criteria_total": integer,
+  "tagline": "one short phrase like 'Mixed signals - buy in parts near support'",
+  "action_line": "short action imperative like 'ACCUMULATE ON DIPS' / 'BUY NOW' / 'AVOID FOR NOW' / 'HOLD AND WATCH' / 'EXIT ON STRENGTH'",
+  "target_price": number_or_null,
+  "stop_loss": number_or_null,
+  "timeframe": "Short-term (1-3 months)" | "Medium-term (3-12 months)" | "Long-term (1-3 years)",
+  "council_agreement": "UNANIMOUS" | "MAJORITY" | "SPLIT" | "OVERRULED",
+  "varsity_reasoning": "1-2 sentences synthesising the Varsity lens",
+  "pure_reasoning":    "1-2 sentences synthesising the pure lens",
+  "final_reasoning":   "1-2 sentences — why this final verdict + score",
+  "risk_flag": "short red-flag tag or empty string"
+}
+
+Return ONLY the JSON object, no prose.`;
+
+  const judgeStart = Date.now();
+  const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt, 'single_stock_judge')
+    .catch(err => ({ error: err?.message || 'judge-error' }));
+
+  if (judgeResult.error || judgeResult.skipped) {
+    console.error(`  ⚖ SINGLE-STOCK JUDGE ${sym} ${AI_JUDGE_MODEL.name}: ${judgeResult.error || 'skipped'}`);
+  } else if (judgeResult.result?.parse_error) {
+    console.error(`  ⚖ SINGLE-STOCK JUDGE ${sym} ${AI_JUDGE_MODEL.name}: JSON parse error — raw head: ${(judgeResult.result.raw_response || '').slice(0, 150)}`);
+  } else {
+    console.log(`  ⚖ SINGLE-STOCK JUDGE ${sym} ${AI_JUDGE_MODEL.name}: verdict=${judgeResult.result?.verdict} score=${judgeResult.result?.score} in ${Date.now() - judgeStart}ms`);
+  }
 
   return {
     ...judgeResult,
@@ -17709,6 +17979,17 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
       .catch(err => ({ id: m.id, name: m.name, error: err.message || 'unknown' }))
   );
   const modelResults = await Promise.all(modelPromises);
+  // Log per-model outcome so Railway logs make silent failures visible.
+  modelResults.forEach(m => {
+    if (m.error || m.skipped) {
+      console.error(`  ❌ Holdings council model ${m.name} (${m.id}): ${m.error || 'skipped'}`);
+    } else if (m.result?.parse_error) {
+      console.error(`  ⚠ Holdings council model ${m.name} (${m.id}): JSON parse error — raw_response head: ${(m.result.raw_response || '').slice(0, 150)}`);
+    } else {
+      const cnt = m.result?.signal_reviews?.length || 0;
+      console.log(`  ✓ Holdings council model ${m.name} (${m.id}): ${cnt}/${allowedSyms.length} stocks reviewed`);
+    }
+  });
 
   // Reuse buildConsensus — it already handles per-model aggregation, NO_REVIEW
   // fill-in, and the per_model breakdown that the Holdings UI expects.
@@ -17754,14 +18035,18 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
     };
   });
 
-  // Persist per-(user, symbol, model) — overwrite on re-run. The judge is
-  // persisted as a special model_id='ai-judge' row so the GET endpoint and
-  // UI can treat it uniformly with council rows.
+  // Persist per-(user, symbol, model) — STICKINESS RULE: only UPSERT when
+  // the new review is a REAL review. Skip NO_REVIEW placeholders so a model
+  // that failed to cover a stock on THIS run does not wipe out the good
+  // review it produced on a PREVIOUS run. The judge row is persisted under
+  // model_id='ai-judge' and follows the same stickiness rule.
   try {
     for (const rev of (consensus.signal_reviews || [])) {
       if (!rev.per_model) continue;
       for (const [mid, mv] of Object.entries(rev.per_model)) {
         const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+        // Stickiness: don't overwrite previous good reviews with placeholders.
+        if (normVerdict === 'NO_REVIEW') continue;
         // Normalize the per-lens verdicts too so the Holdings UI vocab is
         // consistent (AGREE / CAUTION / DISAGREE / NO_REVIEW) across the
         // consensus column, the Varsity lens, and the Pure lens.
@@ -17793,6 +18078,34 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
   const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
   console.log(`🤖 Holdings AI review for ${username}: ${okCount}/${AI_MODELS.length} council models + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
+  // Build a normalized council status summary for the UI progress panel.
+  // The UI renders one row per council model + one row for the judge, showing
+  // status (ok / error / skipped), stock count covered, and duration.
+  const councilStatus = AI_MODELS.map(m => {
+    const mr = modelResults.find(x => x.id === m.id) || {};
+    const status = mr.error ? 'error' : mr.skipped ? 'skipped' : mr.result?.parse_error ? 'parse_error' : 'ok';
+    return {
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      status,
+      error: mr.error || null,
+      stocks_reviewed: mr.result?.signal_reviews?.length || 0,
+      took_ms: mr.took_ms || 0,
+      tokens: mr.tokens || null,
+    };
+  });
+  const judgeStatusEntry = {
+    id: AI_JUDGE_MODEL.id,
+    name: AI_JUDGE_MODEL.name,
+    provider: AI_JUDGE_MODEL.provider,
+    status: judge?.skipped ? 'skipped' : judge?.error ? 'error' : judge?.result?.parse_error ? 'parse_error' : 'ok',
+    error: judge?.error || judge?.reason || null,
+    stocks_reviewed: judge?.result?.signal_reviews?.length || 0,
+    took_ms: judge?.took_ms || 0,
+    tokens: judge?.tokens || null,
+  };
+
   return {
     ok: true,
     username,
@@ -17804,6 +18117,8 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
     took_ms: Date.now() - startTime,
     signal_reviews: consensus.signal_reviews || [],
     model_details: consensus.model_details || [],
+    council_status: councilStatus,
+    judge_status_detail: judgeStatusEntry,
   };
 }
 
@@ -18070,6 +18385,17 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
       .catch(err => ({ id: m.id, name: m.name, error: err.message || 'unknown' }))
   );
   const modelResults = await Promise.all(modelPromises);
+  // Log per-model outcome so Railway logs make silent failures visible.
+  modelResults.forEach(m => {
+    if (m.error || m.skipped) {
+      console.error(`  ❌ Picks(${category}) council model ${m.name} (${m.id}): ${m.error || 'skipped'}`);
+    } else if (m.result?.parse_error) {
+      console.error(`  ⚠ Picks(${category}) council model ${m.name} (${m.id}): JSON parse error — raw_response head: ${(m.result.raw_response || '').slice(0, 150)}`);
+    } else {
+      const cnt = m.result?.signal_reviews?.length || 0;
+      console.log(`  ✓ Picks(${category}) council model ${m.name} (${m.id}): ${cnt}/${top10.length} stocks reviewed`);
+    }
+  });
 
   const consensus = buildConsensus(modelResults, top10);
 
@@ -18104,13 +18430,16 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
     };
   });
 
-  // Persist per-model reviews. The judge is persisted as a special
-  // model_id='ai-judge' row alongside the council rows.
+  // Persist per-model reviews. STICKINESS RULE: skip NO_REVIEW placeholders
+  // so a model that couldn't cover a stock on this run does not overwrite a
+  // previous good review for the same stock. The judge row follows the same
+  // stickiness rule.
   try {
     for (const rev of (consensus.signal_reviews || [])) {
       if (!rev.per_model) continue;
       for (const [mid, mv] of Object.entries(rev.per_model)) {
         const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
+        if (normVerdict === 'NO_REVIEW') continue;  // stickiness
         const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
         const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
         const modelName = mid === 'ai-judge'
@@ -18139,6 +18468,32 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
   const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
   console.log(`🤖 Picks AI review [${category}]: ${okCount}/${AI_MODELS.length} council + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
+  // Build a normalized council status summary for the UI progress panel.
+  const councilStatus = AI_MODELS.map(m => {
+    const mr = modelResults.find(x => x.id === m.id) || {};
+    const status = mr.error ? 'error' : mr.skipped ? 'skipped' : mr.result?.parse_error ? 'parse_error' : 'ok';
+    return {
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      status,
+      error: mr.error || null,
+      stocks_reviewed: mr.result?.signal_reviews?.length || 0,
+      took_ms: mr.took_ms || 0,
+      tokens: mr.tokens || null,
+    };
+  });
+  const judgeStatusEntry = {
+    id: AI_JUDGE_MODEL.id,
+    name: AI_JUDGE_MODEL.name,
+    provider: AI_JUDGE_MODEL.provider,
+    status: judge?.skipped ? 'skipped' : judge?.error ? 'error' : judge?.result?.parse_error ? 'parse_error' : 'ok',
+    error: judge?.error || judge?.reason || null,
+    stocks_reviewed: judge?.result?.signal_reviews?.length || 0,
+    took_ms: judge?.took_ms || 0,
+    tokens: judge?.tokens || null,
+  };
+
   return {
     ok: true,
     category,
@@ -18150,6 +18505,8 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
     took_ms: Date.now() - startTime,
     signal_reviews: consensus.signal_reviews || [],
     model_details: consensus.model_details || [],
+    council_status: councilStatus,
+    judge_status_detail: judgeStatusEntry,
   };
 }
 

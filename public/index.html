@@ -3601,7 +3601,7 @@ function buildUI(d){
   html+='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">';
   html+='<div>';
   html+='<div style="font-weight:700;font-size:13px;color:#8b5cf6">🤖 AI Second Opinion</div>';
-  html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">4 free AI analysts + 1 judge model analyze using Varsity principles</div>';
+  html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">5-model AI council (Varsity + Pure lenses) → ⚖ Claude Opus 4.6 judge → final BUY/HOLD/ACCUMULATE/AVOID verdict with score</div>';
   html+='</div>';
   html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px">';
   html+='<span>🚀 Run AI Review</span></button></div>';
@@ -3919,129 +3919,298 @@ function buildUI(d){
 }
 
 // -- AI Single-Stock Review ---------------------------------------------------
+// Cache of council/judge status per stock symbol so the progress cards stick
+// across re-renders of the analyzer page.
+var _singleStockCouncilStatus = {};
+
 async function runSingleStockAI(sym) {
   var btn = document.getElementById('ai-review-btn');
   var result = document.getElementById('ai-review-result');
   if (!result) return;
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span>⏳ Calling AI models...</span>'; btn.style.opacity = '0.6'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span>⏳ Calling AI council + judge...</span>'; btn.style.opacity = '0.6'; }
 
-  result.innerHTML = '<div style="padding:20px;text-align:center">'
-    +'<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Querying 5 AI models in parallel...</div>'
-    +'<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:220px;margin:0 auto">'
-    +'<div style="height:100%;background:#8b5cf6;width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
-    +'<div style="font-size:10px;color:var(--text4);margin-top:8px">This may take 15-30 seconds...</div></div>';
+  // Show the live council progress panel (5 council + 1 judge, all "Running…")
+  // so the user sees which AIs are working before any results come back.
+  _singleStockCouncilStatus[sym] = { running: true, at: Date.now() };
+  var runningPanel = _renderCouncilProgressPanel(null, { running: true, scopeLabel: 'Deep Stock Review — ' + sym });
+  result.innerHTML = runningPanel
+    + '<div style="padding:18px;text-align:center;margin-top:6px">'
+    + '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Querying 5 AI council models + judge in parallel…</div>'
+    + '<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:220px;margin:0 auto">'
+    + '<div style="height:100%;background:#8b5cf6;width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
+    + '<div style="font-size:10px;color:var(--text4);margin-top:8px">Council review → Judge synthesis. Takes ~20-45 seconds.</div></div>';
 
   try {
     var r = await fetch('/api/stocks/analyze/' + sym + '/ai');
     var d = await r.json();
-    if (d.error) { result.innerHTML = '<div style="color:var(--red);font-size:12px;padding:8px">❌ ' + d.error + '</div>'; return; }
+    if (d.error) {
+      _singleStockCouncilStatus[sym] = null;
+      result.innerHTML = '<div style="color:var(--red);font-size:12px;padding:8px">❌ ' + d.error + '</div>';
+      return;
+    }
+    // Capture the final council + judge statuses so the progress panel stays accurate.
+    if (d.council_status || d.judge_status_detail) {
+      _singleStockCouncilStatus[sym] = {
+        council: d.council_status || [],
+        judge:   d.judge_status_detail || null,
+        at:      Date.now(),
+        running: false,
+      };
+    }
     result.innerHTML = buildAIReviewUI(d);
   } catch(e) {
+    _singleStockCouncilStatus[sym] = null;
     result.innerHTML = '<div style="color:var(--red);font-size:12px;padding:8px">❌ ' + e.message + '</div>';
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '<span>🔄 Re-run AI Review</span>'; btn.style.opacity = '1'; }
   }
 }
 
-function buildAIReviewUI(d) {
+// Style helpers shared between the judge card and the per-model dual-opinion cards.
+function _singleStockVerdictStyle(verdict) {
+  var v = String(verdict || '').toUpperCase();
+  if (v === 'BUY')        return { color: '#22c55e', bg: 'rgba(34,197,94,.10)',  icon: '🟢', actionDefault: 'BUY NOW' };
+  if (v === 'ACCUMULATE') return { color: '#f59e0b', bg: 'rgba(245,158,11,.10)', icon: '📈', actionDefault: 'ACCUMULATE ON DIPS' };
+  if (v === 'HOLD')       return { color: '#eab308', bg: 'rgba(234,179,8,.10)',  icon: '🟡', actionDefault: 'HOLD AND WATCH' };
+  if (v === 'AVOID')      return { color: '#f97316', bg: 'rgba(249,115,22,.10)', icon: '🟠', actionDefault: 'AVOID FOR NOW' };
+  if (v === 'SELL')       return { color: '#ef4444', bg: 'rgba(239,68,68,.10)',  icon: '🔴', actionDefault: 'EXIT ON STRENGTH' };
+  return                         { color: '#6b7280', bg: 'rgba(107,114,128,.10)', icon: '⚪', actionDefault: 'REVIEW' };
+}
+
+// Render the judge's final verdict card, styled to match the analyzer score card
+// (big icon, action label, tagline, score X/100, criteria-passed progress bar,
+// coloured action button). This is the canonical AI verdict for the stock.
+function _renderJudgeVerdictCard(jv, judgeMeta) {
+  if (!jv || !jv.verdict) {
+    var meta = judgeMeta || {};
+    var stat = (meta.status || '').toLowerCase();
+    var reason = stat === 'skipped' ? (meta.error || 'Judge skipped')
+               : stat === 'error'   ? ('Judge error: ' + (meta.error || 'unknown'))
+               : stat === 'parse_error' ? 'Judge returned invalid JSON'
+               : 'Judge did not return a verdict';
+    return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;text-align:center">'
+      + '<div style="font-size:11px;color:var(--text3);font-weight:600">⚖ AI Judge Verdict unavailable</div>'
+      + '<div style="font-size:10px;color:var(--text4);margin-top:4px">' + _escHtml(reason) + '</div>'
+      + '</div>';
+  }
+  var st = _singleStockVerdictStyle(jv.verdict);
+  var score = (typeof jv.score === 'number') ? Math.max(0, Math.min(100, jv.score)) : null;
+  var passed = jv.criteria_passed || 0;
+  var totalC = jv.criteria_total  || 0;
+  var pct    = score != null ? score : (totalC > 0 ? Math.round((passed / totalC) * 100) : 0);
+  var tagline = jv.tagline || jv.final_reasoning || '';
+  var action  = jv.action_line || st.actionDefault;
+  var council = jv.council_agreement ? String(jv.council_agreement).toUpperCase() : '';
+
   var h = '';
-  var cc = { 'BUY': '#22c55e', 'AVOID': '#ef4444', 'HOLD': '#f59e0b', 'MIXED': '#6b7280' };
-  var ci = { 'BUY': '🟢', 'AVOID': '🔴', 'HOLD': '🟡', 'MIXED': '⚪' };
-  var consColor = cc[d.consensus] || '#6b7280';
-  var consIcon = ci[d.consensus] || '⚪';
-
-  // Consensus header
-  h += '<div style="background:' + consColor + '15;border:2px solid ' + consColor + ';border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">';
-  h += '<div style="font-size:22px;margin-bottom:4px">' + consIcon + '</div>';
-  h += '<div style="font-size:18px;font-weight:800;color:' + consColor + '">' + d.consensus + '</div>';
-  h += '<div style="font-size:10px;color:var(--text3);margin-top:4px">' + d.respondedCount + '/' + d.totalModels + ' models responded';
-  if (d.avgConfidence) h += ' · Avg confidence: ' + d.avgConfidence + '%';
+  h += '<div style="background:var(--bg2);border:2px solid ' + st.color + ';border-radius:14px;padding:18px;margin-bottom:12px;text-align:center;box-shadow:0 4px 16px ' + st.color + '20">';
+  // Top row: judge label + council agreement chip
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">';
+  h += '<div style="font-size:10px;font-weight:700;color:#8b5cf6;letter-spacing:.04em">⚖ AI JUDGE VERDICT · CLAUDE OPUS 4.6</div>';
+  if (council) {
+    var ca = council === 'UNANIMOUS' ? '#22c55e' : council === 'MAJORITY' ? '#eab308' : council === 'OVERRULED' ? '#f97316' : '#6b7280';
+    h += '<div style="font-size:9px;font-weight:700;color:' + ca + ';background:' + ca + '18;padding:2px 8px;border-radius:10px;letter-spacing:.04em">' + council + '</div>';
+  }
   h += '</div>';
+  // Big icon
+  h += '<div style="font-size:32px;margin-bottom:2px">' + st.icon + '</div>';
+  // Action label
+  h += '<div style="font-size:22px;font-weight:800;color:' + st.color + ';letter-spacing:.01em">' + _escHtml(jv.verdict) + '</div>';
+  // Tagline under the label
+  if (tagline) {
+    h += '<div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">' + _escHtml(tagline) + '</div>';
+  }
+  // Big score
+  if (score != null) {
+    h += '<div style="margin-top:12px"><span style="font-size:38px;font-weight:800;color:' + st.color + '">' + score + '</span>';
+    h += '<span style="font-size:14px;color:var(--text3);font-weight:600">/100</span></div>';
+  }
+  // Criteria passed
+  if (totalC > 0) {
+    h += '<div style="font-size:10px;color:var(--text3);margin-top:2px">' + passed + '/' + totalC + ' criteria passed</div>';
+  }
+  // Progress bar
+  h += '<div style="height:8px;background:var(--bg4);border-radius:4px;overflow:hidden;margin-top:8px;max-width:240px;margin-left:auto;margin-right:auto">';
+  h += '<div style="height:100%;background:' + st.color + ';width:' + pct + '%;border-radius:4px;transition:width .4s ease"></div></div>';
+  // Action button
+  h += '<div style="margin-top:12px;background:' + st.color + ';color:#000;border-radius:8px;padding:8px 16px;font-weight:800;font-size:13px;letter-spacing:.02em;display:inline-block">' + _escHtml(action) + '</div>';
 
-  // Vote bar
-  var counts = d.counts || {};
-  var total = (counts.buy||0)+(counts.accumulate||0)+(counts.hold||0)+(counts.avoid||0)+(counts.sell||0);
-  if (total > 0) {
-    h += '<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:10px;gap:1px">';
-    if (counts.buy) h += '<div style="flex:' + counts.buy + ';background:#22c55e;border-radius:2px" title="BUY: ' + counts.buy + '"></div>';
-    if (counts.accumulate) h += '<div style="flex:' + counts.accumulate + ';background:#86efac;border-radius:2px" title="ACCUMULATE: ' + counts.accumulate + '"></div>';
-    if (counts.hold) h += '<div style="flex:' + counts.hold + ';background:#f59e0b;border-radius:2px" title="HOLD: ' + counts.hold + '"></div>';
-    if (counts.avoid) h += '<div style="flex:' + counts.avoid + ';background:#f97316;border-radius:2px" title="AVOID: ' + counts.avoid + '"></div>';
-    if (counts.sell) h += '<div style="flex:' + counts.sell + ';background:#ef4444;border-radius:2px" title="SELL: ' + counts.sell + '"></div>';
+  // Target / stop / timeframe row
+  if (jv.target_price || jv.stop_loss || jv.timeframe) {
+    h += '<div style="display:flex;justify-content:center;gap:14px;margin-top:10px;font-size:10px;flex-wrap:wrap">';
+    if (jv.target_price) h += '<span style="color:#22c55e">🎯 Target: ₹' + jv.target_price + '</span>';
+    if (jv.stop_loss)    h += '<span style="color:#ef4444">🛑 Stop: ₹' + jv.stop_loss + '</span>';
+    if (jv.timeframe)    h += '<span style="color:var(--text3)">⏳ ' + _escHtml(jv.timeframe) + '</span>';
     h += '</div>';
-    h += '<div style="display:flex;justify-content:center;gap:12px;margin-top:6px;font-size:10px;flex-wrap:wrap">';
-    if (counts.buy) h += '<span style="color:#22c55e;font-weight:600">🟢 ' + counts.buy + ' Buy</span>';
-    if (counts.accumulate) h += '<span style="color:#86efac;font-weight:600">📈 ' + counts.accumulate + ' Accumulate</span>';
-    if (counts.hold) h += '<span style="color:#f59e0b;font-weight:600">🟡 ' + counts.hold + ' Hold</span>';
-    if (counts.avoid) h += '<span style="color:#f97316;font-weight:600">🟠 ' + counts.avoid + ' Avoid</span>';
-    if (counts.sell) h += '<span style="color:#ef4444;font-weight:600">🔴 ' + counts.sell + ' Sell</span>';
+  }
+  // Expandable reasoning (varsity + pure + final)
+  if (jv.varsity_reasoning || jv.pure_reasoning || jv.final_reasoning || jv.risk_flag) {
+    h += '<div onclick="var el=document.getElementById(\'judge-detail\');var a=document.getElementById(\'judge-arr\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';if(a)a.textContent=el.style.display===\'none\'?\'▶ Judge reasoning\':\'▼ Judge reasoning\';}" style="font-size:10px;color:#8b5cf6;cursor:pointer;margin-top:10px;font-weight:600" id="judge-arr">▶ Judge reasoning</div>';
+    h += '<div id="judge-detail" style="display:none;margin-top:8px;font-size:10px;line-height:1.55;text-align:left;max-width:520px;margin-left:auto;margin-right:auto">';
+    if (jv.varsity_reasoning) {
+      h += '<div style="color:#3b82f6;font-weight:700;margin-bottom:2px">Varsity lens:</div>';
+      h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(jv.varsity_reasoning) + '</div>';
+    }
+    if (jv.pure_reasoning) {
+      h += '<div style="color:#a855f7;font-weight:700;margin-bottom:2px">Pure first-principles:</div>';
+      h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(jv.pure_reasoning) + '</div>';
+    }
+    if (jv.final_reasoning) {
+      h += '<div style="color:' + st.color + ';font-weight:700;margin-bottom:2px">Final call:</div>';
+      h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(jv.final_reasoning) + '</div>';
+    }
+    if (jv.risk_flag) {
+      h += '<div style="color:#ef4444;font-weight:700;margin-top:4px">⚠ Risk flag: <span style="color:var(--text3);font-weight:500">' + _escHtml(jv.risk_flag) + '</span></div>';
+    }
     h += '</div>';
   }
   h += '</div>';
+  return h;
+}
 
-  // Individual model cards
+// Compact per-lens vote bar (e.g. "Varsity lens: 3 BUY · 1 HOLD · 1 AVOID")
+function _renderLensTallyBar(label, tally, consensus) {
+  var order = ['BUY', 'ACCUMULATE', 'HOLD', 'AVOID', 'SELL'];
+  var colors = { 'BUY': '#22c55e', 'ACCUMULATE': '#86efac', 'HOLD': '#f59e0b', 'AVOID': '#f97316', 'SELL': '#ef4444' };
+  var total = order.reduce(function(a, v) { return a + (tally[v] || 0); }, 0);
+  var st = _singleStockVerdictStyle(consensus);
+
+  var h = '';
+  h += '<div style="background:var(--bg2);border-left:3px solid ' + st.color + ';border-radius:8px;padding:10px 12px;flex:1;min-width:0">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:6px">';
+  h += '<div style="font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.03em">' + _escHtml(label) + '</div>';
+  h += '<div style="font-size:10px;font-weight:800;color:' + st.color + ';background:' + st.color + '18;padding:2px 8px;border-radius:4px">' + _escHtml(consensus || 'N/A') + '</div>';
+  h += '</div>';
+  if (total > 0) {
+    h += '<div style="display:flex;height:6px;border-radius:3px;overflow:hidden;gap:1px;margin-bottom:4px">';
+    order.forEach(function(v) {
+      if (tally[v]) h += '<div style="flex:' + tally[v] + ';background:' + colors[v] + ';border-radius:2px" title="' + v + ': ' + tally[v] + '"></div>';
+    });
+    h += '</div>';
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;font-size:9px">';
+    order.forEach(function(v) {
+      if (tally[v]) h += '<span style="color:' + colors[v] + ';font-weight:600">' + tally[v] + ' ' + v + '</span>';
+    });
+    h += '</div>';
+  } else {
+    h += '<div style="font-size:9px;color:var(--text4)">No votes</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function buildAIReviewUI(d) {
+  var h = '';
+
+  // Council + judge progress panel — reuse the shared helper so the user sees
+  // exactly which council models responded and which judge model synthesised.
+  var statusBundle = (typeof _singleStockCouncilStatus === 'object' && d && d.sym) ? _singleStockCouncilStatus[d.sym] : null;
+  if (!statusBundle && (d.council_status || d.judge_status_detail)) {
+    statusBundle = { council: d.council_status || [], judge: d.judge_status_detail || null, at: Date.now(), running: false };
+  }
+  if (statusBundle) {
+    h += _renderCouncilProgressPanel(statusBundle, { scopeLabel: 'Deep Stock Review — ' + (d.sym || '') });
+  }
+
+  // Judge verdict card (big hero card, matches analyzer score card)
+  h += _renderJudgeVerdictCard(d.judge_verdict, d.judge_status_detail);
+
+  // Dual-lens tally bars (two outcomes, side-by-side): Varsity lens and Pure first-principles lens
+  h += '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">';
+  h += _renderLensTallyBar('📚 Varsity-grounded lens', d.counts_varsity || {}, d.varsity_consensus);
+  h += _renderLensTallyBar('🧭 Pure first-principles lens', d.counts_pure || {}, d.pure_consensus);
+  h += '</div>';
+
+  // Response summary
+  h += '<div style="font-size:10px;color:var(--text3);text-align:center;margin-bottom:10px">'
+     + (d.respondedCount || 0) + '/' + (d.totalModels || 5) + ' council models responded';
+  if (d.avgConfidence) h += ' · Avg confidence: ' + d.avgConfidence + '%';
+  h += '</div>';
+
+  // Individual model cards — each now shows BOTH verdicts (Varsity / Pure)
+  h += '<div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:6px;letter-spacing:.03em">🧠 PER-MODEL DUAL OPINIONS</div>';
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  var mn = {'groq-llama':'Groq','gpt-nano':'GPT-nano','deepseek':'DeepSeek','claude-haiku':'Haiku','mistral':'Mistral'};
+  var mn = {'groq-llama':'Groq Llama','gpt-nano':'GPT-4.1-nano','deepseek':'DeepSeek','claude-haiku':'Claude Haiku','mistral':'Mistral'};
   (d.models || []).forEach(function(m) {
     var sn = mn[m.id] || m.name || m.id;
     if (m.error || m.skipped) {
-      h += '<div style="background:var(--bg2);border-radius:8px;padding:10px;border-left:3px solid var(--text4);opacity:0.5">';
-      h += '<div style="font-size:11px;font-weight:700;color:var(--text3)">' + sn + '</div>';
-      h += '<div style="font-size:10px;color:var(--text4)">⏭ ' + (m.error || 'Skipped') + '</div></div>';
+      h += '<div style="background:var(--bg2);border-radius:8px;padding:10px;border-left:3px solid var(--text4);opacity:0.55">';
+      h += '<div style="font-size:11px;font-weight:700;color:var(--text3)">' + _escHtml(sn) + '</div>';
+      h += '<div style="font-size:10px;color:var(--text4)">⏭ ' + _escHtml(m.error || 'Skipped') + '</div></div>';
       return;
     }
-    var vc = m.verdict || 'N/A';
-    var vcu = vc.toUpperCase();
-    var mc = vcu.includes('BUY') && !vcu.includes('AVOID') ? '#22c55e'
-           : vcu.includes('ACCUMULATE') ? '#86efac'
-           : vcu.includes('HOLD') ? '#f59e0b'
-           : vcu.includes('SELL') ? '#ef4444'
-           : vcu.includes('AVOID') ? '#f97316' : 'var(--text3)';
+    var vStyle = _singleStockVerdictStyle(m.varsity_verdict);
+    var pStyle = _singleStockVerdictStyle(m.pure_verdict);
+    // Border colour = the more conservative of the two lenses
+    var conservRank = { 'BUY': 0, 'ACCUMULATE': 1, 'HOLD': 2, 'AVOID': 3, 'SELL': 4 };
+    var bRank = Math.max(conservRank[m.varsity_verdict] || 0, conservRank[m.pure_verdict] || 0);
+    var borderColor = bRank === 0 ? vStyle.color
+                    : bRank === 1 ? '#f59e0b'
+                    : bRank === 2 ? '#eab308'
+                    : bRank === 3 ? '#f97316'
+                    : '#ef4444';
 
-    h += '<div style="background:var(--bg2);border-radius:8px;padding:10px;border-left:3px solid ' + mc + '">';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-    h += '<div style="font-size:11px;font-weight:700;color:var(--text2)">' + sn + '</div>';
-    h += '<div style="font-size:10px;font-weight:700;color:' + mc + ';background:' + mc + '18;padding:2px 8px;border-radius:4px">' + vc + '</div></div>';
-
-    if (m.confidence) h += '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Confidence: <b style="color:' + mc + '">' + m.confidence + '%</b></div>';
+    h += '<div style="background:var(--bg2);border-radius:8px;padding:10px;border-left:3px solid ' + borderColor + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:6px">';
+    h += '<div style="font-size:11px;font-weight:700;color:var(--text2)">' + _escHtml(sn) + '</div>';
+    if (m.confidence) h += '<div style="font-size:9px;color:var(--text3)">conf <b style="color:' + borderColor + '">' + m.confidence + '%</b></div>';
+    h += '</div>';
+    // Two verdict chips side-by-side
+    h += '<div style="display:flex;gap:4px;margin-bottom:6px">';
+    h += '<div style="flex:1;background:' + vStyle.bg + ';border:1px solid ' + vStyle.color + '40;border-radius:6px;padding:4px 6px">';
+    h += '<div style="font-size:8px;color:#3b82f6;font-weight:700;letter-spacing:.03em">📚 VARSITY</div>';
+    h += '<div style="font-size:11px;font-weight:800;color:' + vStyle.color + '">' + _escHtml(m.varsity_verdict || 'N/A') + '</div>';
+    h += '</div>';
+    h += '<div style="flex:1;background:' + pStyle.bg + ';border:1px solid ' + pStyle.color + '40;border-radius:6px;padding:4px 6px">';
+    h += '<div style="font-size:8px;color:#a855f7;font-weight:700;letter-spacing:.03em">🧭 PURE</div>';
+    h += '<div style="font-size:11px;font-weight:800;color:' + pStyle.color + '">' + _escHtml(m.pure_verdict || 'N/A') + '</div>';
+    h += '</div>';
+    h += '</div>';
 
     if (m.one_line_summary) {
-      h += '<div style="font-size:10px;color:var(--text2);line-height:1.5;margin-bottom:6px;font-style:italic">"' + m.one_line_summary + '"</div>';
+      h += '<div style="font-size:10px;color:var(--text2);line-height:1.5;margin-bottom:6px;font-style:italic">"' + _escHtml(m.one_line_summary) + '"</div>';
     }
-
     if (m.target_price || m.stop_loss) {
       h += '<div style="display:flex;gap:8px;font-size:10px;margin-bottom:4px">';
       if (m.target_price) h += '<span style="color:var(--green)">🎯 ₹' + m.target_price + '</span>';
-      if (m.stop_loss) h += '<span style="color:var(--red)">🛑 ₹' + m.stop_loss + '</span>';
+      if (m.stop_loss)    h += '<span style="color:var(--red)">🛑 ₹' + m.stop_loss + '</span>';
       h += '</div>';
     }
 
-    // Expandable bull/bear case
+    // Expandable details: per-lens reasoning, bull/bear, key factors
     var detailId = 'ai-detail-' + m.id;
-    if (m.bull_case || m.bear_case || (m.key_factors && m.key_factors.length)) {
+    if (m.varsity_reasoning || m.pure_reasoning || m.bull_case || m.bear_case || (m.key_factors && m.key_factors.length)) {
       h += '<div onclick="var el=document.getElementById(\'' + detailId + '\');var a=document.getElementById(\'ai-arr-' + m.id + '\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';if(a)a.textContent=el.style.display===\'none\'?\'▶\':\'▼\';}" style="font-size:10px;color:#8b5cf6;cursor:pointer;margin-top:4px;font-weight:600"><span id="ai-arr-' + m.id + '">▶</span> Details</div>';
       h += '<div id="' + detailId + '" style="display:none;margin-top:6px;font-size:10px;line-height:1.5">';
 
+      if (m.varsity_reasoning) {
+        h += '<div style="color:#3b82f6;font-weight:600;margin-bottom:2px">📚 Varsity reasoning:</div>';
+        h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(m.varsity_reasoning) + '</div>';
+      }
+      if (m.pure_reasoning) {
+        h += '<div style="color:#a855f7;font-weight:600;margin-bottom:2px">🧭 Pure reasoning:</div>';
+        h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(m.pure_reasoning) + '</div>';
+      }
       if (m.bull_case) {
         h += '<div style="color:var(--green);font-weight:600;margin-bottom:2px">Bull Case:</div>';
-        h += '<div style="color:var(--text3);margin-bottom:6px">' + m.bull_case + '</div>';
+        h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(m.bull_case) + '</div>';
       }
       if (m.bear_case) {
         h += '<div style="color:var(--red);font-weight:600;margin-bottom:2px">Bear Case:</div>';
-        h += '<div style="color:var(--text3);margin-bottom:6px">' + m.bear_case + '</div>';
+        h += '<div style="color:var(--text3);margin-bottom:6px">' + _escHtml(m.bear_case) + '</div>';
       }
       if (m.key_factors && m.key_factors.length) {
         h += '<div style="font-weight:600;color:var(--text2);margin-bottom:3px">Key Factors:</div>';
         m.key_factors.forEach(function(kf) {
           var kfc = kf.assessment === 'positive' ? 'var(--green)' : kf.assessment === 'negative' ? 'var(--red)' : '#f59e0b';
           var kfi = kf.assessment === 'positive' ? '✅' : kf.assessment === 'negative' ? '❌' : '⚠️';
-          h += '<div style="margin-bottom:3px"><span style="color:' + kfc + '">' + kfi + ' ' + (kf.factor || '') + '</span>';
-          if (kf.detail) h += ' — <span style="color:var(--text4)">' + kf.detail + '</span>';
+          h += '<div style="margin-bottom:3px"><span style="color:' + kfc + '">' + kfi + ' ' + _escHtml(kf.factor || '') + '</span>';
+          if (kf.detail) h += ' — <span style="color:var(--text4)">' + _escHtml(kf.detail) + '</span>';
           h += '</div>';
         });
       }
       if (m.varsity_modules && m.varsity_modules.length) {
-        h += '<div style="margin-top:4px;color:var(--text4)">📚 ' + m.varsity_modules.join(', ') + '</div>';
+        h += '<div style="margin-top:4px;color:var(--text4)">📚 ' + _escHtml(m.varsity_modules.join(', ')) + '</div>';
       }
       h += '</div>';
     }
@@ -4334,6 +4503,12 @@ function renderStockRecPage(){
   html += '<span style="background:rgba(245,158,11,.12);color:#f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+swingPicks.length+'</span>';
   html += '</div>';
   html += '</div>';
+  // Council status panel — shows which 5 council AIs + judge ran, and their
+  // outcomes. Appears in "running" mode while the POST is in-flight, then
+  // sticks around showing real results until the next Deep AI Review click.
+  if (_picksCouncilStatus['rebound']) {
+    html += _renderCouncilProgressPanel(_picksCouncilStatus['rebound'], { running: !!_picksCouncilStatus['rebound'].running, scopeLabel: 'Rebound Picks Deep AI Review' });
+  }
   if(swingPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
@@ -4390,6 +4565,9 @@ function renderStockRecPage(){
   html += '<span style="background:rgba(16,185,129,.12);color:#10b981;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+momentumPicks.length+'</span>';
   html += '</div>';
   html += '</div>';
+  if (_picksCouncilStatus['momentum']) {
+    html += _renderCouncilProgressPanel(_picksCouncilStatus['momentum'], { running: !!_picksCouncilStatus['momentum'].running, scopeLabel: 'Momentum Picks Deep AI Review' });
+  }
   if(momentumPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
@@ -4445,6 +4623,9 @@ function renderStockRecPage(){
   html += '<span style="background:rgba(34,211,238,.12);color:#22d3ee;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">'+longTermPicks.length+'</span>';
   html += '</div>';
   html += '</div>';
+  if (_picksCouncilStatus['longterm']) {
+    html += _renderCouncilProgressPanel(_picksCouncilStatus['longterm'], { running: !!_picksCouncilStatus['longterm'].running, scopeLabel: 'Long-Term Picks Deep AI Review' });
+  }
   if(longTermPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
@@ -4528,6 +4709,107 @@ var _PICKS_CAT_META = {
   momentum: { label: 'Momentum',  color: '#10b981', icon: '📈' },
   longterm: { label: 'Long-Term', color: '#22d3ee', icon: '🏛' },
 };
+
+// ─── Deep AI Review progress panel state + renderer ─────────────────────────
+// Populated from the server response's `council_status` + `judge_status_detail`.
+// Also shown (with a "Running…" status for every row) while the POST is
+// in-flight so the user can see which AIs are working. Persists after the
+// review completes so the user knows exactly who reviewed and who judged.
+// The Holdings flow writes _holdingsCouncilStatus; the Picks flow writes
+// _picksCouncilStatus[category].
+var _holdingsCouncilStatus = null;
+var _picksCouncilStatus    = {};
+
+// The 5 fixed council models (mirrors AI_MODELS on the server, IDs only).
+// Used when showing the "Running…" state before the response comes back.
+var _COUNCIL_MODELS = [
+  { id: 'groq-llama',   name: 'Groq Llama 3.3 70B', provider: 'groq' },
+  { id: 'gpt-nano',     name: 'GPT-4.1-nano',       provider: 'openai' },
+  { id: 'deepseek',     name: 'DeepSeek V3',        provider: 'deepseek' },
+  { id: 'claude-haiku', name: 'Claude Haiku 4.5',   provider: 'anthropic' },
+  { id: 'mistral',      name: 'Mistral Small',      provider: 'mistral' },
+];
+var _JUDGE_MODEL = { id: 'ai-judge', name: 'Claude Opus 4.6 (Judge)', provider: 'anthropic' };
+
+// Maps a status enum from the server to a {label, color, icon} tuple.
+function _councilStatusStyle(status, running) {
+  if (running) return { label: 'Running…', color: '#8b5cf6', icon: '⏳' };
+  switch ((status||'').toLowerCase()) {
+    case 'ok':          return { label: 'Reviewed',    color: '#10b981', icon: '✓' };
+    case 'error':       return { label: 'Error',       color: '#ef4444', icon: '✗' };
+    case 'skipped':     return { label: 'Skipped',     color: '#f59e0b', icon: '⊘' };
+    case 'parse_error': return { label: 'Parse error', color: '#f59e0b', icon: '⚠' };
+    default:            return { label: status || '—', color: '#71717a', icon: '·' };
+  }
+}
+
+// Render one row of the progress panel. `entry` is either a council_status
+// item from the server or a synthetic {id, name, provider} for the running
+// state. `running=true` overrides status to "Running…".
+function _renderCouncilRow(entry, running, isJudge) {
+  var s = _councilStatusStyle(entry.status, running);
+  var ms = entry.took_ms ? (' · ' + (entry.took_ms/1000).toFixed(1) + 's') : '';
+  var cnt = (!running && entry.stocks_reviewed != null)
+    ? (' · ' + entry.stocks_reviewed + ' stocks')
+    : '';
+  var err = (entry.error && !running)
+    ? '<div style="font-size:9px;color:#ef4444;margin-top:2px;font-family:ui-monospace,monospace;word-break:break-all">'+_escHtml(String(entry.error).slice(0,140))+'</div>'
+    : '';
+  var badge = isJudge
+    ? '<span style="background:linear-gradient(135deg,#8b5cf6,#22d3ee);color:#fff;font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;margin-left:6px">JUDGE</span>'
+    : '';
+  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">'
+    + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
+    +   '<div style="font-size:14px;width:18px;text-align:center">'+s.icon+'</div>'
+    +   '<div style="min-width:0;flex:1">'
+    +     '<div style="font-size:11px;font-weight:700;color:var(--text2);display:flex;align-items:center">'+_escHtml(entry.name)+badge+'</div>'
+    +     '<div style="font-size:9px;color:var(--text4);margin-top:1px">'+(entry.provider||'')+cnt+ms+'</div>'
+    +     err
+    +   '</div>'
+    + '</div>'
+    + '<div style="font-size:10px;font-weight:800;color:'+s.color+';white-space:nowrap">'+s.label+'</div>'
+    + '</div>';
+}
+
+// Main progress panel. Pass { running:true } to show the waiting state with
+// all 5 council slots + judge slot in spinner mode. After the response,
+// pass the server's { council_status, judge_status_detail } to show real
+// outcomes. Rendered above the table / grid so the user sees exactly which
+// AIs reviewed and which judged.
+function _renderCouncilProgressPanel(status, opts) {
+  opts = opts || {};
+  var running = !!opts.running;
+  var scopeLabel = opts.scopeLabel || 'Deep AI Review';
+  var council = running
+    ? _COUNCIL_MODELS.map(function(m){ return Object.assign({}, m, { status:'running' }); })
+    : (status && status.council) || [];
+  var judge = running
+    ? Object.assign({}, _JUDGE_MODEL, { status:'running' })
+    : (status && status.judge) || null;
+  var okCnt = council.filter(function(c){ return c.status === 'ok'; }).length;
+  var header = running
+    ? '<span style="color:#8b5cf6">⏳ Running '+scopeLabel+' across 5 council models + 1 judge…</span>'
+    : '<span style="color:var(--text2)">'+okCnt+'/'+council.length+' council models reviewed · judge '+((judge && judge.status) || '—')+'</span>';
+  var ts = (status && status.at)
+    ? ('<span style="font-size:9px;color:var(--text4);margin-left:10px">'+new Date(status.at).toLocaleTimeString()+'</span>')
+    : '';
+  var rows = council.map(function(c){ return _renderCouncilRow(c, running, false); }).join('');
+  rows += judge ? _renderCouncilRow(judge, running, true) : '';
+  return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+    +   '<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em">🧠 '+scopeLabel+' — Council Status</div>'
+    +   '<div style="font-size:10px;font-weight:700">'+header+ts+'</div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">'+rows+'</div>'
+    + '</div>';
+}
+
+// Small HTML escape helper used by the progress panel (and safe to reuse).
+function _escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 
 // The "🧠 Deep AI Review" button that sits next to each column header.
 function _picksAIButton(category) {
@@ -4714,6 +4996,9 @@ async function loadPicksAIReviews(category) {
 async function runPicksAIReview(category) {
   if (_picksAIRunning[category]) return;
   _picksAIRunning[category] = true;
+  // Seed the council status panel in "running" mode so the user sees who's
+  // working as soon as the button is clicked. Cleared on response.
+  _picksCouncilStatus[category] = { running: true, at: Date.now() };
   try { renderStockRecPage(); } catch(e) {}
   try {
     var r = await fetch('/api/picks/ai-review?category=' + category, { method: 'POST' });
@@ -4721,8 +5006,16 @@ async function runPicksAIReview(category) {
     if (d.error) {
       alert('Deep AI Review failed: ' + d.error);
     }
+    if (d.council_status || d.judge_status_detail) {
+      _picksCouncilStatus[category] = {
+        council: d.council_status || [],
+        judge:   d.judge_status_detail || null,
+        at:      Date.now(),
+      };
+    }
   } catch(e) {
     alert('Deep AI Review failed: ' + e.message);
+    _picksCouncilStatus[category] = null;
   } finally {
     _picksAIRunning[category] = false;
     // Force-refresh the cache from DB so the new verdicts show up.
@@ -5916,18 +6209,33 @@ async function runHoldingsAIReview(){
   if (btn){ btn.disabled=true; btn.textContent='🧠 Running across 5 AI models…'; btn.style.opacity='0.75'; }
   var tbl = document.getElementById('holdings-table-wrap');
   if (tbl){
-    tbl.innerHTML = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:30px;text-align:center">'
+    // Show council progress panel in "running" state so the user can see
+    // which AIs are working in real time (the panel is replaced with the
+    // real outcomes as soon as the POST returns).
+    var runningPanel = _renderCouncilProgressPanel(null, { running:true, scopeLabel:'Holdings Deep AI Review' });
+    tbl.innerHTML = runningPanel
+      + '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:30px;text-align:center">'
       + '<div style="font-size:22px;margin-bottom:6px">🧠</div>'
       + '<div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:4px">Running Deep AI Review on '+_holdingsData.holdings.length+' holdings…</div>'
-      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Sending full Varsity payload (fundamentals · technicals · ownership · macro · breadth) to all 5 models in parallel</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Sending full Varsity payload (fundamentals · technicals · ownership · macro · breadth) to all 5 models in parallel, then synthesising with the judge</div>'
       + '<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:240px;margin:0 auto">'
       + '<div style="height:100%;background:linear-gradient(90deg,#8b5cf6,#22d3ee);width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
-      + '</div>' + (tbl.innerHTML || '');
+      + '</div>';
   }
   try{
     var r = await fetch('/api/holdings/ai-review', { method:'POST' });
     var d = await r.json();
     if (d.error) alert('AI review failed: '+d.error);
+    // Capture council + judge status so the progress panel persists after
+    // the POST completes. The Holdings render path reads this state and
+    // shows the panel above the table.
+    if (d.council_status || d.judge_status_detail){
+      _holdingsCouncilStatus = {
+        council: d.council_status || [],
+        judge:   d.judge_status_detail || null,
+        at:      Date.now(),
+      };
+    }
     await loadHoldings();
   }catch(e){
     alert('AI review failed: '+e.message);
@@ -5987,7 +6295,14 @@ function _holdingsRenderTable(){
       + '<div style="color:var(--text4)">Add a stock from the form above to start tracking your portfolio.</div>'
       + '</div>';
   }
-  var h = '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden">';
+  // Show the Council Status panel above the table once the user has run a
+  // Deep AI Review at least once this session. Sticks around so the user can
+  // see exactly which AIs reviewed and which judged.
+  var h = '';
+  if (_holdingsCouncilStatus){
+    h += _renderCouncilProgressPanel(_holdingsCouncilStatus, { scopeLabel: 'Holdings Deep AI Review' });
+  }
+  h += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden">';
   h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
   h += '<thead><tr style="background:var(--bg3);border-bottom:1px solid var(--border)">'
     + '<th style="padding:10px 12px;text-align:left;color:var(--text3);font-size:10px;letter-spacing:.5px">#</th>'
