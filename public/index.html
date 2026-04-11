@@ -4464,22 +4464,18 @@ function renderStockRecPage(){
   html += '</div>';
 
   // ── Score legend — unified, Varsity-aligned ───────────────────────────
-  // Two scores answer two different questions. The same stock has the same
-  // SWING SCORE and LONG TERM SCORE on every tab (Stock Picks, Stock Data,
-  // Portfolio Manager) so there's no mental-model drift between screens.
-  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:14px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:11px">'
-    + '<div style="font-weight:800;color:var(--text2);font-size:11px">How to read the scores</div>'
-    + '<div style="display:flex;align-items:center;gap:6px">'
-      + '<span style="background:rgba(245,158,11,.18);color:#f59e0b;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">REBOUND SCORE</span>'
-      + '<span style="color:var(--text3)">Varsity Rebound Pick — quality business pulled back ≥20% with RSI ≤52. Answers <i>&ldquo;is this a tradeable pullback setup?&rdquo;</i></span>'
-    + '</div>'
-    + '<div style="display:flex;align-items:center;gap:6px">'
-      + '<span style="background:rgba(16,185,129,.18);color:#10b981;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">MOMENTUM SCORE</span>'
-      + '<span style="color:var(--text3)">5-factor blend — FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15. Same score PM Momentum Picks uses. Answers <i>&ldquo;is this a high-conviction 1–3M trade?&rdquo;</i></span>'
-    + '</div>'
-    + '<div style="display:flex;align-items:center;gap:6px">'
-      + '<span style="background:rgba(34,211,238,.18);color:#22d3ee;border-radius:4px;padding:2px 8px;font-weight:800;font-size:10px;letter-spacing:.3px">INVESTMENT SCORE</span>'
-      + '<span style="color:var(--text3)">Varsity 4-pillar — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only. Answers <i>&ldquo;how good is this business to own for 12M?&rdquo;</i></span>'
+  // Stacked vertical layout: one row per score so each pill + description
+  // is a clean aligned line. Label pills share a fixed-width column via
+  // grid so the descriptions line up cleanly across all 3 rows.
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11px">'
+    + '<div style="font-weight:800;color:var(--text2);font-size:11px;letter-spacing:.3px;margin-bottom:10px">HOW TO READ THE SCORES</div>'
+    + '<div style="display:grid;grid-template-columns:150px 1fr;row-gap:8px;column-gap:14px;align-items:center">'
+      + '<span style="background:rgba(245,158,11,.18);color:#f59e0b;border-radius:4px;padding:3px 8px;font-weight:800;font-size:10px;letter-spacing:.3px;text-align:center;white-space:nowrap">REBOUND SCORE</span>'
+      + '<span style="color:var(--text3);line-height:1.5">Varsity Rebound Pick — quality business pulled back ≥20% with RSI ≤52. Answers <i>&ldquo;is this a tradeable pullback setup?&rdquo;</i></span>'
+      + '<span style="background:rgba(16,185,129,.18);color:#10b981;border-radius:4px;padding:3px 8px;font-weight:800;font-size:10px;letter-spacing:.3px;text-align:center;white-space:nowrap">MOMENTUM SCORE</span>'
+      + '<span style="color:var(--text3);line-height:1.5">5-factor blend — FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15. Same score PM Momentum Picks uses. Answers <i>&ldquo;is this a high-conviction 1–3M trade?&rdquo;</i></span>'
+      + '<span style="background:rgba(34,211,238,.18);color:#22d3ee;border-radius:4px;padding:3px 8px;font-weight:800;font-size:10px;letter-spacing:.3px;text-align:center;white-space:nowrap">INVESTMENT SCORE</span>'
+      + '<span style="color:var(--text3);line-height:1.5">Varsity 4-pillar — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only. Answers <i>&ldquo;how good is this business to own for 12M?&rdquo;</i></span>'
     + '</div>'
     + '</div>';
 
@@ -4491,10 +4487,15 @@ function renderStockRecPage(){
   // the Stock Data top-level tab — this page is a compact picker.
   var scopeLbl = (stockRecFilter==='ALL' ? 'All Stocks' : stockRecFilter);
 
+  // `min-width:0` on every direct child is REQUIRED to make 1fr columns
+  // actually equal-width. Without it, CSS grid items default to content
+  // minimum width, so a wide inner table (e.g. long stock names, multi-
+  // line review cells) lets one column bully the others and they end up
+  // mismatched. `min-width:0` forces each column to honor its 1fr share.
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:flex-start">';
 
   // ----- LEFT COLUMN: REBOUND PICKS (quality-on-sale) -----
-  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
   html += '<div><div style="font-weight:800;font-size:14px;color:#f59e0b">🔥 Rebound Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2 — ranked by Rebound Score</div></div>';
@@ -4545,7 +4546,7 @@ function renderStockRecPage(){
   html += '</div>'; // end rebound-picks column
 
   // ----- MIDDLE COLUMN: MOMENTUM PICKS (5-factor composite, Buy+ tier) -----
-  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
   html += '<div><div style="font-weight:800;font-size:14px;color:#10b981">📈 Momentum Picks <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%, ranked by Momentum Score</div></div>';
@@ -4592,7 +4593,7 @@ function renderStockRecPage(){
   html += '</div>'; // end momentum-picks column
 
   // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
-  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px">';
+  html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
   html += '<div><div style="font-weight:800;font-size:14px;color:#22d3ee">🏛 Long-Term Investments <span style="font-size:10px;color:var(--text4);font-weight:500">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth · Not down >35% — ranked by Investment Score</div></div>';
