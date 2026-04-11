@@ -4556,52 +4556,131 @@ function _picksAIReviewsCell(category, sym, rowIdx) {
     return '<span style="font-size:9px;color:var(--text4);font-style:italic">no review</span>';
   }
   var revs = cache[sym];
+  // Split the council (5 fast models) from the judge (ai-judge row). The
+  // tally shows council verdicts only so the user sees the raw 5-way vote;
+  // the judge gets its own separate badge.
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
   var counts = { AGREE:0, CAUTION:0, DISAGREE:0, NO_REVIEW:0 };
-  revs.forEach(function(r){
+  council.forEach(function(r){
     var v = (r.verdict||'NO_REVIEW').toUpperCase();
     if (counts[v]!=null) counts[v]++;
     else counts.CAUTION++;
   });
-  var h = '<div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">';
-  function badge(count, col, icon) {
+  var h = '<div style="display:flex;flex-direction:column;gap:3px">';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center">';
+  // Use the format requested: "N AI ✓ / N AI ⚠ / N AI ✗".
+  function badge(count, col, label) {
     if (!count) return '';
-    return '<span style="background:'+col+'22;color:'+col+';border:1px solid '+col+'55;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+icon+' '+count+'</span>';
+    return '<span title="'+label+'" style="background:'+col+'22;color:'+col+';border:1px solid '+col+'55;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap">'+count+' AI '+label+'</span>';
   }
-  h += badge(counts.AGREE, '#10b981', '✓');
-  h += badge(counts.CAUTION, '#f59e0b', '⚠');
-  h += badge(counts.DISAGREE, '#ef4444', '✗');
-  h += badge(counts.NO_REVIEW, '#64748b', '‼');
+  h += badge(counts.AGREE, '#10b981', '✓ Agree');
+  h += badge(counts.CAUTION, '#f59e0b', '⚠ Caution');
+  h += badge(counts.DISAGREE, '#ef4444', '✗ Disagree');
+  h += badge(counts.NO_REVIEW, '#64748b', '— N/A');
   var expanded = !!_picksAIExpanded[category+':'+sym];
   h += '<button onclick="togglePicksAIDetail(\''+category+'\',\''+sym+'\')" style="background:none;border:none;color:#22d3ee;font-size:9px;cursor:pointer;text-decoration:underline;padding:0 2px">'
     + (expanded?'▾':'▸') + '</button>';
+  h += '</div>';
+  // Judge badge — rendered on its own line so it's visually distinct from
+  // the council tally. Only shown if the judge actually returned a verdict.
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+    var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
+    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+  }
   h += '</div>';
   return h;
 }
 
 // Per-model detail panel that expands under a row when the user clicks "▸".
+// Layout: council grid on top (5 cards, each showing BOTH the Varsity-lens
+// opinion and the pure-lens opinion), then the JUDGE card below as a wide
+// full-width synthesis row so the user can see how the final call relates
+// to the council's vote.
 function _picksAIExpandedPanel(category, sym) {
   var cache = _picksAIReviews[category];
   if (!cache || !cache[sym]) return '<div style="color:var(--text4);font-size:10px">No reviews cached</div>';
   var revs = cache[sym];
-  var h = '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;letter-spacing:.5px;text-transform:uppercase">Per-Model Verdicts · '+sym+'</div>';
-  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px">';
-  revs.forEach(function(rv){
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
+
+  function verdictColor(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'#10b981':v==='CAUTION'?'#f59e0b':v==='DISAGREE'?'#ef4444':'#64748b';
+  }
+  function verdictIcon(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'✓':v==='CAUTION'?'⚠':v==='DISAGREE'?'✗':'‼';
+  }
+
+  var h = '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:6px;letter-spacing:.5px;text-transform:uppercase">Council Verdicts · '+sym+'  <span style="color:var(--text4);font-weight:500;text-transform:none">(each AI gives TWO opinions: Varsity-grounded + pure financial)</span></div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px;margin-bottom:10px">';
+  council.forEach(function(rv){
     var v = (rv.verdict||'NO_REVIEW').toUpperCase();
-    var vCol = v==='AGREE'?'#10b981':v==='CAUTION'?'#f59e0b':v==='DISAGREE'?'#ef4444':'#64748b';
-    var vIcon = v==='AGREE'?'✓':v==='CAUTION'?'⚠':v==='DISAGREE'?'✗':'‼';
+    var vCol = verdictColor(v);
+    var vIcon = verdictIcon(v);
     h += '<div style="background:var(--bg2);border:1px solid '+vCol+'33;border-left:3px solid '+vCol+';border-radius:6px;padding:8px 10px">';
-    h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">';
+    h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">';
     h += '<span style="color:'+vCol+';font-weight:800;font-size:11px">'+vIcon+' '+v+'</span>';
     h += '<span style="color:var(--text4);font-size:9px">· '+(rv.model_name||rv.model_id)+'</span>';
     if (rv.confidence!=null) h += '<span style="margin-left:auto;font-size:9px;color:var(--text3)">'+rv.confidence+'%</span>';
     h += '</div>';
-    if (rv.varsity_module)   h += '<div style="font-size:9px;color:#22d3ee;margin-bottom:2px">📘 '+rv.varsity_module+'</div>';
-    if (rv.varsity_reasoning)h += '<div style="font-size:10px;color:var(--text2);line-height:1.4;margin-bottom:3px">'+rv.varsity_reasoning+'</div>';
-    if (rv.recommendation)   h += '<div style="font-size:9px;color:var(--text3)"><b style="color:var(--text2)">Rec:</b> '+rv.recommendation+'</div>';
-    if (rv.risk_flag)        h += '<div style="margin-top:3px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px">⚠ '+rv.risk_flag+'</div>';
+    // VARSITY-grounded lens
+    var vv = (rv.varsity_verdict||v).toUpperCase();
+    var vvCol = verdictColor(vv);
+    h += '<div style="background:rgba(34,211,238,.05);border-radius:4px;padding:5px 7px;margin-bottom:4px">';
+    h += '<div style="font-size:8px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:2px">📘 WITH VARSITY KNOWLEDGE <span style="color:'+vvCol+'">· '+verdictIcon(vv)+' '+vv+'</span></div>';
+    if (rv.varsity_module)    h += '<div style="font-size:9px;color:#22d3ee;margin-bottom:2px">'+rv.varsity_module+'</div>';
+    if (rv.varsity_reasoning) h += '<div style="font-size:10px;color:var(--text2);line-height:1.4">'+rv.varsity_reasoning+'</div>';
+    else                      h += '<div style="font-size:9px;color:var(--text4);font-style:italic">(no varsity reasoning returned)</div>';
+    h += '</div>';
+    // PURE (non-Varsity) lens
+    var pv = (rv.pure_verdict||'').toUpperCase();
+    var pvCol = verdictColor(pv || v);
+    h += '<div style="background:rgba(167,139,250,.05);border-radius:4px;padding:5px 7px;margin-bottom:4px">';
+    h += '<div style="font-size:8px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:2px">🧠 PURE FINANCIAL (no Varsity) ' + (pv?'<span style="color:'+pvCol+'">· '+verdictIcon(pv)+' '+pv+'</span>':'') + '</div>';
+    if (rv.pure_reasoning)  h += '<div style="font-size:10px;color:var(--text2);line-height:1.4">'+rv.pure_reasoning+'</div>';
+    else                    h += '<div style="font-size:9px;color:var(--text4);font-style:italic">(no pure reasoning returned)</div>';
+    h += '</div>';
+    if (rv.recommendation) h += '<div style="font-size:9px;color:var(--text3);margin-top:3px"><b style="color:var(--text2)">Rec:</b> '+rv.recommendation+'</div>';
+    if (rv.risk_flag)      h += '<div style="margin-top:3px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px">⚠ '+rv.risk_flag+'</div>';
     h += '</div>';
   });
   h += '</div>';
+
+  // Judge card — distinct, full-width, with gradient border.
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jCol = verdictColor(jv);
+    var jIcon = verdictIcon(jv);
+    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
+    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+    h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="color:var(--text4);font-size:9px">· '+(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
+    if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
+    h += '</div>';
+    // The judge sees both lenses; we render its varsity_reasoning as
+    // "With Varsity" and pure_reasoning as "Without Varsity" — same shape
+    // as the council cards for visual consistency.
+    if (judge.varsity_reasoning) {
+      h += '<div style="background:rgba(34,211,238,.07);border-radius:4px;padding:6px 8px;margin-bottom:4px">';
+      h += '<div style="font-size:8px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:2px">📘 SYNTHESIS WITH VARSITY KNOWLEDGE</div>';
+      h += '<div style="font-size:10px;color:var(--text2);line-height:1.45">'+judge.varsity_reasoning+'</div>';
+      h += '</div>';
+    }
+    if (judge.pure_reasoning) {
+      h += '<div style="background:rgba(167,139,250,.07);border-radius:4px;padding:6px 8px;margin-bottom:4px">';
+      h += '<div style="font-size:8px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:2px">🧠 SYNTHESIS WITHOUT VARSITY (pure financial)</div>';
+      h += '<div style="font-size:10px;color:var(--text2);line-height:1.45">'+judge.pure_reasoning+'</div>';
+      h += '</div>';
+    }
+    if (judge.recommendation) h += '<div style="font-size:9px;color:var(--text3);margin-top:4px"><b style="color:var(--text2)">Judge Recommendation:</b> '+judge.recommendation+'</div>';
+    if (judge.risk_flag)      h += '<div style="margin-top:4px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px">⚠ '+judge.risk_flag+'</div>';
+    h += '</div>';
+  }
   return h;
 }
 
@@ -5948,25 +6027,8 @@ function _holdingsRenderTable(){
     // Expanded per-model detail row
     if (_holdingsExpandedAI[h0.symbol] && h0.ai_reviews && h0.ai_reviews.length){
       h += '<tr style="background:var(--bg3)"><td colspan="10" style="padding:14px 18px">';
-      h += '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:8px;letter-spacing:.5px;text-transform:uppercase">Per-Model Verdicts · '+h0.symbol+'</div>';
-      h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">';
-      h0.ai_reviews.forEach(function(rv){
-        var v = (rv.verdict||'NO_REVIEW').toUpperCase();
-        var vCol = v==='AGREE'?'#10b981':v==='CAUTION'?'#f59e0b':v==='DISAGREE'?'#ef4444':'#64748b';
-        var vIcon = v==='AGREE'?'✓':v==='CAUTION'?'⚠':v==='DISAGREE'?'✗':'‼';
-        h += '<div style="background:var(--bg2);border:1px solid '+vCol+'33;border-left:3px solid '+vCol+';border-radius:8px;padding:10px 12px">';
-        h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
-        h += '<span style="color:'+vCol+';font-weight:800;font-size:12px">'+vIcon+' '+v+'</span>';
-        h += '<span style="color:var(--text4);font-size:10px">· '+(rv.model_name||rv.model_id)+'</span>';
-        if (rv.confidence!=null) h += '<span style="margin-left:auto;font-size:10px;color:var(--text3)">'+rv.confidence+'%</span>';
-        h += '</div>';
-        if (rv.varsity_module) h += '<div style="font-size:10px;color:#22d3ee;margin-bottom:3px">📘 '+rv.varsity_module+'</div>';
-        if (rv.varsity_reasoning) h += '<div style="font-size:11px;color:var(--text2);line-height:1.5;margin-bottom:4px">'+rv.varsity_reasoning+'</div>';
-        if (rv.recommendation) h += '<div style="font-size:10px;color:var(--text3)"><b style="color:var(--text2)">Rec:</b> '+rv.recommendation+'</div>';
-        if (rv.risk_flag) h += '<div style="margin-top:4px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px">⚠ '+rv.risk_flag+'</div>';
-        h += '</div>';
-      });
-      h += '</div></td></tr>';
+      h += _holdingsAIExpandedPanel(h0);
+      h += '</td></tr>';
     }
   });
   h += '</tbody></table></div></div>';
@@ -5978,25 +6040,121 @@ function _holdingsRenderAIReviewsCell(h0){
   if (!revs.length){
     return '<div style="font-size:10px;color:var(--text4);font-style:italic">No AI review yet — click 🧠 Deep AI Review above</div>';
   }
+  // Split the council (5 fast models) from the judge (ai-judge row). The
+  // tally shows council verdicts only; the judge is rendered as its own
+  // full-width badge below so the user sees the 6-layer decision clearly.
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
   var counts = { AGREE:0, CAUTION:0, DISAGREE:0, NO_REVIEW:0 };
-  revs.forEach(function(r){
+  council.forEach(function(r){
     var v = (r.verdict||'NO_REVIEW').toUpperCase();
     if (counts[v]!=null) counts[v]++;
     else counts.CAUTION++;
   });
-  var h = '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
-  function badge(label, count, col, icon){
+  var h = '<div style="display:flex;flex-direction:column;gap:4px">';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
+  function badge(label, count, col){
     if (!count) return '';
-    return '<span style="background:'+col+'22;color:'+col+';border:1px solid '+col+'44;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap">'+icon+' '+count+' '+label+'</span>';
+    return '<span style="background:'+col+'22;color:'+col+';border:1px solid '+col+'44;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap">'+count+' AI '+label+'</span>';
   }
-  h += badge('Agreed',   counts.AGREE,    '#10b981', '✓');
-  h += badge('Caution',  counts.CAUTION,  '#f59e0b', '⚠');
-  h += badge('Disagree', counts.DISAGREE, '#ef4444', '✗');
-  h += badge('No Review',counts.NO_REVIEW,'#64748b', '‼');
+  h += badge('✓ Agree',    counts.AGREE,    '#10b981');
+  h += badge('⚠ Caution',  counts.CAUTION,  '#f59e0b');
+  h += badge('✗ Disagree', counts.DISAGREE, '#ef4444');
+  h += badge('— N/A',      counts.NO_REVIEW,'#64748b');
   var expanded = !!_holdingsExpandedAI[h0.symbol];
   h += '<button onclick="toggleHoldingsAIDetail(\''+h0.symbol+'\')" style="background:none;border:none;color:#22d3ee;font-size:10px;cursor:pointer;text-decoration:underline;padding:2px 4px;margin-left:2px">'
-    + (expanded?'▾ Hide':'▸ Show AI Reviews ('+revs.length+' models)') + '</button>';
+    + (expanded?'▾ Hide':'▸ Show AI Reviews ('+council.length+' council'+(judge?' + judge':'')+')') + '</button>';
   h += '</div>';
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jc = jv==='AGREE'?'#10b981':jv==='CAUTION'?'#f59e0b':jv==='DISAGREE'?'#ef4444':'#64748b';
+    var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
+    h += '<span title="Claude Opus 4.6 final synthesis" style="background:linear-gradient(90deg,#7c3aed22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:#a78bfa">⚖ JUDGE</span> '+jl+'</span>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Full expanded AI review panel for a single holding — shared shape with
+// _picksAIExpandedPanel: council cards (each showing Varsity + pure opinions)
+// followed by a distinct Judge synthesis card.
+function _holdingsAIExpandedPanel(h0){
+  var revs = h0.ai_reviews || [];
+  var council = revs.filter(function(r){ return r.model_id !== 'ai-judge'; });
+  var judge   = revs.find(function(r){ return r.model_id === 'ai-judge'; });
+
+  function verdictColor(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'#10b981':v==='CAUTION'?'#f59e0b':v==='DISAGREE'?'#ef4444':'#64748b';
+  }
+  function verdictIcon(v) {
+    v = (v||'NO_REVIEW').toUpperCase();
+    return v==='AGREE'?'✓':v==='CAUTION'?'⚠':v==='DISAGREE'?'✗':'‼';
+  }
+
+  var h = '<div style="font-size:10px;font-weight:700;color:var(--text3);margin-bottom:8px;letter-spacing:.5px;text-transform:uppercase">Council Verdicts · '+h0.symbol+'  <span style="color:var(--text4);font-weight:500;text-transform:none">(each AI gives TWO opinions: Varsity-grounded + pure financial)</span></div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;margin-bottom:12px">';
+  council.forEach(function(rv){
+    var v = (rv.verdict||'NO_REVIEW').toUpperCase();
+    var vCol = verdictColor(v);
+    var vIcon = verdictIcon(v);
+    h += '<div style="background:var(--bg2);border:1px solid '+vCol+'33;border-left:3px solid '+vCol+';border-radius:8px;padding:10px 12px">';
+    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+    h += '<span style="color:'+vCol+';font-weight:800;font-size:12px">'+vIcon+' '+v+'</span>';
+    h += '<span style="color:var(--text4);font-size:10px">· '+(rv.model_name||rv.model_id)+'</span>';
+    if (rv.confidence!=null) h += '<span style="margin-left:auto;font-size:10px;color:var(--text3)">'+rv.confidence+'%</span>';
+    h += '</div>';
+    // WITH VARSITY lens
+    var vv = (rv.varsity_verdict||v).toUpperCase();
+    var vvCol = verdictColor(vv);
+    h += '<div style="background:rgba(34,211,238,.05);border-radius:5px;padding:6px 8px;margin-bottom:5px">';
+    h += '<div style="font-size:9px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:3px">📘 WITH VARSITY KNOWLEDGE <span style="color:'+vvCol+'">· '+verdictIcon(vv)+' '+vv+'</span></div>';
+    if (rv.varsity_module)    h += '<div style="font-size:10px;color:#22d3ee;margin-bottom:2px">'+rv.varsity_module+'</div>';
+    if (rv.varsity_reasoning) h += '<div style="font-size:11px;color:var(--text2);line-height:1.5">'+rv.varsity_reasoning+'</div>';
+    else                      h += '<div style="font-size:10px;color:var(--text4);font-style:italic">(no varsity reasoning)</div>';
+    h += '</div>';
+    // WITHOUT VARSITY (pure) lens
+    var pv = (rv.pure_verdict||'').toUpperCase();
+    var pvCol = verdictColor(pv || v);
+    h += '<div style="background:rgba(167,139,250,.05);border-radius:5px;padding:6px 8px;margin-bottom:5px">';
+    h += '<div style="font-size:9px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:3px">🧠 PURE FINANCIAL (no Varsity) ' + (pv?'<span style="color:'+pvCol+'">· '+verdictIcon(pv)+' '+pv+'</span>':'') + '</div>';
+    if (rv.pure_reasoning) h += '<div style="font-size:11px;color:var(--text2);line-height:1.5">'+rv.pure_reasoning+'</div>';
+    else                   h += '<div style="font-size:10px;color:var(--text4);font-style:italic">(no pure reasoning)</div>';
+    h += '</div>';
+    if (rv.recommendation) h += '<div style="font-size:10px;color:var(--text3);margin-top:4px"><b style="color:var(--text2)">Rec:</b> '+rv.recommendation+'</div>';
+    if (rv.risk_flag) h += '<div style="margin-top:4px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px">⚠ '+rv.risk_flag+'</div>';
+    h += '</div>';
+  });
+  h += '</div>';
+
+  // Judge card
+  if (judge && judge.verdict) {
+    var jv = (judge.verdict||'').toUpperCase();
+    var jCol = verdictColor(jv);
+    var jIcon = verdictIcon(jv);
+    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:8px;padding:12px 14px">';
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    h += '<span style="background:linear-gradient(90deg,#7c3aed,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:12px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="color:var(--text4);font-size:10px">· '+(judge.model_name||'Claude Opus 4.6')+'</span>';
+    h += '<span style="color:'+jCol+';font-weight:800;font-size:13px;margin-left:auto">'+jIcon+' '+jv+'</span>';
+    if (judge.confidence!=null) h += '<span style="font-size:10px;color:var(--text3)">'+judge.confidence+'%</span>';
+    h += '</div>';
+    if (judge.varsity_reasoning) {
+      h += '<div style="background:rgba(34,211,238,.07);border-radius:5px;padding:7px 10px;margin-bottom:5px">';
+      h += '<div style="font-size:9px;font-weight:700;color:#22d3ee;letter-spacing:.5px;margin-bottom:3px">📘 SYNTHESIS WITH VARSITY KNOWLEDGE</div>';
+      h += '<div style="font-size:11px;color:var(--text2);line-height:1.5">'+judge.varsity_reasoning+'</div>';
+      h += '</div>';
+    }
+    if (judge.pure_reasoning) {
+      h += '<div style="background:rgba(167,139,250,.07);border-radius:5px;padding:7px 10px;margin-bottom:5px">';
+      h += '<div style="font-size:9px;font-weight:700;color:#a78bfa;letter-spacing:.5px;margin-bottom:3px">🧠 SYNTHESIS WITHOUT VARSITY (pure financial)</div>';
+      h += '<div style="font-size:11px;color:var(--text2);line-height:1.5">'+judge.pure_reasoning+'</div>';
+      h += '</div>';
+    }
+    if (judge.recommendation) h += '<div style="font-size:10px;color:var(--text3);margin-top:5px"><b style="color:var(--text2)">Judge Recommendation:</b> '+judge.recommendation+'</div>';
+    if (judge.risk_flag) h += '<div style="margin-top:5px;display:inline-block;background:rgba(239,68,68,.15);color:#ef4444;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px">⚠ '+judge.risk_flag+'</div>';
+    h += '</div>';
+  }
   return h;
 }
 
@@ -7827,16 +7985,26 @@ function renderArchitecturePage(){
     + _archNote('The old PM <code>psuggest</code> backend (<code>buildPortfolioSuggestion</code>, <code>buildPortfolioSuggestionV2</code>, <code>validateSignalsWithAI</code>, <code>validateLongTermPortfolioWithAI</code>) is intentionally left intact — only the topbar entry point and <code>validModes</code> array were switched to <code>holdings</code>. The backend remains callable via direct API hits for testing, but no UI route lands there.')
   );
 
-  // ── STOCK PICKS AI REVIEW ──
-  h += _archCard('🧠', 'Stock Picks → Deep AI Review (top 10 per column)',
-      'Each column on the Stock Picks page (Rebound / Momentum / Long-Term Investments) has its own <b>🧠 Deep AI Review</b> button in the header that runs the full 5-model AI review on the <b>top 10</b> of that category. Results are cached in the <code>picks_ai_reviews</code> table (keyed on category + symbol + model_id, shared across all users since picks are global) and rendered as a compact <b>REVIEWS</b> column next to each stock name with expandable per-model detail.',
-      '<div style="margin-bottom:10px"><b>Flow:</b></div>'
-    + _archPillar('Pick top 10', '_getTop10ForCategory', 'Server replicates the exact client filter+sort: Rebound = <code>isFallenAngel</code> sorted by <code>fallenScore</code> desc; Momentum = <code>composite ≥ 55</code> sorted by <code>composite</code> desc; Long-Term = <code>scoreV2 ≥ 60</code> + quality gates, sorted by <code>scoreV2</code> desc. Reads from <code>_lastScoredV2</code> — a module-level cache of the fully-scored rows populated at the end of every <code>/api/stocks/score?scoreVersion=2</code> call. The cache is needed because <code>stockFundamentals</code> stores RAW fundamentals only; fields like <code>isFallenAngel</code> / <code>fallenScore</code> / <code>composite</code> / <code>scoreV2</code> are computed fresh per request and never persisted. Slices top 10 to cap LLM cost.')
-    + _archPillar('Build prompt', '_buildPickStockBlock', 'For each of the 10 symbols, emits a full-data block (CMP + 52wH/L + DMA200 + %Above/FromHigh + ROE/ROCE/D-E/PE/PB/EPS/OPM/FCF/DivYield + EarGrowth/RevGrowth/SalesGr5y/ROE5yAvg + RSI/MACD/Supertrend/ADX/Ichimoku/6M% + Beta/AnnualVol/Sharpe + Promoter/Pledged/FII/DII + ReboundScore/MomentumScore/InvestmentScore). Prepends macro (VIX/repo/crude/USDINR/FII-DII) + market breadth (Nifty 1m/6m/1y + breadth).')
-    + _archPillar('Category framing', 'categoryFraming', 'Each category sends a distinct task prompt: Rebound asks "valid rebound setup or falling knife?", Momentum asks "durable trend or blow-off top?", Long-Term asks "quality compounder or quality trap?". Verdict set: BUY_CONFIRM / HOLD / MODIFY / EXIT → normalised to AGREE / CAUTION / DISAGREE via <code>_normalizeHoldingsVerdict</code>.')
-    + _archPillar('Fan out', 'POST /api/picks/ai-review?category=', '<code>runPicksAIReview(category)</code> calls <code>callAIModel()</code> across all 5 models in parallel (endpoint tag = <code>picks_&lt;category&gt;</code> so each category has its own per-day cost cap). Calls <code>buildConsensus()</code>, upserts on (category, symbol, model_id).')
-    + _archPillar('REVIEWS column', 'GET /api/picks/ai-review?category=', 'Client fetches cached reviews for all 3 categories on Stock Picks mount. Badges (✓/⚠/✗/‼) render next to each stock name for the top 10 rows; rows 11-25 show "—" (top-10 only). Per-row ▸ button expands an inline per-model detail panel.')
-    + _archNote('State: <code>_picksAIReviews</code>, <code>_picksAILoading</code>, <code>_picksAIRunning</code>, <code>_picksAIExpanded</code>. Re-running the review for a category overwrites the rows for just that category — the other two stay cached. The DB table is shared across users because picks are computed from the global universe, not per-user.')
+  // ── DEEP AI REVIEW — DUAL OPINION + JUDGE ──
+  h += _archCard('🧠', 'Deep AI Review — 5-model council + 6th AI judge, dual opinion per stock',
+      'Both the Stock Picks columns (Rebound / Momentum / Long-Term) and the Holdings tab use the same Deep AI Review engine. The server fans out to a COUNCIL of 5 fast/cheap models in parallel, then runs a 6th expensive JUDGE (Claude Opus 4.6 by default) that synthesises all 5 council outputs into one final verdict per stock. Every model — council and judge — produces TWO opinions per stock: one WITH Varsity knowledge (Zerodha Varsity modules cited) and one WITHOUT (pure first-principles financial analysis). The UI shows the council tally in the REVIEWS column and a separate judge badge, with an expand toggle that reveals all council cards (each showing both lenses) plus a distinct full-width judge synthesis card.',
+      '<div style="margin-bottom:10px"><b>What the AI sees per stock (100+ data fields):</b></div>'
+    + _archPillar('Shared builder', '_buildFullStockBlock', 'One helper used by both Holdings and Picks. Merges raw <code>stockFundamentals</code> + <code>FUND_EXT</code> + the scored row from <code>_lastScoredV2</code> and emits the full field set organised by section: IDENTITY, PRICE + 52W + DMA + RETURNS, VALUATION, PROFITABILITY, DUPONT, GROWTH, QUARTERLY, BALANCE SHEET, CASH FLOW, OWNERSHIP, RSI, MACD, TREND, VOLUME, S/R + FIB + PIVOTS, RISK, SCORES (ReboundScore + MomentumScore + InvestmentScoreV2 + sub-scores + bucket + expected return), FLAGS. Missing values emit "?" explicitly so the model knows "unknown" vs zero.')
+    + _archPillar('WHY-WE-PICKED lead line', 'per stock', 'For Stock Picks, the first line under each stock header names the exact rule that qualified it for the category: "WHY WE PICKED #3 MOMENTUM — MomentumScore=72/100 (≥55 required, our 5-factor composite)…". For Holdings, a HOLDING lead line emits quantity + avg buy + invested + current + P&L instead. This tells the AI what to agree or disagree with.')
+    + _archPillar('Category definitions + criteria', '_buildCategoryContextBlock', 'Sent ONCE per Picks review (not per stock). A full block that defines Momentum / Rebound / Long-Term, names the hard gates a stock must pass to enter each list, and explains our scoring formula. Without this the AI does not know what ProTrader means by "momentum" vs "rebound" and cannot judge the pick intent — only the stock in isolation.')
+    + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">Council fan-out (5 fast models, parallel)</div>'
+    + _archPillar('AI_MODELS', '5 models', 'Groq Llama 3.3 70B · GPT-4.1-nano · DeepSeek V3 · Claude Haiku 4.5 · Mistral Small. Same fan-out pattern as <code>validateSignalsWithAI</code>, using the shared <code>VARSITY_KNOWLEDGE_PROMPT</code> system prompt and per-endpoint <code>LLM_DAILY_CAP</code> budget.')
+    + _archPillar('Dual opinion per stock', 'varsity_* + pure_*', 'User prompt instructs each model to form TWO independent opinions: (1) VARSITY OPINION — cite Zerodha Varsity modules M1-M17; (2) PURE OPINION — first-principles financial analysis with NO Varsity citations. If the two agree = strong conviction, if they disagree the user sees the disagreement explicitly. JSON schema: <code>verdict</code> (consensus) + <code>varsity_verdict</code> + <code>varsity_reasoning</code> + <code>varsity_module</code> + <code>pure_verdict</code> + <code>pure_reasoning</code> + <code>recommendation</code> + <code>risk_flag</code>.')
+    + _archPillar('Consensus', 'buildConsensus', 'Per-stock majority vote across the 5 council models. Picks best reasoning from the highest-confidence model for each lens separately (so the top Varsity quote and the top Pure quote can come from different council members). Fills in NO_REVIEW for models that did not return a row for a given stock.')
+    + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">6th AI: THE JUDGE</div>'
+    + _archPillar('AI_JUDGE_MODEL', 'Claude Opus 4.6', '<code>runAIJudge</code> runs AFTER the council. Sees the original stock data blocks + a transcript of every council model\'s per-stock verdict and dual reasoning, and is instructed to synthesise ONE final verdict per stock. Can overrule the council majority when the data supports it. Env override: <code>AI_JUDGE_MODEL</code>. Non-fatal: if the judge errors/skips, the council consensus still stands.')
+    + _archPillar('Judge output', 'per_model[\'ai-judge\']', 'Persisted as a row in the same <code>holdings_ai_reviews</code> / <code>picks_ai_reviews</code> table with <code>model_id = \'ai-judge\'</code>, so the existing upsert + GET paths work unchanged. UI special-cases this row as the "AI JUDGE · FINAL DECISION" card at the bottom of the expanded panel. Judge fields: <code>judge_verdict</code>, <code>judge_confidence</code>, <code>judge_varsity_reasoning</code>, <code>judge_pure_reasoning</code>, <code>judge_council_agreement</code> (UNANIMOUS / MAJORITY / SPLIT / OVERRULED).')
+    + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">DB schema</div>'
+    + _archPillar('holdings_ai_reviews + picks_ai_reviews', 'dual opinion + judge', 'Columns: verdict (consensus) + confidence + varsity_module + varsity_reasoning + <b>varsity_verdict</b> + <b>pure_reasoning</b> + <b>pure_verdict</b> + recommendation + risk_flag. Added via ALTER TABLE IF NOT EXISTS so existing deployments migrate cleanly. The judge occupies a row with model_id=\'ai-judge\' next to the 5 council rows per (user/category, symbol). Re-running the review overwrites the rows for just that scope.')
+    + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">UI</div>'
+    + _archPillar('REVIEWS column tally', 'per row', 'Council vote tally in the format "2 AI ✓ Agree / 2 AI ✗ Disagree / 1 AI ⚠ Caution" — only the 5 council models count here. Below the council tally, a separate JUDGE badge with gradient border shows the 6th AI\'s final call. Clicking ▸ expands the full detail panel.')
+    + _archPillar('Expanded panel', 'council grid + judge card', 'Council grid: 5 cards, each with the model name + consensus verdict and TWO reasoning blocks — 📘 WITH VARSITY KNOWLEDGE (cyan) and 🧠 PURE FINANCIAL (purple). Below the grid a full-width gradient Judge card shows the synthesis with the same two lenses, the judge recommendation, risk flag, and council-agreement tag. Holdings reuses <code>_holdingsAIExpandedPanel</code>; Picks uses <code>_picksAIExpandedPanel</code> — same visual shape.')
+    + _archNote('Re-running Deep AI Review for a category/user overwrites rows for just that scope — other scopes stay cached. Judge calls are capped by the per-endpoint LLM budget under the <code>*_judge</code> tag (e.g. <code>holdings_judge</code>, <code>picks_rebound_judge</code>), so a runaway loop cannot burn more than the daily Opus quota.')
   );
 
   // ── CONFUSION CLARIFIER ──

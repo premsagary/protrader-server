@@ -598,16 +598,24 @@ async function initDB() {
         symbol            VARCHAR(32) NOT NULL,
         model_id          VARCHAR(40) NOT NULL,
         model_name        VARCHAR(80),
-        verdict           VARCHAR(32),    -- AGREE / CAUTION / DISAGREE / NO_REVIEW / ERROR
+        verdict           VARCHAR(32),    -- CONSENSUS verdict (AGREE / CAUTION / DISAGREE / NO_REVIEW)
         confidence        INTEGER,
         varsity_module    VARCHAR(80),
         varsity_reasoning TEXT,
+        varsity_verdict   VARCHAR(32),    -- Verdict from the Varsity-grounded lens alone
+        pure_reasoning    TEXT,           -- Reasoning from the pure (non-Varsity) lens
+        pure_verdict      VARCHAR(32),    -- Verdict from the pure lens alone
         recommendation    TEXT,
         risk_flag         VARCHAR(32),
         reviewed_at       TIMESTAMP DEFAULT NOW(),
         UNIQUE(username, symbol, model_id)
       )
     `);
+    // Additive migration for existing deployments that pre-date the dual
+    // opinion schema — cheap no-op on fresh installs.
+    await pool.query(`ALTER TABLE holdings_ai_reviews ADD COLUMN IF NOT EXISTS varsity_verdict VARCHAR(32)`);
+    await pool.query(`ALTER TABLE holdings_ai_reviews ADD COLUMN IF NOT EXISTS pure_reasoning TEXT`);
+    await pool.query(`ALTER TABLE holdings_ai_reviews ADD COLUMN IF NOT EXISTS pure_verdict VARCHAR(32)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_holdings_ai_reviews_username ON holdings_ai_reviews(username)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_holdings_ai_reviews_username_symbol ON holdings_ai_reviews(username, symbol)`);
 
@@ -624,16 +632,23 @@ async function initDB() {
         symbol            VARCHAR(32) NOT NULL,
         model_id          VARCHAR(40) NOT NULL,
         model_name        VARCHAR(80),
-        verdict           VARCHAR(32),            -- AGREE / CAUTION / DISAGREE / NO_REVIEW
+        verdict           VARCHAR(32),            -- CONSENSUS verdict (AGREE / CAUTION / DISAGREE / NO_REVIEW)
         confidence        INTEGER,
         varsity_module    VARCHAR(80),
         varsity_reasoning TEXT,
+        varsity_verdict   VARCHAR(32),            -- Verdict from the Varsity-grounded lens alone
+        pure_reasoning    TEXT,                   -- Reasoning from the pure (non-Varsity) lens
+        pure_verdict      VARCHAR(32),            -- Verdict from the pure lens alone
         recommendation    TEXT,
         risk_flag         VARCHAR(32),
         reviewed_at       TIMESTAMP DEFAULT NOW(),
         UNIQUE(category, symbol, model_id)
       )
     `);
+    // Additive migration for existing deployments (cheap no-op on fresh installs).
+    await pool.query(`ALTER TABLE picks_ai_reviews ADD COLUMN IF NOT EXISTS varsity_verdict VARCHAR(32)`);
+    await pool.query(`ALTER TABLE picks_ai_reviews ADD COLUMN IF NOT EXISTS pure_reasoning TEXT`);
+    await pool.query(`ALTER TABLE picks_ai_reviews ADD COLUMN IF NOT EXISTS pure_verdict VARCHAR(32)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category ON picks_ai_reviews(category)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_reviews_category_symbol ON picks_ai_reviews(category, symbol)`);
 
@@ -16096,6 +16111,21 @@ const AI_MODELS = [
   { id: 'mistral', name: 'Mistral Small', provider: 'mistral', model: 'mistral-small-latest' },
 ];
 
+// ── 6th AI: THE JUDGE ──
+// The five models above are the "council" — fast/cheap per-model opinions.
+// The judge is a separate, deliberately-expensive frontier model that sees
+// all five council outputs and synthesises one final verdict per stock. It
+// runs ONCE per review (not per stock × model), so the cost premium is
+// bounded. Uses model_id='ai-judge' when persisted so the UI can special-
+// case it as the "Final Synthesis" row next to the council cards.
+// Override with AI_JUDGE_MODEL env var; defaults to Claude Opus 4.6.
+const AI_JUDGE_MODEL = {
+  id: 'ai-judge',
+  name: 'Claude Opus 4.6 (Judge)',
+  provider: 'anthropic',
+  model: process.env.AI_JUDGE_MODEL || 'claude-opus-4-6',
+};
+
 // =============================================================================
 // LLM COST CAP — daily budget discipline (Varsity M9: risk management applied
 // to API spend). Each LLM call is counted against a (date, endpoint, model)
@@ -16232,8 +16262,9 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
       if (!GROQ_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
       const groqSystemPrompt = `You are an expert Indian stock market analyst trained on Zerodha Varsity (all 17 modules).
 Validate portfolio signals against Varsity principles: fundamental analysis (Module 3), technical analysis (Modules 1-2), risk management (Module 9), derivatives hedging (Modules 5-6).
-For each stock, evaluate: Is the current signal (BUY/HOLD/EXIT) justified? Check FA (ROE, PE, PEG, debt), TA (RSI, MACD, moving averages, volume), and risk (position sizing, stop-loss, sector concentration).
-Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGREE|MODIFY","confidence":0-100,"signal_type":"HOLD|FRESH_BUY|EXIT","varsity_module":"Module X+Y","varsity_reasoning":"reason","recommendation":"action","risk_flag":"warning"}]}`;
+For each stock in the user's list, evaluate: Is the current signal (BUY/HOLD/EXIT) justified? Check FA (ROE, PE, PEG, debt), TA (RSI, MACD, moving averages, volume), and risk (position sizing, stop-loss, sector concentration).
+CRITICAL OUTPUT RULE: signal_reviews MUST contain ONE entry per symbol the user asked about. If the user's prompt lists N symbols you MUST return N entries. NEVER return a partial list. The JSON schema below shows the shape of ONE element; the array itself contains as many elements as there are symbols in the user prompt.
+Respond ONLY in JSON: {"signal_reviews":[{"sym":"SYMBOL","verdict":"AGREE|DISAGREE|MODIFY","confidence":0-100,"signal_type":"HOLD|FRESH_BUY|EXIT","varsity_module":"Module X+Y","varsity_reasoning":"reason","recommendation":"action","risk_flag":"warning"}, /* ...one per symbol... */]}`;
       const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
@@ -16329,6 +16360,13 @@ function buildConsensus(modelResults, allowedSymbols) {
         confidence: rev.confidence,
         varsity_module: rev.varsity_module,
         varsity_reasoning: rev.varsity_reasoning,
+        // Dual opinion fields — populated when the prompt asks for both a
+        // Varsity-grounded opinion AND a pure/first-principles opinion. When
+        // the prompt only asks for one opinion these are undefined and the
+        // existing rendering path still works.
+        varsity_verdict: rev.varsity_verdict,
+        pure_verdict: rev.pure_verdict,
+        pure_reasoning: rev.pure_reasoning,
         recommendation: rev.recommendation,
         risk_flag: rev.risk_flag,
         signal_type: rev.signal_type,
@@ -16360,6 +16398,13 @@ function buildConsensus(modelResults, allowedSymbols) {
     // Pick the best reasoning (from the model with highest confidence, excluding NO_REVIEW)
     const bestModel = Object.entries(s.models).filter(([,m]) => m.verdict !== 'NO_REVIEW').sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
 
+    // Pick best pure opinion separately — the best Varsity reasoning may
+    // come from one model while the best pure reasoning comes from another,
+    // and we want to surface the strongest of each at the consensus layer.
+    const bestPureModel = Object.entries(s.models)
+      .filter(([,m]) => m.verdict !== 'NO_REVIEW' && m.pure_reasoning)
+      .sort((a, b) => (b[1].confidence || 0) - (a[1].confidence || 0))[0];
+
     return {
       sym: s.sym,
       signal_type: bestModel?.[1]?.signal_type || '?',
@@ -16372,6 +16417,11 @@ function buildConsensus(modelResults, allowedSymbols) {
       confidence: Math.round(Object.values(s.models).filter(m => m.verdict !== 'NO_REVIEW').reduce((a, m) => a + (m.confidence || 0), 0) / respondedCount),
       varsity_module: bestModel?.[1]?.varsity_module || '',
       varsity_reasoning: bestModel?.[1]?.varsity_reasoning || '',
+      // Dual opinion — surfaced at the top level so the UI can render both
+      // lenses without having to dig into per_model.
+      varsity_verdict: bestModel?.[1]?.varsity_verdict || bestModel?.[1]?.verdict || '',
+      pure_verdict: bestPureModel?.[1]?.pure_verdict || '',
+      pure_reasoning: bestPureModel?.[1]?.pure_reasoning || '',
       recommendation: bestModel?.[1]?.recommendation || '',
       risk_flag: bestModel?.[1]?.risk_flag || '',
       per_model: s.models,
@@ -16404,6 +16454,97 @@ function buildConsensus(modelResults, allowedSymbols) {
     },
     models_used: modelsWithReviews,
     models_total: totalModels,
+  };
+}
+
+// =============================================================================
+// THE JUDGE — 6th AI synthesis layer
+// =============================================================================
+// Runs AFTER the 5-model council fan-out. Takes every council model's output
+// (verdict, varsity_reasoning, pure_reasoning per stock) and asks a frontier
+// model (Claude Opus 4.6 by default) to synthesise ONE final verdict per
+// stock. The judge sees the same stock data blocks the council saw, plus a
+// transcript of the council's opinions, and is instructed to weigh agreements
+// vs disagreements and produce an independent final call.
+//
+// The judge output is stored as a row in the same picks_ai_reviews /
+// holdings_ai_reviews table with model_id='ai-judge', so the existing upsert
+// and GET paths work unchanged; the UI then special-cases that row as the
+// "Final Synthesis" card in the expanded panel.
+async function runAIJudge(endpoint, originalUserPrompt, modelResults, allowedSymbols) {
+  if (!ANTHROPIC_API_KEY) {
+    return { skipped: true, reason: 'no-anthropic-key' };
+  }
+  const validResults = modelResults.filter(m => m.result && !m.error && !m.skipped);
+  if (!validResults.length) {
+    return { skipped: true, reason: 'no-council-output' };
+  }
+  const symList = (allowedSymbols || []).join(', ');
+  const symCount = (allowedSymbols || []).length;
+
+  // Build a compact transcript of the council's opinions. Keep it readable —
+  // each council model gets its own block with per-stock verdict + both
+  // reasonings. The judge will see the original stock data blocks in the
+  // user prompt so it can fact-check any council claims.
+  const transcriptLines = [];
+  validResults.forEach(m => {
+    transcriptLines.push(`━━━ COUNCIL MODEL: ${m.name} (${m.id}) ━━━`);
+    const reviews = m.result?.signal_reviews || [];
+    reviews.forEach(r => {
+      transcriptLines.push(`  ${r.sym}:`);
+      transcriptLines.push(`    consensus_verdict=${r.verdict || '?'}  confidence=${r.confidence || '?'}`);
+      if (r.varsity_verdict) transcriptLines.push(`    varsity_verdict=${r.varsity_verdict}`);
+      if (r.pure_verdict) transcriptLines.push(`    pure_verdict=${r.pure_verdict}`);
+      if (r.varsity_reasoning) transcriptLines.push(`    varsity_reasoning: ${r.varsity_reasoning}`);
+      if (r.pure_reasoning) transcriptLines.push(`    pure_reasoning: ${r.pure_reasoning}`);
+      if (r.recommendation) transcriptLines.push(`    recommendation: ${r.recommendation}`);
+      if (r.risk_flag) transcriptLines.push(`    risk_flag: ${r.risk_flag}`);
+    });
+    transcriptLines.push('');
+  });
+  const councilTranscript = transcriptLines.join('\n');
+
+  const judgeSystemPrompt = `You are the JUDGE — a final-stage synthesiser sitting above a council of five AI stock analysts. The council has already reviewed the stocks using both a Zerodha Varsity lens and a pure first-principles lens. Your job is NOT to re-run their analysis; your job is to:
+1. Read the original stock data and the council's per-model opinions.
+2. Identify where the council agrees (strong conviction) and where it disagrees (low conviction).
+3. Fact-check any claim that looks weak against the underlying data.
+4. Produce ONE final verdict per stock that represents your independent judgment, informed by — but not bound to — the council's majority.
+
+You speak in short, decisive language. You are allowed to overrule a council majority if the data supports it. Cite the council by model id (e.g. "deepseek flagged D/E stress I agree with") when relevant.`;
+
+  const judgeUserPrompt = `${originalUserPrompt}
+
+════════════════════════════════════════
+COUNCIL TRANSCRIPT — what the 5 council models said:
+════════════════════════════════════════
+${councilTranscript}
+
+════════════════════════════════════════
+JUDGE TASK:
+════════════════════════════════════════
+For EACH of the ${symCount} symbols in [${symList}], produce a final synthesised verdict. You must return EXACTLY ${symCount} entries in signal_reviews.
+
+Respond in JSON with a "signal_reviews" array. Each element has:
+  - sym: the stock symbol
+  - verdict: your FINAL call, one of "BUY_CONFIRM" / "HOLD" / "MODIFY" / "EXIT"
+  - confidence: 0-100 (your conviction, NOT the council's)
+  - varsity_reasoning: 1-2 sentence synthesis from the Varsity lens, noting any council disagreement
+  - pure_reasoning: 1-2 sentence synthesis from the pure lens, noting any council disagreement
+  - recommendation: concrete action sentence
+  - risk_flag: short red-flag tag or empty string
+  - council_agreement: one of "UNANIMOUS" / "MAJORITY" / "SPLIT" / "OVERRULED" — describes how your call relates to the council (OVERRULED means you disagreed with the council majority)
+
+FINAL CHECK: exactly ${symCount} entries. Each must have both varsity_reasoning and pure_reasoning.`;
+
+  const judgeStart = Date.now();
+  const judgeResult = await callAIModel(AI_JUDGE_MODEL, judgeSystemPrompt, judgeUserPrompt, endpoint + '_judge')
+    .catch(err => ({ error: err.message || 'judge-error' }));
+
+  return {
+    ...judgeResult,
+    took_ms: Date.now() - judgeStart,
+    id: AI_JUDGE_MODEL.id,
+    name: AI_JUDGE_MODEL.name,
   };
 }
 
@@ -16734,7 +16875,7 @@ Respond in JSON:
   "missed_signals": ["Stocks that SHOULD have a signal but don't — e.g. stock with bearish divergence but no EXIT signal"]
 }
 CRITICAL RULES:
-1. signal_reviews MUST contain exactly one entry for EVERY stock listed in PORTFOLIO POSITIONS and MODEL PORTFOLIO sections above (all 15). Do NOT skip bench/watchlist stocks.
+1. signal_reviews MUST contain exactly ONE entry for EVERY stock listed in the user's prompt — whatever section the stocks are listed under (PORTFOLIO POSITIONS, MODEL PORTFOLIO, USER HOLDINGS, TOP 10, or any other). Count the symbols in the user's prompt and return exactly that many entries. NEVER return a partial list. If the user lists N symbols, your signal_reviews array MUST have N elements.
 2. Be CONCISE: varsity_reasoning max 2 sentences, recommendation max 1 sentence, risk_flag max 1 sentence. Do NOT write paragraphs.
 3. portfolio_flags max 5 items, missed_signals max 5 items.`;
 
@@ -17247,7 +17388,9 @@ app.get('/api/holdings', async (req, res) => {
       [username]
     );
     const { rows: reviews } = await pool.query(
-      `SELECT symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at
+      `SELECT symbol, model_id, model_name, verdict, confidence, varsity_module,
+              varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict,
+              recommendation, risk_flag, reviewed_at
        FROM holdings_ai_reviews WHERE username=$1`,
       [username]
     );
@@ -17377,23 +17520,93 @@ app.post('/api/holdings/ai-review', async (req, res) => {
 // Build the "stock block" portion of the prompt used by runHoldingsAIReview.
 // Format matches the one validateSignalsWithAI uses for PM Model Portfolio
 // rows, so the models see the same depth of data they're trained on.
+// Build a full-data stock block used by both Holdings and Stock Picks AI
+// reviews. Takes the MERGED field map (scored row + raw fundamentals +
+// FUND_EXT — caller is responsible for merging), emits 100+ fields organised
+// by Varsity module so the LLM can cite modules cleanly. The `leadLines`
+// parameter is an array of extra lead-in lines (e.g. the HOLDING P&L block
+// for Holdings) — they render between the header and the first data row.
+// Returning '?' for missing values keeps the block shape stable and tells
+// the model "unknown" explicitly rather than zeros/nulls.
+function _buildFullStockBlock(sym, mf, leadLines) {
+  const _n = (v, suf) => (v == null || v === '' || Number.isNaN(v)) ? '?' : (suf ? v + suf : v);
+  const _b = (v, t, f) => v == null ? '?' : (v ? (t || 'Yes') : (f || 'No'));
+  const px = (livePrices && livePrices[sym]?.price) || mf.price || 0;
+  const lines = [];
+  lines.push(`━━ ${sym} (${mf.name||sym}) [${mf.sector||'?'} · ${mf.grp||'?'}] ━━`);
+  if (Array.isArray(leadLines)) leadLines.forEach(l => lines.push('  ' + l));
+
+  // ── IDENTITY & SIZE ──
+  lines.push(`  IDENTITY: MktCap=₹${_n(mf.mktCap)}Cr IndustryPE=${_n(mf.industryPE)} DataSource=${mf.dataSource||'?'}`);
+
+  // ── PRICE / 52W / DMA (Module 2) ──
+  lines.push(`  PRICE: CMP=₹${px} 52wH=₹${_n(mf.wk52Hi||mf.high52w)} 52wL=₹${_n(mf.wk52Lo||mf.low52w)} 52wChg=${_n(mf.wk52Change,'%')} %FromHigh=${_n(mf.pctFromHigh,'%')}`);
+  lines.push(`  DMA: DMA20=${_n(mf.dma20)} DMA50=${_n(mf.dma50)} DMA100=${_n(mf.dma100)} DMA200=${_n(mf.dma200)} %Above50DMA=${_n(mf.pctAbove50,'%')} %Above200DMA=${_n(mf.pctAbove200,'%')} DMA200Trend=${mf.dma200Trend||'?'} GoldenCross=${_b(mf.goldenCross)}`);
+  lines.push(`  RETURNS: 1m=${_n(mf.change1m,'%')} 3m=${_n(mf.change3m,'%')} 6m=${_n(mf.change6m,'%')} 1y=${_n(mf.ret1y,'%')} 3y=${_n(mf.ret3y,'%')} 5y=${_n(mf.ret5y,'%')}`);
+
+  // ── VALUATION (Module 3, 13) ──
+  lines.push(`  VALUATION: PE=${_n(mf.pe)} FwdPE=${_n(mf.fwdPE)} PEG=${_n(mf.peg)} PB=${_n(mf.pb)} PSales=${_n(mf.priceToSales)} PFCF=${_n(mf.priceToFCF)} EV/EBITDA=${_n(mf.evEbitda)} EarningsYield=${_n(mf.earningsYield,'%')} BookValue=${_n(mf.bookValue)} DivYield=${_n(mf.divYield,'%')} ValLabel=${mf.valuationLabel||'?'}`);
+
+  // ── PROFITABILITY & QUALITY (Module 3) ──
+  lines.push(`  PROFITABILITY: ROE=${_n(mf.roe,'%')} ROE3yAvg=${_n(mf.roe3yAvg,'%')} ROE5yAvg=${_n(mf.roe5yAvg,'%')} ROCE=${_n(mf.roce,'%')} ROA=${_n(mf.roa,'%')} OPM=${_n(mf.opMargin,'%')} GrossMargin=${_n(mf.grossMgn,'%')} ProfitMargin=${_n(mf.profMgn,'%')}`);
+  lines.push(`  DUPONT: NetMargin=${_n(mf.dupontNetMargin)} AssetTurn=${_n(mf.dupontAssetTurnover)} EquityMult=${_n(mf.dupontEquityMultiplier)} DuPontROE=${_n(mf.dupontROE)}`);
+
+  // ── GROWTH (Module 3) ──
+  lines.push(`  GROWTH: EPS=${_n(mf.eps)} EarGrowth=${_n(mf.earGrowth,'%')} EPSGr1y=${_n(mf.epsGr1y,'%')} EPSGr5y=${_n(mf.epsGr5y,'%')} RevGrowth=${_n(mf.revGrowth,'%')} SalesGr1y=${_n(mf.salesGr1y,'%')} SalesGr5y=${_n(mf.salesGr5y,'%')}`);
+  lines.push(`  QUARTERLY: PATQtrYoY=${_n(mf.patQtrYoy,'%')} SalesQtrYoY=${_n(mf.salesQtrYoy,'%')} PATQtr=${_n(mf.patQtr)} SalesQtr=${_n(mf.salesQtr)} PATAnnual=${_n(mf.patAnnual)} SalesAnnual=${_n(mf.salesAnnual)}`);
+
+  // ── BALANCE SHEET & CASH FLOW (Module 3) ──
+  lines.push(`  BALANCE SHEET: D/E=${_n(mf.debtToEq)} Debt=₹${_n(mf.debt)}Cr CurrentRatio=${_n(mf.currentRatio)} QuickRatio=${_n(mf.quickRatio)} InterestCov=${_n(mf.intCov)}`);
+  lines.push(`  CASH FLOW: FCF=₹${_n(mf.fcf)}Cr CashConvCycle=${_n(mf.cashConversionCycle)}d InventoryDays=${_n(mf.inventoryDays)} WorkingCapital=${mf.workingCapitalHealth||'?'}`);
+
+  // ── OWNERSHIP & GOVERNANCE (Module 3) ──
+  lines.push(`  OWNERSHIP: Promoter=${_n(mf.promoter,'%')} PromoterChg=${_n(mf.promoterChg,'%')} Pledged=${_n(mf.pledged,'%')} FII=${_n(mf.fiiHolding,'%')} DII=${_n(mf.diiHolding,'%')} InstitutionalHeld=${_n(mf.instHeld,'%')} Shareholders=${_n(mf.numShareholders)}`);
+
+  // ── TECHNICAL OSCILLATORS (Module 2) ──
+  lines.push(`  RSI: ${_n(mf.rsi)} RSITrend=${mf.rsiTrend||'?'} BullishDiv=${_b(mf.bullishDiv)} BearishDiv=${_b(mf.bearishDiv)} StochK=${_n(mf.stochK)}`);
+  lines.push(`  MACD: ${_n(mf.macd)} MACDBull=${_b(mf.macdBull)} MACDHist=${_n(mf.macdHist)} BollingerBand%=${_n(mf.bbPct)}`);
+
+  // ── TREND (Module 2) ──
+  lines.push(`  TREND: ADX=${_n(mf.adx)} Supertrend=${mf.supertrendSig||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Tenkan=${_n(mf.ichimokuTenkan)} Kijun=${_n(mf.ichimokuKijun)} WeeklyTrend=${mf.weeklyTrend||'?'} WeeklyConfirmed=${_b(mf.weeklyTrendConfirmed)} DowTheory=${mf.dowTheoryTrend||'?'}`);
+
+  // ── VOLUME (Module 2) ──
+  lines.push(`  VOLUME: VolRatio=${_n(mf.volRatio)} VolTrend=${mf.volTrend||'?'} OBVRising=${_b(mf.obvRising)} AccumDist=${mf.accumDist||'?'}`);
+
+  // ── S/R + FIB + PIVOTS (Module 2) ──
+  lines.push(`  S/R: Support=${_n(mf.support)} Resistance=${_n(mf.resistance)} Pivot=${_n(mf.pivot)} R1=${_n(mf.pivotR1)} R2=${_n(mf.pivotR2)} S1=${_n(mf.pivotS1)} S2=${_n(mf.pivotS2)}`);
+  lines.push(`  FIB: 38.2%=${_n(mf.fib382)} 50%=${_n(mf.fib500)} 61.8%=${_n(mf.fib618)} NearestFib=${mf.nearestFib||'?'} FibDist=${_n(mf.nearFibDist,'%')}`);
+
+  // ── RISK (Module 9) ──
+  lines.push(`  RISK: Beta=${_n(mf.beta)} AnnualVol=${_n(mf.annualVol,'%')} Sharpe=${_n(mf.sharpeRatio)} StopLoss=${_n(mf.stopLoss)} Target=${_n(mf.target)} Risk%=${_n(mf.riskPct,'%')} Reward%=${_n(mf.rewardPct,'%')} R:R=${_n(mf.rrRatio)} RiskLevel=${mf.riskLevel||'?'}`);
+
+  // ── PROTRADER SCORES (for model's reference — not as instructions) ──
+  const v2Sub = mf.subScores
+    ? `Q=${mf.subScores.quality||'?'}/${mf.subScores.qualityMax||40} G=${mf.subScores.growth||'?'}/${mf.subScores.growthMax||25} V=${mf.subScores.valuation||'?'}/${mf.subScores.valuationMax||20} B=${mf.subScores.business||'?'}/${mf.subScores.businessMax||15}`
+    : '?';
+  lines.push(`  SCORES: ReboundScore=${_n(mf.fallenScore)} MomentumScore=${_n(mf.composite)} InvestmentScoreV2=${_n(mf.scoreV2)} [${v2Sub}] Bucket=${mf.scoreBucket||'?'} ExpectedReturn6m=${_n(mf.expectedReturn,'%')} SectorTemplate=${mf.sectorTemplate||'?'} DataCompleteness=${_n(mf.dataCompleteness)}`);
+  lines.push(`  FLAGS: isFallenAngel=${_b(mf.isFallenAngel)} MomConviction=${mf.momConviction||'?'} FallenVerdict=${mf.fallenVerdict||'?'}`);
+
+  return lines.join('\n');
+}
+
 function _buildHoldingStockBlock(h) {
-  const mf = stockFundamentals[h.symbol] || {};
+  const raw = stockFundamentals[h.symbol] || {};
   const ext = (global.FUND_EXT && global.FUND_EXT[h.symbol]) || {};
-  const px = (livePrices && livePrices[h.symbol]?.price) || mf.price || ext.price || 0;
+  // Merge: start with raw, overlay ext (fills gaps), overlay the scored row
+  // if present in the v2 cache (has formatted numbers + composite/scoreV2).
+  const scoredRow = Array.isArray(_lastScoredV2)
+    ? _lastScoredV2.find(r => r.sym === h.symbol)
+    : null;
+  const mf = { ...ext, ...raw, ...(scoredRow || {}) };
+  const px = (livePrices && livePrices[h.symbol]?.price) || mf.price || 0;
   const invested = h.quantity * h.avg_price;
   const current = h.quantity * px;
   const pnl = current - invested;
   const pnlPct = invested > 0 ? ((pnl / invested) * 100).toFixed(2) : '0';
-  return `━━ ${h.symbol} (${mf.name||h.symbol}) [${mf.sector||'?'}] ━━\n` +
-    `  HOLDING: Qty=${h.quantity} AvgBuy=₹${h.avg_price} Invested=₹${invested.toFixed(2)} CMP=₹${px} Current=₹${current.toFixed(2)} P&L=₹${pnl.toFixed(2)} (${pnlPct}%)\n` +
-    `  PRICE: 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}%\n` +
-    `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}%\n` +
-    `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
-    `  TECHNICALS: RSI=${mf.rsi!=null?(mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi):'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'} Ichimoku=${mf.ichimokuSignal||'?'}\n` +
-    `  RISK: Beta=${mf.beta||'?'} AnnualVol=${mf.annualVol||'?'}% Sharpe=${mf.sharpeRatio||'?'}\n` +
-    `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
-    `  SCORES: ReboundScore=${mf.fallenScore||'-'} MomentumScore=${mf.composite||'-'} InvestmentScore=${mf.scoreV2||'-'}`;
+  const leadLines = [
+    `HOLDING: Qty=${h.quantity} AvgBuy=₹${h.avg_price} Invested=₹${invested.toFixed(2)} Current=₹${current.toFixed(2)} P&L=₹${pnl.toFixed(2)} (${pnlPct}%)`,
+  ];
+  return _buildFullStockBlock(h.symbol, mf, leadLines);
 }
 
 // Map the raw model verdict (BUY_CONFIRM / HOLD / MODIFY / EXIT / etc.) to
@@ -17429,7 +17642,16 @@ async function runHoldingsAIReview(username, holdings) {
     `Nifty: 1m=${marketRegimeData.nifty?.['1m']||'?'}% 6m=${marketRegimeData.nifty?.['6m']||'?'}% 1y=${marketRegimeData.nifty?.['52w']||'?'}%`,
   ].join('\n') : 'Market breadth: N/A';
 
+  const holdingCount = holdings.length;
+  const holdingSymList = allowedSyms.join(', ');
   const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
+
+⚠ TASK-SPECIFIC OVERRIDE — READ FIRST ⚠
+Ignore any earlier system instruction that mentions "15 stocks", "PORTFOLIO POSITIONS", or "MODEL PORTFOLIO" sections. Those sections do NOT exist in this request. This is a USER HOLDINGS review, not a portfolio validation.
+
+SYMBOLS TO REVIEW (n=${holdingCount}, exact order): ${holdingSymList}
+
+You MUST return EXACTLY ${holdingCount} entries in signal_reviews — one per symbol in the list above, in the same order. A response with fewer than ${holdingCount} entries is INVALID and will be rejected.
 
 ════════════════════════════════════════
 MACRO DATA (Module 1, 8):
@@ -17442,32 +17664,43 @@ MARKET BREADTH (Module 9):
 ${breadthSummary}
 
 ════════════════════════════════════════
-USER HOLDINGS — FULL DATA (${holdings.length} stocks):
+USER HOLDINGS — FULL DATA (${holdingCount} stocks, 100+ fields each):
 ════════════════════════════════════════
 ${stockBlocks}
 
 ════════════════════════════════════════
-TASK — Holdings review (Varsity-grounded):
+TASK — DUAL-OPINION Holdings review:
 ════════════════════════════════════════
-This is a user's PERSONAL PORTFOLIO. For each of the ${holdings.length} holdings listed above you must answer: should the user CONTINUE to hold this, HOLD WITH CAUTION, or EXIT? Evaluate each holding independently:
+This is a user's PERSONAL PORTFOLIO. For each of the ${holdingCount} holdings listed above you must produce TWO independent opinions and a consensus verdict.
 
-1. Cross-check fundamentals vs current valuation (Varsity M3, M13).
-2. Check technical health — 200DMA, RSI, MACD, Supertrend, Ichimoku (M2).
-3. Check ownership signals — promoter pledge, FII/DII flows (M3).
+Evaluation checklist (apply to BOTH opinions):
+1. Cross-check fundamentals vs current valuation.
+2. Check technical health — 200DMA, RSI, MACD, Supertrend, Ichimoku.
+3. Check ownership signals — promoter pledge, FII/DII flows.
 4. Check the holding's P&L vs the broader market (was the buy thesis valid? Is it still valid now?).
-5. Apply sector-specific rules from Module 15.
+5. Apply sector-specific rules.
 6. Flag any governance or solvency red flags.
 
-Respond in JSON with a "signal_reviews" array where each element has:
+Two opinions required per stock:
+
+1. VARSITY OPINION — grounded in Zerodha Varsity modules (M1-M17). Cite the specific module(s) that drove your call. This is the framework the user's system is built on.
+2. PURE OPINION — a completely independent financial analysis that IGNORES Varsity framing. Use first-principles quant/fundamental thinking: DCF sanity, peer comparison, moat durability, balance sheet, cash flow quality, price action, catalyst calendar. Do NOT cite Varsity modules here. This is the "second brain" check on the Varsity call.
+
+The two opinions should be formed INDEPENDENTLY. If they agree, that's strong conviction; if they disagree, the user wants to see the disagreement explicitly.
+
+Respond in JSON with a "signal_reviews" array that contains EXACTLY ${holdingCount} elements, one per symbol in [${holdingSymList}]. Each element has:
   - sym: the stock symbol (exactly as given)
-  - verdict: one of "BUY_CONFIRM" (keep holding, thesis intact), "HOLD" (neutral — no action needed), "MODIFY" (hold with caution — reduce, tighten stop, or watch closely), "EXIT" (sell, thesis broken or better opportunities)
-  - confidence: 0-100
-  - varsity_module: which Varsity module(s) drove this call
-  - varsity_reasoning: 1-2 sentence rationale grounded in Varsity principles
+  - verdict: your CONSENSUS verdict — one of "BUY_CONFIRM" (keep holding, thesis intact), "HOLD" (neutral), "MODIFY" (hold with caution — reduce, tighten stop, watch closely), "EXIT" (sell, thesis broken)
+  - confidence: 0-100 (overall conviction)
+  - varsity_module: which Varsity module(s) drove the varsity opinion
+  - varsity_reasoning: 1-2 sentence rationale from the VARSITY lens (cite modules)
+  - varsity_verdict: the verdict from the Varsity lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
+  - pure_reasoning: 1-2 sentence rationale from the PURE financial-analysis lens (NO Varsity citations)
+  - pure_verdict: the verdict from the pure lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
   - recommendation: a concrete action ("Hold", "Reduce 25%", "Exit on rally to ₹X", etc.)
   - risk_flag: short red-flag tag if any (e.g. "HIGH_PLEDGE", "VALUATION_STRETCHED", "EARNINGS_DECAY"), or empty string
 
-You MUST return a review for EVERY symbol above. Do not skip any.`;
+FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exactly ${holdingCount}. Each element must have BOTH varsity_reasoning AND pure_reasoning populated. If either is missing, the response is invalid.`;
 
   // Fan out to all 5 models in parallel (same pattern as validateSignalsWithAI).
   const modelPromises = AI_MODELS.map(m =>
@@ -17481,22 +17714,73 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
   // fill-in, and the per_model breakdown that the Holdings UI expects.
   const consensus = buildConsensus(modelResults, allowedSyms);
 
-  // Persist per-(user, symbol, model) — overwrite on re-run.
+  // ── 6th AI: THE JUDGE ──
+  // Feed the council transcript + the original stock data to a frontier
+  // model and ask it to synthesise one final verdict per stock. Non-fatal:
+  // if the judge errors/skips, the council consensus still stands.
+  const judge = await runAIJudge('holdings', userPrompt, modelResults, allowedSyms)
+    .catch(err => ({ error: err.message || 'judge-error', skipped: true }));
+  const judgeReviews = (judge && !judge.error && !judge.skipped && judge.result?.signal_reviews) || [];
+  // Merge judge output into each stock's per_model map under the special
+  // 'ai-judge' slot so the existing rendering path picks it up, and expose
+  // top-level judge_* fields so the UI can short-circuit to the final call.
+  const judgeBySym = {};
+  judgeReviews.forEach(jr => { if (jr && jr.sym) judgeBySym[(jr.sym || '').toUpperCase()] = jr; });
+  (consensus.signal_reviews || []).forEach(rev => {
+    const jr = judgeBySym[(rev.sym || '').toUpperCase()];
+    if (!jr) return;
+    rev.judge_verdict = _normalizeHoldingsVerdict(jr.verdict);
+    rev.judge_confidence = jr.confidence || 0;
+    rev.judge_varsity_reasoning = jr.varsity_reasoning || '';
+    rev.judge_pure_reasoning = jr.pure_reasoning || '';
+    rev.judge_recommendation = jr.recommendation || '';
+    rev.judge_risk_flag = jr.risk_flag || '';
+    rev.judge_council_agreement = jr.council_agreement || '';
+    // Also populate the per_model map with an 'ai-judge' entry so the
+    // existing expanded-panel render code can iterate per_model and show
+    // the judge alongside the 5 council models.
+    rev.per_model = rev.per_model || {};
+    rev.per_model['ai-judge'] = {
+      verdict: rev.judge_verdict,
+      confidence: rev.judge_confidence,
+      varsity_module: 'Judge synthesis',
+      varsity_reasoning: rev.judge_varsity_reasoning,
+      varsity_verdict: rev.judge_verdict,
+      pure_reasoning: rev.judge_pure_reasoning,
+      pure_verdict: rev.judge_verdict,
+      recommendation: rev.judge_recommendation,
+      risk_flag: rev.judge_risk_flag,
+      council_agreement: rev.judge_council_agreement,
+    };
+  });
+
+  // Persist per-(user, symbol, model) — overwrite on re-run. The judge is
+  // persisted as a special model_id='ai-judge' row so the GET endpoint and
+  // UI can treat it uniformly with council rows.
   try {
     for (const rev of (consensus.signal_reviews || [])) {
       if (!rev.per_model) continue;
       for (const [mid, mv] of Object.entries(rev.per_model)) {
         const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
-        const modelName = (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        // Normalize the per-lens verdicts too so the Holdings UI vocab is
+        // consistent (AGREE / CAUTION / DISAGREE / NO_REVIEW) across the
+        // consensus column, the Varsity lens, and the Pure lens.
+        const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
+        const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
+        const modelName = mid === 'ai-judge'
+          ? AI_JUDGE_MODEL.name
+          : (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
         await pool.query(
           `INSERT INTO holdings_ai_reviews
-             (username, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+             (username, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict, recommendation, risk_flag, reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
            ON CONFLICT (username, symbol, model_id) DO UPDATE SET
              model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
-             varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=NOW()`,
+             varsity_reasoning=$8, varsity_verdict=$9, pure_reasoning=$10,
+             pure_verdict=$11, recommendation=$12, risk_flag=$13, reviewed_at=NOW()`,
           [username, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
            mv.varsity_module || '', mv.varsity_reasoning || '',
+           normVarsityVerdict, mv.pure_reasoning || '', normPureVerdict,
            mv.recommendation || '', mv.risk_flag || '']
         );
       }
@@ -17506,7 +17790,8 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
   }
 
   const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
-  console.log(`🤖 Holdings AI review for ${username}: ${okCount}/${AI_MODELS.length} models, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+  const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
+  console.log(`🤖 Holdings AI review for ${username}: ${okCount}/${AI_MODELS.length} council models + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
   return {
     ok: true,
@@ -17514,6 +17799,8 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
     holdings_count: holdings.length,
     models_responded: okCount,
     models_total: AI_MODELS.length,
+    judge_status: judgeStatus,
+    judge_took_ms: judge?.took_ms || 0,
     took_ms: Date.now() - startTime,
     signal_reviews: consensus.signal_reviews || [],
     model_details: consensus.model_details || [],
@@ -17536,26 +17823,101 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
 // Verdict vocabulary is the same AGREE / CAUTION / DISAGREE / NO_REVIEW set
 // used by Holdings — `_normalizeHoldingsVerdict` is reused.
 
-// Build a full-data stock block for the AI prompt — same shape Holdings uses
-// but WITHOUT the personal P&L block (picks are global, not per-user). Takes
-// the SCORED row (which has fallenScore/composite/scoreV2 materialised) and
-// merges it with the raw `stockFundamentals` entry + FUND_EXT fallback so the
-// prompt sees every field the client sees.
-function _buildPickStockBlock(row) {
+// Build a full-data stock block for the AI prompt — delegates to the shared
+// `_buildFullStockBlock` helper. Takes the SCORED row (which has fallenScore /
+// composite / scoreV2 materialised), merges it with the raw `stockFundamentals`
+// entry + FUND_EXT fallback so the prompt sees EVERY field the client sees, and
+// prefixes a category-specific WHY-WE-PICKED lead line that names the rule that
+// qualified this stock (score + gate values) so the AI knows what to agree or
+// disagree with.
+function _buildPickStockBlock(row, category, rank) {
   const sym = row.sym;
   const raw = stockFundamentals[sym] || {};
   const ext = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
-  // Prefer the scored row (has formatted numbers), fall back to raw, then ext.
-  const mf = { ...raw, ...ext, ...row };
-  const px = (livePrices && livePrices[sym]?.price) || mf.price || 0;
-  return `━━ ${sym} (${mf.name||sym}) [${mf.sector||'?'}] ━━\n` +
-    `  PRICE: CMP=₹${px} 52wH=₹${mf.high52w||mf.wk52Hi||'?'} 52wL=₹${mf.low52w||mf.wk52Lo||'?'} DMA200=${mf.dma200||'?'} %Above200DMA=${mf.pctAbove200||'?'}% %FromHigh=${mf.pctFromHigh||'?'}%\n` +
-    `  FUNDAMENTALS: ROE=${mf.roe||'?'}% ROCE=${mf.roce||'?'}% D/E=${mf.debtToEq||'?'} PE=${mf.pe||'?'} PB=${mf.pb||'?'} EPS=${mf.eps||'?'} OPM=${mf.opMargin||'?'}% FCF=${mf.fcf||'?'}Cr DivYield=${mf.divYield||'?'}%\n` +
-    `  GROWTH: EarGrowth=${mf.earGrowth||'?'}% RevGrowth=${mf.revGrowth||'?'}% SalesGr5y=${mf.salesGr5y||'?'}% ROE5yAvg=${mf.roe5yAvg||'?'}%\n` +
-    `  TECHNICALS: RSI=${mf.rsi!=null?(mf.rsi.toFixed?mf.rsi.toFixed(1):mf.rsi):'?'} MACD=${mf.macdBull?'Bullish':'Bearish'} Supertrend=${mf.supertrendSig||'?'} ADX=${mf.adx||'?'} Ichimoku=${mf.ichimokuSignal||'?'} Change6m=${mf.change6m||'?'}%\n` +
-    `  RISK: Beta=${mf.beta||'?'} AnnualVol=${mf.annualVol||'?'}% Sharpe=${mf.sharpeRatio||'?'}\n` +
-    `  OWNERSHIP: Promoter=${mf.promoter||'?'}% Pledged=${mf.pledged||'?'}% FII=${mf.fiiHolding||'?'}% DII=${mf.diiHolding||'?'}%\n` +
-    `  SCORES: ReboundScore=${mf.fallenScore||'-'} MomentumScore=${mf.composite||'-'} InvestmentScore=${mf.scoreV2||'-'}`;
+  // Prefer the scored row (has formatted numbers + composite/scoreV2), fall
+  // back to raw, then ext. Same precedence as the Holdings builder so the two
+  // code paths produce the same 100+ field block shape.
+  const mf = { ...ext, ...raw, ...row };
+  const _n = (v, suf) => (v == null || v === '' || Number.isNaN(v)) ? '?' : (suf ? v + suf : v);
+  const leadLines = [];
+  const rk = rank ? `#${rank} ` : '';
+  if (category === 'rebound') {
+    leadLines.push(`WHY WE PICKED: ${rk}REBOUND — ReboundScore=${_n(mf.fallenScore)} (higher = better setup). Passed fallen-angel gate: %FromHigh=${_n(mf.pctFromHigh,'%')} (≤-20 required), RSI=${_n(mf.rsi)} (≤50 required), D/E=${_n(mf.debtToEq)} (≤2 required). Thesis: quality-on-sale pullback entry.`);
+  } else if (category === 'momentum') {
+    leadLines.push(`WHY WE PICKED: ${rk}MOMENTUM — MomentumScore=${_n(mf.composite)}/100 (≥55 required, our 5-factor composite = FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15). Conviction=${mf.momConviction||'?'}. Thesis: 1-3 month swing ride on strong multi-factor momentum.`);
+  } else if (category === 'longterm') {
+    const sub = mf.subScores
+      ? `Q=${mf.subScores.quality||'?'}/40 G=${mf.subScores.growth||'?'}/25 V=${mf.subScores.valuation||'?'}/20 B=${mf.subScores.business||'?'}/15`
+      : '?';
+    leadLines.push(`WHY WE PICKED: ${rk}LONG-TERM — InvestmentScoreV2=${_n(mf.scoreV2)}/100 (≥60 required). Sub-scores: ${sub}. Bucket=${mf.scoreBucket||'?'}. Gates passed: ROE≥12, D/E≤2, EPSGrowth≥0, %FromHigh≥-35. Thesis: 3-10 year buy-and-hold compounder.`);
+  }
+  return _buildFullStockBlock(sym, mf, leadLines);
+}
+
+// Build the category definitions + selection criteria block. This is shared
+// context sent ONCE per review (not per stock) that tells the AI exactly how
+// ProTrader defines momentum / rebound / longterm categories and what filters
+// + scoring formula qualified the stocks it's about to see. Knowing the
+// intent lets the AI agree or disagree with the PICK, not just the stock.
+function _buildCategoryContextBlock(category) {
+  if (category === 'rebound') {
+    return `PROTRADER REBOUND CATEGORY — DEFINITION & SELECTION CRITERIA
+
+What it is: "Fallen angel" setups — high-quality stocks that have sold off to a technically oversold zone, offering a pullback-entry opportunity. This is NOT a broken-business bucket; it's a quality-on-sale bucket.
+
+Hard gates a stock MUST pass to enter this list:
+  • %FromHigh ≤ -20% (down at least 20% from 52-week high — the "fallen" part)
+  • RSI ≤ 50 (technically cool/oversold — not still extended)
+  • Debt-to-Equity ≤ 2 (solvent — eliminates leveraged trainwrecks)
+  • isFallenAngel = true (composite quality gate: ROE ≥ 10, positive EPS, clean ownership)
+
+Ranking: sorted by ReboundScore DESC — a composite that rewards quality (ROE, low leverage, FCF), penalises structural damage (falling EPS, promoter selling, pledge spikes), and upweights technical bottoming signals (bullish divergence, accumulation, volume dry-up at lows).
+
+What the user is asking from you: agree or disagree that these are VALID rebound entries. Is the dip buyable or is the knife still falling? Is the fundamental thesis intact? Is there any sign of bottoming action (M2) vs continued distribution?`;
+  }
+  if (category === 'momentum') {
+    return `PROTRADER MOMENTUM CATEGORY — DEFINITION & SELECTION CRITERIA
+
+What it is: 1-3 month SWING-TRADE candidates riding strong multi-factor momentum. This is a short-horizon tactical bucket, NOT a buy-and-hold bucket.
+
+Hard gate: MomentumScore (composite) ≥ 55 out of 100.
+
+Composite formula (5 factors, 100 points total):
+  • Fundamentals (FA) — 35 pts: ROE, profit growth, quality screens
+  • Valuation — 15 pts: PE, PEG, P/B normalised against sector
+  • Technicals (TA) — 20 pts: DMA stack, RSI regime, MACD, ADX, Supertrend, Ichimoku
+  • Momentum — 15 pts: 1m/3m/6m return strength + volume confirmation
+  • Risk — 15 pts: beta, vol, Sharpe (reward good risk-adjusted momentum)
+
+Ranking: sorted by composite DESC. Each stock also carries a MomConviction label (HIGH / MEDIUM / LOW) which bundles how many of the 5 factors are firing simultaneously.
+
+What the user is asking from you: agree or disagree that these are VALID momentum entries for a 1-3 month swing. Is the trend durable or already extended (blow-off top)? Is the valuation premium justified by the momentum? Are technicals overbought vs still accelerating?`;
+  }
+  if (category === 'longterm') {
+    return `PROTRADER LONG-TERM CATEGORY — DEFINITION & SELECTION CRITERIA
+
+What it is: 3-10 year BUY-AND-HOLD compounders selected via a 4-pillar Varsity-v2 scoring framework. This is the core investment bucket, NOT a trade bucket.
+
+Hard gates a stock MUST pass:
+  • InvestmentScoreV2 ≥ 60 out of 100
+  • ROE ≥ 12% (or null — unknowns don't auto-fail)
+  • Debt-to-Equity ≤ 2
+  • EarGrowth ≥ 0% (no collapsing profits)
+  • %FromHigh ≥ -35% (not in structural breakdown)
+
+Varsity-v2 4-pillar scoring (100 points total):
+  • Quality — 40 pts: ROE (3y/5y avg), ROCE, OPM, promoter holding, pledge, DuPont decomposition, cash-flow quality
+  • Growth — 25 pts: revenue CAGR, EPS CAGR, profit CAGR, quarterly trend
+  • Valuation — 20 pts: PE, PEG, P/B, earnings yield — bucketed by sector template
+  • Business — 15 pts: moat/competitive-position proxies, sector tailwind, balance-sheet durability
+
+IMPORTANT FA/TA separation: this score is 100% fundamental. Technical fields (RSI, MACD, DMA) are provided for CONTEXT ONLY — judge the thesis on fundamentals, comment on timing as a separate concern. A great business at a bad entry is still a great business.
+
+Ranking: sorted by InvestmentScoreV2 DESC. Each stock has a scoreBucket label (ELITE / STRONG / GOOD / FAIR).
+
+What the user is asking from you: agree or disagree that these are VALID long-term compounders. Is the business quality real and durable? Is growth sustainable for 5+ years? Is valuation reasonable given the growth? Does the moat hold?`;
+  }
+  return '';
 }
 
 // Pick the top-10 ROWS for a category using the SAME filter/sort the client
@@ -17623,7 +17985,8 @@ async function runPicksAIReview(category) {
   }
   const top10 = top10Rows.map(r => r.sym);
 
-  const stockBlocks = top10Rows.map(_buildPickStockBlock).join('\n');
+  const stockBlocks = top10Rows.map((r, i) => _buildPickStockBlock(r, category, i + 1)).join('\n');
+  const categoryContextBlock = _buildCategoryContextBlock(category);
 
   // Macro + breadth context — same as Holdings/signals validation
   const vix = _marketDataCache.vix;
@@ -17640,7 +18003,21 @@ async function runPicksAIReview(category) {
     `Nifty: 1m=${marketRegimeData.nifty?.['1m']||'?'}% 6m=${marketRegimeData.nifty?.['6m']||'?'}% 1y=${marketRegimeData.nifty?.['52w']||'?'}%`,
   ].join('\n') : 'Market breadth: N/A';
 
+  const pickCount = top10.length;
+  const symbolList = top10.join(', ');
   const userPrompt = `CURRENT MARKET REGIME: ${marketRegime || 'NEUTRAL'}
+
+⚠ TASK-SPECIFIC OVERRIDE — READ FIRST ⚠
+Ignore any earlier system instruction that mentions "15 stocks", "PORTFOLIO POSITIONS", or "MODEL PORTFOLIO" sections. Those sections do NOT exist in this request. This is a STOCK PICKS review, not a portfolio validation.
+
+SYMBOLS TO REVIEW (n=${pickCount}, exact order): ${symbolList}
+
+You MUST return EXACTLY ${pickCount} entries in signal_reviews — one per symbol in the list above, in the same order. A response with fewer than ${pickCount} entries is INVALID and will be rejected.
+
+════════════════════════════════════════
+PROTRADER CATEGORY DEFINITION — READ BEFORE SCORING:
+════════════════════════════════════════
+${categoryContextBlock}
 
 ════════════════════════════════════════
 MACRO DATA (Module 1, 8):
@@ -17653,25 +18030,37 @@ MARKET BREADTH (Module 9):
 ${breadthSummary}
 
 ════════════════════════════════════════
-TOP 10 ${label.toUpperCase()} — FULL DATA:
+TOP ${pickCount} ${label.toUpperCase()} — FULL DATA (100+ fields per stock):
 ════════════════════════════════════════
+Each stock starts with a "WHY WE PICKED" line showing what rule qualified it for this category. Use it to agree or disagree with the PICK, not just the stock.
+
 ${stockBlocks}
 
 ════════════════════════════════════════
-TASK — Pick review (Varsity-grounded):
+TASK — DUAL-OPINION Pick review:
 ════════════════════════════════════════
 ${categoryFraming[category]}
 
-Respond in JSON with a "signal_reviews" array where each element has:
+For EACH of the ${pickCount} stocks you must produce TWO independent opinions:
+
+1. VARSITY OPINION — grounded in Zerodha Varsity modules (M1-M17). Cite the specific module(s) that drove your call. This is the framework the user's system is built on.
+2. PURE OPINION — a completely independent financial analysis that IGNORES Varsity framing. Use first-principles quant/fundamental thinking: DCF sanity, peer comparison, Porter-style moat, balance sheet durability, price action, catalyst calendar. Do NOT cite Varsity modules here. This is the "second brain" check on the Varsity call.
+
+The two opinions should be formed INDEPENDENTLY — if they agree, that's strong conviction; if they disagree, the user wants to see the disagreement explicitly.
+
+Respond in JSON with a "signal_reviews" array that contains EXACTLY ${pickCount} elements, one per symbol in [${symbolList}]. Each element has:
   - sym: the stock symbol (exactly as given)
-  - verdict: one of "BUY_CONFIRM" (confirm the pick), "HOLD" (neutral), "MODIFY" (caution — wait / tighten / trim), "EXIT" (avoid / broken thesis)
-  - confidence: 0-100
-  - varsity_module: which Varsity module(s) drove this call
-  - varsity_reasoning: 1-2 sentence rationale grounded in Varsity principles
+  - verdict: one of "BUY_CONFIRM" (confirm the pick), "HOLD" (neutral), "MODIFY" (caution — wait / tighten / trim), "EXIT" (avoid / broken thesis). This is your CONSENSUS verdict after weighing both opinions.
+  - confidence: 0-100 (overall conviction)
+  - varsity_module: which Varsity module(s) drove the varsity opinion
+  - varsity_reasoning: 1-2 sentence rationale from the VARSITY lens (cite modules)
+  - varsity_verdict: the verdict from the Varsity lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
+  - pure_reasoning: 1-2 sentence rationale from the PURE financial-analysis lens (NO Varsity citations)
+  - pure_verdict: the verdict from the pure lens alone (BUY_CONFIRM/HOLD/MODIFY/EXIT)
   - recommendation: a concrete action sentence
   - risk_flag: short red-flag tag if any (e.g. "HIGH_PE", "VALUATION_STRETCHED", "EARNINGS_DECAY"), or empty string
 
-You MUST return a review for EVERY symbol above. Do not skip any.`;
+FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exactly ${pickCount}. Each element must have BOTH varsity_reasoning AND pure_reasoning populated. If either is missing, the response is invalid.`;
 
   // Fan out to all 5 models in parallel with a category-tagged endpoint so the
   // per-endpoint LLM cost cap applies separately to each picks category.
@@ -17684,24 +18073,60 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
 
   const consensus = buildConsensus(modelResults, top10);
 
-  // Persist per-model reviews. Clear old rows for the symbols we just scored
-  // in this category so stale picks (e.g. a stock that used to be top 10 but
-  // dropped out) don't linger — then upsert the fresh ones.
+  // ── 6th AI: THE JUDGE ── Same synthesis step as Holdings.
+  const judge = await runAIJudge('picks_' + category, userPrompt, modelResults, top10)
+    .catch(err => ({ error: err.message || 'judge-error', skipped: true }));
+  const judgeReviews = (judge && !judge.error && !judge.skipped && judge.result?.signal_reviews) || [];
+  const judgeBySym = {};
+  judgeReviews.forEach(jr => { if (jr && jr.sym) judgeBySym[(jr.sym || '').toUpperCase()] = jr; });
+  (consensus.signal_reviews || []).forEach(rev => {
+    const jr = judgeBySym[(rev.sym || '').toUpperCase()];
+    if (!jr) return;
+    rev.judge_verdict = _normalizeHoldingsVerdict(jr.verdict);
+    rev.judge_confidence = jr.confidence || 0;
+    rev.judge_varsity_reasoning = jr.varsity_reasoning || '';
+    rev.judge_pure_reasoning = jr.pure_reasoning || '';
+    rev.judge_recommendation = jr.recommendation || '';
+    rev.judge_risk_flag = jr.risk_flag || '';
+    rev.judge_council_agreement = jr.council_agreement || '';
+    rev.per_model = rev.per_model || {};
+    rev.per_model['ai-judge'] = {
+      verdict: rev.judge_verdict,
+      confidence: rev.judge_confidence,
+      varsity_module: 'Judge synthesis',
+      varsity_reasoning: rev.judge_varsity_reasoning,
+      varsity_verdict: rev.judge_verdict,
+      pure_reasoning: rev.judge_pure_reasoning,
+      pure_verdict: rev.judge_verdict,
+      recommendation: rev.judge_recommendation,
+      risk_flag: rev.judge_risk_flag,
+      council_agreement: rev.judge_council_agreement,
+    };
+  });
+
+  // Persist per-model reviews. The judge is persisted as a special
+  // model_id='ai-judge' row alongside the council rows.
   try {
     for (const rev of (consensus.signal_reviews || [])) {
       if (!rev.per_model) continue;
       for (const [mid, mv] of Object.entries(rev.per_model)) {
         const normVerdict = _normalizeHoldingsVerdict(mv.verdict);
-        const modelName = (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
+        const normVarsityVerdict = _normalizeHoldingsVerdict(mv.varsity_verdict || mv.verdict);
+        const normPureVerdict    = _normalizeHoldingsVerdict(mv.pure_verdict);
+        const modelName = mid === 'ai-judge'
+          ? AI_JUDGE_MODEL.name
+          : (AI_MODELS.find(m => m.id === mid) || {}).name || mid;
         await pool.query(
           `INSERT INTO picks_ai_reviews
-             (category, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, recommendation, risk_flag, reviewed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+             (category, symbol, model_id, model_name, verdict, confidence, varsity_module, varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict, recommendation, risk_flag, reviewed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
            ON CONFLICT (category, symbol, model_id) DO UPDATE SET
              model_name=$4, verdict=$5, confidence=$6, varsity_module=$7,
-             varsity_reasoning=$8, recommendation=$9, risk_flag=$10, reviewed_at=NOW()`,
+             varsity_reasoning=$8, varsity_verdict=$9, pure_reasoning=$10,
+             pure_verdict=$11, recommendation=$12, risk_flag=$13, reviewed_at=NOW()`,
           [category, rev.sym, mid, modelName, normVerdict, mv.confidence || 0,
            mv.varsity_module || '', mv.varsity_reasoning || '',
+           normVarsityVerdict, mv.pure_reasoning || '', normPureVerdict,
            mv.recommendation || '', mv.risk_flag || '']
         );
       }
@@ -17711,7 +18136,8 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
   }
 
   const okCount = modelResults.filter(m => !m.error && !m.skipped).length;
-  console.log(`🤖 Picks AI review [${category}]: ${okCount}/${AI_MODELS.length} models, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+  const judgeStatus = judge?.skipped ? 'skipped' : judge?.error ? 'error' : 'ok';
+  console.log(`🤖 Picks AI review [${category}]: ${okCount}/${AI_MODELS.length} council + judge=${judgeStatus}, ${consensus.signal_reviews?.length || 0} stocks reviewed in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
   return {
     ok: true,
@@ -17719,6 +18145,8 @@ You MUST return a review for EVERY symbol above. Do not skip any.`;
     symbols: top10,
     models_responded: okCount,
     models_total: AI_MODELS.length,
+    judge_status: judgeStatus,
+    judge_took_ms: judge?.took_ms || 0,
     took_ms: Date.now() - startTime,
     signal_reviews: consensus.signal_reviews || [],
     model_details: consensus.model_details || [],
@@ -17751,7 +18179,8 @@ app.get('/api/picks/ai-review', async (req, res) => {
     }
     const rows = (await pool.query(
       `SELECT symbol, model_id, model_name, verdict, confidence, varsity_module,
-              varsity_reasoning, recommendation, risk_flag, reviewed_at
+              varsity_reasoning, varsity_verdict, pure_reasoning, pure_verdict,
+              recommendation, risk_flag, reviewed_at
          FROM picks_ai_reviews WHERE category=$1 ORDER BY symbol, model_id`,
       [category]
     )).rows;
