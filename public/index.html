@@ -8513,6 +8513,91 @@ function renderArchitecturePage(){
     + '<div style="font-size:12px;color:var(--text3);margin-top:4px">How each component picks, scores, ranks, and (where applicable) sends data to AI for review. Grounded in the code in <code style="background:var(--bg3);padding:1px 6px;border-radius:4px;color:#22d3ee">kite-server.js</code>.</div>'
     + '</div>';
 
+  // ── End-to-end flow diagram ──
+  h += _archCard('\uD83D\uDDFA', 'End-to-end data flow \u2014 at a glance',
+      'Everything downstream of the 5 data sources is derived from the same scored universe. This diagram shows which engine produces which score, which tabs read it, and where Deep AI Review plugs in.',
+      '<div style="overflow-x:auto;margin:4px 0 2px 0">'
+    + '<svg viewBox="0 0 1080 760" xmlns="http://www.w3.org/2000/svg" style="width:100%;min-width:920px;height:auto;display:block;background:#0b1120;border:1px solid var(--border);border-radius:10px">'
+    +   '<defs>'
+    +     '<linearGradient id="judgeGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>'
+    +     '<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#64748b"/></marker>'
+    +   '</defs>'
+    +   '<style>.t{fill:#e2e8f0;font:600 11px system-ui,Segoe UI,Roboto,sans-serif}.s{fill:#94a3b8;font:500 9.5px system-ui,Segoe UI,Roboto,sans-serif}.h{fill:#f0abfc;font:800 12px system-ui,Segoe UI,Roboto,sans-serif;letter-spacing:.5px}.b{stroke-width:1.3}</style>'
+    // Row 1 header
+    +   '<text x="24" y="26" class="h">1 \u2022 DATA SOURCES</text>'
+    // 5 data source boxes
+    +   '<g>'
+    +   '<rect x="24" y="36"  width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="36" y="56" class="t">Kite Connect</text><text x="36" y="72" class="s">Live price \u2022 OHLC \u2022 volume</text>'
+    +   '<rect x="232" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="244" y="56" class="t">Yahoo Finance</text><text x="244" y="72" class="s">Fundamentals \u2022 trailing returns</text>'
+    +   '<rect x="440" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="452" y="56" class="t">Screener.in</text><text x="452" y="72" class="s">ROCE \u2022 PEG \u2022 ownership \u2022 DuPont</text>'
+    +   '<rect x="648" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#8b5cf6" class="b"/><text x="660" y="56" class="t">Tickertape CSV</text><text x="660" y="72" class="s">Mutual fund dataset</text>'
+    +   '<rect x="856" y="36" width="200" height="48" rx="8" fill="#0f172a" stroke="#22c55e" class="b"/><text x="868" y="56" class="t">In-process TA</text><text x="868" y="72" class="s">RSI \u2022 MACD \u2022 Ichimoku \u2022 DMAs</text>'
+    +   '</g>'
+    // Arrows down to scoring
+    +   '<g stroke="#64748b" stroke-width="1.2" fill="none" marker-end="url(#arr)">'
+    +   '<path d="M122 84 L122 118"/><path d="M330 84 L330 118"/><path d="M538 84 L538 118"/><path d="M746 84 L746 118"/><path d="M956 84 L956 118"/>'
+    +   '</g>'
+    // Row 2 header
+    +   '<text x="24" y="140" class="h">2 \u2022 SCORING ENGINES (kite-server.js)</text>'
+    // 4 scoring engines panel
+    +   '<g>'
+    +   '<rect x="24" y="150" width="250" height="80" rx="10" fill="#0c1322" stroke="#f59e0b" class="b"/><text x="36" y="172" class="t">scoreFallenAngel()</text><text x="36" y="190" class="s">~line 9678 \u2022 5-pillar quality-on-sale</text><text x="36" y="208" class="s" fill="#f59e0b">\u2192 REBOUND SCORE (fallenScore)</text>'
+    +   '<rect x="288" y="150" width="250" height="80" rx="10" fill="#0c1322" stroke="#22c55e" class="b"/><text x="300" y="172" class="t">scoreStockForPortfolio()</text><text x="300" y="190" class="s">~line 10384 \u2022 FA35+Val15+TA20+Mom15+Risk15</text><text x="300" y="208" class="s" fill="#22c55e">\u2192 MOMENTUM SCORE (composite)</text>'
+    +   '<rect x="552" y="150" width="250" height="80" rx="10" fill="#0c1322" stroke="#22d3ee" class="b"/><text x="564" y="172" class="t">scoreOneStockV2()</text><text x="564" y="190" class="s">~line 9098 \u2022 Varsity 4-pillar (FA only)</text><text x="564" y="208" class="s" fill="#22d3ee">\u2192 INVESTMENT SCORE (scoreV2)</text>'
+    +   '<rect x="816" y="150" width="240" height="80" rx="10" fill="#0c1322" stroke="#8b5cf6" class="b"/><text x="828" y="172" class="t">scoreMFTickertape()</text><text x="828" y="190" class="s">~line 4455 \u2022 Varsity M11 \u2022 13 pillars</text><text x="828" y="208" class="s" fill="#8b5cf6">\u2192 MF SCORE (0\u2013100)</text>'
+    +   '</g>'
+    // Row 3: optional overlays
+    +   '<text x="24" y="262" class="h">3 \u2022 OPTIONAL OVERLAYS</text>'
+    +   '<g>'
+    +   '<rect x="24" y="272" width="516" height="56" rx="10" fill="#0c1322" stroke="#a78bfa" stroke-dasharray="4 3" class="b"/><text x="36" y="292" class="t">Pass 1.5 \u2014 Structure Filter + LLM Review</text><text x="36" y="310" class="s">Pivot/zone S/R \u2022 VWAP \u2022 PDH/PDL \u2022 /api/candidates/latest + /api/scan/pass2-debug</text>'
+    +   '<rect x="552" y="272" width="504" height="56" rx="10" fill="#0c1322" stroke="#22d3ee" stroke-dasharray="4 3" class="b"/><text x="564" y="292" class="t">\uD83D\uDC1F MiroFish Wealth Projection</text><text x="564" y="310" class="s">/api/mirofish/mf-predict \u2022 \u20B91 Lakh \u2192 7Y / 10Y / 20Y / 30Y / 40Y projection per MF card</text>'
+    +   '</g>'
+    // Row 4: tabs
+    +   '<text x="24" y="360" class="h">4 \u2022 USER-FACING TABS</text>'
+    +   '<g>'
+    +   '<rect x="24" y="370"  width="160" height="58" rx="8" fill="#0f172a" stroke="#475569" class="b"/><text x="36" y="390" class="t">\uD83D\uDCCB Stock Picks</text><text x="36" y="406" class="s">3 columns: Rebound /</text><text x="36" y="418" class="s">Momentum / Long-Term</text>'
+    +   '<rect x="192" y="370" width="160" height="58" rx="8" fill="#0f172a" stroke="#475569" class="b"/><text x="204" y="390" class="t">\uD83D\uDCB0 MF Picks</text><text x="204" y="406" class="s">Small / Mid / Flexi Cap</text><text x="204" y="418" class="s">top 5 cards + table</text>'
+    +   '<rect x="360" y="370" width="160" height="58" rx="8" fill="#0f172a" stroke="#475569" class="b"/><text x="372" y="390" class="t">\uD83D\uDCBC Holdings</text><text x="372" y="406" class="s">Personal portfolio</text><text x="372" y="418" class="s">Live P&amp;L + reviews</text>'
+    +   '<rect x="528" y="370" width="160" height="58" rx="8" fill="#0f172a" stroke="#475569" class="b"/><text x="540" y="390" class="t">\uD83D\uDD0D Deep Analyzer</text><text x="540" y="406" class="s">Single-stock deep dive</text><text x="540" y="418" class="s">/api/stocks/analyze/:sym/ai</text>'
+    +   '<rect x="696" y="370" width="160" height="58" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="708" y="390" class="t">\uD83E\uDDEA Candidates</text><text x="708" y="406" class="s">Structure Filter + LLM</text><text x="708" y="418" class="s">(sub-tab of RoboTrade)</text>'
+    +   '<rect x="864" y="370" width="192" height="58" rx="8" fill="#0f172a" stroke="#475569" class="b"/><text x="876" y="390" class="t">\uD83D\uDCCA Stock Data</text><text x="876" y="406" class="s">Full universe table \u2014 MOMENTUM /</text><text x="876" y="418" class="s">REBOUND / INVESTMENT SCORE cols</text>'
+    +   '</g>'
+    // Row 5 header
+    +   '<text x="24" y="460" class="h">5 \u2022 DEEP AI REVIEW \u2014 5-model council + 6th AI judge</text>'
+    // Council + judge
+    +   '<g>'
+    +   '<rect x="24" y="470"  width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="36" y="490" class="t">Groq Llama 3.3 70B</text><text x="36" y="508" class="s">council \u2022 varsity + pure</text>'
+    +   '<rect x="204" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="216" y="490" class="t">GPT-4.1-nano</text><text x="216" y="508" class="s">council \u2022 varsity + pure</text>'
+    +   '<rect x="384" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="396" y="490" class="t">DeepSeek V3</text><text x="396" y="508" class="s">council \u2022 varsity + pure</text>'
+    +   '<rect x="564" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="576" y="490" class="t">Claude Haiku 4.5</text><text x="576" y="508" class="s">council \u2022 varsity + pure</text>'
+    +   '<rect x="744" y="470" width="172" height="54" rx="8" fill="#0f172a" stroke="#a78bfa" class="b"/><text x="756" y="490" class="t">Mistral Small</text><text x="756" y="508" class="s">council \u2022 varsity + pure</text>'
+    +   '<rect x="924" y="470" width="132" height="54" rx="8" fill="#0f172a" stroke="url(#judgeGrad)" stroke-width="2"/><text x="936" y="490" class="t">\u2696 AI JUDGE</text><text x="936" y="508" class="s">Claude Opus 4.6</text>'
+    +   '</g>'
+    // Arrows council → judge
+    +   '<g stroke="#a78bfa" stroke-width="1.1" fill="none" opacity="0.55" marker-end="url(#arr)">'
+    +   '<path d="M110 524 C 400 600, 700 600, 920 534"/>'
+    +   '<path d="M290 524 C 500 580, 700 580, 920 534"/>'
+    +   '<path d="M470 524 C 600 560, 760 560, 920 534"/>'
+    +   '<path d="M650 524 L 920 534"/>'
+    +   '<path d="M830 524 L 920 534"/>'
+    +   '</g>'
+    +   '<text x="24" y="606" class="s">Scopes: Stock Picks (Rebound / Momentum / Long-Term), Holdings, MF Picks top-3 per category. Dual opinion per row: WITH Varsity + PURE first-principles.</text>'
+    // Row 6 persistence
+    +   '<text x="24" y="642" class="h">6 \u2022 PERSISTENCE (PostgreSQL)</text>'
+    +   '<g>'
+    +   '<rect x="24" y="652"  width="196" height="44" rx="8" fill="#0f172a" stroke="#64748b"/><text x="36" y="672" class="t">mf_tickertape</text><text x="36" y="688" class="s">MF dataset snapshot</text>'
+    +   '<rect x="232" y="652" width="196" height="44" rx="8" fill="#0f172a" stroke="#64748b"/><text x="244" y="672" class="t">mfScoreCache</text><text x="244" y="688" class="s">scoreMFTickertape output</text>'
+    +   '<rect x="440" y="652" width="196" height="44" rx="8" fill="#0f172a" stroke="#a78bfa"/><text x="452" y="672" class="t">picks_ai_reviews</text><text x="452" y="688" class="s">council + judge rows</text>'
+    +   '<rect x="648" y="652" width="196" height="44" rx="8" fill="#0f172a" stroke="#a78bfa"/><text x="660" y="672" class="t">holdings_ai_reviews</text><text x="660" y="688" class="s">council + judge rows</text>'
+    +   '<rect x="856" y="652" width="200" height="44" rx="8" fill="#0f172a" stroke="#a78bfa"/><text x="868" y="672" class="t">mf_ai_reviews</text><text x="868" y="688" class="s">per-row, survives reruns</text>'
+    +   '</g>'
+    +   '<rect x="24" y="708" width="1032" height="36" rx="8" fill="#0f172a" stroke="#22c55e"/>'
+    +   '<text x="36" y="731" class="t">user_holdings \u2022 bucket_stats \u2022 ai_stock_reviews \u2022 _lastScoredV2 (in-memory) \u2014 shared state every tab reads from</text>'
+    +   '</svg>'
+    + '</div>'
+    + '<div style="font-size:11px;color:var(--text3);margin-top:8px;line-height:1.55">Read this top-down: raw data \u2192 4 scoring engines \u2192 optional overlays \u2192 6 tabs \u2192 Deep AI Review (council + judge) \u2192 PostgreSQL. Every card below expands on one of these stages.</div>'
+  );
+
   // ── Shared data sources ──
   h += _archCard('🗄', 'Shared Data Sources', 'Every ranking pipeline below reads from some subset of these sources.',
       _archSrc('Kite Connect', 'Live price, volume, day change, OHLC. Zerodha broker API — primary for real-time quotes.')
@@ -8542,7 +8627,7 @@ function renderArchitecturePage(){
     + _archPillar('Deep AI Review (top 3 per category)', '5 council + 1 judge', 'On top of the pure-quant ranking, each category exposes a "🧠 Deep AI Review" button that runs the top-3 eligible funds through the same 5-council + 1-judge pipeline used by Stock Picks. Sends EVERY MF data point (identity, AUM, expense, all return buckets, vs-category ratios, Sharpe/Sortino, drawdown, tracking error, portfolio + concentration, and the per-pillar hit breakdown so the AI can agree/disagree with the METHODOLOGY) plus a Varsity Module 11 category context block citing Ch16 (closet indexer), Ch19 (rolling returns), Ch20 (TER), Ch21 (benchmarking), Ch22-23 (Sharpe/Sortino/Capture), and Ch24 (4-stage fund analysis). Persisted in <code>mf_ai_reviews</code>, cached by category + fund_name + model_id.')
     + '<div style="margin-top:12px"><b>Style-drift penalties:</b> small-cap fund with &lt; 50% in small caps, mid-cap fund with > 27% in small caps, large-cap fund with > 15% in small caps, flexi cap concentrated > 72% in one segment — each is flagged as a mandate breach and penalised.</div>'
     + '<div style="margin-top:10px"><b>Credibility caps:</b> young-and-small funds cannot outrank established ones regardless of recent numbers. If AUM &lt; ₹5K Cr AND age &lt; 7Y AND raw score &gt; 70, the score is capped at 70. "No 5Y data" + age &lt; 7Y caps at 75.</div>'
-    + _archNote('The ranking is pure quant — no LLM involvement. The cache rebuilds every 6 hours via cron and at server startup.')
+    + _archNote('The pure-quant <b>ranking</b> has zero LLM involvement — the cache rebuilds every 6 hours via cron and at server startup. The <b>Deep AI Review</b> layer above sits on top of that ranking as a separate call: click "🧠 Deep AI Review" on any MF category (Small / Mid / Flexi Cap) and the top-3 eligible funds are run through the same 5-model council + Claude Opus judge used by Stock Picks and Holdings. Council + judge rows are persisted per-(category, fund_name, model_id) in <code>mf_ai_reviews</code>, survive server restarts, and render as a verdict tally next to each fund in the top-3 area — identical UX to the Stock Picks REVIEWS column.')
   );
 
   // ── DEEP STOCK ANALYZER ──
@@ -8722,6 +8807,26 @@ function renderArchitecturePage(){
     + '<div style="margin-top:14px"><b>Why the two lists are intentionally different:</b></div>'
     + '<div style="margin-top:6px">Rebound Picks answers <em>"give me the best quality-on-sale setups right now"</em> — mean-reversion on intact businesses. Momentum Picks answers <em>"build me a diversified 15-stock book optimised for a 1–3 month hold"</em> — a blend of quality, valuation, trend and momentum. Overlapping answers, but not identical: a strong composite in a healthy uptrend is a legitimate Momentum Pick but NOT a Rebound Pick, and a deep rebound with bad R:R is a Stock Picks row but not a Momentum portfolio position.</div>'
     + _archNote('Internal field names are unchanged: the Rebound Score is still <code>fallenScore</code>, the Investment Score is still <code>scoreV2</code>, and the Momentum Score is still <code>composite</code>. Only the UI labels were renamed — backend logic, test invariants (FA/TA separation in <code>test/v2-invariants.js</code>), and API responses continue to use the original field names.')
+  );
+
+  // ── STOCKS ROBOTRADE → CANDIDATES TAB ──
+  h += _archCard('🧪', 'Stocks RoboTrade → Candidates — Structure Filter + LLM Review',
+      'Sub-tab <code>id:"candidates"</code> under the Stocks RoboTrade page. Client renderer: <code>renderStocksCandidates()</code> in index.html (~line 920). Server endpoints: <code>GET /api/candidates/latest</code> (the latest Pass 1.5 output) and <code>GET /api/scan/pass2-debug</code> (full Pass 2 debug trace with per-candidate reject reason). This is the only place in the app where an LLM touches an <em>intraday</em> signal path — everything else is end-of-day or review.',
+      '<div style="margin-bottom:10px">Candidates is the UI window into <b>Pass 1.5</b>, a structural filter that sits between the cheap TA scan (Pass 1) and the heavy per-stock scoring (Pass 2). The goal is to reject obviously bad long setups before spending LLM budget on them, and to optionally run a small, targeted LLM review on what survives.</div>'
+    + _archPillar('Structure Filter (free, deterministic)', 'structureFilterEnabled', 'Rejects a candidate if price is too close to a supply zone: pivot-zone / classical S/R, VWAP, and PDH/PDL proximity. Config knob <code>rejectIfResistanceWithinPct</code> controls the reject distance (default ~0.8%). Pure-quant, no API cost — runs on every Pass 1 survivor.')
+    + _archPillar('LLM Review (optional, budgeted)', 'llmFilterEnabled', 'After the structure filter, the top N candidates by score are sent to a cheap LLM for a short structural sanity-check. Controlled by <code>llmTopCandidatesPerScan</code> (cap on fan-out) and <code>llmMinScoreThreshold</code> (floor to even consider). Returns per-candidate verdict + reason; verdict is stored alongside the Pass 1.5 row.')
+    + _archPillar('UI output', 'Candidates table', 'Each row shows symbol, side, entry/SL/target, Pass 1 score, structure-filter verdict (PASS / REJECT + reason), and — if the LLM layer ran — the LLM verdict + reason. A "debug" expander surfaces the raw Pass 2 trace from <code>/api/scan/pass2-debug</code> so you can see exactly why each candidate was or was not promoted.')
+    + _archNote('Unlike Deep AI Review, the Candidates LLM layer is NOT persisted long-term — it is a per-scan decision. The structure filter itself is always on by default; the LLM layer is gated behind <code>llmFilterEnabled</code> so the hot path can be kept free-of-LLM in production.')
+  );
+
+  // ── MIROFISH WEALTH PROJECTION ──
+  h += _archCard('🐟', 'MiroFish — ₹1 Lakh wealth projection on every MF card',
+      'Endpoint: <code>GET /api/mirofish/mf-predict</code> in kite-server.js. Auto-called per top-3 MF card in each category (Small / Mid / Flexi Cap) when the MF Picks page renders. Purpose: give a visceral "what would ₹1 Lakh become?" read on every recommended fund, using the fund\'s own CAGR + volatility as inputs.',
+      '<div style="margin-bottom:10px">MiroFish is an external compounder model that ProTrader calls per fund and renders inline on the top-3 MF cards in MF Picks. It is a separate concern from the Varsity pillar score — the ranking comes from <code>scoreMFTickertape()</code>, MiroFish only adds a wealth-projection overlay so you can see the long-run compounding profile at a glance.</div>'
+    + _archPillar('Request', '/api/mirofish/mf-predict', 'ProTrader sends the fund\'s CAGR buckets + volatility + category to the MiroFish endpoint. The call is cached per (fund, horizon) so re-rendering the same top-3 list doesn\'t re-hit the upstream.')
+    + _archPillar('Response horizons', '7Y / 10Y / 20Y / 30Y / 40Y', 'Each horizon returns an expected corpus for a ₹1 Lakh lump-sum investment. Rendered as a compact row under the fund name: "🐟 MiroFish — ₹1 Lakh invested → X @ 7Y · Y @ 10Y · …". Colour-coded by horizon so the 30Y/40Y numbers stand out.')
+    + _archPillar('Scope', 'top 3 per category only', 'Only the top-3 cards per category call the endpoint. The full table below does NOT call MiroFish — keeps latency + cost bounded and matches Deep AI Review\'s "top 3 per category" scope.')
+    + _archNote('MiroFish also exposes a crowd-reaction agent simulator (56 AI agents) that is not yet wired into ProTrader. It is a future integration for qualitative "how would retail investors react to this fund\'s drawdown profile" narratives.')
   );
 
   h += '</div>';
