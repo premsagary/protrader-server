@@ -4512,40 +4512,27 @@ function renderStockRecPage(){
   if(swingPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('swing','sym',        'Stock', 'left')
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
       + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
-      + _srHdr('swing','fallenScore','REBOUND SCORE','right','Rebound Score — quality-on-sale ranking for pullback entries (ROE/D-E/margin 40 + Depth of Fall 15 + Oversold 20 + Valuation 12 + Recovery Signals 13)')
-      + _srHdr('swing','price',      'Price')
-      + _srHdr('swing','pctFromHigh','FrHi%','right','% from 52-week high')
-      + _srHdr('swing','rsi',        'RSI')
-      + _srHdr('swing','roe',        'ROE%')
+      + _srHdr('swing','fallenScore','REBOUND<br/>SCORE','center','Rebound Score — quality-on-sale ranking for pullback entries (ROE/D-E/margin 40 + Depth of Fall 15 + Oversold 20 + Valuation 12 + Recovery Signals 13)')
+      + _srHdr('swing','price',      'Price','center')
       + '</tr></thead><tbody>';
     swingPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
       var fs = s.fallenScore;
       var swCol = fs==null?'var(--text4)':fs>=75?'var(--green)':fs>=55?'#f59e0b':'var(--red)';
-      var fh = s.pctFromHigh;
-      var fhCol = fh==null?'var(--text4)':fh>=-25?'#f59e0b':fh>=-35?'#f97316':'var(--red)';
-      var rsiCol = s.rsi==null?'var(--text4)':s.rsi<35?'var(--green)':s.rsi<50?'#f59e0b':'var(--red)';
-      var roe = s.roe;
-      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#f59e0b':'var(--text)';
       var bg = i%2===0?'var(--bg)':'var(--bg2)';
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
-        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
-        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px">'+_picksAIReviewsCell('rebound', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksAIReviewsCell('rebound', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('rebound', s.sym, i)+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+fhCol+';font-weight:600">'+(fh!=null?fh.toFixed(1)+'%':'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '</tr>';
       // Expanded per-model panel for this row (spans all cols)
       if (_picksAIExpanded['rebound:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('rebound', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="5" style="padding:10px 14px">' + _picksAIExpandedPanel('rebound', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -4573,39 +4560,26 @@ function renderStockRecPage(){
   if(momentumPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('mom','sym',       'Stock', 'left')
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
       + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
-      + _srHdr('mom','composite', 'MOMENTUM SCORE','right','Momentum Score — 5-factor composite (FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%) used by Portfolio Manager → Momentum Picks to pick and allocate stocks. Same number on every tab.')
-      + _srHdr('mom','price',     'Price')
-      + _srHdr('mom','change6m',  '6M%',  'right','6-month return')
-      + _srHdr('mom','rsi',       'RSI')
-      + _srHdr('mom','roe',       'ROE%')
+      + _srHdr('mom','composite', 'MOMENTUM<br/>SCORE','center','Momentum Score — 5-factor composite (FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%) used by Portfolio Manager → Momentum Picks to pick and allocate stocks. Same number on every tab.')
+      + _srHdr('mom','price',     'Price','center')
       + '</tr></thead><tbody>';
     momentumPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
       var ms = s.composite;
       var msCol = ms==null?'var(--text4)':ms>=65?'#22c55e':ms>=55?'#10b981':ms>=45?'#f59e0b':'var(--red)';
-      var c6 = s.change6m;
-      var c6Col = c6==null?'var(--text4)':c6>=15?'var(--green)':c6>=0?'#10b981':c6>=-15?'#f59e0b':'var(--red)';
-      var rsiCol = s.rsi==null?'var(--text4)':s.rsi<35?'var(--green)':s.rsi<60?'var(--text)':s.rsi<70?'#f59e0b':'var(--red)';
-      var roe = s.roe;
-      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#10b981':'var(--text)';
       var bg = i%2===0?'var(--bg)':'var(--bg2)';
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
-        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
-        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px">'+_picksAIReviewsCell('momentum', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksAIReviewsCell('momentum', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('momentum', s.sym, i)+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+msCol+'">'+(ms!=null?(+ms).toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+c6Col+';font-weight:600">'+(c6!=null?c6.toFixed(1)+'%':'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+rsiCol+'">'+(s.rsi!=null?s.rsi:'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center;font-weight:700;color:'+msCol+'">'+(ms!=null?(+ms).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '</tr>';
       if (_picksAIExpanded['momentum:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('momentum', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="5" style="padding:10px 14px">' + _picksAIExpandedPanel('momentum', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -4633,40 +4607,26 @@ function renderStockRecPage(){
   if(longTermPicks.length){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)">#</th>'
       + _srHdr('long','sym',        'Stock', 'left')
-      + '<th style="text-align:left;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
+      + '<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="AI review verdicts (top 10 only — click Deep AI Review button)">REVIEWS</th>'
       + '<th style="text-align:center;padding:6px 8px;color:#a78bfa" title="Claude Opus 4.6 final verdict (top 10 only)">⚖ JUDGE</th>'
-      + _srHdr('long','scoreV2',    'INVESTMENT SCORE','right','Varsity 4-pillar Investment Score — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only (TA lives in the timing overlay).')
-      + _srHdr('long','price',      'Price')
-      + _srHdr('long','roe',        'ROE%')
-      + _srHdr('long','debtToEq',   'D/E')
-      + _srHdr('long','revGrowth',  'RevGr%', 'right','Revenue growth YoY')
+      + _srHdr('long','scoreV2',    'INVESTMENT<br/>SCORE','center','Varsity 4-pillar Investment Score — Quality 40 + Growth 25 + Valuation 20 + Business 15. Fundamentals only (TA lives in the timing overlay).')
+      + _srHdr('long','price',      'Price','center')
       + '</tr></thead><tbody>';
     longTermPicks.slice(0, 25).forEach(function(s, i){
       var gc = {NIFTY50:'var(--blue)',NEXT50:'#8b5cf6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
       var ltS = s.scoreV2;
       var sc = ltS==null?'var(--text4)':ltS>=75?'var(--green)':ltS>=60?'#f59e0b':'var(--red)';
-      var roe = s.roe;
-      var roeCol = roe==null?'var(--text4)':roe>=20?'var(--green)':roe>=15?'#10b981':'var(--text)';
-      var de = s.debtToEq;
-      var deCol = de==null?'var(--text4)':de<1?'var(--green)':de<2?'var(--text)':'var(--red)';
-      var rg = s.revGrowth;
-      var rgCol = rg==null?'var(--text4)':rg>=15?'var(--green)':rg>=5?'#10b981':rg>=0?'var(--text)':'var(--red)';
       var bg = i%2===0?'var(--bg)':'var(--bg2)';
       html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
-        + '<td style="padding:6px 8px;color:var(--text3)">'+(i+1)+'</td>'
-        + '<td style="padding:6px 8px"><div style="font-weight:700">'+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-        + '<td style="padding:6px 8px">'+_picksAIReviewsCell('longterm', s.sym, i)+'</td>'
+        + '<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
+        + '<td style="padding:6px 8px;text-align:center">'+_picksAIReviewsCell('longterm', s.sym, i)+'</td>'
         + '<td style="padding:6px 8px;text-align:center">'+_picksJudgeCell('longterm', s.sym, i)+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;font-weight:700;color:'+sc+'">'+(ltS!=null?(+ltS).toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+roeCol+'">'+(roe!=null?roe.toFixed(1):'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+deCol+'">'+(de!=null?de.toFixed(2)+'x':'-')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:'+rgCol+'">'+(rg!=null?rg.toFixed(1)+'%':'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center;font-weight:700;color:'+sc+'">'+(ltS!=null?(+ltS).toFixed(1):'-')+'</td>'
+        + '<td style="padding:6px 8px;text-align:center">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
         + '</tr>';
       if (_picksAIExpanded['longterm:'+s.sym]) {
-        html += '<tr style="background:var(--bg3)"><td colspan="9" style="padding:10px 14px">' + _picksAIExpandedPanel('longterm', s.sym) + '</td></tr>';
+        html += '<tr style="background:var(--bg3)"><td colspan="5" style="padding:10px 14px">' + _picksAIExpandedPanel('longterm', s.sym) + '</td></tr>';
       }
     });
     html += '</tbody></table></div>';

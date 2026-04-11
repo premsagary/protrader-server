@@ -16348,14 +16348,37 @@ async function callAIModel(modelDef, systemPrompt, userPrompt, endpoint = 'defau
     // ── Provider: Anthropic (requires max_tokens) ──
     if (modelDef.provider === 'anthropic') {
       if (!ANTHROPIC_API_KEY) return { id: modelDef.id, name: modelDef.name, error: 'No API key', skipped: true };
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
-        body: JSON.stringify({ model: modelDef.model, max_tokens: 64000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
-        signal: AbortSignal.timeout(180000),
-      });
-      if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-      const data = await resp.json();
+      // Anthropic's TPM rate limit (30K input tokens/minute on lower tiers)
+      // is the #1 reason the judge fails — running Claude Haiku 4.5 on the
+      // council at the same time as Claude Opus 4.6 for the judge easily
+      // blows the per-minute budget. Retry up to 3× with honor for the
+      // retry-after header; fall back to exponential backoff if the header
+      // is missing.
+      let resp, data, attempt = 0, maxAttempts = 3;
+      while (true) {
+        resp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': ANTHROPIC_API_KEY },
+          body: JSON.stringify({ model: modelDef.model, max_tokens: 64000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+          signal: AbortSignal.timeout(180000),
+        });
+        if (resp.ok) break;
+        if (resp.status === 429 && attempt < maxAttempts - 1) {
+          // Honor retry-after header if present (in seconds), else use
+          // exponential backoff 20s → 45s → 90s with ±20% jitter.
+          const ra = parseFloat(resp.headers.get('retry-after') || '');
+          const defaults = [20, 45, 90];
+          const waitSec = (Number.isFinite(ra) && ra > 0) ? ra : defaults[attempt];
+          const jitter = 0.8 + Math.random() * 0.4;
+          const waitMs = Math.round(waitSec * 1000 * jitter);
+          console.warn(`  ⏳ Anthropic 429 for ${modelDef.name} — retry ${attempt + 1}/${maxAttempts - 1} in ${(waitMs/1000).toFixed(1)}s`);
+          await new Promise(r => setTimeout(r, waitMs));
+          attempt++;
+          continue;
+        }
+        throw new Error(`${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      }
+      data = await resp.json();
       raw = data.content?.[0]?.text || '';
       tokens = { input: data.usage?.input_tokens || 0, output: data.usage?.output_tokens || 0 };
 
