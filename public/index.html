@@ -56,8 +56,9 @@ html{scroll-behavior:smooth}
 html,body{height:100%}
 body.in-app{overflow:hidden}
 body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
-  background:var(--bg);color:var(--text);font-size:13px;display:flex;flex-direction:column;
+  background:transparent;color:var(--text);font-size:13px;display:flex;flex-direction:column;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+html{background:var(--bg)}
 
 /* ── Global contrast scrim — darkens center behind UI, above 3D canvas ── */
 #contrast-scrim{position:fixed;inset:0;pointer-events:none;z-index:1;
@@ -507,13 +508,13 @@ select option{background:var(--bg3)}
 
 /* ── Spatial card system — 3D transform on hover ── */
 /* ── Tiltable elements — 3D perspective on hover + mouse tracking ── */
-.spatial-card,.tilt-3d,.tw,.qs-stock,
+.spatial-card,.tilt-3d,.qs-stock,
 .lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge{
   transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
   transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color 0.3s,background 0.3s;
   will-change:transform;
 }
-.spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover,
+.spatial-card:hover,.tilt-3d:hover,.qs-stock:hover,
 .lp-feature:hover,.lp-price-card:hover,.lp-example:hover,.lp-stat:hover,.lp-step:hover,
 .lp-ex-metric:hover,.lp-roi:hover,.lp-hero-badge:hover{
   transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(6px);
@@ -636,12 +637,12 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Three.js canvas container ── */
 #three-login{position:absolute;inset:0;z-index:0}
 #three-login canvas{display:block}
-#game-bg{position:fixed;inset:0;pointer-events:none;z-index:0}
+#game-bg{position:fixed;inset:0;pointer-events:none;z-index:-1}
 #game-bg canvas{display:block}
 
 /* ── Mobile optimizations ── */
 @media(max-width:767px){
-  .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
+  .spatial-card:hover,.tilt-3d:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
   .cascade>*{animation:none !important;opacity:1;transform:none}
 }
@@ -649,7 +650,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Reduce motion for accessibility ── */
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important}
-  .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
+  .spatial-card:hover,.tilt-3d:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
   #three-login,#game-bg{display:none}
   .reveal,.reveal-left,.reveal-right,.reveal-scale{opacity:1;transform:none}
@@ -2131,8 +2132,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       /* Fog — use STORY color, floor at visible blue */
       scene.fog.color.setRGB(w.fc[0]/255,w.fc[1]/255,w.fc[2]/255);
       scene.fog.density=w.fd;
-      /* DEBUG: bright blue-purple clear color so we can see if canvas is rendering */
-      renderer.setClearColor(0x101840,1);
+      renderer.setClearColor(new THREE.Color(w.fc[0]/255,w.fc[1]/255,w.fc[2]/255),1);
 
       /* Ambient light — continuous */
       ambLight.color.setHSL(w.h/360,w.s,w.l);
@@ -2439,7 +2439,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   };
 
   /* ── 3D tilt mouse tracking for all tiltable elements ── */
-  var _tiltSel='.spatial-card,.tilt-3d,.sc,.tw,.qs-stock,.lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge';
+  var _tiltSel='.spatial-card,.tilt-3d,.sc,.qs-stock,.lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge';
   var _isMobileTilt=window.innerWidth<768;
   window.addEventListener('resize',function(){_isMobileTilt=window.innerWidth<768;});
   document.addEventListener('mousemove',function(e){
