@@ -902,6 +902,29 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-parallax{will-change:transform}
 
 /* ── Mobile simplifications ── */
+/* ── Glass transparency upgrade — reveal 3D background through UI tiles ── */
+.lp .lp-feature,.lp .lp-step,.lp .lp-stat{
+  background:rgba(10,12,18,0.55);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border-color:rgba(80,120,180,0.10)}
+.lp .lp-price-card{
+  background:rgba(10,12,18,0.52);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-color:rgba(80,120,180,0.10)}
+.lp .lp-price-card.featured{
+  background:linear-gradient(135deg,rgba(64,112,168,0.10),rgba(10,12,18,0.52));
+  border-color:rgba(80,120,180,0.18)}
+.lp .lp-example{
+  background:rgba(10,12,18,0.50);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-color:rgba(80,120,180,0.12)}
+.lp .lp-ex-metric{
+  background:rgba(10,12,18,0.48);border-color:rgba(80,120,180,0.08)}
+.lp .lp-roi{
+  background:rgba(10,12,18,0.50);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-color:rgba(80,120,180,0.10)}
+.lp .lp-hero-badge{
+  background:rgba(10,12,18,0.45);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+/* Subtle glow tint on section dividers */
+.lp .lp-section-divider{border-color:rgba(80,128,200,0.08)}
+
 @media(max-width:768px){
   .lp-sheen::after{display:none}
   .lp-parallax{transform:none!important}
@@ -910,6 +933,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   .lp-hero.lp-cinematic .lp-hero-trust span{animation:none}
   .lp-scroll-progress{display:none}
   .lp-reveal-up,.lp-reveal-scale,.lp-reveal-left,.lp-reveal-right{transition-duration:0.4s!important}
+  /* Restore opacity on mobile for readability */
+  .lp .lp-feature,.lp .lp-step,.lp .lp-stat,.lp .lp-price-card,.lp .lp-example,.lp .lp-roi{
+    background:rgba(12,14,20,0.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1721,9 +1747,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
 
   /* ── Ambient light (zone-reactive) ── */
-  var ambLight=new THREE.AmbientLight(0x304060,0.6);
+  var ambLight=new THREE.AmbientLight(0x4060a0,0.7);
   scene.add(ambLight);
-  var dirLight=new THREE.DirectionalLight(0x5080b0,0.5);
+  var dirLight=new THREE.DirectionalLight(0x6090d0,0.6);
   dirLight.position.set(30,50,40);
   scene.add(dirLight);
 
@@ -1740,7 +1766,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
   var starGeo=new THREE.BufferGeometry();
   starGeo.setAttribute('position',new THREE.BufferAttribute(starPos,3));
-  var starMat=new THREE.PointsMaterial({color:0xc0cce0,size:tier===0?2.0:1.5,transparent:true,opacity:0.55,sizeAttenuation:true,depthWrite:false});
+  var starMat=new THREE.PointsMaterial({color:0xd0daf0,size:tier===0?2.0:1.6,transparent:true,opacity:0.65,sizeAttenuation:true,depthWrite:false});
   var stars=new THREE.Points(starGeo,starMat);
   scene.add(stars);
 
@@ -1757,7 +1783,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
   var dustGeo=new THREE.BufferGeometry();
   dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPos,3));
-  var dustMat=new THREE.PointsMaterial({color:0x90a0c0,size:tier===0?1.8:1.2,transparent:true,opacity:0.35,sizeAttenuation:true,depthWrite:false});
+  var dustMat=new THREE.PointsMaterial({color:0xa0b8e0,size:tier===0?1.8:1.4,transparent:true,opacity:0.40,sizeAttenuation:true,depthWrite:false});
   var dustField=new THREE.Points(dustGeo,dustMat);
   scene.add(dustField);
 
@@ -1765,11 +1791,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   var shapes=[];
   if(CONF.shapes>0){
     var shapeDefs=[
-      {geo:new THREE.IcosahedronGeometry(10,0),pos:[-30,18,-20],color:0x5080b0,op:0.15,spd:[0.008,0.006]},
-      {geo:new THREE.OctahedronGeometry(7,0),pos:[35,22,-30],color:0x6090b8,op:0.12,spd:[-0.006,0.009]},
-      {geo:new THREE.TetrahedronGeometry(8,0),pos:[-18,-12,-15],color:0x7098b0,op:0.10,spd:[0.01,-0.005]},
-      {geo:new THREE.DodecahedronGeometry(6,0),pos:[28,-8,-25],color:0x5a80a0,op:0.10,spd:[-0.007,0.008]},
-      {geo:new THREE.IcosahedronGeometry(14,1),pos:[0,28,-35],color:0x486888,op:0.08,spd:[0.004,0.003]}
+      {geo:new THREE.IcosahedronGeometry(10,0),pos:[-30,18,-20],color:0x6898d0,op:0.18,spd:[0.008,0.006]},
+      {geo:new THREE.OctahedronGeometry(7,0),pos:[35,22,-30],color:0x78a0d8,op:0.15,spd:[-0.006,0.009]},
+      {geo:new THREE.TetrahedronGeometry(8,0),pos:[-18,-12,-15],color:0x88a8d0,op:0.13,spd:[0.01,-0.005]},
+      {geo:new THREE.DodecahedronGeometry(6,0),pos:[28,-8,-25],color:0x7090c0,op:0.13,spd:[-0.007,0.008]},
+      {geo:new THREE.IcosahedronGeometry(14,1),pos:[0,28,-35],color:0x5878a8,op:0.10,spd:[0.004,0.003]}
     ];
     for(var s=0;s<CONF.shapes;s++){
       var sd=shapeDefs[s];
@@ -1785,7 +1811,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   /* ── Ground grid plane (medium+high only) ── */
   var gridHelper=null;
   if(CONF.gridSegs>0){
-    gridHelper=new THREE.GridHelper(300,CONF.gridSegs,0x304060,0x1a2840);
+    gridHelper=new THREE.GridHelper(300,CONF.gridSegs,0x4060a0,0x243058);
     gridHelper.position.y=-25;
     gridHelper.material.transparent=true;
     gridHelper.material.opacity=0.20;
@@ -1795,33 +1821,33 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
   /* ── Volumetric cone light (subtle god-ray from above) ── */
   var coneGeo=new THREE.ConeGeometry(60,120,16,1,true);
-  var coneMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0.035,side:THREE.DoubleSide,depthWrite:false});
+  var coneMat=new THREE.MeshBasicMaterial({color:0x6090d0,transparent:true,opacity:0.035,side:THREE.DoubleSide,depthWrite:false});
   var lightCone=new THREE.Mesh(coneGeo,coneMat);
   lightCone.position.set(0,60,0);lightCone.rotation.x=Math.PI;
   scene.add(lightCone);
 
   /* ── Central glow orb (focal point with breathing) ── */
   var orbGeo=new THREE.SphereGeometry(5,16,16);
-  var orbMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0.08,depthWrite:false});
+  var orbMat=new THREE.MeshBasicMaterial({color:0x6898d0,transparent:true,opacity:0.10,depthWrite:false});
   var orb=new THREE.Mesh(orbGeo,orbMat);
   orb.position.set(0,5,-10);
   scene.add(orb);
   var orbOuterGeo=new THREE.SphereGeometry(12,16,16);
-  var orbOuterMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.04,depthWrite:false});
+  var orbOuterMat=new THREE.MeshBasicMaterial({color:0x5070a8,transparent:true,opacity:0.06,depthWrite:false});
   var orbOuter=new THREE.Mesh(orbOuterGeo,orbOuterMat);
   orbOuter.position.set(0,5,-10);
   scene.add(orbOuter);
 
   /* ── Visual anchor: alignment ring (toroidal guide that resolves over scroll) ── */
   var ringGeo=new THREE.TorusGeometry(18,0.3,8,48);
-  var ringMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
+  var ringMat=new THREE.MeshBasicMaterial({color:0x6898d0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
   var alignRing=new THREE.Mesh(ringGeo,ringMat);
   alignRing.position.set(0,4,-10);
   alignRing.rotation.x=Math.PI*0.5;
   scene.add(alignRing);
   /* Second smaller ring for depth */
   var ring2Geo=new THREE.TorusGeometry(10,0.2,6,36);
-  var ring2Mat=new THREE.MeshBasicMaterial({color:0x4070a0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
+  var ring2Mat=new THREE.MeshBasicMaterial({color:0x5888c0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
   var alignRing2=new THREE.Mesh(ring2Geo,ring2Mat);
   alignRing2.position.set(0,4,-10);
   alignRing2.rotation.x=Math.PI*0.5;
@@ -1830,16 +1856,55 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   /* ── Dominant visual anchor: energy column (grows with scroll) ── */
   /* Core beam — thin, bright, the primary trackable element */
   var colCoreGeo=new THREE.CylinderGeometry(0.35,0.35,70,8,1,true);
-  var colCoreMat=new THREE.MeshBasicMaterial({color:0x6898c8,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+  var colCoreMat=new THREE.MeshBasicMaterial({color:0x78a8e0,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
   var energyCore=new THREE.Mesh(colCoreGeo,colCoreMat);
   energyCore.position.set(0,4,-10);
   scene.add(energyCore);
   /* Glow halo — wider, softer, gives volume */
   var colGlowGeo=new THREE.CylinderGeometry(2.2,2.2,70,8,1,true);
-  var colGlowMat=new THREE.MeshBasicMaterial({color:0x4878a8,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+  var colGlowMat=new THREE.MeshBasicMaterial({color:0x5888c0,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
   var energyGlow=new THREE.Mesh(colGlowGeo,colGlowMat);
   energyGlow.position.set(0,4,-10);
   scene.add(energyGlow);
+
+  /* ── World group — mid-layer objects reparented for vertical flow ── */
+  var worldGroup=new THREE.Group();
+  scene.add(worldGroup);
+  /* Reparent mid-layer objects into worldGroup for unified vertical scroll */
+  scene.remove(dustField);worldGroup.add(dustField);
+  scene.remove(lightCone);worldGroup.add(lightCone);
+  scene.remove(orb);worldGroup.add(orb);
+  scene.remove(orbOuter);worldGroup.add(orbOuter);
+  scene.remove(alignRing);worldGroup.add(alignRing);
+  scene.remove(alignRing2);worldGroup.add(alignRing2);
+  scene.remove(energyCore);worldGroup.add(energyCore);
+  scene.remove(energyGlow);worldGroup.add(energyGlow);
+  if(gridHelper){scene.remove(gridHelper);worldGroup.add(gridHelper);}
+  for(var si2=0;si2<shapes.length;si2++){scene.remove(shapes[si2]);worldGroup.add(shapes[si2]);}
+
+  /* ── Forest columns — tall thin wireframe cylinders, abstract nature feel ── */
+  var forestCols=[];
+  if(tier>=1){
+    var forestDefs=[
+      {r:0.15,h:55,x:-22,z:-18,color:0x4060a0},{r:0.20,h:72,x:18,z:-22,color:0x5070b0},
+      {r:0.12,h:48,x:-35,z:-10,color:0x3858a0},{r:0.18,h:65,x:30,z:-15,color:0x4870b8},
+      {r:0.22,h:80,x:-12,z:-30,color:0x5580c0},{r:0.14,h:52,x:25,z:-28,color:0x3a62a8},
+      {r:0.17,h:68,x:-28,z:-25,color:0x5090c8},{r:0.20,h:60,x:8,z:-35,color:0x4478b0}
+    ];
+    if(tier>=2){
+      forestDefs.push({r:0.13,h:45,x:38,z:-8,color:0x3c5ea0});
+    }
+    for(var fi=0;fi<forestDefs.length;fi++){
+      var fd2=forestDefs[fi];
+      var fGeo=new THREE.CylinderGeometry(fd2.r,fd2.r*0.6,fd2.h,5,1,true);
+      var fMat=new THREE.MeshBasicMaterial({color:fd2.color,transparent:true,opacity:0,wireframe:true,depthWrite:false});
+      var fMesh=new THREE.Mesh(fGeo,fMat);
+      fMesh.position.set(fd2.x,fd2.h*0.3,-10+fd2.z);
+      fMesh.userData={baseH:fd2.h,baseY:fd2.h*0.3,idx:fi};
+      worldGroup.add(fMesh);
+      forestCols.push(fMesh);
+    }
+  }
 
   /* ── Landing page scroll-driven world story ── */
   /* Keyframes: progress → world state. Everything interpolated via smoothstep.
@@ -1849,14 +1914,21 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
      go=gridOpacity, gy=gridY, li=lightIntensity, h/s/l=ambientHSL, sp=shapeSpread,
      sa=shapeAlignment, co=coneOpacity, ri=ringOpacity,
      col=columnOpacity, cs=columnScale (0=hidden,1=full height) */
+  /* STORY v5 — VIVID 5-chapter visual journey
+     Ch1 Hero(0-0.12): deep ocean void, empty, only stars+dust
+     Ch2 Structure(0.12-0.30): columns forming, forest appearing, blue+violet
+     Ch3 Focus(0.30-0.50): convergence, BRIGHT blue+silver+gold peak, formation moment
+     Ch4 Expansion(0.50-0.72): teal+blue-violet, richer, wider
+     Ch5 Stability(0.72-1.0): calm blue+gold, settled, peaceful */
   var STORY=[
-    {p:0.00, fc:[4,6,12],   fd:0.00016, cy:22, cz:120, os:0.4, og:0.01, go:0.0,  gy:-38, li:0.22, h:214,s:0.12,l:0.05, sp:2.0, sa:0.0,  co:0.008, ri:0.0,  col:0.0,  cs:0.0},
-    {p:0.12, fc:[5,9,18],   fd:0.00024, cy:18, cz:100, os:0.65,og:0.03, go:0.04, gy:-34, li:0.36, h:220,s:0.18,l:0.07, sp:1.7, sa:0.05, co:0.016, ri:0.015,col:0.02, cs:0.06},
-    {p:0.28, fc:[10,18,34], fd:0.00032, cy:13, cz:72,  os:1.2, og:0.09, go:0.18, gy:-28, li:0.68, h:232,s:0.32,l:0.12, sp:0.9, sa:0.38, co:0.042, ri:0.08, col:0.08, cs:0.32},
-    {p:0.45, fc:[14,24,44], fd:0.00034, cy:7,  cz:42,  os:2.1, og:0.22, go:0.32, gy:-22, li:1.0,  h:226,s:0.40,l:0.15, sp:0.25,sa:0.90, co:0.07,  ri:0.24, col:0.20, cs:1.0},
-    {p:0.62, fc:[9,16,30],  fd:0.00028, cy:11, cz:68,  os:1.35,og:0.11, go:0.25, gy:-25, li:0.72, h:224,s:0.28,l:0.11, sp:1.15,sa:0.42, co:0.042, ri:0.12, col:0.09, cs:0.5},
-    {p:0.80, fc:[6,10,20],  fd:0.00036, cy:9,  cz:82,  os:1.15,og:0.08, go:0.32, gy:-21, li:0.56, h:218,s:0.20,l:0.09, sp:0.75,sa:0.84, co:0.032, ri:0.20, col:0.15, cs:0.72},
-    {p:1.00, fc:[5,8,14],   fd:0.00042, cy:8,  cz:88,  os:1.05,og:0.06, go:0.38, gy:-19, li:0.48, h:214,s:0.16,l:0.08, sp:0.55,sa:0.97, co:0.025, ri:0.28, col:0.17, cs:0.82}
+    {p:0.00, fc:[8,12,28],   fd:0.00012, cy:26, cz:130, os:0.3, og:0.008,go:0.0,  gy:-42, li:0.25, h:225,s:0.18,l:0.06, sp:2.2, sa:0.0,  co:0.006, ri:0.0,  col:0.0,  cs:0.0,  fo:0.0},
+    {p:0.12, fc:[12,18,42],  fd:0.00018, cy:21, cz:108, os:0.55,og:0.025,go:0.05, gy:-36, li:0.42, h:230,s:0.28,l:0.09, sp:1.8, sa:0.04, co:0.018, ri:0.012,col:0.015,cs:0.04, fo:0.02},
+    {p:0.22, fc:[18,30,65],  fd:0.00024, cy:16, cz:82,  os:1.0, og:0.08, go:0.16, gy:-32, li:0.65, h:238,s:0.40,l:0.14, sp:1.2, sa:0.22, co:0.036, ri:0.06, col:0.06, cs:0.22, fo:0.08},
+    {p:0.35, fc:[25,40,85],  fd:0.00028, cy:10, cz:55,  os:1.8, og:0.18, go:0.30, gy:-26, li:0.92, h:242,s:0.50,l:0.18, sp:0.5, sa:0.65, co:0.06,  ri:0.18, col:0.16, cs:0.65, fo:0.15},
+    {p:0.48, fc:[32,50,105], fd:0.00026, cy:4,  cz:34,  os:2.8, og:0.35, go:0.40, gy:-20, li:1.20, h:235,s:0.55,l:0.22, sp:0.15,sa:0.95, co:0.09,  ri:0.32, col:0.28, cs:1.0,  fo:0.20},
+    {p:0.62, fc:[22,38,82],  fd:0.00022, cy:9,  cz:62,  os:1.6, og:0.14, go:0.32, gy:-24, li:0.85, h:228,s:0.42,l:0.16, sp:0.8, sa:0.48, co:0.05,  ri:0.16, col:0.12, cs:0.55, fo:0.14},
+    {p:0.78, fc:[16,28,60],  fd:0.00030, cy:7,  cz:78,  os:1.3, og:0.10, go:0.36, gy:-22, li:0.68, h:222,s:0.32,l:0.13, sp:0.6, sa:0.80, co:0.038, ri:0.24, col:0.18, cs:0.75, fo:0.16},
+    {p:1.00, fc:[10,18,42],  fd:0.00035, cy:6,  cz:92,  os:1.15,og:0.07, go:0.42, gy:-19, li:0.55, h:218,s:0.24,l:0.10, sp:0.45,sa:0.95, co:0.028, ri:0.30, col:0.22, cs:0.85, fo:0.18}
   ];
   /* Aligned shape positions — tight converge at focal point */
   var shapeAlignedPos=[[-6,4,-5],[6,4,-5],[0,-4,-5],[-5,0,-12],[5,0,-12]];
@@ -1872,7 +1944,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     var t=range>0?(p-a.p)/range:0;
     t=t*t*(3-2*t); /* smoothstep */
     var out={};
-    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co','ri','col','cs'];
+    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co','ri','col','cs','fo'];
     for(var k=0;k<keys.length;k++){var key=keys[k];out[key]=a[key]+(b[key]-a[key])*t;}
     out.fc=[a.fc[0]+(b.fc[0]-a.fc[0])*t,a.fc[1]+(b.fc[1]-a.fc[1])*t,a.fc[2]+(b.fc[2]-a.fc[2])*t];
     return out;
@@ -1996,6 +2068,23 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       energyGlow.scale.x=1+0.1*Math.sin(t*0.25)*tgtCs;
       energyGlow.scale.z=energyGlow.scale.x;
 
+      /* ── Vertical world flow — objects move UP as user scrolls DOWN ── */
+      /* worldGroup (mid-layer) moves at primary rate */
+      worldGroup.position.y+=(_lpProgressSmooth*78-worldGroup.position.y)*0.045;
+      /* Stars (far-layer) move much slower — parallax depth */
+      stars.position.y+=(_lpProgressSmooth*8-stars.position.y)*0.03;
+
+      /* ── Forest columns — progressive appearance + gentle sway ── */
+      for(var fc=0;fc<forestCols.length;fc++){
+        var fTree=forestCols[fc];
+        var fIdx=fTree.userData.idx;
+        /* Opacity lerps toward forest opacity from STORY */
+        fTree.material.opacity+=(w.fo*(0.12+fIdx*0.015)-fTree.material.opacity)*0.03;
+        /* Gentle organic sway */
+        fTree.rotation.z=Math.sin(t*0.08+fIdx*1.1)*0.04*w.fo*5;
+        fTree.rotation.x=Math.cos(t*0.06+fIdx*0.8)*0.02*w.fo*5;
+      }
+
     } else {
       /* ── ZONE-DRIVEN (app tabs) ── */
       updateZoneTarget();
@@ -2012,14 +2101,19 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       ringMat.opacity*=0.92;ring2Mat.opacity*=0.92;
       colCoreMat.opacity*=0.92;colGlowMat.opacity*=0.92;
       energyCore.scale.y*=0.95;energyGlow.scale.y*=0.95;
+      /* Decay world flow back to origin */
+      worldGroup.position.y*=0.95;
+      stars.position.y*=0.95;
+      /* Fade forest columns */
+      for(var fci=0;fci<forestCols.length;fci++){forestCols[fci].material.opacity*=0.92;}
     }
 
     /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
     camera.position.x=mxSmooth*5+Math.sin(t*0.05)*1.2;
     camera.position.y=wCy+(-mySmooth*2.5)+Math.cos(t*0.04)*0.8;
     camera.position.z=wCz+Math.sin(t*0.03)*1.5;
-    /* lookAt drifts forward with scroll — creates "moving through space" */
-    var lookZ=_lpActive?(-15-_lpProgressSmooth*32):0;
+    /* lookAt drifts forward with scroll — creates "descending through space" */
+    var lookZ=_lpActive?(-18-_lpProgressSmooth*48):0;
     camera.lookAt(mxSmooth*1.5,mySmooth*-0.6+Math.sin(t*0.06)*0.3,lookZ);
 
     /* ── Star field — gentle rotation + scroll-driven roll ── */
@@ -2039,7 +2133,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
     }
     dustGeo.attributes.position.needsUpdate=true;
-    dustMat.opacity=0.25+0.12*Math.sin(t*0.4)+(_lpActive?wLi*0.06:0);
+    dustMat.opacity=0.25+0.12*Math.sin(t*0.4)+(_lpActive?wLi*0.18:0);
+    /* Near-layer extra parallax: dust moves faster than worldGroup */
+    if(_lpActive){dustField.position.y+=(_lpProgressSmooth*28-dustField.position.y)*0.04;}
 
     /* ── Wireframe shapes — scroll-driven spread/alignment OR zone bob ── */
     for(var si=0;si<shapes.length;si++){
