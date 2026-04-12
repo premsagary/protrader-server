@@ -56,9 +56,8 @@ html{scroll-behavior:smooth}
 html,body{height:100%}
 body.in-app{overflow:hidden}
 body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
-  background:transparent;color:var(--text);font-size:13px;display:flex;flex-direction:column;
+  background:var(--bg);color:var(--text);font-size:13px;display:flex;flex-direction:column;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-html{background:var(--bg)}
 
 /* ── Global contrast scrim — darkens center behind UI, above 3D canvas ── */
 #contrast-scrim{position:fixed;inset:0;pointer-events:none;z-index:1;
@@ -76,7 +75,7 @@ body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
 .topbar,.stat-grid,.tw table th{text-shadow:0 1px 3px rgba(0,0,0,0.4)}
 
 /* -- LAYOUT -- */
-#app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative}
+#app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative;z-index:1}
 /* ── Subtle Shiva aura — restrained top-line glow ── */
 #app::after{content:'';position:fixed;top:0;left:0;right:0;height:1px;z-index:300;
   background:linear-gradient(90deg,transparent 10%,var(--shiva-blue-glow),rgba(128,144,168,0.15),var(--shiva-blue-glow),transparent 90%);
@@ -637,7 +636,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Three.js canvas container ── */
 #three-login{position:absolute;inset:0;z-index:0}
 #three-login canvas{display:block}
-#game-bg{position:fixed;inset:0;pointer-events:none;z-index:-1}
+#game-bg{position:fixed;inset:0;pointer-events:none;z-index:0}
 #game-bg canvas{display:block}
 
 /* ── Mobile optimizations ── */
@@ -659,7 +658,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ═══════════════════════════════════════════════════════════════
    LANDING PAGE — public-facing, pre-auth
    ═══════════════════════════════════════════════════════════════ */
-.lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative}
+.lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative;z-index:1}
 .lp-nav{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;position:fixed;top:0;left:0;right:0;z-index:300;
   background:rgba(5,6,8,0.7);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.03)}
 .lp-logo{font-weight:600;font-size:15px;color:var(--shiva-silver);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
