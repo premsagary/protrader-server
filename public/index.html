@@ -821,7 +821,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 <!-- Hero — problem → solution → proof -->
 <section class="lp-hero">
-  <div class="lp-hero-badge">Varsity-grounded · 200+ NSE stocks · Real-time Kite data</div>
+  <div class="lp-hero-badge">Varsity-grounded · 500+ NSE stocks · Real-time NSE data</div>
   <h1>Stop guessing. <strong>Start analyzing.</strong></h1>
   <p class="lp-hero-sub">Most retail traders rely on tips, gut feel, or a single screener. ProTrader runs every NSE stock through a 14-point Varsity checklist, maps exact buy zones, then sends it to 5 independent AI models for a second opinion — so you trade with evidence, not hope.</p>
   <div class="lp-hero-cta">
@@ -851,7 +851,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     <div class="lp-step">
       <div class="lp-step-num">1</div>
       <h4>Pick any NSE stock</h4>
-      <p>Type a symbol — RELIANCE, TCS, HDFCBANK — into the Deep Analyzer. Works with 200+ stocks across Nifty 50, Next 50, Midcap, and Smallcap.</p>
+      <p>Type a symbol — RELIANCE, TCS, HDFCBANK — into the Deep Analyzer. Works with 500+ stocks across Nifty 50, Next 50, Midcap, and Smallcap.</p>
     </div>
     <div class="lp-step">
       <div class="lp-step-num">2</div>
@@ -905,13 +905,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     </div>
     <div class="lp-feature">
       <div class="lp-feature-icon">🧠</div>
-      <h3>AI Council Review</h3>
+      <h3>AI Council Review <span style="font-size:9px;color:var(--shiva-blue);background:rgba(64,112,168,0.1);padding:2px 8px;border-radius:8px;vertical-align:middle;font-weight:700;letter-spacing:0.3px">PRO</span></h3>
       <p>5 independent AI models analyze each stock through different Varsity lenses. They often disagree — that's the point. A Claude judge resolves conflicts into a final verdict.</p>
     </div>
     <div class="lp-feature">
       <div class="lp-feature-icon">📈</div>
       <h3>3 Stock Picks Lists</h3>
-      <p>Updated daily: <strong style="color:var(--shiva-gold)">Rebound</strong> (quality on sale), <strong style="color:var(--green)">Momentum</strong> (5-factor scoring), and <strong style="color:var(--shiva-blue)">Long-Term</strong> (Buffett-style criteria). Each with AI reviews.</p>
+      <p>Updated daily: <strong style="color:var(--shiva-gold)">Rebound</strong> (quality on sale), <strong style="color:var(--green)">Momentum</strong> (5-factor scoring), and <strong style="color:var(--shiva-blue)">Long-Term</strong> (Buffett-style criteria). Sortable, filterable, fully transparent.</p>
     </div>
     <div class="lp-feature">
       <div class="lp-feature-icon">💼</div>
@@ -942,33 +942,35 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     <div class="lp-price-card">
       <div class="lp-price-name">Starter</div>
       <div class="lp-price-cost">₹0<span> / forever</span></div>
-      <div class="lp-price-desc">Everything you need to evaluate the platform</div>
+      <div class="lp-price-desc">Full platform access — no restrictions, no card required</div>
       <ul class="lp-price-list">
-        <li>Full Deep Analyzer (all indicators)</li>
-        <li>Stock Picks (top 10 per category)</li>
-        <li>Mutual Fund scores &amp; rankings</li>
-        <li>Stock Data browser (200+ stocks)</li>
-        <li>3 AI Council Reviews per day</li>
+        <li>Deep Analyzer — 14-point Varsity checklist, 30+ indicators</li>
+        <li>Stock Picks — Rebound, Momentum &amp; Long-Term lists</li>
+        <li>Mutual Fund scoring across 4 categories (120 pts)</li>
+        <li>Holdings tracker with live P&amp;L</li>
+        <li>Stock Data browser (500+ NSE stocks)</li>
+        <li>Support/resistance, Fibonacci levels &amp; buy zones</li>
       </ul>
       <button class="lp-price-btn" onclick="showLoginFromLanding()">Start Free</button>
     </div>
     <div class="lp-price-card featured">
-      <div class="lp-price-badge">Best Value</div>
+      <div class="lp-price-badge" style="display:inline-block">Coming Soon</div>
       <div class="lp-price-name">Pro</div>
       <div class="lp-price-cost">₹499<span> / month</span></div>
       <div class="lp-price-desc">For active traders who want every edge</div>
       <ul class="lp-price-list">
         <li>Everything in Starter — unlimited</li>
-        <li>Full Stock Picks (all stocks, all lists)</li>
-        <li>Unlimited AI Council Reviews</li>
+        <li>AI Council Reviews — 5-model second opinion per stock</li>
         <li>Holdings AI Review (entire portfolio)</li>
         <li>Priority data refresh (15s vs 60s)</li>
+        <li>Advanced alerts &amp; notifications</li>
         <li>Early access to new features</li>
       </ul>
-      <button class="lp-price-btn" onclick="showLoginFromLanding()">Start 14-Day Free Trial</button>
-      <div style="font-size:10px;color:var(--text4);margin-top:8px">No card required. Cancel anytime.</div>
+      <button class="lp-price-btn" style="opacity:0.5;cursor:default" disabled>Launching Soon</button>
+      <div style="font-size:10px;color:var(--text4);margin-top:8px">We'll notify you when Pro is available.</div>
     </div>
     <div class="lp-price-card">
+      <div class="lp-price-badge" style="display:inline-block;background:rgba(160,136,72,0.12);color:var(--shiva-gold)">Coming Soon</div>
       <div class="lp-price-name">Institutional</div>
       <div class="lp-price-cost">₹2,499<span> / month</span></div>
       <div class="lp-price-desc">For RIAs, advisors, and prop desks</div>
@@ -978,9 +980,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         <li>Custom scoring model parameters</li>
         <li>Multi-portfolio management</li>
         <li>Dedicated support channel</li>
-        <li>White-label reports (coming soon)</li>
+        <li>White-label reports</li>
       </ul>
-      <button class="lp-price-btn" onclick="showLoginFromLanding()">Get Started</button>
+      <button class="lp-price-btn" style="opacity:0.5;cursor:default" disabled>Launching Soon</button>
     </div>
   </div>
   <div class="lp-roi">
@@ -1803,7 +1805,7 @@ const sc    = (l,v,c,s) => `<div class="sc"><div class="l">${l}</div><div class=
 async function toggleTradingMode(){
   const goingLive = S.tradingMode !== 'LIVE';
   if(goingLive){
-    const ok = confirm('⚠️ SWITCH TO LIVE TRADING?\n\nThis will place REAL orders on Kite Connect using real money.\n\n• BUY orders will be placed as LIMIT orders\n• SELL orders will be placed as MARKET orders\n• All trades will use your Kite account balance\n\nAre you sure you want to enable LIVE trading?');
+    const ok = confirm('⚠️ SWITCH TO LIVE TRADING?\n\nThis will place REAL orders using real money.\n\n• BUY orders will be placed as LIMIT orders\n• SELL orders will be placed as MARKET orders\n• All trades will use your broker account balance\n\nAre you sure you want to enable LIVE trading?');
     if(!ok) return;
   }
   try {
@@ -1826,7 +1828,7 @@ async function toggleTradingMode(){
 async function testBuyOrder(){
   const sym = prompt('Enter stock symbol to test buy (1 share):', 'YESBANK');
   if(!sym) return;
-  const ok = confirm(`⚠️ TEST BUY ORDER\n\nThis will buy 1 share of ${sym.toUpperCase()} with REAL money on Kite.\nEstimated cost: ₹10-50 depending on stock.\n\nProceed?`);
+  const ok = confirm(`⚠️ TEST BUY ORDER\n\nThis will buy 1 share of ${sym.toUpperCase()} with REAL money via your broker.\nEstimated cost: ₹10-50 depending on stock.\n\nProceed?`);
   if(!ok) return;
   try {
     const r = await fetch('/api/test-buy', {
@@ -1836,7 +1838,7 @@ async function testBuyOrder(){
     });
     const d = await r.json();
     if(r.ok && d.success){
-      alert(`✅ TEST BUY SUCCESS!\n\nSymbol: ${d.symbol}\nQty: ${d.quantity}\nPrice: ₹${d.price}\nOrder ID: ${d.orderId}\n\nKite order placement is working!`);
+      alert(`✅ TEST BUY SUCCESS!\n\nSymbol: ${d.symbol}\nQty: ${d.quantity}\nPrice: ₹${d.price}\nOrder ID: ${d.orderId}\n\nOrder placement is working!`);
     } else {
       alert(`❌ TEST BUY FAILED\n\n${d.error || 'Unknown error'}\n${d.hint || ''}`);
     }
@@ -2127,7 +2129,7 @@ function renderStocksOverview(){
       ${sc("Max drawdown",ns.max_drawdown!=null?ns.max_drawdown.toFixed(1)+"%":"--",ns.max_drawdown<5?"var(--green)":ns.max_drawdown<15?"var(--amber)":"var(--red)")}
       ${sc("Profit factor",ns.profit_factor!=null?ns.profit_factor.toFixed(2):"--",ns.profit_factor>1.5?"var(--green)":ns.profit_factor>1?"var(--amber)":"var(--red)","W/L ratio")}
       ${sc("Kelly %",ns.kelly_pct!=null?ns.kelly_pct+"%":"--","var(--blue)","Optimal bet size")}
-      ${sc("Available cash",S.margin?.equity?.net?.available?.live_balance!=null?INR(S.margin.equity.net.available.live_balance.toFixed(0)):"-","var(--text)","Kite margin")}
+      ${sc("Available cash",S.margin?.equity?.net?.available?.live_balance!=null?INR(S.margin.equity.net.available.live_balance.toFixed(0)):"-","var(--text)","Broker margin")}
       ${sc("Holdings value",INR(S.holdings.reduce((s,h)=>s+(h.last_price||h.average_price||0)*h.quantity,0).toFixed(0)),"var(--text)",`${S.holdings.length} stocks`)}
     </div>
     <div class="sec-title">Cumulative P&L</div>
@@ -2147,7 +2149,7 @@ function renderStocksOverview(){
   // Live trades section
   if(S.liveTrades.length>0){
     var liveRecent=S.liveTrades.slice(0,5);
-    h+=sectionHeader('Real Trades (Kite)',true,S.liveTrades.length+' total');
+    h+=sectionHeader('Real Trades (Live)',true,S.liveTrades.length+' total');
     h+=liveRecent.map(function(t){return tradeCard(t,S.prices);}).join('');
   }
   // Paper trades section
@@ -2918,7 +2920,7 @@ function renderPortfolio(){
   const pnl=holdVal-invested;
   document.getElementById("main-content").innerHTML=`
     <div class="stat-grid">
-      ${sc("Available cash",cash!=null?INR(cash.toFixed(0)):"-","var(--text)","Kite margin")}
+      ${sc("Available cash",cash!=null?INR(cash.toFixed(0)):"-","var(--text)","Broker margin")}
       ${sc("Holdings value",INR(holdVal.toFixed(0)),"var(--text)",`${h.length} stocks`)}
       ${sc("Total invested",INR(invested.toFixed(0)))}
       ${sc("Total P&L",`${pnl>=0?"+":""}${INR(pnl.toFixed(0))}`,clr(pnl))}
@@ -2986,7 +2988,7 @@ function renderStocksChartPage(){
       </div>
       <span id="kite-chart-price" style="font-weight:600;font-size:15px"></span>
       <span id="kite-chart-change" style="font-size:12px"></span>
-      <span style="font-size:11px;color:var(--text3);margin-left:auto">Real-time · Kite Connect · Free</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:auto">Real-time · NSE · Free</span>
     </div>
     <div class="fr" style="margin-bottom:8px;font-size:11px;flex-wrap:wrap">
       <span style="color:var(--text3);margin-right:4px">Overlays:</span>
@@ -3077,7 +3079,7 @@ async function loadKiteChart(){
       <span>L: <b style="color:var(--red)">${INR(last.low)}</b></span>
       <span>C: <b>${INR(last.close)}</b></span>
       <span>Vol: <b>${(last.volume||0).toLocaleString("en-IN")}</b></span>
-      <span style="color:var(--text3)">${candles.length} candles · ${tf} · Kite</span>`;
+      <span style="color:var(--text3)">${candles.length} candles · ${tf} · NSE</span>`;
 
   } catch(e){
     if(loading){ loading.innerHTML=`<div style="text-align:center"><div style="font-size:13px;color:var(--red);margin-bottom:8px">Could not load chart data</div><div style="font-size:11px;color:var(--text3)">Market may be closed or token expired</div></div>`; loading.style.display="flex"; }
@@ -5010,7 +5012,7 @@ async function renderStockRec(forceRefresh){
     cont.innerHTML = '<div class="picks-wrap">'
       +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">'
       +'<div><div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Stock Picks</div>'
-      +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Loading scored stocks from Kite...</div></div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Loading scored stocks...</div></div>'
       +'<button class="btn btn-sm" onclick="stockRecData=null;stockRecRetries=0;renderStockRec(true)">Retry</button>'
       +'</div>'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">'
@@ -5020,7 +5022,7 @@ async function renderStockRec(forceRefresh){
       +'</div>'
       +'<div style="text-align:center;padding:20px 0;margin-bottom:16px">'
       +'<div class="shiva-loader" style="margin:0 auto 12px"></div>'
-      +'<div id="srec-loading-msg" style="font-size:13px;color:var(--text2);margin-bottom:4px">Fetching Kite candles for all stocks...</div>'
+      +'<div id="srec-loading-msg" style="font-size:13px;color:var(--text2);margin-bottom:4px">Fetching candles for all stocks...</div>'
       +'<div id="srec-loading-sub" style="font-size:10px;color:var(--text3)">First load takes ~60s. Subsequent loads are instant from cache.</div>'
       +'<div class="shiva-progress" style="margin-top:12px;max-width:200px;margin-left:auto;margin-right:auto">'
       +'<div class="shiva-progress-fill" style="width:40%;animation:mfpulse 1.5s ease-in-out infinite"></div></div>'
@@ -5068,10 +5070,10 @@ async function pollStockRec(){
     if(d.loading){
       stockRecRetries++;
       var elapsed = stockRecRetries * 4;
-      if(msgEl) msgEl.textContent = d.loadingMsg || 'Fetching Kite candles for all stocks...';
+      if(msgEl) msgEl.textContent = d.loadingMsg || 'Fetching candles for all stocks...';
       if(subEl) subEl.textContent = elapsed < 60
         ? 'Loading in background... first fetch takes ~90s'
-        : 'Still loading (' + elapsed + 's) — Kite historical API for all stocks takes time';
+        : 'Still loading (' + elapsed + 's) — Historical API for all stocks takes time';
       setTimeout(pollStockRec, 4000); // keep polling forever while server is loading
       return;
     }
@@ -5109,7 +5111,7 @@ function renderStockAnalyzerPage(){
       azBuild(d.stocks);
       // Update the status chip with the final count.
       var chip = document.getElementById('az-status-chip');
-      if (chip) chip.textContent = d.stocks.length + ' stocks · Kite candles + fundamentals + news';
+      if (chip) chip.textContent = d.stocks.length + ' stocks · Candles + fundamentals + news';
     }
   }).catch(function(){});
 
@@ -6428,7 +6430,7 @@ function renderStockRecPage(){
     {name:'Quality',pts:25,c:'var(--shiva-gold)',factors:'ROE · ROA/ROCE · Debt/Equity · Operating Margin · Percentile vs sector peers'},
     {name:'Value',pts:20,c:'var(--green)',factors:'P/E ratio · P/B ratio · PEG (growth-adj value) · Dividend Yield · NSE Value 50 methodology'},
     {name:'Momentum',pts:20,c:'var(--blue)',factors:'52-week price return · % from 52w high · Beta · NSE Momentum index methodology'},
-    {name:'Growth',pts:20,c:'var(--shiva-blue)',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (Kite + Screener.in)'},
+    {name:'Growth',pts:20,c:'var(--shiva-blue)',factors:'Revenue growth YoY · EPS growth YoY · Analyst consensus (NSE + Screener.in)'},
     {name:'Technical',pts:15,c:'var(--red)',factors:'Price vs 50 DMA · Price vs 200 DMA · Golden/Death Cross · Volume accumulation'},
   ];
   pillars.forEach(function(p){
@@ -6438,7 +6440,7 @@ function renderStockRecPage(){
       +'</div>';
   });
   html += '</div>';
-  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: Kite + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
+  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Data: NSE + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology</div>';
   html += '</div>';
 
   html += '</div>';
@@ -10499,7 +10501,7 @@ function renderArchitecturePage(){
     +   '<text x="24" y="26" class="h">1 \u2022 DATA SOURCES</text>'
     // 5 data source boxes
     +   '<g>'
-    +   '<rect x="24" y="36"  width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="36" y="56" class="t">Kite Connect</text><text x="36" y="72" class="s">Live price \u2022 OHLC \u2022 volume</text>'
+    +   '<rect x="24" y="36"  width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="36" y="56" class="t">Broker API</text><text x="36" y="72" class="s">Live price \u2022 OHLC \u2022 volume</text>'
     +   '<rect x="232" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="244" y="56" class="t">Yahoo Finance</text><text x="244" y="72" class="s">Fundamentals \u2022 trailing returns</text>'
     +   '<rect x="440" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#22d3ee" class="b"/><text x="452" y="56" class="t">Screener.in</text><text x="452" y="72" class="s">ROCE \u2022 PEG \u2022 ownership \u2022 DuPont</text>'
     +   '<rect x="648" y="36" width="196" height="48" rx="8" fill="#0f172a" stroke="#8b5cf6" class="b"/><text x="660" y="56" class="t">Tickertape CSV</text><text x="660" y="72" class="s">Mutual fund dataset</text>'
@@ -10576,7 +10578,7 @@ function renderArchitecturePage(){
 
   // ── Shared data sources ──
   h += _archCard('🗄', 'Shared Data Sources', 'Every ranking pipeline below reads from some subset of these sources.',
-      _archSrc('Kite Connect', 'Live price, volume, day change, OHLC. Zerodha broker API — primary for real-time quotes.')
+      _archSrc('Broker API', 'Live price, volume, day change, OHLC. Zerodha broker API — primary for real-time quotes.')
     + _archSrc('Yahoo Finance', 'Fundamentals (P/E, P/B, ROE, ROA, D/E, margins, EPS, 52w high/low, beta, FCF, fwd P/E, gross margin, annual vol) + trailing returns.')
     + _archSrc('Screener.in', 'Fills gaps Yahoo misses: ROCE, PEG, EV/EBITDA, pledged %, promoter change, FII/DII holding, shareholder count, 3Y/5Y ROE averages, interest coverage, current/quick ratio, cash conversion cycle, DuPont decomposition, working-capital health. Kept in <code>global.FUND_EXT</code>.')
     + _archSrc('Tickertape CSV', 'Mutual fund dataset — AUM, expense ratio, rolling returns, Sharpe, Sortino, vs-category ratios, drawdown, volatility, UCR/DCR, tracking error, concentration, style drift %. Imported through the Admin tab: drop all 6 Tickertape facet CSVs onto <b>📤 Upload Tickertape CSVs</b> → server detects each facet, joins on (Name, Sub Category, Plan), TRUNCATEs + bulk-INSERTs into <code>mf_tickertape</code>, bumps the <code>dataSource</code> label (<code>app_config.mf_data_source</code>), and rebuilds the scored cache. Endpoint: <code>POST /api/mf/import</code> with <code>{files:[{name,text}]}</code>.')
@@ -10839,7 +10841,7 @@ async function renderAdmin() {
     <!-- Auto Pipeline Schedule -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:20px">
       <div style="font-weight:700;font-size:12px;color:#22d3ee;margin-bottom:10px">🔄 Automated Data Pipeline</div>
-      <div style="font-size:10px;color:var(--text3);margin-bottom:12px">Everything runs automatically. Data syncs from NSE, Screener.in, and Kite Connect on schedule. No manual imports needed.</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:12px">Everything runs automatically. Data syncs from NSE, Screener.in, and the broker API on schedule. No manual imports needed.</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
           <div>
@@ -10863,7 +10865,7 @@ async function renderAdmin() {
         <div style="background:var(--bg3);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center">
           <div>
             <div style="font-size:11px;font-weight:600;color:#10b981">⚡ Scoring Engine</div>
-            <div style="font-size:10px;color:var(--text4)">Kite candles → technicals → Varsity composite score</div>
+            <div style="font-size:10px;color:var(--text4)">Candles → technicals → Varsity composite score</div>
             <div style="font-size:10px;color:var(--text4)">Auto-scores daily at 7AM IST + on startup</div>
           </div>
           <button onclick="adminForceRefresh('scoring')" style="background:var(--bg4);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap">↻ Sync</button>
@@ -11075,13 +11077,13 @@ async function adminLoadStatus() {
       : fundStatus.age || 'Never synced';
 
     var scoreVal = scoreStatus.running ? '⏳ Scoring...' : (scoreStatus.count||0) + ' stocks';
-    var scoreSub = scoreStatus.running ? 'Fetching Kite candles...' : scoreStatus.age || 'Never scored';
+    var scoreSub = scoreStatus.running ? 'Fetching candles...' : scoreStatus.age || 'Never scored';
 
     el.innerHTML =
       adminCard('🌐 Universe', (univStatus.count||0)+' stocks', univStatus.age||'Never synced', 'var(--shiva-blue)') +
       adminCard('📊 Fundamentals', fundVal, fundSub, fundStatus.running?'var(--shiva-gold)':'#10b981') +
       adminCard('⚡ Scored', scoreVal, scoreSub, scoreStatus.running?'var(--shiva-gold)':'#10b981') +
-      adminCard('🔗 Kite', kiteStatus.connected ? (kiteStatus.tokenValid ? '● Connected' : '⚠ Token expired') : '○ Disconnected', kiteStatus.connected ? (kiteStatus.tokenValid ? 'Token valid' : 'Re-auth needed') : 'No session', kiteStatus.tokenValid ? '#10b981' : '#ef4444');
+      adminCard('🔗 Broker', kiteStatus.connected ? (kiteStatus.tokenValid ? '● Connected' : '⚠ Token expired') : '○ Disconnected', kiteStatus.connected ? (kiteStatus.tokenValid ? 'Token valid' : 'Re-auth needed') : 'No session', kiteStatus.tokenValid ? '#10b981' : '#ef4444');
 
     // Show uptime
     var uptimeEl = document.getElementById('pipeline-uptime');
