@@ -1827,29 +1827,39 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   alignRing2.rotation.x=Math.PI*0.5;
   scene.add(alignRing2);
 
-  /* ── Visual anchor: central axis (vertical line that clarifies over scroll) ── */
-  var axisPoints=[new THREE.Vector3(0,-20,-10),new THREE.Vector3(0,30,-10)];
-  var axisGeo=new THREE.BufferGeometry().setFromPoints(axisPoints);
-  var axisMat=new THREE.LineBasicMaterial({color:0x5080b0,transparent:true,opacity:0,depthWrite:false});
-  var centralAxis=new THREE.Line(axisGeo,axisMat);
-  scene.add(centralAxis);
+  /* ── Dominant visual anchor: energy column (grows with scroll) ── */
+  /* Core beam — thin, bright, the primary trackable element */
+  var colCoreGeo=new THREE.CylinderGeometry(0.35,0.35,70,8,1,true);
+  var colCoreMat=new THREE.MeshBasicMaterial({color:0x6898c8,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+  var energyCore=new THREE.Mesh(colCoreGeo,colCoreMat);
+  energyCore.position.set(0,4,-10);
+  scene.add(energyCore);
+  /* Glow halo — wider, softer, gives volume */
+  var colGlowGeo=new THREE.CylinderGeometry(2.2,2.2,70,8,1,true);
+  var colGlowMat=new THREE.MeshBasicMaterial({color:0x4878a8,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+  var energyGlow=new THREE.Mesh(colGlowGeo,colGlowMat);
+  energyGlow.position.set(0,4,-10);
+  scene.add(energyGlow);
 
   /* ── Landing page scroll-driven world story ── */
-  /* Keyframes: progress → world state. Everything interpolated via smoothstep. */
-  /* fc=fogColor(RGB), fd=fogDensity, cy=camY, cz=camZ, os=orbScale, og=orbGlow,
+  /* Keyframes: progress → world state. Everything interpolated via smoothstep.
+     PROGRESSIVE FORMATION: at Hero, only stars+dust exist. Grid, rings, column
+     all emerge from nothing as user scrolls. Example is the "formation moment."
+     fc=fogColor(RGB), fd=fogDensity, cy=camY, cz=camZ, os=orbScale, og=orbGlow,
      go=gridOpacity, gy=gridY, li=lightIntensity, h/s/l=ambientHSL, sp=shapeSpread,
-     sa=shapeAlignment, co=coneOpacity, ri=ringOpacity, ax=axisOpacity */
+     sa=shapeAlignment, co=coneOpacity, ri=ringOpacity,
+     col=columnOpacity, cs=columnScale (0=hidden,1=full height) */
   var STORY=[
-    {p:0.00, fc:[5,8,16],   fd:0.00020, cy:20, cz:112, os:0.6, og:0.025,go:0.04, gy:-36, li:0.28, h:216,s:0.14,l:0.055,sp:1.8, sa:0.0,  co:0.015, ri:0.0,  ax:0.0},
-    {p:0.12, fc:[6,10,20],  fd:0.00028, cy:17, cz:96,  os:0.8, og:0.04, go:0.08, gy:-32, li:0.40, h:222,s:0.20,l:0.075,sp:1.5, sa:0.08, co:0.020, ri:0.02, ax:0.01},
-    {p:0.28, fc:[9,16,30],  fd:0.00034, cy:13, cz:74,  os:1.15,og:0.08, go:0.18, gy:-27, li:0.65, h:232,s:0.30,l:0.12, sp:1.0, sa:0.35, co:0.038, ri:0.06, ax:0.03},
-    {p:0.45, fc:[11,20,36], fd:0.00038, cy:9,  cz:56,  os:1.7, og:0.16, go:0.26, gy:-23, li:0.90, h:228,s:0.38,l:0.14, sp:0.5, sa:0.72, co:0.058, ri:0.10, ax:0.06},
-    {p:0.62, fc:[8,14,26],  fd:0.00032, cy:12, cz:75,  os:1.3, og:0.10, go:0.22, gy:-25, li:0.72, h:224,s:0.28,l:0.11, sp:1.2, sa:0.40, co:0.040, ri:0.07, ax:0.04},
-    {p:0.80, fc:[6,10,18],  fd:0.00038, cy:10, cz:86,  os:1.1, og:0.07, go:0.28, gy:-22, li:0.55, h:218,s:0.20,l:0.09, sp:0.85,sa:0.80, co:0.030, ri:0.10, ax:0.06},
-    {p:1.00, fc:[5,8,14],   fd:0.00046, cy:9,  cz:90,  os:1.0, og:0.055,go:0.32, gy:-20, li:0.48, h:214,s:0.16,l:0.08, sp:0.7, sa:0.95, co:0.024, ri:0.12, ax:0.07}
+    {p:0.00, fc:[4,6,12],   fd:0.00016, cy:22, cz:120, os:0.4, og:0.01, go:0.0,  gy:-38, li:0.22, h:214,s:0.12,l:0.05, sp:2.0, sa:0.0,  co:0.008, ri:0.0,  col:0.0,  cs:0.0},
+    {p:0.12, fc:[5,9,18],   fd:0.00024, cy:18, cz:100, os:0.65,og:0.03, go:0.04, gy:-34, li:0.36, h:220,s:0.18,l:0.07, sp:1.7, sa:0.05, co:0.016, ri:0.015,col:0.02, cs:0.06},
+    {p:0.28, fc:[10,18,34], fd:0.00032, cy:13, cz:72,  os:1.2, og:0.09, go:0.18, gy:-28, li:0.68, h:232,s:0.32,l:0.12, sp:0.9, sa:0.38, co:0.042, ri:0.08, col:0.08, cs:0.32},
+    {p:0.45, fc:[14,24,44], fd:0.00034, cy:7,  cz:42,  os:2.1, og:0.22, go:0.32, gy:-22, li:1.0,  h:226,s:0.40,l:0.15, sp:0.25,sa:0.90, co:0.07,  ri:0.24, col:0.20, cs:1.0},
+    {p:0.62, fc:[9,16,30],  fd:0.00028, cy:11, cz:68,  os:1.35,og:0.11, go:0.25, gy:-25, li:0.72, h:224,s:0.28,l:0.11, sp:1.15,sa:0.42, co:0.042, ri:0.12, col:0.09, cs:0.5},
+    {p:0.80, fc:[6,10,20],  fd:0.00036, cy:9,  cz:82,  os:1.15,og:0.08, go:0.32, gy:-21, li:0.56, h:218,s:0.20,l:0.09, sp:0.75,sa:0.84, co:0.032, ri:0.20, col:0.15, cs:0.72},
+    {p:1.00, fc:[5,8,14],   fd:0.00042, cy:8,  cz:88,  os:1.05,og:0.06, go:0.38, gy:-19, li:0.48, h:214,s:0.16,l:0.08, sp:0.55,sa:0.97, co:0.025, ri:0.28, col:0.17, cs:0.82}
   ];
-  /* Aligned shape positions — tighter symmetrical ring, closer to focal point */
-  var shapeAlignedPos=[[-8,5,-6],[8,5,-6],[0,-5,-6],[-6,0,-14],[6,0,-14]];
+  /* Aligned shape positions — tight converge at focal point */
+  var shapeAlignedPos=[[-6,4,-5],[6,4,-5],[0,-4,-5],[-5,0,-12],[5,0,-12]];
   /* Capture original shape positions for interpolation */
   var shapeOrigPos=shapes.map(function(sh){return[sh.position.x,sh.position.y,sh.position.z];});
 
@@ -1862,7 +1872,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     var t=range>0?(p-a.p)/range:0;
     t=t*t*(3-2*t); /* smoothstep */
     var out={};
-    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co','ri','ax'];
+    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co','ri','col','cs'];
     for(var k=0;k<keys.length;k++){var key=keys[k];out[key]=a[key]+(b[key]-a[key])*t;}
     out.fc=[a.fc[0]+(b.fc[0]-a.fc[0])*t,a.fc[1]+(b.fc[1]-a.fc[1])*t,a.fc[2]+(b.fc[2]-a.fc[2])*t];
     return out;
@@ -1966,14 +1976,25 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
       /* ── Alignment ring — resolves progressively ── */
       ringMat.opacity+=(w.ri-ringMat.opacity)*0.04;
-      alignRing.rotation.z=t*0.02+_lpProgressSmooth*1.2;
-      alignRing.scale.setScalar(1+0.08*Math.sin(t*0.2));
-      ring2Mat.opacity+=(w.ri*0.7-ring2Mat.opacity)*0.04;
-      alignRing2.rotation.z=-t*0.015+_lpProgressSmooth*0.8;
-      alignRing2.scale.setScalar(1-0.06*Math.sin(t*0.25));
+      alignRing.rotation.z=t*0.02+_lpProgressSmooth*1.5;
+      var rsc=1+0.06*Math.sin(t*0.2);
+      alignRing.scale.set(rsc,rsc,rsc);
+      ring2Mat.opacity+=(w.ri*0.65-ring2Mat.opacity)*0.04;
+      alignRing2.rotation.z=-t*0.015+_lpProgressSmooth*1.0;
+      var rsc2=1-0.05*Math.sin(t*0.25);
+      alignRing2.scale.set(rsc2,rsc2,rsc2);
 
-      /* ── Central axis — clarifies over scroll ── */
-      axisMat.opacity+=(w.ax-axisMat.opacity)*0.04;
+      /* ── Energy column — dominant anchor, grows with scroll ── */
+      colCoreMat.opacity+=(w.col-colCoreMat.opacity)*0.035;
+      colGlowMat.opacity+=(w.col*0.3-colGlowMat.opacity)*0.035;
+      /* Scale Y from 0 (hidden) to 1 (full height) — the formation */
+      var tgtCs=w.cs;
+      energyCore.scale.y+=(tgtCs-energyCore.scale.y)*0.03;
+      energyCore.scale.x=1+0.15*Math.sin(t*0.3)*tgtCs;
+      energyCore.scale.z=energyCore.scale.x;
+      energyGlow.scale.y=energyCore.scale.y;
+      energyGlow.scale.x=1+0.1*Math.sin(t*0.25)*tgtCs;
+      energyGlow.scale.z=energyGlow.scale.x;
 
     } else {
       /* ── ZONE-DRIVEN (app tabs) ── */
@@ -1988,7 +2009,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       wGo=0.15+scrollProg*0.08;wGy=-25;
       wOs=1;wOg=0.08;wSp=1;wSa=0;wCo=0.035;
       /* Hide LP anchors in app mode */
-      ringMat.opacity*=0.92;ring2Mat.opacity*=0.92;axisMat.opacity*=0.92;
+      ringMat.opacity*=0.92;ring2Mat.opacity*=0.92;
+      colCoreMat.opacity*=0.92;colGlowMat.opacity*=0.92;
+      energyCore.scale.y*=0.95;energyGlow.scale.y*=0.95;
     }
 
     /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
@@ -1996,7 +2019,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     camera.position.y=wCy+(-mySmooth*2.5)+Math.cos(t*0.04)*0.8;
     camera.position.z=wCz+Math.sin(t*0.03)*1.5;
     /* lookAt drifts forward with scroll — creates "moving through space" */
-    var lookZ=_lpActive?(-12-_lpProgressSmooth*25):0;
+    var lookZ=_lpActive?(-15-_lpProgressSmooth*32):0;
     camera.lookAt(mxSmooth*1.5,mySmooth*-0.6+Math.sin(t*0.06)*0.3,lookZ);
 
     /* ── Star field — gentle rotation + scroll-driven roll ── */
@@ -2026,7 +2049,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         var orig=shapeOrigPos[si];var aligned=shapeAlignedPos[si]||orig;
         var tx=orig[0]*wSp*(1-wSa)+aligned[0]*wSa;
         var ty=(orig[1]*wSp*(1-wSa)+aligned[1]*wSa)+Math.sin(t*0.15+si*1.2)*2.5;
-        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*16;
+        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*22;
         sh.position.x+=(tx-sh.position.x)*0.04;
         sh.position.y+=(ty-sh.position.y)*0.04;
         sh.position.z+=(tz-sh.position.z)*0.04;
@@ -2046,7 +2069,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     if(gridHelper){
       if(_lpActive){
         gridHelper.position.y+=(wGy-gridHelper.position.y)*0.04;
-        gridHelper.position.z=-_lpProgressSmooth*24;
+        gridHelper.position.z=-_lpProgressSmooth*30;
       } else {
         gridHelper.position.z=scrollProg*(-20);
       }
