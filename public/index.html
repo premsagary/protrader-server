@@ -1812,22 +1812,44 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   orbOuter.position.set(0,5,-10);
   scene.add(orbOuter);
 
+  /* ── Visual anchor: alignment ring (toroidal guide that resolves over scroll) ── */
+  var ringGeo=new THREE.TorusGeometry(18,0.3,8,48);
+  var ringMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
+  var alignRing=new THREE.Mesh(ringGeo,ringMat);
+  alignRing.position.set(0,4,-10);
+  alignRing.rotation.x=Math.PI*0.5;
+  scene.add(alignRing);
+  /* Second smaller ring for depth */
+  var ring2Geo=new THREE.TorusGeometry(10,0.2,6,36);
+  var ring2Mat=new THREE.MeshBasicMaterial({color:0x4070a0,transparent:true,opacity:0,wireframe:true,depthWrite:false});
+  var alignRing2=new THREE.Mesh(ring2Geo,ring2Mat);
+  alignRing2.position.set(0,4,-10);
+  alignRing2.rotation.x=Math.PI*0.5;
+  scene.add(alignRing2);
+
+  /* ── Visual anchor: central axis (vertical line that clarifies over scroll) ── */
+  var axisPoints=[new THREE.Vector3(0,-20,-10),new THREE.Vector3(0,30,-10)];
+  var axisGeo=new THREE.BufferGeometry().setFromPoints(axisPoints);
+  var axisMat=new THREE.LineBasicMaterial({color:0x5080b0,transparent:true,opacity:0,depthWrite:false});
+  var centralAxis=new THREE.Line(axisGeo,axisMat);
+  scene.add(centralAxis);
+
   /* ── Landing page scroll-driven world story ── */
   /* Keyframes: progress → world state. Everything interpolated via smoothstep. */
-  /* fc=fogColor(RGB 0-255), fd=fogDensity, cy=camY, cz=camZ, os=orbScale, og=orbGlow,
+  /* fc=fogColor(RGB), fd=fogDensity, cy=camY, cz=camZ, os=orbScale, og=orbGlow,
      go=gridOpacity, gy=gridY, li=lightIntensity, h/s/l=ambientHSL, sp=shapeSpread,
-     sa=shapeAlignment(0=scattered,1=symmetric), co=coneOpacity */
+     sa=shapeAlignment, co=coneOpacity, ri=ringOpacity, ax=axisOpacity */
   var STORY=[
-    {p:0.00, fc:[5,8,16],   fd:0.00022, cy:19, cz:105, os:0.7, og:0.03, go:0.05, gy:-34, li:0.32, h:218,s:0.16,l:0.06, sp:1.6, sa:0.0,  co:0.018},
-    {p:0.12, fc:[6,10,18],  fd:0.00030, cy:17, cz:94,  os:0.85,og:0.045,go:0.09, gy:-31, li:0.42, h:222,s:0.20,l:0.075,sp:1.4, sa:0.1,  co:0.022},
-    {p:0.28, fc:[8,14,26],  fd:0.00036, cy:14, cz:78,  os:1.1, og:0.07, go:0.16, gy:-27, li:0.62, h:230,s:0.28,l:0.11, sp:1.05,sa:0.3,  co:0.032},
-    {p:0.45, fc:[9,16,30],  fd:0.00040, cy:11, cz:65,  os:1.5, og:0.13, go:0.22, gy:-24, li:0.82, h:228,s:0.34,l:0.13, sp:0.65,sa:0.65, co:0.048},
-    {p:0.62, fc:[8,13,24],  fd:0.00034, cy:13, cz:80,  os:1.25,og:0.09, go:0.19, gy:-26, li:0.68, h:224,s:0.26,l:0.10, sp:1.15,sa:0.35, co:0.035},
-    {p:0.80, fc:[6,10,18],  fd:0.00040, cy:11, cz:88,  os:1.05,og:0.065,go:0.23, gy:-23, li:0.52, h:218,s:0.20,l:0.09, sp:0.9, sa:0.75, co:0.028},
-    {p:1.00, fc:[5,8,14],   fd:0.00048, cy:10, cz:92,  os:0.95,og:0.05, go:0.26, gy:-21, li:0.45, h:214,s:0.16,l:0.08, sp:0.8, sa:0.9,  co:0.022}
+    {p:0.00, fc:[5,8,16],   fd:0.00020, cy:20, cz:112, os:0.6, og:0.025,go:0.04, gy:-36, li:0.28, h:216,s:0.14,l:0.055,sp:1.8, sa:0.0,  co:0.015, ri:0.0,  ax:0.0},
+    {p:0.12, fc:[6,10,20],  fd:0.00028, cy:17, cz:96,  os:0.8, og:0.04, go:0.08, gy:-32, li:0.40, h:222,s:0.20,l:0.075,sp:1.5, sa:0.08, co:0.020, ri:0.02, ax:0.01},
+    {p:0.28, fc:[9,16,30],  fd:0.00034, cy:13, cz:74,  os:1.15,og:0.08, go:0.18, gy:-27, li:0.65, h:232,s:0.30,l:0.12, sp:1.0, sa:0.35, co:0.038, ri:0.06, ax:0.03},
+    {p:0.45, fc:[11,20,36], fd:0.00038, cy:9,  cz:56,  os:1.7, og:0.16, go:0.26, gy:-23, li:0.90, h:228,s:0.38,l:0.14, sp:0.5, sa:0.72, co:0.058, ri:0.10, ax:0.06},
+    {p:0.62, fc:[8,14,26],  fd:0.00032, cy:12, cz:75,  os:1.3, og:0.10, go:0.22, gy:-25, li:0.72, h:224,s:0.28,l:0.11, sp:1.2, sa:0.40, co:0.040, ri:0.07, ax:0.04},
+    {p:0.80, fc:[6,10,18],  fd:0.00038, cy:10, cz:86,  os:1.1, og:0.07, go:0.28, gy:-22, li:0.55, h:218,s:0.20,l:0.09, sp:0.85,sa:0.80, co:0.030, ri:0.10, ax:0.06},
+    {p:1.00, fc:[5,8,14],   fd:0.00046, cy:9,  cz:90,  os:1.0, og:0.055,go:0.32, gy:-20, li:0.48, h:214,s:0.16,l:0.08, sp:0.7, sa:0.95, co:0.024, ri:0.12, ax:0.07}
   ];
-  /* Aligned shape positions — symmetrical ring around focal point */
-  var shapeAlignedPos=[[-10,6,-8],[10,6,-8],[0,-6,-8],[-7,0,-16],[7,0,-16]];
+  /* Aligned shape positions — tighter symmetrical ring, closer to focal point */
+  var shapeAlignedPos=[[-8,5,-6],[8,5,-6],[0,-5,-6],[-6,0,-14],[6,0,-14]];
   /* Capture original shape positions for interpolation */
   var shapeOrigPos=shapes.map(function(sh){return[sh.position.x,sh.position.y,sh.position.z];});
 
@@ -1840,7 +1862,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     var t=range>0?(p-a.p)/range:0;
     t=t*t*(3-2*t); /* smoothstep */
     var out={};
-    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co'];
+    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co','ri','ax'];
     for(var k=0;k<keys.length;k++){var key=keys[k];out[key]=a[key]+(b[key]-a[key])*t;}
     out.fc=[a.fc[0]+(b.fc[0]-a.fc[0])*t,a.fc[1]+(b.fc[1]-a.fc[1])*t,a.fc[2]+(b.fc[2]-a.fc[2])*t];
     return out;
@@ -1942,6 +1964,17 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       wCy=w.cy;wCz=w.cz;wLi=w.li;wGo=w.go;wGy=w.gy;
       wOs=w.os;wOg=w.og;wSp=w.sp;wSa=w.sa;wCo=w.co;
 
+      /* ── Alignment ring — resolves progressively ── */
+      ringMat.opacity+=(w.ri-ringMat.opacity)*0.04;
+      alignRing.rotation.z=t*0.02+_lpProgressSmooth*1.2;
+      alignRing.scale.setScalar(1+0.08*Math.sin(t*0.2));
+      ring2Mat.opacity+=(w.ri*0.7-ring2Mat.opacity)*0.04;
+      alignRing2.rotation.z=-t*0.015+_lpProgressSmooth*0.8;
+      alignRing2.scale.setScalar(1-0.06*Math.sin(t*0.25));
+
+      /* ── Central axis — clarifies over scroll ── */
+      axisMat.opacity+=(w.ax-axisMat.opacity)*0.04;
+
     } else {
       /* ── ZONE-DRIVEN (app tabs) ── */
       updateZoneTarget();
@@ -1954,19 +1987,22 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       wCy=zoneCur.cy;wCz=90+scrollProg*(-15);wLi=zoneCur.li;
       wGo=0.15+scrollProg*0.08;wGy=-25;
       wOs=1;wOg=0.08;wSp=1;wSa=0;wCo=0.035;
+      /* Hide LP anchors in app mode */
+      ringMat.opacity*=0.92;ring2Mat.opacity*=0.92;axisMat.opacity*=0.92;
     }
 
     /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
     camera.position.x=mxSmooth*5+Math.sin(t*0.05)*1.2;
     camera.position.y=wCy+(-mySmooth*2.5)+Math.cos(t*0.04)*0.8;
     camera.position.z=wCz+Math.sin(t*0.03)*1.5;
-    var lookZ=_lpActive?(-8-_lpProgressSmooth*18):0;
-    camera.lookAt(mxSmooth*1.8,mySmooth*-0.8+Math.sin(t*0.06)*0.3,lookZ);
+    /* lookAt drifts forward with scroll — creates "moving through space" */
+    var lookZ=_lpActive?(-12-_lpProgressSmooth*25):0;
+    camera.lookAt(mxSmooth*1.5,mySmooth*-0.6+Math.sin(t*0.06)*0.3,lookZ);
 
     /* ── Star field — gentle rotation + scroll-driven roll ── */
     var scrollR=_lpActive?_lpProgressSmooth:scrollProg;
-    stars.rotation.y=t*0.004+scrollR*0.18;
-    stars.rotation.x=t*0.0015+scrollR*0.08;
+    stars.rotation.y=t*0.004+scrollR*0.24;
+    stars.rotation.x=t*0.0015+scrollR*0.12;
 
     /* ── Dust field — drift (runs in both modes) ── */
     var dPos=dustGeo.attributes.position.array;
@@ -1990,12 +2026,12 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         var orig=shapeOrigPos[si];var aligned=shapeAlignedPos[si]||orig;
         var tx=orig[0]*wSp*(1-wSa)+aligned[0]*wSa;
         var ty=(orig[1]*wSp*(1-wSa)+aligned[1]*wSa)+Math.sin(t*0.15+si*1.2)*2.5;
-        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*12;
-        sh.position.x+=(tx-sh.position.x)*0.035;
-        sh.position.y+=(ty-sh.position.y)*0.035;
-        sh.position.z+=(tz-sh.position.z)*0.035;
-        /* Rotation slows as shapes align */
-        var rotFact=1-wSa*0.55;
+        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*16;
+        sh.position.x+=(tx-sh.position.x)*0.04;
+        sh.position.y+=(ty-sh.position.y)*0.04;
+        sh.position.z+=(tz-sh.position.z)*0.04;
+        /* Rotation slows as shapes align — very visible at high sa */
+        var rotFact=1-wSa*0.7;
         sh.rotation.x=t*ud.spd[0]*rotFact;
         sh.rotation.y=t*ud.spd[1]*rotFact;
       } else {
@@ -2010,7 +2046,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     if(gridHelper){
       if(_lpActive){
         gridHelper.position.y+=(wGy-gridHelper.position.y)*0.04;
-        gridHelper.position.z=-_lpProgressSmooth*18;
+        gridHelper.position.z=-_lpProgressSmooth*24;
       } else {
         gridHelper.position.z=scrollProg*(-20);
       }
@@ -2021,7 +2057,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     coneMat.opacity=wCo*(1+0.35*Math.sin(t*0.25));
     lightCone.rotation.y=t*0.015;
     if(_lpActive){
-      lightCone.position.y+=(48+_lpProgressSmooth*14-lightCone.position.y)*0.03;
+      lightCone.position.y+=(46+_lpProgressSmooth*20-lightCone.position.y)*0.03;
     }
 
     /* ── Central orb — scroll-driven scale/glow + breathe ── */
