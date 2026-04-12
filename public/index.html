@@ -1847,6 +1847,7 @@ async function testBuyOrder(){
 // FETCH
 // =======================================================
 async function fetchAll(){
+  if(!_authToken) return;
   try {
     const rs = await Promise.allSettled([
       fetch("/health"),fetch("/prices"),fetch("/paper-trades"),
@@ -1882,6 +1883,7 @@ async function fetchAll(){
 }
 
 async function fetchCryptoPrices(){
+  if(!_authToken) return;
   try {
     // Use server proxy to avoid browser CORS issues with Binance
     const r = await fetch("/api/crypto-prices");
@@ -11218,8 +11220,8 @@ function _init() {
   }
   try { fetchAll(); } catch(e){}
   try { fetchCryptoPrices(); } catch(e){}
-  setInterval(function(){ try{ fetchAll(); }catch(e){} }, 15000);
-  setInterval(function(){ try{ fetchCryptoPrices(); }catch(e){} }, 30000);
+  _fetchIntervalIds.push(setInterval(function(){ try{ fetchAll(); }catch(e){} }, 15000));
+  _fetchIntervalIds.push(setInterval(function(){ try{ fetchCryptoPrices(); }catch(e){} }, 30000));
 }
 
 // Handle browser back/forward buttons
@@ -11243,6 +11245,9 @@ var _authToken = null;
 var _authUser = null;
 
 // Wrap fetch to auto-attach auth token
+var _fetchIntervalIds = [];
+function _clearFetchIntervals(){ _fetchIntervalIds.forEach(clearInterval); _fetchIntervalIds=[]; }
+
 var _origFetch = window.fetch;
 window.fetch = function(url, opts) {
   opts = opts || {};
@@ -11253,12 +11258,15 @@ window.fetch = function(url, opts) {
     }
   }
   return _origFetch.call(window, url, opts).then(function(resp){
-    // If 401 on any API call, force re-login
+    // If 401 on any API call, force logout — but don't wipe login form if user is already there
     if(resp.status === 401 && typeof url === 'string' && url.startsWith('/api') && !url.startsWith('/api/auth')){
       _authToken = null;
       _authUser = null;
       try{ localStorage.removeItem('pt_token'); }catch(e){}
-      showLogin();
+      _clearFetchIntervals();
+      var loginVisible = document.getElementById('login-screen') && document.getElementById('login-screen').style.display === 'flex';
+      var landingVisible = document.getElementById('landing-page') && document.getElementById('landing-page').style.display !== 'none';
+      if(!loginVisible && !landingVisible) showLanding();
     }
     return resp;
   });
@@ -11278,18 +11286,21 @@ function showLoginFromLanding() {
   setTimeout(function(){ var u=document.getElementById('login-username'); if(u)u.focus(); }, 150);
 }
 
-function showLogin() {
+function showLogin(skipClear) {
   document.getElementById('landing-page').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
   document.body.classList.add('in-app');
-  document.getElementById('login-error').style.display = 'none';
-  document.getElementById('login-username').value = '';
-  document.getElementById('login-password').value = '';
+  if(!skipClear){
+    document.getElementById('login-error').style.display = 'none';
+    document.getElementById('login-username').value = '';
+    document.getElementById('login-password').value = '';
+  }
   var logoutBtn = document.getElementById('logout-btn');
   if(logoutBtn) logoutBtn.style.display = 'none';
+  _clearFetchIntervals();
   _clearInactivityTimer();
-  setTimeout(function(){ document.getElementById('login-username').focus(); }, 100);
+  if(!skipClear) setTimeout(function(){ document.getElementById('login-username').focus(); }, 100);
 }
 
 function showApp() {
@@ -11369,6 +11380,8 @@ async function doLogin() {
 }
 
 async function doLogout() {
+  _clearFetchIntervals();
+  _inited = false;
   try { await _origFetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + _authToken } }); } catch(e){}
   _authToken = null;
   _authUser = null;
