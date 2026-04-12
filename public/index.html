@@ -92,12 +92,13 @@ body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
 @keyframes pdot{0%,100%{box-shadow:0 0 4px var(--shiva-blue-glow)}50%{box-shadow:0 0 12px 3px var(--shiva-blue-glow)}}
 
 /* -- MODE SWITCHER -- */
-.mode-tabs{display:flex;gap:2px;background:rgba(255,255,255,0.03);border-radius:var(--radius);padding:3px;border:1px solid rgba(255,255,255,0.07)}
-.mode-tab{padding:5px 14px;border:none;background:transparent;cursor:pointer;font-size:11.5px;font-weight:600;
-  color:var(--text3);border-radius:6px;font-family:inherit;transition:all var(--transition-med);letter-spacing:0.2px}
-.mode-tab:hover{color:var(--text);background:rgba(255,255,255,0.04)}
-.mode-tab.active{background:rgba(255,255,255,0.07);color:var(--text);font-weight:700;
-  box-shadow:0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,0.06)}
+.mode-tabs{display:flex;gap:2px;background:rgba(255,255,255,0.04);border-radius:var(--radius);padding:3px;border:1px solid rgba(255,255,255,0.09)}
+.mode-tab{padding:6px 14px;border:none;background:transparent;cursor:pointer;font-size:11.5px;font-weight:600;
+  color:var(--text2);border-radius:6px;font-family:inherit;transition:all var(--transition-med);letter-spacing:0.2px}
+.mode-tab:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+.mode-tab.active{background:rgba(255,255,255,0.10);color:var(--text);font-weight:700;
+  box-shadow:0 2px 10px rgba(0,0,0,.40),inset 0 1px 0 rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.10)}
 .mode-tab.stocks.active{color:var(--shiva-blue)}
 .mode-tab.crypto.active{color:var(--purple)}
 .mode-tab#mode-mf.active{color:var(--green)}
@@ -152,11 +153,11 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 .subtabs::-webkit-scrollbar{display:none}
 .stab{
   padding:0 16px;height:38px;border:none;background:transparent;
-  cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text3);
+  cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text2);
   border-bottom:2px solid transparent;font-family:inherit;
   white-space:nowrap;transition:all var(--transition-med);letter-spacing:0.1px;
 }
-.stab:hover{color:var(--text)}
+.stab:hover{color:var(--text);background:rgba(255,255,255,0.03)}
 .stab.stocks-active{border-bottom-color:var(--shiva-blue);color:var(--shiva-blue)}
 .stab.crypto-active{border-bottom-color:var(--purple);color:var(--purple)}
 
@@ -258,31 +259,34 @@ tbody tr:hover td{background:rgba(255,255,255,0.02)}
 
 /* -- UNIFIED BUTTON SYSTEM -- */
 .btn{
-  background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);
+  background:rgba(255,255,255,0.09);border:1px solid rgba(255,255,255,0.12);
   border-radius:var(--radius);padding:7px 16px;cursor:pointer;
-  font-size:12px;font-weight:600;font-family:inherit;color:var(--text2);
+  font-size:12px;font-weight:600;font-family:inherit;color:var(--text);
   transition:all var(--transition-med);backdrop-filter:blur(8px);
   letter-spacing:0.2px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.04);
 }
-.btn:hover{background:rgba(255,255,255,0.08);color:var(--text);border-color:rgba(255,255,255,0.12);
-  box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+.btn:hover{background:rgba(255,255,255,0.14);color:#fff;border-color:rgba(255,255,255,0.18);
+  box-shadow:0 6px 20px rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.06)}
 .btn-sm{padding:5px 12px;font-size:11px;font-weight:600}
-.btn-primary{background:rgba(64,112,168,0.22);color:var(--shiva-blue);border-color:rgba(64,112,168,0.25);font-weight:700}
-.btn-primary:hover{background:rgba(64,112,168,0.32);border-color:rgba(64,112,168,0.35);color:#90c0f0;
-  box-shadow:0 4px 20px rgba(64,112,168,0.15)}
+.btn-primary{background:rgba(64,112,168,0.28);color:var(--shiva-blue);border-color:rgba(64,112,168,0.35);font-weight:700;
+  box-shadow:0 2px 8px rgba(64,112,168,0.15),inset 0 1px 0 rgba(64,112,168,0.1)}
+.btn-primary:hover{background:rgba(64,112,168,0.40);border-color:rgba(64,112,168,0.50);color:#a8d4ff;
+  box-shadow:0 6px 24px rgba(64,112,168,0.25),0 0 12px rgba(64,112,168,0.1)}
 /* Disabled state — all buttons */
 .btn:disabled,.btn-primary:disabled,button:disabled{
-  opacity:0.5 !important;cursor:not-allowed !important;
+  opacity:0.45 !important;cursor:not-allowed !important;
   transform:none !important;box-shadow:none !important;
-  filter:grayscale(0.3);
+  filter:grayscale(0.4);pointer-events:none;
 }
 .btn:disabled:hover,.btn-primary:disabled:hover,button:disabled:hover{
   transform:none !important;box-shadow:none !important;background:inherit;
 }
 /* Coming soon variant */
 .btn-coming-soon{
-  background:rgba(160,136,72,0.08);color:rgba(160,136,72,0.6);border:1px solid rgba(160,136,72,0.12);
-  font-weight:600;cursor:not-allowed;opacity:0.7;letter-spacing:0.3px;
+  background:rgba(160,136,72,0.08);color:rgba(160,136,72,0.55);border:1px solid rgba(160,136,72,0.12);
+  font-weight:600;cursor:not-allowed;opacity:0.6;letter-spacing:0.3px;
+  pointer-events:none;
 }
 input,select{
   background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);
@@ -296,14 +300,16 @@ select option{background:var(--bg3)}
 /* -- FILTER PILLS -- */
 .fr{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .fpill{
-  border-radius:20px;padding:5px 15px;font-size:11px;font-weight:600;
-  border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);
-  cursor:pointer;color:var(--text2);font-family:inherit;transition:all var(--transition-med);
-  backdrop-filter:blur(8px);letter-spacing:0.1px;
+  border-radius:20px;padding:6px 18px;font-size:11px;font-weight:600;
+  border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);
+  cursor:pointer;color:var(--text);font-family:inherit;transition:all var(--transition-med);
+  backdrop-filter:blur(8px);letter-spacing:0.2px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.15);
 }
-.fpill:hover{border-color:rgba(255,255,255,0.12);color:var(--text);background:rgba(255,255,255,0.05)}
-.fpill.active{background:rgba(64,112,168,0.18);color:var(--shiva-blue);border-color:rgba(64,112,168,0.25);font-weight:700;
-  box-shadow:0 2px 8px rgba(64,112,168,0.1)}
+.fpill:hover{border-color:rgba(255,255,255,0.18);color:#fff;background:rgba(255,255,255,0.11);
+  box-shadow:0 4px 12px rgba(0,0,0,0.25)}
+.fpill.active{background:rgba(64,112,168,0.25);color:#90c0f0;border-color:rgba(64,112,168,0.40);font-weight:700;
+  box-shadow:0 2px 12px rgba(64,112,168,0.2),0 0 8px rgba(64,112,168,0.08)}
 
 /* -- NEWS CARDS -- */
 .news-card{
@@ -345,8 +351,8 @@ select option{background:var(--bg3)}
 /* ── Deep Stock Analyzer (flagship) ── */
 .analyzer-wrap{max-width:1400px;margin:0 auto;padding:24px 4px}
 .analyzer-header{margin-bottom:28px}
-.analyzer-header h1{font-weight:400;font-size:22px;letter-spacing:1px;color:var(--text);margin-bottom:6px}
-.analyzer-header p{font-size:12px;color:var(--text2);line-height:1.6;max-width:680px;font-weight:400}
+.analyzer-header h1{font-weight:600;font-size:22px;letter-spacing:1px;color:var(--text);margin-bottom:6px}
+.analyzer-header p{font-size:12px;color:var(--text2);line-height:1.6;max-width:680px;font-weight:500}
 .analyzer-search{background:rgba(12,14,18,0.94);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
   border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:20px;margin-bottom:20px;
   box-shadow:0 4px 20px rgba(0,0,0,0.2);transition:border-color var(--transition-med)}
@@ -700,8 +706,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-nav-links{display:flex;gap:24px;align-items:center}
 .lp-nav-links a{color:var(--text2);font-size:12px;font-weight:500;text-decoration:none;letter-spacing:0.3px;transition:color 0.2s}
 .lp-nav-links a:hover{color:var(--text)}
-.lp-cta-sm{background:rgba(64,112,168,0.18);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.25);border-radius:8px;
+.lp-cta-sm{background:rgba(64,112,168,0.25);color:#a0c8f0;border:1px solid rgba(64,112,168,0.35);border-radius:8px;
   padding:8px 20px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;
+  box-shadow:0 2px 8px rgba(64,112,168,0.12);
   transform:perspective(600px) translateZ(0);
   transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s;text-decoration:none}
 .lp-cta-sm:hover{background:rgba(64,112,168,0.25);color:#c0d0e8;
@@ -725,8 +732,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-btn-primary:hover{background:linear-gradient(135deg,rgba(64,112,168,0.3),rgba(64,112,168,0.15));
   transform:perspective(600px) translateZ(5px) translateY(-2px);
   box-shadow:0 12px 35px rgba(64,112,168,0.15)}
-.lp-btn-ghost{background:rgba(255,255,255,0.03);color:var(--text);border:1px solid rgba(255,255,255,0.1);border-radius:10px;
+.lp-btn-ghost{background:rgba(255,255,255,0.07);color:var(--text);border:1px solid rgba(255,255,255,0.14);border-radius:10px;
   padding:14px 28px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
+  box-shadow:0 2px 8px rgba(0,0,0,0.15);
   transform:perspective(600px) translateZ(0);
   transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;font-family:inherit;text-decoration:none}
 .lp-btn-ghost:hover{border-color:rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);color:var(--text);
@@ -773,8 +781,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-price-btn{width:100%;padding:12px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.3px;
   transform:perspective(600px) translateZ(0);
   transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;
-  font-family:inherit;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.05);color:var(--text)}
-.lp-price-btn:hover{background:rgba(255,255,255,0.08);color:var(--text);
+  font-family:inherit;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.08);color:var(--text);
+  box-shadow:0 2px 8px rgba(0,0,0,0.2)}
+.lp-price-btn:hover{background:rgba(255,255,255,0.12);color:#fff;
   transform:perspective(600px) translateZ(4px) translateY(-1px);box-shadow:0 8px 20px rgba(0,0,0,0.2)}
 .lp-price-card.featured .lp-price-btn{background:rgba(64,112,168,0.2);color:var(--shiva-blue);border-color:rgba(64,112,168,0.25);font-weight:700}
 .lp-price-card.featured .lp-price-btn:hover{background:rgba(64,112,168,0.3);box-shadow:0 8px 25px rgba(64,112,168,0.12)}
@@ -812,13 +821,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* Quick-start bar (inside app, post-login) */
 .qs-bar{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:12px;
   padding:14px 18px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.015);border:1px solid var(--glass-border);border-radius:10px;padding:10px 18px;
+.qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 18px;
   cursor:pointer;transition:all 0.35s cubic-bezier(.4,0,.2,1);text-align:center;min-width:90px;font-family:inherit}
 .qs-stock::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--qs-accent,var(--shiva-gold));opacity:0.5;transition:opacity 0.3s}
 .qs-stock:hover{border-color:var(--qs-accent,var(--shiva-gold));box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 12px color-mix(in srgb,var(--qs-accent,var(--shiva-gold)) 15%,transparent)}
 .qs-stock:hover::before{opacity:1}
 .qs-stock:active{transform:translateY(0);transition-duration:0.1s}
-.qs-stock-sym{font-size:12px;font-weight:600;color:var(--text);letter-spacing:0.3px}
+.qs-stock-sym{font-size:12px;font-weight:700;color:#fff;letter-spacing:0.3px}
 .qs-stock-score{font-size:10px;margin-top:2px}
 @keyframes qsTileIn{0%{opacity:0;transform:translateY(6px) scale(0.95)}100%{opacity:1;transform:translateY(0) scale(1)}}
 
@@ -837,20 +846,20 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── Hero cinematic entrance keyframes ── */
-@keyframes lpHeroIn{0%{opacity:0;transform:translateY(36px) scale(0.97);filter:blur(6px)}55%{filter:blur(0)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
-@keyframes lpBadgeIn{0%{opacity:0;transform:translateY(18px) scale(0.92)}100%{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes lpHeroGlow{0%,100%{text-shadow:0 0 40px rgba(64,112,168,0)}50%{text-shadow:0 0 60px rgba(64,112,168,0.12),0 0 100px rgba(64,112,168,0.04)}}
-@keyframes lpBreatheCta{0%,100%{box-shadow:0 0 20px rgba(64,112,168,0.06),0 0 50px rgba(64,112,168,0.02)}50%{box-shadow:0 0 30px rgba(64,112,168,0.14),0 0 70px rgba(64,112,168,0.05)}}
-@keyframes lpFloatSlow{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-@keyframes lpPulseNum{0%,100%{box-shadow:0 0 16px rgba(64,112,168,0.06)}50%{box-shadow:0 0 28px rgba(64,112,168,0.12)}}
+@keyframes lpHeroIn{0%{opacity:0;transform:translateY(48px) scale(0.95);filter:blur(10px)}40%{filter:blur(2px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+@keyframes lpBadgeIn{0%{opacity:0;transform:translateY(24px) scale(0.88);filter:blur(4px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+@keyframes lpHeroGlow{0%,100%{text-shadow:0 0 50px rgba(64,140,220,0),0 0 80px rgba(64,140,220,0)}50%{text-shadow:0 0 70px rgba(64,140,220,0.25),0 0 120px rgba(64,140,220,0.10),0 0 200px rgba(64,140,220,0.04)}}
+@keyframes lpBreatheCta{0%,100%{box-shadow:0 0 24px rgba(64,140,220,0.10),0 0 60px rgba(64,140,220,0.03)}50%{box-shadow:0 0 40px rgba(64,140,220,0.25),0 0 90px rgba(64,140,220,0.10),0 0 140px rgba(64,140,220,0.03)}}
+@keyframes lpFloatSlow{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes lpPulseNum{0%,100%{box-shadow:0 0 20px rgba(64,140,220,0.08),0 0 40px rgba(64,140,220,0.02)}50%{box-shadow:0 0 35px rgba(64,140,220,0.20),0 0 60px rgba(64,140,220,0.06)}}
 
-/* Hero cinematic entrance — staggered children */
-.lp-hero.lp-cinematic .lp-hero-badge{animation:lpBadgeIn 0.7s 0.15s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic h1{animation:lpHeroIn 0.9s 0.35s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-sub{animation:lpHeroIn 0.9s 0.55s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-cta{animation:lpHeroIn 0.7s 0.75s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-trust{animation:lpHeroIn 0.7s 0.95s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic h1 strong{animation:lpHeroGlow 4s 2s ease-in-out infinite}
+/* Hero cinematic entrance — staggered children (long delays for drama) */
+.lp-hero.lp-cinematic .lp-hero-badge{animation:lpBadgeIn 0.9s 0.2s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic h1{animation:lpHeroIn 1.1s 0.5s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-sub{animation:lpHeroIn 1.0s 0.85s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-cta{animation:lpHeroIn 0.9s 1.15s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-trust{animation:lpHeroIn 0.8s 1.5s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic h1 strong{animation:lpHeroGlow 4s 2.5s ease-in-out infinite}
 
 /* Breathing CTA */
 .lp-btn-primary{animation:lpBreatheCta 3s ease-in-out infinite}
@@ -868,10 +877,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-sheen:hover::after{left:170%}
 
 /* ── Enhanced hover glow — layered depth shadows ── */
-.lp-feature:hover,.lp-step:hover{box-shadow:0 10px 36px rgba(0,0,0,0.3),0 0 50px rgba(64,112,168,0.04),0 0 0 1px rgba(255,255,255,0.04)}
-.lp-price-card:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.03),0 0 0 1px rgba(255,255,255,0.04)}
-.lp-price-card.featured:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.08),0 0 0 1px rgba(64,112,168,0.15)}
-.lp-example:hover{box-shadow:0 18px 55px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.04)}
+.lp-feature:hover,.lp-step:hover{box-shadow:0 14px 48px rgba(0,0,0,0.45),0 0 60px rgba(64,140,220,0.08),0 0 0 1px rgba(80,140,220,0.10);
+  border-color:rgba(80,140,220,0.20) !important}
+.lp-price-card:hover{box-shadow:0 18px 56px rgba(0,0,0,0.45),0 0 80px rgba(64,140,220,0.06),0 0 0 1px rgba(80,140,220,0.10);
+  border-color:rgba(80,140,220,0.20) !important}
+.lp-price-card.featured:hover{box-shadow:0 18px 56px rgba(0,0,0,0.45),0 0 90px rgba(64,140,220,0.14),0 0 0 1px rgba(64,140,220,0.25);
+  border-color:rgba(64,140,220,0.35) !important}
+.lp-example:hover{box-shadow:0 22px 64px rgba(0,0,0,0.45),0 0 80px rgba(64,140,220,0.08),0 0 0 1px rgba(80,140,220,0.10);
+  border-color:rgba(80,140,220,0.20) !important}
 
 /* ── LP reveal animations ── */
 .lp-reveal-up{opacity:0;transform:translateY(36px);transition:opacity 0.75s var(--ease-out-expo),transform 0.75s var(--ease-out-expo)}
@@ -894,16 +907,18 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Section atmosphere overlays ── */
 .lp [data-lp-zone]{position:relative}
 .lp [data-lp-zone]::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity 1.4s ease;z-index:0}
-[data-lp-zone="hero"]::before{background:radial-gradient(ellipse 60% 40% at 50% 30%,rgba(64,112,168,0.035),transparent)}
-[data-lp-zone="stats"]::before{background:linear-gradient(180deg,rgba(64,112,168,0.015),transparent 40%,transparent 60%,rgba(64,112,168,0.015))}
-[data-lp-zone="howit"]::before{background:radial-gradient(ellipse 80% 50% at 50% 50%,rgba(64,112,168,0.025),transparent)}
-[data-lp-zone="features"]::before{background:radial-gradient(ellipse 70% 45% at 50% 40%,rgba(64,112,168,0.02),transparent)}
-[data-lp-zone="pricing"]::before{background:radial-gradient(ellipse 55% 50% at 50% 50%,rgba(64,112,168,0.025),transparent)}
+[data-lp-zone="hero"]::before{background:radial-gradient(ellipse 70% 50% at 50% 30%,rgba(64,140,220,0.06),rgba(30,60,120,0.02) 60%,transparent)}
+[data-lp-zone="stats"]::before{background:linear-gradient(180deg,rgba(64,140,220,0.03),transparent 35%,transparent 65%,rgba(64,140,220,0.03))}
+[data-lp-zone="howit"]::before{background:radial-gradient(ellipse 80% 55% at 50% 50%,rgba(64,140,220,0.05),rgba(30,80,160,0.015) 65%,transparent)}
+[data-lp-zone="features"]::before{background:radial-gradient(ellipse 75% 50% at 50% 40%,rgba(80,180,255,0.04),rgba(64,140,220,0.015) 60%,transparent)}
+[data-lp-zone="pricing"]::before{background:radial-gradient(ellipse 60% 55% at 50% 50%,rgba(64,140,220,0.05),rgba(100,180,240,0.015) 60%,transparent)}
 .lp [data-lp-zone].lp-zone-active::before{opacity:1}
 
 /* ── Scroll progress bar ── */
-.lp-scroll-progress{position:fixed;top:0;left:0;width:100%;height:2px;z-index:400;pointer-events:none;
-  background:linear-gradient(90deg,rgba(64,112,168,0.5),rgba(64,112,168,0.15));transform-origin:left;transform:scaleX(0);transition:transform 0.12s linear}
+.lp-scroll-progress{position:fixed;top:0;left:0;width:100%;height:3px;z-index:400;pointer-events:none;
+  background:linear-gradient(90deg,rgba(64,140,220,0.8),rgba(100,200,255,0.5),rgba(64,140,220,0.3));
+  box-shadow:0 0 12px rgba(64,140,220,0.4),0 0 30px rgba(64,140,220,0.12);
+  transform-origin:left;transform:scaleX(0);transition:transform 0.12s linear}
 
 /* ── Sequential metric reveal in example card ── */
 .lp-example .lp-ex-metric{opacity:0;transform:perspective(800px) translateY(14px) scale(0.96);
@@ -939,28 +954,37 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-parallax{will-change:transform}
 
 /* ── Mobile simplifications ── */
-/* ── Glass transparency upgrade — reveal 3D background through UI tiles ── */
+/* ── Glass transparency upgrade — floating panels above 3D world ── */
 .lp .lp-feature,.lp .lp-step,.lp .lp-stat{
-  background:rgba(10,12,18,0.55);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-  border-color:rgba(80,120,180,0.10)}
+  background:rgba(8,10,16,0.78);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border:1px solid rgba(80,130,200,0.14);
+  box-shadow:0 4px 24px rgba(0,0,0,0.4),0 0 0 1px rgba(80,130,200,0.04),inset 0 1px 0 rgba(255,255,255,0.03)}
 .lp .lp-price-card{
-  background:rgba(10,12,18,0.52);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  border-color:rgba(80,120,180,0.10)}
+  background:rgba(8,10,16,0.80);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(80,130,200,0.14);
+  box-shadow:0 4px 28px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.03)}
 .lp .lp-price-card.featured{
-  background:linear-gradient(135deg,rgba(64,112,168,0.10),rgba(10,12,18,0.52));
-  border-color:rgba(80,120,180,0.18)}
+  background:linear-gradient(135deg,rgba(64,120,180,0.14),rgba(8,10,16,0.80));
+  border-color:rgba(80,140,220,0.25);
+  box-shadow:0 4px 40px rgba(0,0,0,0.45),0 0 60px rgba(64,120,180,0.06),inset 0 1px 0 rgba(64,140,220,0.08)}
 .lp .lp-example{
-  background:rgba(10,12,18,0.50);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  border-color:rgba(80,120,180,0.12)}
+  background:rgba(8,10,16,0.78);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid rgba(80,130,200,0.15);
+  box-shadow:0 6px 32px rgba(0,0,0,0.45),inset 0 1px 0 rgba(255,255,255,0.03)}
 .lp .lp-ex-metric{
-  background:rgba(10,12,18,0.48);border-color:rgba(80,120,180,0.08)}
+  background:rgba(8,10,16,0.65);border:1px solid rgba(80,130,200,0.10);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
 .lp .lp-roi{
-  background:rgba(10,12,18,0.50);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border-color:rgba(80,120,180,0.10)}
+  background:rgba(8,10,16,0.75);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(80,130,200,0.12);
+  box-shadow:0 4px 20px rgba(0,0,0,0.35),inset 0 1px 0 rgba(255,255,255,0.02)}
 .lp .lp-hero-badge{
-  background:rgba(10,12,18,0.45);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-/* Subtle glow tint on section dividers */
-.lp .lp-section-divider{border-color:rgba(80,128,200,0.08)}
+  background:rgba(8,10,16,0.65);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(64,140,220,0.18);
+  box-shadow:0 2px 12px rgba(0,0,0,0.3),0 0 20px rgba(64,140,220,0.05)}
+/* Glow tint on section dividers */
+.lp .lp-section-divider{border-color:rgba(80,140,220,0.12);
+  box-shadow:0 0 20px rgba(64,140,220,0.04)}
 
 @media(max-width:768px){
   .lp-sheen::after{display:none}
@@ -972,7 +996,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   .lp-reveal-up,.lp-reveal-scale,.lp-reveal-left,.lp-reveal-right{transition-duration:0.4s!important}
   /* Restore opacity on mobile for readability */
   .lp .lp-feature,.lp .lp-step,.lp .lp-stat,.lp .lp-price-card,.lp .lp-example,.lp .lp-roi{
-    background:rgba(12,14,20,0.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+    background:rgba(10,12,18,0.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1308,13 +1332,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Button (restrained Shiva-blue glow) ── */
 .login-btn-3d{
   width:100%;padding:14px;border:none;border-radius:10px;cursor:pointer;
-  font-size:13px;font-weight:700;color:#d8d4cc;position:relative;overflow:hidden;
-  background:rgba(64,112,168,0.18);border:1px solid rgba(64,112,168,0.2);
-  box-shadow:0 2px 15px rgba(64,112,168,0.1);
+  font-size:13px;font-weight:700;color:#e0dcd4;position:relative;overflow:hidden;
+  background:rgba(64,112,168,0.25);border:1px solid rgba(64,112,168,0.30);
+  box-shadow:0 2px 15px rgba(64,112,168,0.15),inset 0 1px 0 rgba(64,112,168,0.1);
   transition:all 0.3s ease;margin-bottom:16px;letter-spacing:0.5px;
 }
-.login-btn-3d:hover{background:rgba(64,112,168,0.26);color:#e8e8e0;
-  box-shadow:0 6px 30px rgba(64,112,168,0.15);border-color:rgba(64,112,168,0.25)}
+.login-btn-3d:hover{background:rgba(64,112,168,0.35);color:#f0ece4;
+  box-shadow:0 6px 30px rgba(64,112,168,0.2),0 0 12px rgba(64,112,168,0.08);border-color:rgba(64,112,168,0.40)}
 .login-btn-3d:active{transform:scale(0.98);box-shadow:0 1px 8px rgba(64,112,168,0.1)}
 .login-btn-3d::after{content:'';position:absolute;inset:0;
   background:linear-gradient(105deg,transparent 42%,rgba(255,255,255,0.04) 50%,transparent 58%);
@@ -2015,22 +2039,23 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
      go=gridOpacity, gy=gridY, li=lightIntensity, h/s/l=ambientHSL, sp=shapeSpread,
      sa=shapeAlignment, co=coneOpacity, ri=ringOpacity,
      col=columnOpacity, cs=columnScale (0=hidden,1=full height) */
-  /* STORY v6 — ULTRA-VISIBLE 5-chapter visual journey
-     Colors 4-5× brighter, fog much lower, camera closer, lights stronger.
-     Ch1 Hero(0-0.12): deep ocean, stars+dust clearly visible
-     Ch2 Structure(0.12-0.30): columns forming, blue+violet glow
-     Ch3 Focus(0.30-0.50): BRIGHT convergence, silver+gold peak
-     Ch4 Expansion(0.50-0.72): teal+blue-violet richness
-     Ch5 Stability(0.72-1.0): calm blue+gold, settled */
+  /* STORY v7 — CINEMATIC IMMERSIVE 5-chapter visual journey
+     Dramatically brighter colors, deeper camera moves, stronger fog transitions,
+     life systems much more visible, true sense of descending into a world.
+     Ch1 Hero(0-0.12): deep void, near-empty, mysterious
+     Ch2 Formation(0.12-0.30): structures materializing, blue glow rising
+     Ch3 Focus(0.30-0.50): PEAK brightness, convergence, electric blue-cyan
+     Ch4 Expansion(0.50-0.72): teal-cyan richness, objects spread
+     Ch5 Stability(0.72-1.0): calm deep blue, symmetry, settled clarity */
   var STORY=[
-    {p:0.00, fc:[14,20,48],  fd:0.00006, cy:18, cz:85,  os:0.5, og:0.04, go:0.0,  gy:-38, li:0.55, h:225,s:0.30,l:0.10, sp:2.0, sa:0.0,  co:0.02,  ri:0.0,  col:0.0,  cs:0.0,  fo:0.0},
-    {p:0.12, fc:[22,32,72],  fd:0.00008, cy:15, cz:72,  os:0.8, og:0.08, go:0.10, gy:-34, li:0.72, h:230,s:0.38,l:0.14, sp:1.6, sa:0.08, co:0.04,  ri:0.04, col:0.04, cs:0.08, fo:0.06},
-    {p:0.22, fc:[35,55,110], fd:0.00010, cy:12, cz:58,  os:1.4, og:0.16, go:0.24, gy:-30, li:0.92, h:236,s:0.48,l:0.18, sp:1.0, sa:0.30, co:0.07,  ri:0.12, col:0.12, cs:0.30, fo:0.14},
-    {p:0.35, fc:[48,72,140], fd:0.00012, cy:8,  cz:42,  os:2.2, og:0.28, go:0.36, gy:-26, li:1.15, h:240,s:0.55,l:0.22, sp:0.45,sa:0.70, co:0.10,  ri:0.24, col:0.22, cs:0.70, fo:0.22},
-    {p:0.48, fc:[60,90,170], fd:0.00010, cy:3,  cz:28,  os:3.2, og:0.45, go:0.48, gy:-20, li:1.45, h:234,s:0.62,l:0.28, sp:0.12,sa:0.95, co:0.14,  ri:0.40, col:0.38, cs:1.0,  fo:0.30},
-    {p:0.62, fc:[42,65,130], fd:0.00008, cy:7,  cz:48,  os:2.0, og:0.22, go:0.38, gy:-24, li:1.05, h:228,s:0.50,l:0.20, sp:0.7, sa:0.52, co:0.08,  ri:0.22, col:0.18, cs:0.60, fo:0.20},
-    {p:0.78, fc:[30,48,100], fd:0.00012, cy:5,  cz:60,  os:1.6, og:0.15, go:0.42, gy:-22, li:0.85, h:222,s:0.42,l:0.16, sp:0.5, sa:0.82, co:0.06,  ri:0.30, col:0.24, cs:0.78, fo:0.22},
-    {p:1.00, fc:[18,30,68],  fd:0.00015, cy:4,  cz:72,  os:1.3, og:0.10, go:0.50, gy:-19, li:0.70, h:218,s:0.35,l:0.13, sp:0.4, sa:0.95, co:0.04,  ri:0.36, col:0.28, cs:0.88, fo:0.24}
+    {p:0.00, fc:[8,12,35],   fd:0.00003, cy:22, cz:95,  os:0.3, og:0.02, go:0.0,  gy:-42, li:0.40, h:225,s:0.25,l:0.06, sp:2.5, sa:0.0,  co:0.01,  ri:0.0,  col:0.0,  cs:0.0,  fo:0.0},
+    {p:0.12, fc:[18,30,70],  fd:0.00005, cy:17, cz:78,  os:0.7, og:0.08, go:0.08, gy:-37, li:0.65, h:228,s:0.35,l:0.12, sp:1.8, sa:0.06, co:0.04,  ri:0.03, col:0.03, cs:0.06, fo:0.05},
+    {p:0.22, fc:[35,58,120], fd:0.00008, cy:13, cz:60,  os:1.5, og:0.20, go:0.22, gy:-32, li:0.95, h:234,s:0.52,l:0.18, sp:1.1, sa:0.28, co:0.08,  ri:0.14, col:0.14, cs:0.32, fo:0.16},
+    {p:0.35, fc:[55,85,165], fd:0.00010, cy:8,  cz:40,  os:2.5, og:0.38, go:0.40, gy:-26, li:1.30, h:238,s:0.62,l:0.25, sp:0.35,sa:0.72, co:0.14,  ri:0.30, col:0.28, cs:0.75, fo:0.28},
+    {p:0.48, fc:[70,110,200],fd:0.00008, cy:2,  cz:22,  os:3.8, og:0.60, go:0.55, gy:-18, li:1.65, h:232,s:0.72,l:0.32, sp:0.08,sa:0.98, co:0.20,  ri:0.50, col:0.48, cs:1.0,  fo:0.38},
+    {p:0.62, fc:[48,75,150], fd:0.00006, cy:6,  cz:45,  os:2.2, og:0.30, go:0.45, gy:-23, li:1.15, h:226,s:0.55,l:0.22, sp:0.6, sa:0.55, co:0.10,  ri:0.28, col:0.22, cs:0.65, fo:0.25},
+    {p:0.78, fc:[32,52,115], fd:0.00010, cy:4,  cz:58,  os:1.8, og:0.18, go:0.50, gy:-20, li:0.90, h:220,s:0.46,l:0.17, sp:0.45,sa:0.85, co:0.07,  ri:0.35, col:0.28, cs:0.82, fo:0.26},
+    {p:1.00, fc:[16,28,65],  fd:0.00014, cy:3,  cz:68,  os:1.4, og:0.12, go:0.55, gy:-17, li:0.75, h:216,s:0.38,l:0.14, sp:0.35,sa:0.98, co:0.05,  ri:0.42, col:0.32, cs:0.92, fo:0.28}
   ];
   /* Aligned shape positions — tight converge at focal point */
   var shapeAlignedPos=[[-6,4,-5],[6,4,-5],[0,-4,-5],[-5,0,-12],[5,0,-12]];
@@ -2121,8 +2146,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     lastFrame=now;
     var t=now*0.001;
 
-    /* Smooth scroll progress (LP) — low alpha for buttery interpolation */
-    _lpProgressSmooth+=(_lpProgress-_lpProgressSmooth)*0.055;
+    /* Smooth scroll progress (LP) — responsive yet buttery interpolation */
+    _lpProgressSmooth+=(_lpProgress-_lpProgressSmooth)*0.07;
 
     /* Mouse parallax (always) */
     mxSmooth+=(mx-mxSmooth)*0.04;
@@ -2171,20 +2196,20 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       energyGlow.scale.z=energyGlow.scale.x;
 
       /* ── Vertical world flow — objects move UP as user scrolls DOWN ── */
-      /* worldGroup (mid-layer) moves at primary rate */
-      worldGroup.position.y+=(_lpProgressSmooth*78-worldGroup.position.y)*0.045;
-      /* Stars (far-layer) move much slower — parallax depth */
-      stars.position.y+=(_lpProgressSmooth*8-stars.position.y)*0.03;
+      /* worldGroup (mid-layer) moves at primary rate — dramatic 140-unit range */
+      worldGroup.position.y+=(_lpProgressSmooth*140-worldGroup.position.y)*0.04;
+      /* Stars (far-layer) move very slowly — true parallax depth separation */
+      stars.position.y+=(_lpProgressSmooth*12-stars.position.y)*0.025;
 
       /* ── Forest columns — progressive appearance + gentle sway ── */
       for(var fc=0;fc<forestCols.length;fc++){
         var fTree=forestCols[fc];
         var fIdx=fTree.userData.idx;
-        /* Opacity lerps toward forest opacity from STORY — clearly visible */
-        fTree.material.opacity+=(w.fo*(0.25+fIdx*0.02)-fTree.material.opacity)*0.03;
-        /* Gentle organic sway */
-        fTree.rotation.z=Math.sin(t*0.08+fIdx*1.1)*0.04*w.fo*5;
-        fTree.rotation.x=Math.cos(t*0.06+fIdx*0.8)*0.02*w.fo*5;
+        /* Opacity lerps toward forest opacity from STORY — dramatically visible */
+        fTree.material.opacity+=(w.fo*(0.35+fIdx*0.03)-fTree.material.opacity)*0.035;
+        /* Stronger organic sway — alive, forest-like */
+        fTree.rotation.z=Math.sin(t*0.07+fIdx*1.1)*0.06*w.fo*6;
+        fTree.rotation.x=Math.cos(t*0.05+fIdx*0.8)*0.03*w.fo*6;
       }
 
     } else {
@@ -2215,18 +2240,18 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     }
 
     /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
-    camera.position.x=mxSmooth*5+Math.sin(t*0.05)*1.2;
-    camera.position.y=wCy+(-mySmooth*2.5)+Math.cos(t*0.04)*0.8;
-    camera.position.z=wCz+Math.sin(t*0.03)*1.5;
+    camera.position.x=mxSmooth*6+Math.sin(t*0.04)*2.0;
+    camera.position.y=wCy+(-mySmooth*3)+Math.cos(t*0.035)*1.2;
+    camera.position.z=wCz+Math.sin(t*0.025)*2.5;
     /* lookAt drifts forward with scroll — creates "descending through space" */
-    var lookZ=_lpActive?(-18-_lpProgressSmooth*48):0;
-    camera.lookAt(mxSmooth*1.5,mySmooth*-0.6+Math.sin(t*0.06)*0.3,lookZ);
+    var lookZ=_lpActive?(-22-_lpProgressSmooth*70):0;
+    camera.lookAt(mxSmooth*2.0,mySmooth*-0.8+Math.sin(t*0.06)*0.5,lookZ);
 
     /* ── Star field — alive rotation + scroll-driven roll + breathe ── */
     var scrollR=_lpActive?_lpProgressSmooth:scrollProg;
-    stars.rotation.y=t*0.006+scrollR*0.28;
-    stars.rotation.x=t*0.002+scrollR*0.14;
-    starMat.opacity=0.75+0.15*Math.sin(t*0.15)+(_lpActive?wLi*0.15:0);
+    stars.rotation.y=t*0.005+scrollR*0.40;
+    stars.rotation.x=t*0.002+scrollR*0.20;
+    starMat.opacity=0.80+0.12*Math.sin(t*0.12)+(_lpActive?wLi*0.20:0);
 
     /* ── Dust field — ALIVE drift with curved sine paths (runs in both modes) ── */
     var dPos=dustGeo.attributes.position.array;
@@ -2242,9 +2267,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
     }
     dustGeo.attributes.position.needsUpdate=true;
-    dustMat.opacity=0.48+0.15*Math.sin(t*0.4)+(_lpActive?wLi*0.25:0);
-    /* Near-layer extra parallax: dust moves faster than worldGroup */
-    if(_lpActive){dustField.position.y+=(_lpProgressSmooth*28-dustField.position.y)*0.04;}
+    dustMat.opacity=0.55+0.18*Math.sin(t*0.35)+(_lpActive?wLi*0.30:0);
+    /* Near-layer extra parallax: dust moves MUCH faster than worldGroup — true depth */
+    if(_lpActive){dustField.position.y+=(_lpProgressSmooth*55-dustField.position.y)*0.045;}
 
     /* ── Wireframe shapes — scroll-driven spread/alignment OR zone bob ── */
     for(var si=0;si<shapes.length;si++){
@@ -2254,7 +2279,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         var orig=shapeOrigPos[si];var aligned=shapeAlignedPos[si]||orig;
         var tx=orig[0]*wSp*(1-wSa)+aligned[0]*wSa;
         var ty=(orig[1]*wSp*(1-wSa)+aligned[1]*wSa)+Math.sin(t*0.15+si*1.2)*2.5;
-        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*22;
+        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*35;
         sh.position.x+=(tx-sh.position.x)*0.04;
         sh.position.y+=(ty-sh.position.y)*0.04;
         sh.position.z+=(tz-sh.position.z)*0.04;
@@ -2267,14 +2292,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         sh.rotation.y=t*ud.spd[1];
         sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*4;
       }
-      sh.material.opacity=ud.baseOp*(0.55+wLi*0.9);
+      sh.material.opacity=ud.baseOp*(0.65+wLi*1.1);
     }
 
     /* ── Ground grid — scroll-driven depth OR app parallax ── */
     if(gridHelper){
       if(_lpActive){
         gridHelper.position.y+=(wGy-gridHelper.position.y)*0.04;
-        gridHelper.position.z=-_lpProgressSmooth*30;
+        gridHelper.position.z=-_lpProgressSmooth*50;
       } else {
         gridHelper.position.z=scrollProg*(-20);
       }
@@ -2282,31 +2307,31 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     }
 
     /* ── Light cone — alive: sway, pulse, scroll-reactive ── */
-    var conePulse=1+0.45*Math.sin(t*0.2)+0.2*Math.sin(t*0.35+1.2);
-    coneMat.opacity=wCo*conePulse;
+    var conePulse=1+0.55*Math.sin(t*0.18)+0.25*Math.sin(t*0.32+1.2);
+    coneMat.opacity=wCo*conePulse*1.3;
     /* Sway: gentle rotation + pendulum tilt */
     lightCone.rotation.y=t*0.02+Math.sin(t*0.08)*0.15;
     lightCone.rotation.z=Math.sin(t*0.06+0.5)*0.08;
     if(_lpActive){
-      lightCone.position.y+=(46+_lpProgressSmooth*22-lightCone.position.y)*0.03;
-      lightCone.position.x=Math.sin(t*0.04)*3; /* gentle side-to-side */
+      lightCone.position.y+=(50+_lpProgressSmooth*30-lightCone.position.y)*0.03;
+      lightCone.position.x=Math.sin(t*0.035)*5; /* dramatic side-to-side */
     }
 
     /* ── Central orb — alive: deep breathe + pulse + scroll glow ── */
-    var orbBreath=1+0.12*Math.sin(t*0.28)+0.06*Math.sin(t*0.45+0.8);
+    var orbBreath=1+0.18*Math.sin(t*0.25)+0.08*Math.sin(t*0.42+0.8);
     var bsc=wOs*orbBreath;
     orb.scale.set(bsc,bsc,bsc);
-    orbMat.opacity=wOg*(1+0.35*Math.sin(t*0.32)+0.15*Math.sin(t*0.55));
-    var osc=bsc*(_lpActive?1.2:0.95);
+    orbMat.opacity=wOg*(1+0.45*Math.sin(t*0.30)+0.20*Math.sin(t*0.50));
+    var osc=bsc*(_lpActive?1.35:0.95);
     orbOuter.scale.set(osc,osc,osc);
-    orbOuterMat.opacity=wOg*0.55*(1+0.3*Math.sin(t*0.22)+0.1*Math.cos(t*0.4));
+    orbOuterMat.opacity=wOg*0.65*(1+0.35*Math.sin(t*0.20)+0.15*Math.cos(t*0.38));
 
     /* ══════════════════════════════════════════════════════
        LIFE SYSTEMS ANIMATION — flow, schools, bubbles
        Entry/exit: particles enter from above, exit below.
        Three layers: near(fast), mid(moderate), far(slow).
        ══════════════════════════════════════════════════════ */
-    var lifeAlpha=_lpActive?Math.min(0.3+_lpProgressSmooth*2.8,1):0; /* base 30% visible + ramps to full */
+    var lifeAlpha=_lpActive?Math.min(0.4+_lpProgressSmooth*2.5,1):0; /* base 40% visible immediately + ramps to full */
 
     /* ── 1. Flow streams — curved sine paths rising upward ── */
     if(FLOW_COUNT>0){
@@ -2329,8 +2354,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       }
       flowGeo.attributes.position.needsUpdate=true;
       /* Layer-aware opacity: brighter with scroll, scales with lifeAlpha */
-      flowMat.opacity=lifeAlpha*0.65;
-      flowMat.size=tier===2?3.2:2.8;
+      flowMat.opacity=lifeAlpha*0.82;
+      flowMat.size=tier===2?3.8:3.2;
     }
 
     /* ── 2. Fish schools — smooth heading changes, spread/regroup ── */
@@ -2366,7 +2391,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         sArr[sfi3+2]+=(tgz-sArr[sfi3+2])*0.03;
       }
       sch.geometry.attributes.position.needsUpdate=true;
-      sch.material.opacity=lifeAlpha*0.58;
+      sch.material.opacity=lifeAlpha*0.75;
     }
 
     /* ── 3. Bubbles — rising, wobbling, fading at top ── */
@@ -2389,8 +2414,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         }
       }
       bubbleGeo.attributes.position.needsUpdate=true;
-      bubbleMat.opacity=lifeAlpha*0.52;
-      bubbleMat.size=tier===2?2.6:2.2;
+      bubbleMat.opacity=lifeAlpha*0.72;
+      bubbleMat.size=tier===2?3.2:2.6;
     }
 
     renderer.render(scene,camera);
@@ -2692,8 +2717,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   </div>
 </div>
 <!-- DISCLAIMER STRIP -->
-<div id="app-disclaimer" style="background:rgba(160,136,72,0.06);border-bottom:1px solid rgba(160,136,72,0.1);padding:5px 16px;font-size:9.5px;color:var(--text3);text-align:center;letter-spacing:0.2px;line-height:1.5;flex-shrink:0">
-  <strong style="color:var(--shiva-gold)">Not financial advice</strong> · Not SEBI registered · Educational purpose only · Data may be delayed · You are responsible for your own investment decisions and outcomes
+<div id="app-disclaimer" style="background:rgba(160,136,72,0.1);border-bottom:1px solid rgba(160,136,72,0.15);padding:6px 16px;font-size:10px;color:var(--text2);text-align:center;letter-spacing:0.2px;line-height:1.5;flex-shrink:0;font-weight:500">
+  <strong style="color:var(--shiva-gold);font-weight:700">Not financial advice</strong> · Not SEBI registered · Educational purpose only · Data may be delayed · You are responsible for your own investment decisions and outcomes
 </div>
 <!-- SUB TABS -->
 <div class="subtabs" id="subtabs"></div>
@@ -4813,8 +4838,8 @@ async function renderMFPage(){
     +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Tickertape screener · 120-point scoring · Eligibility filters · Not SEBI advice</div></div>'
     +'<div style="display:flex;gap:6px;align-items:center">'
     +'<span id="mf-updated" style="font-size:9px;color:var(--text3);letter-spacing:0.3px"></span>'
-    +'<button class="btn btn-sm" onclick="mfForceRefresh()">Refresh</button>'
-    +'<a href="https://www.tickertape.in/mutual-funds" target="_blank" class="btn btn-sm">Tickertape</a>'
+    +(_isAdmin()?'<button class="btn btn-sm" onclick="mfForceRefresh()">Refresh</button>'
+    +'<a href="https://www.tickertape.in/mutual-funds" target="_blank" class="btn btn-sm">Tickertape</a>':'')
     +'</div></div>'
     +'<div id="mf-loading" style="text-align:center;padding:60px 0">'
     +'<div class="shiva-loader" style="margin:0 auto 16px"></div>'
@@ -6402,7 +6427,7 @@ function buildUI(d){
   html+='<div style="display:flex;gap:4px">';
   ['3M','1Y','3Y','10Y','MAX'].forEach(function(tf){
     var a=tf===analyzerTab;
-    html+='<button class="tilt-3d" onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(a?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')+';color:'+(a?'var(--shiva-blue)':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?600:400)+';letter-spacing:0.2px">'+tf+'</button>';
+    html+='<button class="tilt-3d" onclick="switchTab(\''+tf+'\')" style="padding:4px 12px;border-radius:5px;border:1px solid '+(a?'rgba(64,112,168,0.40)':'rgba(255,255,255,0.12)')+';background:'+(a?'rgba(64,112,168,0.25)':'rgba(255,255,255,0.07)')+';color:'+(a?'#90c0f0':'var(--text2)')+';font-size:10px;cursor:pointer;font-weight:'+(a?700:600)+';letter-spacing:0.2px;box-shadow:'+(a?'0 2px 8px rgba(64,112,168,0.15)':'0 1px 3px rgba(0,0,0,0.12)')+'">'+tf+'</button>';
   });
   html+='</div></div>';
   html+='<div style="font-size:9px;color:var(--text3);margin-bottom:6px;letter-spacing:0.3px">Support · Resistance · Buy Zone · 50DMA · 200DMA</div>';
@@ -7187,8 +7212,8 @@ function renderStockRecPage(){
 
   html += '<div class="picks-header reveal">';
   html += '<div>'
-    +'<div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Stock Picks</div>'
-    +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">'
+    +'<div style="font-weight:400;font-size:20px;letter-spacing:0.5px;color:var(--text)">Stock Picks</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-top:4px;letter-spacing:0.2px;font-weight:500">'
     +'Checklist scoring · Trend + Quality + Momentum + Value + Technical · '
     +(data.last_refresh?'Scored '+data.last_refresh:'Scoring...')
     +'</div>'
@@ -7219,9 +7244,9 @@ function renderStockRecPage(){
     {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'var(--green)'},
   ];
   pills.forEach(function(p){
-    html+='<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:7px 13px">'
-      +'<div style="font-size:9px;color:var(--text3);letter-spacing:0.3px">'+p.l+'</div>'
-      +'<div style="font-size:16px;font-weight:600;color:'+p.c+'">'+p.v+'</div>'
+    html+='<div class="tilt-3d" style="background:rgba(12,14,18,0.93);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius);padding:8px 14px">'
+      +'<div style="font-size:9px;color:var(--text2);letter-spacing:0.3px;font-weight:600">'+p.l+'</div>'
+      +'<div style="font-size:18px;font-weight:700;color:'+p.c+'">'+p.v+'</div>'
       +'</div>';
   });
   html += '</div>';
@@ -7231,11 +7256,11 @@ function renderStockRecPage(){
     if(!stocks.length) return '';
     var top5 = stocks.slice(0,5);
     var out='<div class="qs-bar tilt-3d reveal" style="margin-bottom:8px;border-left:2px solid '+labelColor+'">';
-    out+='<span style="font-size:10px;color:'+labelColor+';letter-spacing:0.3px;margin-right:4px;white-space:nowrap;font-weight:600">'+emoji+' '+label+' →</span>';
+    out+='<span style="font-size:11px;color:'+labelColor+';letter-spacing:0.3px;margin-right:4px;white-space:nowrap;font-weight:700">'+emoji+' '+label+' →</span>';
     top5.forEach(function(q,idx){
       var delay=(idx*0.06).toFixed(2);
       out+='<button class="qs-stock" style="--qs-accent:'+labelColor+';animation:qsTileIn 0.4s ease-out '+delay+'s both" onclick="setMode(\'stockanalyzer\');setTimeout(function(){var i=document.getElementById(\'stock-analyzer-input\'),h=document.getElementById(\'az-sym\');if(i)i.value=\''+q.sym+'\';if(h)h.value=\''+q.sym+'\';try{analyzeStock();}catch(e){}},200)">';
-      out+='<span style="font-weight:600;color:var(--text);font-size:12px;letter-spacing:0.3px">'+q.sym+'</span>';
+      out+='<span style="font-weight:700;color:var(--text);font-size:12px;letter-spacing:0.3px">'+q.sym+'</span>';
       out+='</button>';
     });
     out+='</div>';
@@ -7257,9 +7282,10 @@ function renderStockRecPage(){
   filters.forEach(function(f){
     var active = stockRecFilter===f;
     html += '<button class="tilt-3d" onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      +(active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
-      +(active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      +';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
+      +(active?'rgba(64,112,168,0.40)':'rgba(255,255,255,0.12)')+';background:'
+      +(active?'rgba(64,112,168,0.25)':'rgba(255,255,255,0.07)')
+      +';color:'+(active?'#90c0f0':'var(--text)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'600')+';letter-spacing:0.3px;backdrop-filter:blur(8px);box-shadow:'
+      +(active?'0 2px 10px rgba(64,112,168,0.2)':'0 1px 4px rgba(0,0,0,0.15)')+'">'
       +f+'</button>';
   });
   html += '</div>';
@@ -7268,15 +7294,15 @@ function renderStockRecPage(){
   // Stacked vertical layout: one row per score so each pill + description
   // is a clean aligned line. Label pills share a fixed-width column via
   // grid so the descriptions line up cleanly across all 3 rows.
-  html += '<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px;font-size:11px">'
-    + '<div style="font-weight:500;color:var(--text2);font-size:10px;letter-spacing:0.8px;margin-bottom:10px;text-transform:uppercase">How to Read the Scores</div>'
+  html += '<div class="tilt-3d" style="background:rgba(12,14,18,0.93);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:16px 18px;margin-bottom:14px;font-size:11px">'
+    + '<div style="font-weight:700;color:var(--text);font-size:11px;letter-spacing:0.8px;margin-bottom:10px;text-transform:uppercase">How to Read the Scores</div>'
     + '<div style="display:grid;grid-template-columns:140px 1fr;row-gap:8px;column-gap:14px;align-items:center">'
-      + '<span style="background:rgba(160,136,72,0.1);color:var(--shiva-gold);border-radius:4px;padding:3px 8px;font-weight:600;font-size:9px;letter-spacing:.5px;text-align:center;white-space:nowrap">REBOUND</span>'
-      + '<span style="color:var(--text3);line-height:1.5;font-size:10px">Quality business pulled back ≥20% with RSI ≤52 — tradeable pullback setup</span>'
-      + '<span style="background:rgba(94,204,138,0.08);color:var(--green);border-radius:4px;padding:3px 8px;font-weight:600;font-size:9px;letter-spacing:.5px;text-align:center;white-space:nowrap">MOMENTUM</span>'
-      + '<span style="color:var(--text3);line-height:1.5;font-size:10px">5-factor blend (FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15) — high-conviction 1–3M trade</span>'
-      + '<span style="background:rgba(64,112,168,0.08);color:var(--shiva-blue);border-radius:4px;padding:3px 8px;font-weight:600;font-size:9px;letter-spacing:.5px;text-align:center;white-space:nowrap">INVESTMENT</span>'
-      + '<span style="color:var(--text3);line-height:1.5;font-size:10px">Varsity 4-pillar (Quality 40 + Growth 25 + Val 20 + Business 15) — fundamentals only, 12M hold</span>'
+      + '<span style="background:rgba(160,136,72,0.12);color:var(--shiva-gold);border-radius:4px;padding:3px 8px;font-weight:700;font-size:10px;letter-spacing:.5px;text-align:center;white-space:nowrap">REBOUND</span>'
+      + '<span style="color:var(--text2);line-height:1.5;font-size:11px;font-weight:500">Quality business pulled back ≥20% with RSI ≤52 — tradeable pullback setup</span>'
+      + '<span style="background:rgba(94,204,138,0.1);color:var(--green);border-radius:4px;padding:3px 8px;font-weight:700;font-size:10px;letter-spacing:.5px;text-align:center;white-space:nowrap">MOMENTUM</span>'
+      + '<span style="color:var(--text2);line-height:1.5;font-size:11px;font-weight:500">5-factor blend (FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15) — high-conviction 1–3M trade</span>'
+      + '<span style="background:rgba(64,112,168,0.1);color:var(--shiva-blue);border-radius:4px;padding:3px 8px;font-weight:700;font-size:10px;letter-spacing:.5px;text-align:center;white-space:nowrap">INVESTMENT</span>'
+      + '<span style="color:var(--text2);line-height:1.5;font-size:11px;font-weight:500">Varsity 4-pillar (Quality 40 + Growth 25 + Val 20 + Business 15) — fundamentals only, 12M hold</span>'
     + '</div>'
     + '</div>';
 
@@ -7302,8 +7328,8 @@ function renderStockRecPage(){
   // button inline next to the title if the description was short enough).
   html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(160,136,72,0.25)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-gold);letter-spacing:0.3px">Rebound Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2</div>';
+  html += '<div style="font-weight:700;font-size:15px;color:var(--shiva-gold);letter-spacing:0.3px">Rebound Picks <span style="font-size:11px;color:var(--text2);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;font-weight:500">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('rebound');
   html += '<span style="background:rgba(160,136,72,0.1);color:var(--shiva-gold);border-radius:6px;padding:3px 10px;font-size:10px;font-weight:600">'+swingPicks.length+'</span>';
@@ -7355,8 +7381,8 @@ function renderStockRecPage(){
   // button+count row) — identical to all three picks columns.
   html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(34,197,94,0.25)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--green);letter-spacing:0.3px">Momentum Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%</div>';
+  html += '<div style="font-weight:700;font-size:15px;color:var(--green);letter-spacing:0.3px">Momentum Picks <span style="font-size:11px;color:var(--text2);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;font-weight:500">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('momentum');
   html += '<span style="background:rgba(94,204,138,0.08);color:var(--green);border-radius:6px;padding:3px 10px;font-size:10px;font-weight:600">'+momentumPicks.length+'</span>';
@@ -7403,8 +7429,8 @@ function renderStockRecPage(){
   // Same vertically stacked header layout as the other two picks columns.
   html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(64,112,168,0.25)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-blue);letter-spacing:0.3px">Long-Term Investments <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
-  html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth</div>';
+  html += '<div style="font-weight:700;font-size:15px;color:var(--shiva-blue);letter-spacing:0.3px">Long-Term Investments <span style="font-size:11px;color:var(--text2);font-weight:500">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-size:11px;color:var(--text2);margin-top:3px;font-weight:500">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('longterm');
   html += '<span style="background:rgba(64,112,168,0.08);color:var(--shiva-blue);border-radius:6px;padding:3px 10px;font-size:10px;font-weight:600">'+longTermPicks.length+'</span>';
@@ -8419,8 +8445,8 @@ async function renderStockDataPage(){
   var html = '<div class="stockdata-wrap">';
   html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
   html += '<div>'
-    + '<div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Stock Data</div>'
-    + '<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Full universe · '+allStocks.length+' stocks · sortable columns · search</div>'
+    + '<div style="font-weight:600;font-size:20px;letter-spacing:0.5px;color:var(--text)">Stock Data</div>'
+    + '<div style="font-size:11px;color:var(--text2);margin-top:4px;letter-spacing:0.2px;font-weight:500">Full universe · '+allStocks.length+' stocks · sortable columns · search</div>'
     + '</div>';
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
   html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockDataPage()">Refresh</button>';
@@ -8436,9 +8462,10 @@ async function renderStockDataPage(){
   mcFilters.forEach(function(f){
     var active = stockDataFilter===f;
     html += '<button class="tilt-3d" onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
-      + (active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
+      + (active?'rgba(64,112,168,0.40)':'rgba(255,255,255,0.12)')+';background:'
+      + (active?'rgba(64,112,168,0.25)':'rgba(255,255,255,0.07)')
+      + ';color:'+(active?'#90c0f0':'var(--text)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'600')+';letter-spacing:0.3px;backdrop-filter:blur(8px);box-shadow:'
+      + (active?'0 2px 10px rgba(64,112,168,0.2)':'0 1px 4px rgba(0,0,0,0.15)')+'">'
       + f+'</button>';
   });
   html += '</div>';
@@ -8449,9 +8476,9 @@ async function renderStockDataPage(){
     var isActive = stockDataTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
     html += '<button class="tilt-3d" onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (isActive?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(isActive?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(isActive?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'600':'400')
-      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px)">'
+      + (isActive?'rgba(64,112,168,0.40)':'rgba(255,255,255,0.12)')+';background:'+(isActive?'rgba(64,112,168,0.25)':'rgba(255,255,255,0.07)')
+      + ';color:'+(isActive?'#90c0f0':'var(--text)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'600')
+      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px);box-shadow:'+(isActive?'0 2px 10px rgba(64,112,168,0.2)':'0 1px 4px rgba(0,0,0,0.15)')+'">'
       + t.label+' <span style="font-size:9px;opacity:0.5">('+colCount+')</span></button>';
   });
   html += '</div>';
