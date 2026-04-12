@@ -748,7 +748,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 /* ── Disclaimer banner — visible on every page ── */
 #disclaimer-bar{position:fixed;bottom:0;left:0;right:0;z-index:999;
-  background:rgba(20,16,8,0.98);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  background:rgba(18,22,32,0.98);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   border-top:1px solid rgba(251,191,36,0.20);padding:0;
   text-align:center}
 #disclaimer-bar .disc-inner{max-width:1200px;margin:0 auto;padding:10px 16px;
@@ -785,20 +785,39 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
    LANDING PAGE — public-facing, pre-auth
    ═══════════════════════════════════════════════════════════════ */
 .lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative;z-index:1}
-.lp-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 32px;position:fixed;top:0;left:0;right:0;z-index:300;
-  background:rgba(8,10,18,0.88);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid rgba(120,160,255,0.06)}
-.lp-logo{font-weight:800;font-size:15px;color:#E6EAF2;letter-spacing:2.5px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
-.lp-logo-dot{width:7px;height:7px;border-radius:50%;background:#8aa2ff;animation:pdot 3s ease-in-out infinite;box-shadow:0 0 8px rgba(138,162,255,0.4)}
-.lp-nav-links{display:flex;gap:28px;align-items:center}
-.lp-nav-links a{color:#9aa3b2;font-size:12px;font-weight:500;text-decoration:none;letter-spacing:0.3px;transition:color 0.2s}
-.lp-nav-links a:hover{color:#E6EAF2}
-.lp-cta-sm{background:linear-gradient(135deg,rgba(60,100,220,0.22),rgba(80,60,200,0.15));color:#c0d0ff;
-  border:1px solid rgba(120,160,255,0.25);border-radius:10px;
-  padding:8px 20px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.3px;
+/* ── Landing nav bar — glassmorphism container ── */
+.lp-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 36px;position:fixed;top:0;left:0;right:0;z-index:300;
+  background:rgba(8,10,18,0.92);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+  border-bottom:1px solid rgba(120,160,255,0.10);
+  box-shadow:0 4px 24px rgba(0,0,0,0.35),0 0 40px rgba(60,100,220,0.03)}
+.lp-logo{font-weight:800;font-size:15px;color:#f0f4ff;letter-spacing:2.5px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.lp-logo-dot{width:7px;height:7px;border-radius:50%;background:#8aa2ff;animation:pdot 3s ease-in-out infinite;box-shadow:0 0 10px rgba(138,162,255,0.5)}
+
+/* ── Nav links — bright, readable, premium ── */
+.lp-nav-links{display:flex;gap:32px;align-items:center}
+.lp-nav-links a{color:#d0d5e0;font-size:13px;font-weight:500;text-decoration:none;letter-spacing:0.4px;
+  transition:color 0.2s ease,transform 0.2s ease,text-shadow 0.3s ease;position:relative;padding:2px 0}
+.lp-nav-links a:not(.lp-cta-sm):hover{color:#ffffff;transform:translateY(-1px);
+  text-shadow:0 0 12px rgba(138,162,255,0.25)}
+/* Animated underline on hover */
+.lp-nav-links a:not(.lp-cta-sm)::after{content:'';position:absolute;bottom:-2px;left:0;right:0;height:1.5px;
+  background:linear-gradient(90deg,#8aa2ff,#22d3ee);border-radius:2px;
+  transform:scaleX(0);transform-origin:center;transition:transform 0.3s var(--ease-out-expo)}
+.lp-nav-links a:not(.lp-cta-sm):hover::after{transform:scaleX(1)}
+
+/* ── CTA button — dominant, glowing, unmissable ── */
+.lp-cta-sm{background:linear-gradient(135deg,rgba(60,100,220,0.40),rgba(80,60,200,0.30));color:#ffffff;
+  border:1px solid rgba(120,160,255,0.35);border-radius:12px;
+  padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.4px;
   transform:perspective(600px) translateZ(0);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s;text-decoration:none}
-.lp-cta-sm:hover{background:rgba(64,112,168,0.25);color:#c0d0e8;
-  transform:perspective(600px) translateZ(4px) translateY(-1px);box-shadow:0 8px 25px rgba(64,112,168,0.12)}
+  box-shadow:0 4px 16px rgba(60,100,220,0.20),0 0 20px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s;
+  text-decoration:none;animation:lpCtaGlow 3s ease-in-out infinite}
+@keyframes lpCtaGlow{0%,100%{box-shadow:0 4px 16px rgba(60,100,220,0.20),0 0 20px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}
+  50%{box-shadow:0 4px 24px rgba(60,100,220,0.30),0 0 30px rgba(60,100,220,0.14),inset 0 1px 0 rgba(255,255,255,0.10)}}
+.lp-cta-sm:hover{background:linear-gradient(135deg,rgba(60,100,220,0.55),rgba(80,60,200,0.40));color:#ffffff;
+  transform:perspective(600px) translateZ(5px) translateY(-2px) scale(1.04);
+  box-shadow:0 8px 30px rgba(60,100,220,0.30),0 0 40px rgba(60,100,220,0.12)}
 
 /* Hero */
 .lp-hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
@@ -2847,8 +2866,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   </div>
 </div>
 <!-- DISCLAIMER STRIP -->
-<div id="app-disclaimer" style="background:rgba(20,16,8,0.97);border-bottom:1px solid rgba(245,158,11,0.18);padding:8px 16px;font-size:12px;color:#ffffff;text-align:center;letter-spacing:0.3px;line-height:1.5;flex-shrink:0;font-weight:700">
-  <strong style="color:#fbbf24;font-weight:800;font-size:12.5px">⚠ Not financial advice</strong> <span style="color:rgba(255,255,255,0.25)">·</span> <span style="color:#fde68a">Not SEBI registered</span> <span style="color:rgba(255,255,255,0.25)">·</span> <span style="color:#fde68a">Educational purpose only</span> <span style="color:rgba(255,255,255,0.25)">·</span> <span style="color:#fde68a">Data may be delayed</span> <span style="color:rgba(255,255,255,0.25)">·</span> <span style="color:#fde68a">You are responsible for your own investment decisions</span>
+<div id="app-disclaimer" style="background:rgba(18,22,32,0.95);border-bottom:1px solid rgba(251,191,36,0.18);padding:9px 16px;font-size:12px;color:#ffffff;text-align:center;letter-spacing:0.3px;line-height:1.5;flex-shrink:0;font-weight:700">
+  <strong style="color:#fbbf24;font-weight:800;font-size:12.5px">⚠ Not financial advice</strong> <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Not SEBI registered</span> <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Educational purpose only</span> <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Data may be delayed</span> <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">You are responsible for your own investment decisions</span>
 </div>
 <!-- SUB TABS -->
 <div class="subtabs" id="subtabs"></div>
@@ -6363,6 +6382,15 @@ function renderStockAnalyzerPage(){
   h += '</div>';
   h += '</div>';
 
+  // Disclaimer banner — matches app-disclaimer strip style
+  h += '<div style="background:rgba(18,22,32,0.95);border:1px solid rgba(251,191,36,0.18);border-radius:10px;padding:10px 16px;margin-top:14px;text-align:center;font-size:12px;font-weight:700;color:#ffffff;letter-spacing:0.3px;line-height:1.5">';
+  h += '<strong style="color:#fbbf24;font-weight:800;font-size:12.5px">⚠ Not financial advice</strong>';
+  h += ' <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Not SEBI registered</span>';
+  h += ' <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Educational purpose only</span>';
+  h += ' <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">Data may be delayed</span>';
+  h += ' <span style="color:#fbbf24;opacity:0.5">·</span> <span style="color:#fde68a">You are responsible for your own investment decisions</span>';
+  h += '</div>';
+
   // Result area
   h += '<div id="stock-analyzer-result" style="margin-top:0"></div>';
 
@@ -6895,7 +6923,7 @@ function buildUI(d){
   }
   html+='</div>';
 
-  html+='<div style="font-size:12px;color:#ffffff;padding:16px 0 20px;text-align:center;letter-spacing:0.3px;font-weight:700;background:rgba(20,16,8,0.60);border:1px solid rgba(251,191,36,0.15);border-radius:10px;margin:14px 0"><span style="color:#fbbf24;font-weight:800;font-size:12.5px">⚠ Disclaimer:</span> <span style="color:#fde68a">Algorithmic analysis only. Not financial advice. Consult a SEBI-registered advisor before investing.</span></div>';
+  html+='<div style="font-size:12px;color:#ffffff;padding:14px 16px;text-align:center;letter-spacing:0.3px;font-weight:700;background:rgba(18,22,32,0.95);border:1px solid rgba(251,191,36,0.18);border-radius:10px;margin:14px 0"><span style="color:#fbbf24;font-weight:800;font-size:12.5px">⚠ Disclaimer:</span> <span style="color:#fde68a">Algorithmic analysis only. Not financial advice. Consult a SEBI-registered advisor before investing.</span></div>';
   html+='</div>';
   return html;
 }
