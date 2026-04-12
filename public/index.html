@@ -141,12 +141,16 @@ body.ui-focus #shiva-app-canvas,body.ui-focus #three-app,body.ui-focus .vol-ligh
   background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   border:1px solid var(--glass-border);
   border-radius:var(--radius-lg);padding:14px 16px;
-  transition:all var(--transition-med);position:relative;overflow:hidden;
+  position:relative;overflow:hidden;
+  transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
+  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color var(--transition-med);
+  will-change:transform;
 }
 .sc::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);pointer-events:none;
   background:linear-gradient(135deg,rgba(255,255,255,0.015),transparent 60%);opacity:0;transition:opacity var(--transition-med)}
-.sc:hover{border-color:rgba(128,144,168,0.1);transform:translateY(-2px);
-  box-shadow:0 8px 25px rgba(0,0,0,0.25),0 0 0 1px rgba(255,255,255,0.02)}
+.sc:hover{border-color:rgba(128,144,168,0.1);
+  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px);
+  box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.03)}
 .sc:hover::before{opacity:1}
 .sc .l{font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px;font-weight:500}
 .sc .v{font-weight:700;font-size:18px;letter-spacing:-.5px;line-height:1}
@@ -474,12 +478,13 @@ select option{background:var(--bg3)}
 .depth-layer.near{filter:none;opacity:1}
 
 /* ── Spatial card system — 3D transform on hover ── */
-.spatial-card{
+/* ── Tiltable elements — 3D perspective on hover + mouse tracking ── */
+.spatial-card,.tilt-3d,.tw,.qs-stock{
   transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
   transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo);
   will-change:transform;
 }
-.spatial-card:hover{
+.spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{
   transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px);
   box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.03);
 }
@@ -605,7 +610,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 /* ── Mobile optimizations ── */
 @media(max-width:767px){
-  .spatial-card:hover{transform:none !important}
+  .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
   #three-app{display:none}
   .vol-light{opacity:0.5}
@@ -615,7 +620,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Reduce motion for accessibility ── */
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important}
-  .spatial-card:hover{transform:none !important}
+  .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
   .vol-light{display:none}
   #three-login,#three-app{display:none}
@@ -737,7 +742,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.015);border:1px solid var(--glass-border);border-radius:10px;padding:10px 18px;
   cursor:pointer;transition:all 0.35s cubic-bezier(.4,0,.2,1);text-align:center;min-width:90px;font-family:inherit}
 .qs-stock::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--qs-accent,var(--shiva-gold));opacity:0.5;transition:opacity 0.3s}
-.qs-stock:hover{transform:translateY(-2px);border-color:var(--qs-accent,var(--shiva-gold));box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 12px color-mix(in srgb,var(--qs-accent,var(--shiva-gold)) 15%,transparent)}
+.qs-stock:hover{border-color:var(--qs-accent,var(--shiva-gold));box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 12px color-mix(in srgb,var(--qs-accent,var(--shiva-gold)) 15%,transparent)}
 .qs-stock:hover::before{opacity:1}
 .qs-stock:active{transform:translateY(0);transition-duration:0.1s}
 .qs-stock-sym{font-size:12px;font-weight:600;color:var(--text);letter-spacing:0.3px}
@@ -1627,9 +1632,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     container.classList.add('page-transition');
   };
 
-  /* ── Spatial card mouse tilt (perspective 3D hover) ── */
+  /* ── 3D tilt mouse tracking for all tiltable elements ── */
+  var _tiltSel='.spatial-card,.tilt-3d,.sc,.tw,.qs-stock';
+  var _isMobileTilt=window.innerWidth<768;
+  window.addEventListener('resize',function(){_isMobileTilt=window.innerWidth<768;});
   document.addEventListener('mousemove',function(e){
-    var cards=document.querySelectorAll('.spatial-card');
+    if(_isMobileTilt)return;
+    var cards=document.querySelectorAll(_tiltSel);
     cards.forEach(function(card){
       var r=card.getBoundingClientRect();
       if(e.clientX<r.left-50||e.clientX>r.right+50||e.clientY<r.top-50||e.clientY>r.bottom+50)return;
@@ -1639,7 +1648,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     });
   });
   document.addEventListener('mouseleave',function(){
-    document.querySelectorAll('.spatial-card').forEach(function(c){
+    document.querySelectorAll(_tiltSel).forEach(function(c){
       c.style.transform='';
     });
   });
@@ -5349,7 +5358,7 @@ function buildUI(d){
   html+='</div></div>';
 
   // Verdict + Score — premium glass card
-  html+='<div class="analyzer-verdict breathe-glow reveal-scale '+scoreGlow+'" style="color:'+vc+'">';
+  html+='<div class="analyzer-verdict tilt-3d breathe-glow reveal-scale '+scoreGlow+'" style="color:'+vc+'">';
   html+='<div style="font-size:24px;margin-bottom:6px;opacity:0.8">'+d.verdictIcon+'</div>';
   html+='<div style="font-size:16px;font-weight:600;color:'+vc+';letter-spacing:0.3px">'+d.verdict+'</div>';
   html+='<div style="font-size:10px;color:var(--text3);margin:6px 0 12px">'+d.verdictTimeframe+'</div>';
@@ -6219,7 +6228,7 @@ function renderStockRecPage(){
     {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'var(--green)'},
   ];
   pills.forEach(function(p){
-    html+='<div style="background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:7px 13px;transition:all var(--transition-fast)">'
+    html+='<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:7px 13px;transition:all var(--transition-fast)">'
       +'<div style="font-size:9px;color:var(--text3);letter-spacing:0.3px">'+p.l+'</div>'
       +'<div style="font-size:16px;font-weight:600;color:'+p.c+'">'+p.v+'</div>'
       +'</div>';
@@ -6230,7 +6239,7 @@ function renderStockRecPage(){
   function _qsBar(label, labelColor, stocks, scoreKey, emoji){
     if(!stocks.length) return '';
     var top5 = stocks.slice(0,5);
-    var out='<div class="qs-bar reveal" style="margin-bottom:8px;border-left:2px solid '+labelColor+'">';
+    var out='<div class="qs-bar tilt-3d reveal" style="margin-bottom:8px;border-left:2px solid '+labelColor+'">';
     out+='<span style="font-size:10px;color:'+labelColor+';letter-spacing:0.3px;margin-right:4px;white-space:nowrap;font-weight:600">'+emoji+' '+label+' →</span>';
     top5.forEach(function(q,idx){
       var delay=(idx*0.06).toFixed(2);
@@ -6268,7 +6277,7 @@ function renderStockRecPage(){
   // Stacked vertical layout: one row per score so each pill + description
   // is a clean aligned line. Label pills share a fixed-width column via
   // grid so the descriptions line up cleanly across all 3 rows.
-  html += '<div style="background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px;font-size:11px">'
+  html += '<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px;font-size:11px">'
     + '<div style="font-weight:500;color:var(--text2);font-size:10px;letter-spacing:0.8px;margin-bottom:10px;text-transform:uppercase">How to Read the Scores</div>'
     + '<div style="display:grid;grid-template-columns:140px 1fr;row-gap:8px;column-gap:14px;align-items:center">'
       + '<span style="background:rgba(160,136,72,0.1);color:var(--shiva-gold);border-radius:4px;padding:3px 8px;font-weight:600;font-size:9px;letter-spacing:.5px;text-align:center;white-space:nowrap">REBOUND</span>'
