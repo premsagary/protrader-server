@@ -69,7 +69,10 @@ body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-
 /* Hide scrim on landing page so 3D scene is fully visible */
 body:not(.in-app) #contrast-scrim{opacity:0}
 /* ── Dynamic background dim on interaction (typing, modal, analyzer) ── */
-body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
+body.ui-focus #game-bg{opacity:0.35;transition:opacity 0.8s ease}
+/* Data-heavy tabs get dimmer background so tables dominate */
+body.data-tab #game-bg{opacity:0.25;transition:opacity 0.8s ease}
+body.data-tab.ui-focus #game-bg{opacity:0.15}
 #game-bg{transition:opacity 0.8s ease}
 /* ── Text backplate shadows for readability over particles ── */
 .lp-hero h1,.lp-hero-sub,.lp-section-title,.lp-section-label,.analyzer-header h1,
@@ -2986,6 +2989,10 @@ function setMode(mode){
   S.mode=mode;
   window._currentMode = mode;
   _updateHash();
+  /* Dim 3D background on data-heavy tabs so tables dominate */
+  var _dataTabs = ['stockdata','stockrec','mf','holdings'];
+  if(_dataTabs.indexOf(mode)>=0){document.body.classList.add('data-tab');}
+  else{document.body.classList.remove('data-tab');}
   /* Notify game-bg of zone change */
   if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(e){}
   /* Cinematic page transition */
@@ -8463,23 +8470,30 @@ async function renderStockDataPage(){
     + '<div style="font-size:11px;color:var(--text2);margin-top:4px;letter-spacing:0.2px;font-weight:500">Full universe · '+allStocks.length+' stocks · sortable columns · search</div>'
     + '</div>';
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
-  html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockDataPage()">Refresh</button>';
+  html += '<button onclick="stockRecData=null;renderStockDataPage()" style="padding:6px 14px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;background:rgba(30,40,65,0.55);color:#cfd8ff;border:1px solid rgba(120,160,255,0.18);font-weight:600;transition:all 0.25s ease">↻ Refresh</button>';
   html += '</div></div>';
 
   // ── Search box + market cap filters ──
   html += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">';
+  html += '<div style="position:relative;flex:1;min-width:240px;max-width:420px" id="sd-search-wrap">';
   html += '<input id="sd-search" type="text" placeholder="🔍 Search stock symbol, name or sector..." '
+    + 'autocomplete="off" '
     + 'value="'+((stockDataSearch||'').replace(/"/g,'&quot;'))+'" '
-    + 'oninput="stockDataSearch=this.value;clearTimeout(window._sdSearchT);window._sdSearchT=setTimeout(renderStockDataPage,180)" '
-    + 'style="flex:1;min-width:240px;max-width:420px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 14px;font-size:13px;box-sizing:border-box"/>';
+    + 'oninput="stockDataSearch=this.value;clearTimeout(window._sdSearchT);window._sdSearchT=setTimeout(renderStockDataPage,180);sdShowSuggestions(this.value)" '
+    + 'onkeydown="sdSuggestKey(event)" '
+    + 'onfocus="sdShowSuggestions(this.value);this.style.borderColor=\'rgba(120,160,255,0.5)\';this.style.boxShadow=\'0 0 12px rgba(80,120,255,0.15)\'" '
+    + 'onblur="setTimeout(sdHideSuggestions,200);this.style.borderColor=\'rgba(120,160,255,0.25)\';this.style.boxShadow=\'none\'" '
+    + 'style="width:100%;background:rgba(20,30,50,0.75);border:1px solid rgba(120,160,255,0.25);border-radius:10px;color:#e5e7eb;padding:9px 14px;font-size:13px;font-weight:500;box-sizing:border-box;transition:border-color 0.25s ease"/>';
+  html += '<div id="sd-suggest-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:rgba(14,20,35,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(120,160,255,0.2);border-radius:10px;max-height:320px;overflow-y:auto;z-index:999;margin-top:4px;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>';
+  html += '</div>';
   var mcFilters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
   mcFilters.forEach(function(f){
     var active = stockDataFilter===f;
-    html += '<button onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (active?'rgba(120,160,255,0.6)':'rgba(255,255,255,0.08)')+';background:'
-      + (active?'rgba(80,120,255,0.20)':'rgba(255,255,255,0.04)')
-      + ';color:'+(active?'#fff':'#e6eaf2')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'600')+';letter-spacing:0.3px;backdrop-filter:blur(8px);transition:all 0.25s'
-      + (active?';box-shadow:0 0 12px rgba(80,120,255,0.4)':'')+'">'
+    html += '<button onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;transition:all 0.25s ease;letter-spacing:0.3px;'
+      + (active
+        ? 'background:linear-gradient(135deg,#4f7cff,#6aa8ff);color:#ffffff;border:1px solid rgba(120,160,255,0.6);font-weight:700;box-shadow:0 6px 16px rgba(80,120,255,0.35)'
+        : 'background:rgba(30,40,65,0.55);color:#cfd8ff;border:1px solid rgba(120,160,255,0.18);font-weight:500')
+      + '">'
       + f+'</button>';
   });
   html += '</div>';
@@ -8489,18 +8503,18 @@ async function renderStockDataPage(){
   TAB_DEFS.forEach(function(t){
     var isActive = stockDataTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (isActive?'rgba(120,160,255,0.6)':'rgba(255,255,255,0.08)')+';background:'+(isActive?'rgba(80,120,255,0.20)':'rgba(255,255,255,0.04)')
-      + ';color:'+(isActive?'#fff':'#e6eaf2')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'600')
-      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px);transition:all 0.25s'
-      + (isActive?';box-shadow:0 0 12px rgba(80,120,255,0.4)':'')+'">'
-      + t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
+    html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;letter-spacing:0.3px;transition:all 0.25s ease;'
+      + (isActive
+        ? 'background:rgba(80,120,255,0.25);border:1px solid rgba(120,160,255,0.4);color:#ffffff;font-weight:700;box-shadow:0 4px 12px rgba(80,120,255,0.2)'
+        : 'background:rgba(40,55,90,0.45);border:1px solid rgba(120,160,255,0.15);color:#c9d4ff;font-weight:500')
+      + '">'
+      + t.label+' <span style="font-size:9px;opacity:0.55">('+colCount+')</span></button>';
   });
   html += '</div>';
 
   // Result count — pretty-print the internal sort key for the user
   var _sortLabel = {sym:'Stock',grp:'Group',composite:'MOMENTUM SCORE',fallenScore:'REBOUND SCORE',scoreV2:'INVESTMENT SCORE',score:'INVESTMENT SCORE (legacy)',price:'Price',valuation:'Valuation'}[sk] || sk;
-  html += '<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Showing <b>'+filtered.length+'</b> of '+allStocks.length+' stocks'
+  html += '<div style="font-size:11px;color:#8b93a5;margin-bottom:8px">Showing <b style="color:#cfd8ff">'+filtered.length+'</b> of '+allStocks.length+' stocks'
     + (q?' matching "'+q+'"':'')
     + (stockDataFilter!=='ALL'?' · '+stockDataFilter:'')
     + ' · sorted by <b>'+_sortLabel+'</b> ('+stockDataSortDir+')</div>';
@@ -8523,16 +8537,16 @@ async function renderStockDataPage(){
   }
 
   // ── Table ──
-  html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
+  html += '<div style="overflow-x:auto;background:rgba(12,18,30,0.92);backdrop-filter:blur(10px);border-radius:14px;border:1px solid rgba(120,160,255,0.12);box-shadow:0 4px 20px rgba(0,0,0,0.3)">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px">';
 
   // Header row
   // Two separate score columns:
   //   · Swing  = fallenScore (quality-on-sale ranking, only for fallen angels)
   //   · LtTerm = score       (100-pt composite, used for Long Term ranking)
-  html += '<thead><tr style="background:var(--bg2)">';
-  html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:var(--bg2);z-index:5">#</th>';
-  html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:var(--bg2);z-index:5;min-width:130px');
+  html += '<thead><tr style="background:rgba(18,24,40,0.98)">';
+  html += '<th style="text-align:right;padding:6px 8px;color:var(--text3);position:sticky;left:0;background:rgba(18,24,40,0.98);z-index:5">#</th>';
+  html += sortableHeader('sym',         'Stock',   'left',  'position:sticky;left:36px;background:rgba(18,24,40,0.98);z-index:5;min-width:130px');
   html += sortableHeader('grp',         'Grp',     'center');
   html += sortableHeader('composite',   'MOMENTUM SCORE',   'right');
   html += sortableHeader('fallenScore', 'REBOUND SCORE',    'right');
@@ -8561,7 +8575,7 @@ async function renderStockDataPage(){
     html += '<tr><td colspan="'+(8+activeCols.length)+'" style="padding:40px;text-align:center;color:var(--text4);font-size:12px">No stocks match the current filter / search.</td></tr>';
   }
   filtered.forEach(function(s, idx){
-    var bg = idx%2===0?'var(--bg)':'var(--bg2)';
+    var bg = idx%2===0?'rgba(10,14,22,0.95)':'rgba(16,21,35,0.95)';
     var gc = grpCol[s.grp]||'var(--text3)';
     // LONG TERM SCORE = Varsity 4-pillar scoreV2 (fundamentals-only, matches
     // Portfolio Manager → Long Term Portfolio).
@@ -8576,17 +8590,17 @@ async function renderStockDataPage(){
     // that fail the portfolio quality gate.
     var mc = s.composite;
     var mcCol = mc==null?'var(--text4)':mc>=70?'var(--green)':mc>=55?'var(--shiva-gold)':'var(--red)';
-    html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
-      + '<td style="padding:5px 8px;text-align:right;color:var(--text3);position:sticky;left:0;background:'+bg+';z-index:3">'+(idx+1)+'</td>'
-      + '<td style="padding:5px 8px;position:sticky;left:36px;background:'+bg+';z-index:3">'
-        + '<div style="font-weight:600">'+s.sym+'</div>'
-        + '<div style="font-size:10px;color:var(--text3)">'+(s.sector||'')+'</div>'
+    html += '<tr style="border-bottom:1px solid rgba(40,50,75,0.5);background:'+bg+';transition:background 0.15s ease" onmouseenter="this.style.background=\'rgba(80,120,255,0.06)\'" onmouseleave="this.style.background=\''+bg+'\'">'
+      + '<td style="padding:5px 8px;text-align:right;color:#8b93a5;position:sticky;left:0;background:inherit;z-index:3">'+(idx+1)+'</td>'
+      + '<td style="padding:5px 8px;position:sticky;left:36px;background:inherit;z-index:3">'
+        + '<div style="font-weight:600;color:#E6EAF2">'+s.sym+'</div>'
+        + '<div style="font-size:10px;color:#8b93a5">'+(s.sector||'')+'</div>'
       + '</td>'
       + '<td style="padding:5px 8px;text-align:center"><span style="background:'+gc+'22;color:'+gc+';border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">'+s.grp+'</span></td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+mcCol+'">'+(mc!=null?(+mc).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+swCol+'">'+(fs!=null?fs:'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:right;font-weight:700;color:'+ltCol+'">'+(lt!=null?(+lt).toFixed(1):'-')+'</td>'
-      + '<td style="padding:5px 8px;text-align:right">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
+      + '<td style="padding:5px 8px;text-align:right;font-weight:500;color:#DDE3F0">'+(s.price?'₹'+parseFloat(s.price).toFixed(1):'-')+'</td>'
       + '<td style="padding:5px 8px;text-align:center;border-right:2px solid var(--border3)">'+_valuationCell(s)+'</td>';
     activeCols.forEach(function(col){
       html += '<td style="padding:5px 8px;text-align:right'+(col.br?';border-right:1px solid var(--border2)':'')+'">'
@@ -8596,7 +8610,7 @@ async function renderStockDataPage(){
   });
   html += '</tbody></table></div>';
 
-  html += '<div style="margin-top:10px;font-size:10px;color:var(--text4)">Tip: click any column header to sort. Click again to flip ascending/descending. Data from /api/stocks/score · refreshed daily 7AM IST.</div>';
+  html += '<div style="margin-top:10px;font-size:10px;color:#8b93a5">Tip: click any column header to sort · click again to flip · Data from /api/stocks/score · refreshed daily 7AM IST</div>';
   html += '</div>'; // end padding wrapper
 
   cont.innerHTML = html;
@@ -8610,6 +8624,74 @@ async function renderStockDataPage(){
       var v = sb.value; sb.value=''; sb.value=v;
     }
   }catch(e){}
+}
+
+/* ── Stock Data search autocomplete ──
+   Shows matching stock suggestions as the user types, pulling from the
+   same allStocks list that the table uses. Click a suggestion to filter
+   the table to that stock. */
+var _sdSuggestSel = -1;
+function sdShowSuggestions(val) {
+  var list = document.getElementById('sd-suggest-list');
+  if (!list) return;
+  var q = (val || '').trim().toLowerCase();
+  if (q.length === 0) { list.style.display = 'none'; return; }
+  var stocks = (stockRecData && stockRecData.stocks) ? stockRecData.stocks : [];
+  var matches = stocks.filter(function(s) {
+    return s.sym.toLowerCase().indexOf(q) === 0
+        || (s.name && s.name.toLowerCase().indexOf(q) >= 0)
+        || (s.sector && s.sector.toLowerCase().indexOf(q) >= 0);
+  }).slice(0, 40);
+  if (!matches.length) { list.style.display = 'none'; return; }
+  _sdSuggestSel = -1;
+  list.style.display = 'block';
+  list.innerHTML = matches.map(function(s, i) {
+    var sc2 = s.scoreV2;
+    var scCol = sc2 == null ? '#8b93a5' : sc2 >= 75 ? '#22c55e' : sc2 >= 60 ? '#facc15' : '#ef4444';
+    var gc = {NIFTY50:'#6098d0',NEXT50:'#8090a8',MIDCAP:'#facc15',SMALLCAP:'#22c55e'}[s.grp] || '#8b93a5';
+    return '<div id="sd-sg-'+i+'" onmousedown="sdSelectSuggestion(\''+s.sym+'\')" '
+      + 'style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid rgba(120,160,255,0.08);transition:background 0.15s ease" '
+      + 'onmouseover="this.style.background=\'rgba(80,120,255,0.1)\'" onmouseout="this.style.background=\'\'">'
+      + '<div style="min-width:72px;font-family:\'SF Mono\',monospace;font-size:12px;font-weight:700;color:#E6EAF2">'+s.sym+'</div>'
+      + '<div style="flex:1;font-size:11px;color:#8b93a5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(s.name||'')+'</div>'
+      + '<div style="font-size:10px;color:'+gc+';font-weight:600;min-width:60px;text-align:center">'+s.grp+'</div>'
+      + '<div style="font-size:10px;color:#8b93a5;min-width:50px;text-align:right;white-space:nowrap">'+(s.price?'₹'+parseFloat(s.price).toFixed(0):'-')+'</div>'
+      + '<div style="font-size:10px;font-weight:700;color:'+scCol+';min-width:30px;text-align:right">'+(sc2!=null?(+sc2).toFixed(0):'-')+'</div>'
+      + '</div>';
+  }).join('');
+}
+function sdHideSuggestions() {
+  var list = document.getElementById('sd-suggest-list');
+  if (list) list.style.display = 'none';
+}
+function sdSelectSuggestion(sym) {
+  var inp = document.getElementById('sd-search');
+  if (inp) inp.value = sym;
+  stockDataSearch = sym;
+  sdHideSuggestions();
+  renderStockDataPage();
+}
+function sdSuggestKey(e) {
+  var list = document.getElementById('sd-suggest-list');
+  if (!list || list.style.display === 'none') return;
+  var items = list.querySelectorAll('div[id^="sd-sg-"]');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _sdSuggestSel = Math.min(_sdSuggestSel + 1, items.length - 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _sdSuggestSel = Math.max(_sdSuggestSel - 1, 0);
+  } else if (e.key === 'Enter' && _sdSuggestSel >= 0 && items[_sdSuggestSel]) {
+    e.preventDefault();
+    items[_sdSuggestSel].dispatchEvent(new MouseEvent('mousedown'));
+    return;
+  } else if (e.key === 'Escape') {
+    sdHideSuggestions(); return;
+  } else { return; }
+  items.forEach(function(it, idx) {
+    it.style.background = idx === _sdSuggestSel ? 'rgba(80,120,255,0.12)' : '';
+  });
+  if (items[_sdSuggestSel]) items[_sdSuggestSel].scrollIntoView({ block: 'nearest' });
 }
 
 function buildStockCard(s, medal){
