@@ -721,12 +721,16 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 /* Quick-start bar (inside app, post-login) */
 .qs-bar{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:12px;
-  padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.qs-stock{background:rgba(255,255,255,0.02);border:1px solid var(--glass-border);border-radius:8px;padding:8px 14px;
-  cursor:pointer;transition:all 0.2s;text-align:center;min-width:80px;font-family:inherit}
-.qs-stock:hover{border-color:rgba(64,112,168,0.2);background:rgba(64,112,168,0.04)}
-.qs-stock-sym{font-size:12px;font-weight:600;color:var(--text);letter-spacing:0.2px}
+  padding:14px 18px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.015);border:1px solid var(--glass-border);border-radius:10px;padding:10px 18px;
+  cursor:pointer;transition:all 0.35s cubic-bezier(.4,0,.2,1);text-align:center;min-width:90px;font-family:inherit}
+.qs-stock::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--qs-accent,var(--shiva-gold));opacity:0.5;transition:opacity 0.3s}
+.qs-stock:hover{transform:translateY(-2px);border-color:var(--qs-accent,var(--shiva-gold));box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 12px color-mix(in srgb,var(--qs-accent,var(--shiva-gold)) 15%,transparent)}
+.qs-stock:hover::before{opacity:1}
+.qs-stock:active{transform:translateY(0);transition-duration:0.1s}
+.qs-stock-sym{font-size:12px;font-weight:600;color:var(--text);letter-spacing:0.3px}
 .qs-stock-score{font-size:10px;margin-top:2px}
+@keyframes qsTileIn{0%{opacity:0;transform:translateY(6px) scale(0.95)}100%{opacity:1;transform:translateY(0) scale(1)}}
 
 @media(max-width:768px){
   .lp-steps{grid-template-columns:1fr;max-width:360px}
@@ -1006,7 +1010,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 <div class="lp-footer">
   <div style="margin-bottom:8px"><span class="lp-logo" style="font-size:13px;display:inline-flex"><span class="lp-logo-dot" style="width:5px;height:5px"></span>ProTrader</span></div>
   <div>Varsity-grounded analysis · Educational use only · Not SEBI-registered</div>
-  <div style="margin-top:6px;color:rgba(255,255,255,0.1)">ॐ नमः शिवाय</div>
+  <div style="margin-top:6px;color:rgba(255,255,255,0.1)"></div>
 </div>
 </div>
 
@@ -1133,16 +1137,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 <div class="login-card-wrap">
   <div class="login-card" id="login-card">
     <div class="login-sheen" id="login-sheen"></div>
-    <!-- Trishul line SVG -->
-    <div class="login-trident">
-      <svg width="32" height="40" viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16 8V38M16 8L8 2M16 8L24 2M16 8L16 2M12 14H20" stroke="rgba(128,160,200,0.5)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
-    <div style="font-weight:300;font-size:22px;margin-bottom:4px;color:#d4d0c8;letter-spacing:3px;text-transform:uppercase;
+    <div style="font-weight:300;font-size:22px;margin-bottom:28px;color:#d4d0c8;letter-spacing:3px;text-transform:uppercase;
       transform:translateZ(20px);animation:titleReveal 1s ease-out 0.5s both">ProTrader</div>
-    <div style="font-size:10px;color:rgba(128,144,168,0.4);margin-bottom:28px;transform:translateZ(10px);letter-spacing:3px;
-      animation:titleReveal 1s ease-out 0.7s both">MAHADEV</div>
     <input id="login-username" type="text" placeholder="Username" autocomplete="username" class="login-input" aria-label="Username"
       onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()"
       oninput="document.getElementById('login-error').style.display='none'"
@@ -1154,7 +1150,6 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     <div id="login-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
     <button onclick="doLogin()" id="login-btn" class="login-btn-3d" style="animation:fieldReveal 0.8s ease-out 1s both">Sign In</button>
     <div class="login-divider"></div>
-    <div style="font-size:9px;color:rgba(128,144,168,0.2);letter-spacing:4px;text-transform:uppercase">ॐ नमः शिवाय</div>
     <div style="margin-top:12px"><a onclick="showLanding()" class="login-back-link">&larr; Back to home</a></div>
   </div>
 </div>
@@ -6201,17 +6196,15 @@ function renderStockRecPage(){
   html += '</div>';
 
   // -- QUICK-START BARS: top picks per category for one-click deep analysis
-  function _qsBar(label, labelColor, stocks, scoreKey){
+  function _qsBar(label, labelColor, stocks, scoreKey, emoji){
     if(!stocks.length) return '';
     var top5 = stocks.slice(0,5);
     var out='<div class="qs-bar reveal" style="margin-bottom:8px;border-left:2px solid '+labelColor+'">';
-    out+='<span style="font-size:10px;color:'+labelColor+';letter-spacing:0.3px;margin-right:8px;white-space:nowrap;font-weight:600">'+label+' →</span>';
-    top5.forEach(function(q){
-      var sc=q[scoreKey]||q.pctScore||0;
-      var scC=sc>=70?'var(--green)':sc>=50?'var(--shiva-gold)':'var(--text3)';
-      out+='<button class="qs-stock" onclick="setMode(\'stockanalyzer\');setTimeout(function(){var i=document.getElementById(\'stock-analyzer-input\'),h=document.getElementById(\'az-sym\');if(i)i.value=\''+q.sym+'\';if(h)h.value=\''+q.sym+'\';try{analyzeStock();}catch(e){}},200)">';
-      out+='<span style="font-weight:600;color:var(--text)">'+q.sym+'</span>';
-      out+='<span style="font-size:10px;color:'+scC+';font-weight:600">'+Math.round(sc)+'</span>';
+    out+='<span style="font-size:10px;color:'+labelColor+';letter-spacing:0.3px;margin-right:4px;white-space:nowrap;font-weight:600">'+emoji+' '+label+' →</span>';
+    top5.forEach(function(q,idx){
+      var delay=(idx*0.06).toFixed(2);
+      out+='<button class="qs-stock" style="--qs-accent:'+labelColor+';animation:qsTileIn 0.4s ease-out '+delay+'s both" onclick="setMode(\'stockanalyzer\');setTimeout(function(){var i=document.getElementById(\'stock-analyzer-input\'),h=document.getElementById(\'az-sym\');if(i)i.value=\''+q.sym+'\';if(h)h.value=\''+q.sym+'\';try{analyzeStock();}catch(e){}},200)">';
+      out+='<span style="font-weight:600;color:var(--text);font-size:12px;letter-spacing:0.3px">'+q.sym+'</span>';
       out+='</button>';
     });
     out+='</div>';
@@ -6220,9 +6213,9 @@ function renderStockRecPage(){
   var _reboundSorted = swingPicks.slice().sort(function(a,b){return (b.pctScore||0)-(a.pctScore||0);});
   var _momentumSorted = momentumPicks.slice().sort(function(a,b){return (b.composite||0)-(a.composite||0);});
   var _longtermSorted = longTermPicks.slice().sort(function(a,b){return (b.scoreV2||0)-(a.scoreV2||0);});
-  html+=_qsBar('Rebound','rgba(160,136,72,0.8)',_reboundSorted,'pctScore');
-  html+=_qsBar('Momentum','rgba(94,204,138,0.8)',_momentumSorted,'composite');
-  html+=_qsBar('Long-Term','rgba(64,112,168,0.8)',_longtermSorted,'scoreV2');
+  html+=_qsBar('Rebound','rgba(160,136,72,0.8)',_reboundSorted,'pctScore','🔄');
+  html+=_qsBar('Momentum','rgba(94,204,138,0.8)',_momentumSorted,'composite','⚡');
+  html+=_qsBar('Long-Term','rgba(64,112,168,0.8)',_longtermSorted,'scoreV2','🏦');
   if(_reboundSorted.length||_momentumSorted.length||_longtermSorted.length) html+='<div style="height:8px"></div>';
 
   // Market-cap filter row — centered, FALLEN removed (Fallen Angels are the
