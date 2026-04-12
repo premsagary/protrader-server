@@ -141,11 +141,18 @@ body.ui-focus #shiva-app-canvas,body.ui-focus #three-app,body.ui-focus .vol-ligh
   background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   border:1px solid var(--glass-border);
   border-radius:var(--radius-lg);padding:14px 16px;
-  transition:all var(--transition-med);position:relative;overflow:hidden;
+  position:relative;overflow:hidden;
+  /* Tier 2 depth */
+  transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
+  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color var(--transition-med);
+  will-change:transform;
+  box-shadow:0 2px 16px rgba(0,0,0,0.2),0 1px 0 rgba(255,255,255,0.02) inset;
 }
 .sc::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);pointer-events:none;
   background:linear-gradient(135deg,rgba(255,255,255,0.015),transparent 60%);opacity:0;transition:opacity var(--transition-med)}
-.sc:hover{border-color:rgba(128,144,168,0.1);transform:translateY(-2px);
+.sc:hover{border-color:rgba(128,144,168,0.1);
+  transform:perspective(800px) translateY(-3px) translateZ(4px);
+  box-shadow:0 12px 40px rgba(0,0,0,0.3),0 0 20px rgba(64,112,168,0.04),0 1px 0 rgba(255,255,255,0.03) inset;
   box-shadow:0 8px 25px rgba(0,0,0,0.25),0 0 0 1px rgba(255,255,255,0.02)}
 .sc:hover::before{opacity:1}
 .sc .l{font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px;font-weight:500}
@@ -293,20 +300,26 @@ select option{background:var(--bg3)}
   transition:border-color var(--transition-med)}
 .analyzer-search:focus-within{border-color:rgba(64,112,168,0.15)}
 .analyzer-verdict{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-  border:1px solid var(--glass-border);border-radius:16px;padding:24px;text-align:center;min-width:200px;
-  position:relative;overflow:hidden}
+  border:1px solid var(--glass-border);border-radius:16px;padding:24px;text-align:center;min-width:200px}
 .analyzer-verdict::before{content:'';position:absolute;inset:0;opacity:0.04;
   background:radial-gradient(circle at 50% 30%,currentColor,transparent 70%)}
 .analyzer-section{background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:20px;margin-bottom:14px}
+  border:1px solid var(--glass-border);border-radius:var(--radius-lg);padding:20px;margin-bottom:14px;
+  /* Tier 2 depth */
+  transform:perspective(800px) translateZ(0);transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo);
+  box-shadow:0 2px 16px rgba(0,0,0,0.2),0 1px 0 rgba(255,255,255,0.02) inset}
+.analyzer-section:hover{transform:perspective(800px) translateY(-2px) translateZ(3px);
+  box-shadow:0 10px 35px rgba(0,0,0,0.28),0 1px 0 rgba(255,255,255,0.03) inset}
 .analyzer-section-title{font-weight:500;font-size:12px;letter-spacing:0.5px;color:var(--text2);margin-bottom:14px;
   text-transform:uppercase}
 .analyzer-grid{display:grid;gap:8px}
 .analyzer-grid-2{grid-template-columns:1fr 1fr}
 .analyzer-grid-3{grid-template-columns:1fr 1fr 1fr}
 .analyzer-cell{background:rgba(255,255,255,0.02);border-radius:var(--radius);padding:10px 12px;
-  border:1px solid var(--glass-border);transition:all var(--transition-fast)}
-.analyzer-cell:hover{background:rgba(255,255,255,0.035);border-color:rgba(255,255,255,0.06)}
+  border:1px solid var(--glass-border);
+  /* Tier 3 depth */
+  transition:background 0.25s ease,border-color 0.25s ease,transform 0.25s ease}
+.analyzer-cell:hover{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.07);transform:translateY(-1px)}
 .analyzer-cell .label{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px}
 .analyzer-cell .value{font-size:13px;font-weight:600}
 
@@ -484,6 +497,73 @@ select option{background:var(--bg3)}
   box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.03);
 }
 
+/* ══════════════════════════════════════════════════════════════
+   3-TIER SPATIAL DEPTH SYSTEM
+   Tier 1 (flagship): strongest 3D — perspective tilt, light sweep, depth glow
+   Tier 2 (important): moderate 3D — mild tilt, hover lift, layered shadow
+   Tier 3 (utility):   mostly flat — subtle hover brighten, slight lift
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── TIER 1: Flagship depth ── */
+.depth-flagship{
+  position:relative;overflow:hidden;
+  transform:perspective(900px) rotateX(0deg) rotateY(0deg) translateZ(0);
+  transition:transform 0.5s var(--ease-out-expo),box-shadow 0.5s var(--ease-out-expo);
+  will-change:transform;
+  box-shadow:0 4px 24px rgba(0,0,0,0.25),0 1px 0 rgba(255,255,255,0.03) inset;
+}
+.depth-flagship:hover{
+  transform:perspective(900px) rotateX(calc(var(--tiltY,0)*-1deg)) rotateY(calc(var(--tiltX,0)*1deg)) translateZ(8px);
+  box-shadow:0 20px 60px rgba(0,0,0,0.4),0 0 40px rgba(64,112,168,0.06),0 1px 0 rgba(255,255,255,0.04) inset;
+}
+/* Light sweep — follows mouse via --mx/--my CSS vars set by JS */
+.depth-flagship::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:1;
+  background:radial-gradient(600px circle at var(--mx,50%) var(--my,-20%),rgba(200,215,240,0.06),transparent 45%);
+  opacity:0;transition:opacity 0.4s ease;
+}
+.depth-flagship:hover::after{opacity:1}
+/* Depth glow — bottom edge aura */
+.depth-flagship::before{
+  content:'';position:absolute;bottom:-8px;left:10%;right:10%;height:16px;border-radius:50%;pointer-events:none;z-index:-1;
+  background:radial-gradient(ellipse,rgba(64,112,168,0.12),transparent 70%);
+  opacity:0;transition:opacity 0.5s ease;
+}
+.depth-flagship:hover::before{opacity:1}
+
+/* ── TIER 2: Important depth ── */
+.depth-important{
+  position:relative;
+  transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
+  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo);
+  will-change:transform;
+  box-shadow:0 2px 16px rgba(0,0,0,0.2),0 1px 0 rgba(255,255,255,0.02) inset;
+}
+.depth-important:hover{
+  transform:perspective(800px) translateY(-3px) translateZ(4px);
+  box-shadow:0 12px 40px rgba(0,0,0,0.3),0 0 20px rgba(64,112,168,0.04),0 1px 0 rgba(255,255,255,0.03) inset;
+}
+
+/* ── TIER 3: Utility (flat, calm) ── */
+.depth-utility{
+  transition:background 0.25s ease,border-color 0.25s ease,transform 0.25s ease;
+}
+.depth-utility:hover{
+  background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.07);
+  transform:translateY(-1px);
+}
+
+/* ── Mobile: flatten Tier 1 to Tier 2 level, Tier 2 to subtle ── */
+@media(max-width:767px){
+  .depth-flagship,.depth-flagship:hover{transform:none !important;box-shadow:0 2px 16px rgba(0,0,0,0.2)}
+  .depth-flagship::after,.depth-flagship::before{display:none}
+  .depth-important,.depth-important:hover{transform:none !important}
+}
+@media(prefers-reduced-motion:reduce){
+  .depth-flagship,.depth-important,.depth-utility{transform:none !important;transition:none !important}
+  .depth-flagship::after,.depth-flagship::before{display:none}
+}
+
 /* ── Section entrance animations (IntersectionObserver driven) ── */
 .reveal{opacity:0;transform:translateY(24px);transition:opacity 0.7s var(--ease-out-expo),transform 0.7s var(--ease-out-expo)}
 .reveal.visible{opacity:1;transform:translateY(0)}
@@ -544,8 +624,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .cascade>*:nth-child(8){animation-delay:0.4s}
 @keyframes cascadeIn{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
 
-/* ── Spatial stat card (3D tilt micro-interaction) ── */
-.sc{transform:perspective(600px) rotateX(0) rotateY(0);will-change:transform}
+/* ── Spatial stat card — Tier 2 depth inherits from .sc definition above ── */
 
 /* ── Premium topbar depth ── */
 .topbar{box-shadow:0 1px 30px rgba(0,0,0,0.3),0 8px 32px rgba(0,0,0,0.15)}
@@ -607,6 +686,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 @media(max-width:767px){
   .spatial-card:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
+  .sc,.sc:hover,.analyzer-section,.analyzer-section:hover{transform:none !important;box-shadow:0 2px 12px rgba(0,0,0,0.2) !important}
   #three-app{display:none}
   .vol-light{opacity:0.5}
   .cascade>*{animation:none !important;opacity:1;transform:none}
@@ -1627,9 +1707,27 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     container.classList.add('page-transition');
   };
 
-  /* ── Spatial card mouse tilt (perspective 3D hover) ── */
+  /* ── Spatial card + Flagship depth mouse tracking ── */
+  var _isMobileDepth=window.innerWidth<768;
+  window.addEventListener('resize',function(){_isMobileDepth=window.innerWidth<768;});
   document.addEventListener('mousemove',function(e){
-    var cards=document.querySelectorAll('.spatial-card');
+    if(_isMobileDepth)return;
+    /* Flagship tier: set CSS vars for tilt + light sweep */
+    var flagships=document.querySelectorAll('.depth-flagship');
+    flagships.forEach(function(el){
+      var r=el.getBoundingClientRect();
+      if(e.clientX<r.left-80||e.clientX>r.right+80||e.clientY<r.top-80||e.clientY>r.bottom+80){
+        el.style.removeProperty('--tiltX');el.style.removeProperty('--tiltY');return;
+      }
+      var dx=(e.clientX-r.left-r.width/2)/r.width;
+      var dy=(e.clientY-r.top-r.height/2)/r.height;
+      el.style.setProperty('--tiltX',(dx*3).toFixed(2));
+      el.style.setProperty('--tiltY',(dy*3).toFixed(2));
+      el.style.setProperty('--mx',((e.clientX-r.left)/r.width*100).toFixed(1)+'%');
+      el.style.setProperty('--my',((e.clientY-r.top)/r.height*100).toFixed(1)+'%');
+    });
+    /* Spatial cards that are NOT flagship: lighter tilt */
+    var cards=document.querySelectorAll('.spatial-card:not(.depth-flagship)');
     cards.forEach(function(card){
       var r=card.getBoundingClientRect();
       if(e.clientX<r.left-50||e.clientX>r.right+50||e.clientY<r.top-50||e.clientY>r.bottom+50)return;
@@ -1639,8 +1737,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     });
   });
   document.addEventListener('mouseleave',function(){
-    document.querySelectorAll('.spatial-card').forEach(function(c){
-      c.style.transform='';
+    document.querySelectorAll('.spatial-card:not(.depth-flagship)').forEach(function(c){c.style.transform='';});
+    document.querySelectorAll('.depth-flagship').forEach(function(el){
+      el.style.removeProperty('--tiltX');el.style.removeProperty('--tiltY');
     });
   });
 
@@ -3885,7 +3984,7 @@ async function renderMFPage(){
       var eligibleFunds = catFunds.filter(function(f){return f.eligible!==false;});
       var top5=eligibleFunds.slice(0,5), maxS=top5[0]?top5[0].score:1;
       var catId = 'cat-'+cat.replace(/\s/g,'-');
-      html+='<div class="mf-category-card spatial-card float-hover reveal">';
+      html+='<div class="mf-category-card depth-flagship spatial-card float-hover reveal">';
       html+='<div class="mf-category-header" style="border-bottom-color:var(--glass-border)">';
       html+='<div style="width:2px;height:16px;background:'+cfg.color+';border-radius:1px;opacity:0.6"></div>';
       html+='<div style="font-weight:500;font-size:14px;letter-spacing:0.3px;color:var(--text)">'+cfg.label+'</div>';
@@ -5155,7 +5254,7 @@ function renderStockAnalyzerPage(){
   h += '</div>';
 
   // Search card — glassmorphism
-  h += '<div class="analyzer-search spatial-card reveal">';
+  h += '<div class="analyzer-search depth-flagship spatial-card reveal">';
   h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:relative">';
 
   // Searchable dropdown wrapper
@@ -5349,7 +5448,7 @@ function buildUI(d){
   html+='</div></div>';
 
   // Verdict + Score — premium glass card
-  html+='<div class="analyzer-verdict breathe-glow reveal-scale '+scoreGlow+'" style="color:'+vc+'">';
+  html+='<div class="analyzer-verdict depth-flagship breathe-glow reveal-scale '+scoreGlow+'" style="color:'+vc+'">';
   html+='<div style="font-size:24px;margin-bottom:6px;opacity:0.8">'+d.verdictIcon+'</div>';
   html+='<div style="font-size:16px;font-weight:600;color:'+vc+';letter-spacing:0.3px">'+d.verdict+'</div>';
   html+='<div style="font-size:10px;color:var(--text3);margin:6px 0 12px">'+d.verdictTimeframe+'</div>';
@@ -6300,7 +6399,7 @@ function renderStockRecPage(){
   // row. This guarantees all three picks columns look identical regardless of
   // how long the description is (old flex-wrap:wrap approach would leave the
   // button inline next to the title if the description was short enough).
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(160,136,72,0.25)">';
+  html += '<div class="picks-column depth-flagship spatial-card reveal" style="border-top:2px solid rgba(160,136,72,0.25)">';
   html += '<div style="margin-bottom:10px">';
   html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-gold);letter-spacing:0.3px">Rebound Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2</div>';
@@ -6353,7 +6452,7 @@ function renderStockRecPage(){
   // ----- MIDDLE COLUMN: MOMENTUM PICKS (5-factor composite, Buy+ tier) -----
   // Same vertically stacked header layout as Rebound Picks (title → desc →
   // button+count row) — identical to all three picks columns.
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(34,197,94,0.25)">';
+  html += '<div class="picks-column depth-flagship spatial-card reveal" style="border-top:2px solid rgba(34,197,94,0.25)">';
   html += '<div style="margin-bottom:10px">';
   html += '<div style="font-weight:500;font-size:14px;color:var(--green);letter-spacing:0.3px">Momentum Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%</div>';
@@ -6401,7 +6500,7 @@ function renderStockRecPage(){
 
   // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
   // Same vertically stacked header layout as the other two picks columns.
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(64,112,168,0.25)">';
+  html += '<div class="picks-column depth-flagship spatial-card reveal" style="border-top:2px solid rgba(64,112,168,0.25)">';
   html += '<div style="margin-bottom:10px">';
   html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-blue);letter-spacing:0.3px">Long-Term Investments <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth</div>';
