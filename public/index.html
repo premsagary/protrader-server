@@ -228,22 +228,128 @@ select option{background:var(--bg3)}
 </head>
 <body>
 
-<!-- LOGIN SCREEN -->
-<div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)">
-  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:40px;width:360px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)">
-    <div style="font-size:40px;margin-bottom:12px">📈</div>
-    <div style="font-weight:800;font-size:22px;margin-bottom:4px;color:var(--text)">ProTrader</div>
-    <div style="font-size:12px;color:var(--text3);margin-bottom:28px">Sign in to continue</div>
-    <input id="login-username" type="text" placeholder="Username" autocomplete="username"
-      style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px"
+<!-- LOGIN SCREEN — 3D animated card with floating particles -->
+<div id="login-screen" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#06080f;overflow:hidden;position:relative">
+<style>
+/* ── Floating particles ── */
+.login-particles{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.login-particles span{position:absolute;display:block;width:3px;height:3px;border-radius:50%;opacity:0;animation:loginFloat linear infinite}
+@keyframes loginFloat{
+  0%{transform:translateY(100vh) scale(0);opacity:0}
+  15%{opacity:1}
+  85%{opacity:1}
+  100%{transform:translateY(-10vh) scale(1);opacity:0}
+}
+
+/* ── Ambient glow behind card ── */
+.login-glow{position:absolute;width:420px;height:420px;border-radius:50%;
+  background:radial-gradient(circle,rgba(59,130,246,0.12) 0%,rgba(139,92,246,0.06) 40%,transparent 70%);
+  filter:blur(40px);animation:loginPulse 4s ease-in-out infinite alternate;pointer-events:none}
+@keyframes loginPulse{0%{transform:scale(1);opacity:0.7}100%{transform:scale(1.15);opacity:1}}
+
+/* ── 3D Card ── */
+.login-card-wrap{perspective:800px;z-index:2}
+.login-card{
+  position:relative;width:380px;padding:44px 40px 36px;border-radius:20px;text-align:center;
+  background:linear-gradient(145deg,rgba(15,23,42,0.92),rgba(10,15,30,0.96));
+  border:1px solid rgba(255,255,255,0.06);
+  box-shadow:0 25px 80px rgba(0,0,0,0.6),0 0 40px rgba(59,130,246,0.06),inset 0 1px 0 rgba(255,255,255,0.04);
+  transform:rotateX(0deg) rotateY(0deg);transform-style:preserve-3d;
+  transition:transform 0.12s ease-out,box-shadow 0.3s ease;
+  animation:loginCardEntry 0.8s cubic-bezier(0.16,1,0.3,1) both;
+}
+@keyframes loginCardEntry{
+  0%{opacity:0;transform:rotateX(12deg) translateY(40px) scale(0.95)}
+  100%{opacity:1;transform:rotateX(0) translateY(0) scale(1)}
+}
+.login-card:hover{box-shadow:0 30px 90px rgba(0,0,0,0.7),0 0 60px rgba(59,130,246,0.1),inset 0 1px 0 rgba(255,255,255,0.06)}
+
+/* ── Sheen overlay (follows mouse) ── */
+.login-sheen{position:absolute;inset:0;border-radius:20px;pointer-events:none;
+  background:radial-gradient(600px circle at var(--mx,50%) var(--my,0%),rgba(59,130,246,0.06),transparent 40%);
+  transition:opacity 0.3s}
+
+/* ── Logo ── */
+.login-logo{font-size:44px;margin-bottom:14px;display:inline-block;
+  animation:loginBounce 2s ease-in-out infinite;transform-style:preserve-3d;transform:translateZ(30px)}
+@keyframes loginBounce{0%,100%{transform:translateZ(30px) translateY(0)}50%{transform:translateZ(30px) translateY(-6px)}}
+
+/* ── Inputs ── */
+.login-input{
+  width:100%;box-sizing:border-box;padding:13px 16px;font-size:14px;
+  background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);
+  border-radius:10px;color:#e2e8f0;outline:none;margin-bottom:12px;
+  transition:border-color 0.3s,box-shadow 0.3s,background 0.3s;
+}
+.login-input::placeholder{color:rgba(148,163,184,0.5)}
+.login-input:focus{border-color:rgba(59,130,246,0.5);background:rgba(59,130,246,0.04);
+  box-shadow:0 0 0 3px rgba(59,130,246,0.1),0 0 20px rgba(59,130,246,0.06)}
+
+/* ── Button ── */
+.login-btn-3d{
+  width:100%;padding:13px;border:none;border-radius:10px;cursor:pointer;
+  font-size:14px;font-weight:700;color:#fff;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,#3b82f6,#6366f1);
+  box-shadow:0 4px 15px rgba(59,130,246,0.3),0 0 0 0 rgba(99,102,241,0);
+  transition:transform 0.2s,box-shadow 0.3s;margin-bottom:14px;
+}
+.login-btn-3d:hover{transform:translateY(-2px);
+  box-shadow:0 8px 25px rgba(59,130,246,0.4),0 0 30px rgba(99,102,241,0.15)}
+.login-btn-3d:active{transform:translateY(1px) scale(0.98);
+  box-shadow:0 2px 8px rgba(59,130,246,0.3)}
+/* shimmer sweep */
+.login-btn-3d::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(105deg,transparent 40%,rgba(255,255,255,0.15) 50%,transparent 60%);
+  transform:translateX(-100%);animation:loginShimmer 3s ease-in-out infinite}
+@keyframes loginShimmer{0%,100%{transform:translateX(-100%)}50%{transform:translateX(100%)}}
+
+/* ── Divider line ── */
+.login-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.06),transparent);margin:4px 0 16px}
+</style>
+
+<!-- Particles -->
+<div class="login-particles" id="login-particles"></div>
+<!-- Glow -->
+<div class="login-glow"></div>
+
+<div class="login-card-wrap">
+  <div class="login-card" id="login-card">
+    <div class="login-sheen" id="login-sheen"></div>
+    <div class="login-logo">📈</div>
+    <div style="font-weight:800;font-size:24px;margin-bottom:4px;color:#f1f5f9;letter-spacing:-0.3px;transform:translateZ(20px)">ProTrader</div>
+    <div style="font-size:12px;color:rgba(148,163,184,0.7);margin-bottom:28px;transform:translateZ(10px)">Sign in to continue</div>
+    <input id="login-username" type="text" placeholder="Username" autocomplete="username" class="login-input"
       onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()"/>
-    <input id="login-password" type="password" placeholder="Password" autocomplete="current-password"
-      style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:14px;color:var(--text);outline:none;margin-bottom:10px"
+    <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" class="login-input"
       onkeydown="if(event.key==='Enter')doLogin()"/>
     <div id="login-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
-    <button onclick="doLogin()" id="login-btn" style="width:100%;padding:11px;background:var(--blue);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:14px;font-weight:700;margin-bottom:12px">Sign In</button>
-    <div style="font-size:10px;color:var(--text4)">Contact admin for access</div>
+    <button onclick="doLogin()" id="login-btn" class="login-btn-3d">Sign In</button>
+    <div class="login-divider"></div>
+    <div style="font-size:10px;color:rgba(100,116,139,0.6)">Contact admin for access</div>
   </div>
+</div>
+
+<script>
+(function(){
+  /* Particles */
+  var pc=document.getElementById('login-particles');
+  if(pc){for(var i=0;i<35;i++){var s=document.createElement('span');
+    var sz=Math.random()*3+1;s.style.cssText='width:'+sz+'px;height:'+sz+'px;left:'+Math.random()*100+'%;'+
+    'animation-duration:'+(Math.random()*8+6)+'s;animation-delay:'+(Math.random()*10)+'s;'+
+    'background:hsl('+(200+Math.random()*60)+',70%,'+(50+Math.random()*30)+'%)';pc.appendChild(s);}}
+  /* 3D tilt */
+  var card=document.getElementById('login-card'),sheen=document.getElementById('login-sheen');
+  if(card){document.getElementById('login-screen').addEventListener('mousemove',function(e){
+    var r=card.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+    var dx=(e.clientX-cx)/r.width,dy=(e.clientY-cy)/r.height;
+    var rx=dy*-12,ry=dx*12;
+    card.style.transform='rotateX('+rx+'deg) rotateY('+ry+'deg)';
+    if(sheen){var mx=((e.clientX-r.left)/r.width*100),my=((e.clientY-r.top)/r.height*100);
+      sheen.style.setProperty('--mx',mx+'%');sheen.style.setProperty('--my',my+'%');}
+  });document.getElementById('login-screen').addEventListener('mouseleave',function(){
+    card.style.transform='rotateX(0) rotateY(0)';});}
+})();
+</script>
 </div>
 
 <div id="app" style="display:none">
