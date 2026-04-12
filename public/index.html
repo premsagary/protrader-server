@@ -104,14 +104,14 @@ body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
    UNIFIED 3D PRESS — consistent click feel across entire app
    Applies to: tabs, buttons, pills, filter chips, stock tiles
    ══════════════════════════════════════════════════════════════ */
-.mode-tab,.btn,.btn-sm,.btn-primary,.stab,.qs-stock,.login-btn-3d,
+.mode-tab,.btn,.btn-sm,.btn-primary,.stab,.qs-stock,.login-btn-3d,.lp-cta-sm,.lp-btn-primary,.lp-btn-ghost,.lp-price-btn,
 button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
   transform:perspective(600px) translateZ(0);
   transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),
              color var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);
 }
 .mode-tab:active,.btn:active,.btn-sm:active,.btn-primary:active,.stab:active,
-.qs-stock:active,.login-btn-3d:active,button:active{
+.qs-stock:active,.login-btn-3d:active,.lp-cta-sm:active,.lp-btn-primary:active,.lp-btn-ghost:active,.lp-price-btn:active,button:active{
   transform:perspective(600px) translateZ(-4px) scale(0.96) !important;
   box-shadow:0 1px 4px rgba(0,0,0,0.4),inset 0 1px 2px rgba(0,0,0,0.2) !important;
   transition-duration:0.08s !important;
@@ -504,14 +504,17 @@ select option{background:var(--bg3)}
 
 /* ── Spatial card system — 3D transform on hover ── */
 /* ── Tiltable elements — 3D perspective on hover + mouse tracking ── */
-.spatial-card,.tilt-3d,.tw,.qs-stock{
+.spatial-card,.tilt-3d,.tw,.qs-stock,
+.lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge{
   transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
-  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo);
+  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color 0.3s,background 0.3s;
   will-change:transform;
 }
-.spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{
-  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px);
-  box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.03);
+.spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover,
+.lp-feature:hover,.lp-price-card:hover,.lp-example:hover,.lp-stat:hover,.lp-step:hover,
+.lp-ex-metric:hover,.lp-roi:hover,.lp-hero-badge:hover{
+  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(6px);
+  box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.04);
 }
 
 /* ── Section entrance animations (IntersectionObserver driven) ── */
@@ -661,8 +664,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-nav-links a{color:var(--text3);font-size:12px;text-decoration:none;letter-spacing:0.3px;transition:color 0.2s}
 .lp-nav-links a:hover{color:var(--text)}
 .lp-cta-sm{background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:8px;
-  padding:8px 20px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.3px;transition:all 0.3s;text-decoration:none}
-.lp-cta-sm:hover{background:rgba(64,112,168,0.25);color:#c0d0e8}
+  padding:8px 20px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
+  transform:perspective(600px) translateZ(0);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s;text-decoration:none}
+.lp-cta-sm:hover{background:rgba(64,112,168,0.25);color:#c0d0e8;
+  transform:perspective(600px) translateZ(4px) translateY(-1px);box-shadow:0 8px 25px rgba(64,112,168,0.12)}
 
 /* Hero */
 .lp-hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
@@ -677,12 +683,17 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-hero-cta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center}
 .lp-btn-primary{background:linear-gradient(135deg,rgba(64,112,168,0.2),rgba(64,112,168,0.1));color:#c0d0e8;border:1px solid rgba(64,112,168,0.25);
   border-radius:10px;padding:14px 36px;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
-  transition:all 0.3s var(--ease-out-expo);font-family:inherit}
-.lp-btn-primary:hover{background:linear-gradient(135deg,rgba(64,112,168,0.3),rgba(64,112,168,0.15));transform:translateY(-1px);
-  box-shadow:0 8px 30px rgba(64,112,168,0.12)}
+  transform:perspective(600px) translateZ(0);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;font-family:inherit}
+.lp-btn-primary:hover{background:linear-gradient(135deg,rgba(64,112,168,0.3),rgba(64,112,168,0.15));
+  transform:perspective(600px) translateZ(5px) translateY(-2px);
+  box-shadow:0 12px 35px rgba(64,112,168,0.15)}
 .lp-btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--glass-border);border-radius:10px;
-  padding:14px 28px;font-size:13px;font-weight:500;cursor:pointer;letter-spacing:0.3px;transition:all 0.3s;font-family:inherit;text-decoration:none}
-.lp-btn-ghost:hover{border-color:rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);color:var(--text)}
+  padding:14px 28px;font-size:13px;font-weight:500;cursor:pointer;letter-spacing:0.3px;
+  transform:perspective(600px) translateZ(0);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;font-family:inherit;text-decoration:none}
+.lp-btn-ghost:hover{border-color:rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);color:var(--text);
+  transform:perspective(600px) translateZ(5px) translateY(-2px);box-shadow:0 10px 30px rgba(0,0,0,0.15)}
 .lp-hero-trust{display:flex;gap:24px;margin-top:48px;font-size:11px;color:var(--text3);letter-spacing:0.2px;flex-wrap:wrap;justify-content:center}
 .lp-hero-trust span{display:flex;align-items:center;gap:4px}
 
@@ -692,8 +703,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-section-title{font-weight:300;font-size:clamp(22px,3vw,32px);color:var(--text);text-align:center;margin-bottom:48px;letter-spacing:0.5px}
 .lp-feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .lp-feature{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:14px;
-  padding:28px 24px;transition:all 0.3s var(--ease-out-expo)}
-.lp-feature:hover{border-color:rgba(255,255,255,0.06);transform:translateY(-2px);box-shadow:0 12px 40px rgba(0,0,0,0.2)}
+  padding:28px 24px}
+.lp-feature:hover{border-color:rgba(255,255,255,0.08)}
 .lp-feature-icon{font-size:20px;margin-bottom:12px}
 .lp-feature h3{font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;letter-spacing:0.2px}
 .lp-feature p{font-size:12px;color:var(--text3);line-height:1.6}
@@ -708,8 +719,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-pricing{padding:80px 24px;max-width:900px;margin:0 auto}
 .lp-price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start}
 .lp-price-card{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:14px;padding:32px 24px;
-  text-align:center;transition:all 0.3s var(--ease-out-expo)}
-.lp-price-card:hover{border-color:rgba(255,255,255,0.06);transform:translateY(-2px)}
+  text-align:center}
+.lp-price-card:hover{border-color:rgba(255,255,255,0.08)}
 .lp-price-card.featured{border-color:rgba(64,112,168,0.2);background:linear-gradient(135deg,rgba(64,112,168,0.06),var(--glass));
   box-shadow:0 0 40px rgba(64,112,168,0.05)}
 .lp-price-card.featured .lp-price-badge{display:inline-block}
@@ -723,8 +734,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-price-list li{font-size:11px;color:var(--text2);padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.02);display:flex;gap:8px;align-items:flex-start}
 .lp-price-list li::before{content:'✓';color:var(--green);font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px}
 .lp-price-btn{width:100%;padding:11px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
-  transition:all 0.3s;font-family:inherit;border:1px solid var(--glass-border);background:rgba(255,255,255,0.03);color:var(--text2)}
-.lp-price-btn:hover{background:rgba(255,255,255,0.05);color:var(--text)}
+  transform:perspective(600px) translateZ(0);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;
+  font-family:inherit;border:1px solid var(--glass-border);background:rgba(255,255,255,0.03);color:var(--text2)}
+.lp-price-btn:hover{background:rgba(255,255,255,0.06);color:var(--text);
+  transform:perspective(600px) translateZ(4px) translateY(-1px);box-shadow:0 8px 20px rgba(0,0,0,0.15)}
 .lp-price-card.featured .lp-price-btn{background:rgba(64,112,168,0.15);color:var(--shiva-blue);border-color:rgba(64,112,168,0.2)}
 .lp-price-card.featured .lp-price-btn:hover{background:rgba(64,112,168,0.25)}
 
@@ -1857,7 +1871,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   };
 
   /* ── 3D tilt mouse tracking for all tiltable elements ── */
-  var _tiltSel='.spatial-card,.tilt-3d,.sc,.tw,.qs-stock';
+  var _tiltSel='.spatial-card,.tilt-3d,.sc,.tw,.qs-stock,.lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge';
   var _isMobileTilt=window.innerWidth<768;
   window.addEventListener('resize',function(){_isMobileTilt=window.innerWidth<768;});
   document.addEventListener('mousemove',function(e){
@@ -1879,7 +1893,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
   /* ── Button ripple + 3D press animation ── */
   document.addEventListener('click',function(e){
-    var btn=e.target.closest('.btn,.login-btn-3d,button,.mode-tab,.stab,.qs-stock');
+    var btn=e.target.closest('.btn,.login-btn-3d,button,.mode-tab,.stab,.qs-stock,.lp-cta-sm,.lp-btn-primary,.lp-btn-ghost,.lp-price-btn');
     if(!btn)return;
     /* Ripple */
     var ripple=document.createElement('span');
