@@ -1659,13 +1659,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     <button class="mode-tab active" onclick="setMode('stockanalyzer')" id="mode-stockanalyzer" style="color:var(--shiva-gold)">🔍 Deep Analyzer</button>
     <button class="mode-tab stockrec" onclick="setMode('stockrec')" id="mode-stockrec">Stock Picks</button>
     <button class="mode-tab" onclick="setMode('mf')" id="mode-mf">MF Picks</button>
-    <button class="mode-tab stocks" onclick="setMode('stocks')" id="mode-stocks">Stocks RoboTrade</button>
-    <button class="mode-tab crypto" onclick="setMode('crypto')" id="mode-crypto">Crypto RoboTrade</button>
+    <button class="mode-tab stocks admin-only" onclick="setMode('stocks')" id="mode-stocks" style="display:none">Stocks RoboTrade</button>
+    <button class="mode-tab crypto admin-only" onclick="setMode('crypto')" id="mode-crypto" style="display:none">Crypto RoboTrade</button>
     <button class="mode-tab" onclick="setMode('holdings')" id="mode-holdings" style="color:#22d3ee">💼 Holdings</button>
-    <button class="mode-tab" onclick="setMode('mirofish')" id="mode-mirofish" style="color:#22d3ee" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
+    <button class="mode-tab admin-only" onclick="setMode('mirofish')" id="mode-mirofish" style="display:none;color:#22d3ee" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata" style="color:var(--shiva-blue)">📊 Stock Data</button>
-    <button class="mode-tab" onclick="setMode('architecture')" id="mode-architecture" style="color:#f0abfc">🏛 Architecture</button>
-    <button class="mode-tab" onclick="setMode('admin')" id="mode-admin" style="color:#64748b;font-size:11px">⚙</button>
+    <button class="mode-tab admin-only" onclick="setMode('architecture')" id="mode-architecture" style="display:none;color:#f0abfc">🏛 Architecture</button>
+    <button class="mode-tab admin-only" onclick="setMode('admin')" id="mode-admin" style="display:none;color:#64748b;font-size:11px">⚙</button>
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
   <div style="display:flex;gap:8px;align-items:center;margin-left:12px;flex-shrink:0">
@@ -2038,49 +2038,8 @@ function renderTopBar(){
   const sl=(S.scanLog||[])[0];
   const mb=document.getElementById("market-badge");
   if(mb) mb.style.display=h.marketOpen?"inline-flex":"none";
-  function stat(l,v,c){ return '<div class="hstat"><div class="l">'+l+'</div><div class="v"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>'; }
   const el=document.getElementById("topbar-stats");
-  if(!el) return;
-  if(S.mode==="stocks"){
-    var ls=S.liveStats||{}, livePnL=+(ls.total_pnl||0), liveOpen=(S.liveTrades||[]).filter(t=>t.status==="OPEN").length;
-    var isLive=S.tradingMode==='LIVE';
-    var modeToggle=isLive
-      ?'<button onclick="toggleTradingMode()" style="background:#ef4444;color:#fff;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #dc2626;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#dc2626\'" onmouseout="this.style.background=\'#ef4444\'"><span style="font-size:7px">&#9679;</span> LIVE</button>'
-      :'<button onclick="toggleTradingMode()" style="background:#1e3a5f;color:#60a5fa;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid var(--shiva-blue);cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s" onmouseover="this.style.background=\'#2d4a6f\'" onmouseout="this.style.background=\'#1e3a5f\'"><span style="font-size:7px">&#9679;</span> PAPER</button>';
-    var testBuyBtn='<button onclick="testBuyOrder()" style="background:#0d9488;color:#fff;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;border:2px solid #14b8a6;cursor:pointer;display:flex;align-items:center;gap:4px;transition:all .2s;margin-left:6px" onmouseover="this.style.background=\'#14b8a6\'" onmouseout="this.style.background=\'#0d9488\'">🧪 Test Buy</button>';
-    el.innerHTML=[
-      '<div class="hstat" style="display:flex;gap:4px">'+modeToggle+testBuyBtn+'</div>',
-      S.liveTrades.length>0?stat("Live P&L",(livePnL>=0?"+":"")+INR(livePnL.toFixed(0)),clr(livePnL)):"",
-      S.liveTrades.length>0?stat("Live Open",liveOpen,""):"",
-      stat("Paper P&L",(nsePnL>=0?"+":"")+INR(nsePnL.toFixed(0)),clr(nsePnL)),
-      stat("Open",nseOpen,""),
-      stat("Win Rate",nwr+"%",nwr>=55?"var(--green)":"var(--red)"),
-      cash!=null?stat("Cash",INR(cash.toFixed(0)),""):"",
-      sl?stat("Last Scan",new Date(sl.scanned_at).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})+" · "+(sl.regime||""),""):"",
-    ].filter(Boolean).join("");
-  } else if(S.mode==="stockrec"){
-    el.innerHTML=[
-      stat("Universe",(window._universeCount||252)+" stocks","var(--text2)"),
-      stat("Criteria","100 pts","var(--shiva-gold)"),
-      stat("Pillars","5 factors","var(--shiva-gold)"),
-      stat("Scope","Long term","var(--green)"),
-      stat("Data","Kite + Screener.in","var(--text2)"),
-    ].join("");
-  } else if(S.mode==="crypto"){
-    el.innerHTML=[
-      stat("Crypto P&L",(cryptoPnL>=0?"+":"")+INR(cryptoPnL.toFixed(0)),clr(cryptoPnL)),
-      stat("Open",cryptoOpen,""),
-      stat("Win Rate",cwr+"%",cwr>=55?"var(--green)":"var(--red)"),
-      stat("Pairs",(CRYPTO_LIST||[]).length,"var(--purple)"),
-      stat("Status","24/7","var(--purple)"),
-    ].join("");
-  } else {
-    el.innerHTML=[
-      stat("Universe",(S.mfTotal||"-")+" funds","var(--text2)"),
-      stat("Criteria","100 pts","var(--text2)"),
-      stat("Data","Live NAV","var(--green)"),
-    ].join("");
-  }
+  if(el) el.innerHTML="";
   // Phase 3: Risk banner for drawdown warnings
   const ddLevel = ns.drawdown_level || h.drawdown_level || 'NORMAL';
   let riskBanner = document.getElementById('risk-banner');
@@ -6234,21 +6193,30 @@ function renderStockRecPage(){
   });
   html += '</div>';
 
-  // -- QUICK-START BAR: top 5 highest-scoring stocks for one-click deep analysis
-  var qsStocks = allStocks.slice().sort(function(a,b){return (b.pctScore||b.composite||0)-(a.pctScore||a.composite||0);}).slice(0,5);
-  if(qsStocks.length){
-    html+='<div class="qs-bar reveal" style="margin-bottom:16px">';
-    html+='<span style="font-size:10px;color:var(--text3);letter-spacing:0.3px;margin-right:8px;white-space:nowrap">Top Picks →</span>';
-    qsStocks.forEach(function(q){
-      var sc=q.pctScore||q.composite||0;
+  // -- QUICK-START BARS: top picks per category for one-click deep analysis
+  function _qsBar(label, labelColor, stocks, scoreKey){
+    if(!stocks.length) return '';
+    var top5 = stocks.slice(0,5);
+    var out='<div class="qs-bar reveal" style="margin-bottom:8px;border-left:2px solid '+labelColor+'">';
+    out+='<span style="font-size:10px;color:'+labelColor+';letter-spacing:0.3px;margin-right:8px;white-space:nowrap;font-weight:600">'+label+' →</span>';
+    top5.forEach(function(q){
+      var sc=q[scoreKey]||q.pctScore||0;
       var scC=sc>=70?'var(--green)':sc>=50?'var(--shiva-gold)':'var(--text3)';
-      html+='<button class="qs-stock" onclick="setMode(\'stockanalyzer\');setTimeout(function(){var i=document.getElementById(\'stock-analyzer-input\'),h=document.getElementById(\'az-sym\');if(i)i.value=\''+q.sym+'\';if(h)h.value=\''+q.sym+'\';try{analyzeStock();}catch(e){}},200)">';
-      html+='<span style="font-weight:600;color:var(--text)">'+q.sym+'</span>';
-      html+='<span style="font-size:10px;color:'+scC+';font-weight:600">'+sc+'%</span>';
-      html+='</button>';
+      out+='<button class="qs-stock" onclick="setMode(\'stockanalyzer\');setTimeout(function(){var i=document.getElementById(\'stock-analyzer-input\'),h=document.getElementById(\'az-sym\');if(i)i.value=\''+q.sym+'\';if(h)h.value=\''+q.sym+'\';try{analyzeStock();}catch(e){}},200)">';
+      out+='<span style="font-weight:600;color:var(--text)">'+q.sym+'</span>';
+      out+='<span style="font-size:10px;color:'+scC+';font-weight:600">'+Math.round(sc)+'</span>';
+      out+='</button>';
     });
-    html+='</div>';
+    out+='</div>';
+    return out;
   }
+  var _reboundSorted = swingPicks.slice().sort(function(a,b){return (b.pctScore||0)-(a.pctScore||0);});
+  var _momentumSorted = momentumPicks.slice().sort(function(a,b){return (b.composite||0)-(a.composite||0);});
+  var _longtermSorted = longTermPicks.slice().sort(function(a,b){return (b.scoreV2||0)-(a.scoreV2||0);});
+  html+=_qsBar('Rebound','rgba(160,136,72,0.8)',_reboundSorted,'pctScore');
+  html+=_qsBar('Momentum','rgba(94,204,138,0.8)',_momentumSorted,'composite');
+  html+=_qsBar('Long-Term','rgba(64,112,168,0.8)',_longtermSorted,'scoreV2');
+  if(_reboundSorted.length||_momentumSorted.length||_longtermSorted.length) html+='<div style="height:8px"></div>';
 
   // Market-cap filter row — centered, FALLEN removed (Fallen Angels are the
   // Swing Trades column below). The user picks a market cap slice up top, then
@@ -11333,9 +11301,11 @@ function showApp() {
   if(badge && _authUser) badge.textContent = '👤 ' + _authUser.username + (_authUser.role==='admin'?' (admin)':'');
   var logoutBtn = document.getElementById('logout-btn');
   if(logoutBtn) logoutBtn.style.display = '';
-  // Show/hide admin tab based on role
-  var adminBtn = document.getElementById('mode-admin');
-  if(adminBtn) adminBtn.style.display = (_authUser && _authUser.role === 'admin') ? '' : 'none';
+  // Show/hide admin-only tabs based on role
+  var isAdmin = _authUser && _authUser.role === 'admin';
+  document.querySelectorAll('.admin-only').forEach(function(el){
+    el.style.display = isAdmin ? '' : 'none';
+  });
   // Start inactivity timer
   _resetInactivityTimer();
   // Show onboarding for first-time users
