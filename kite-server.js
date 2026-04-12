@@ -4126,40 +4126,41 @@ app.get('/api/auth/me', async (req, res) => {
 
 // Auth middleware — protects all /api/* routes (except auth routes and public routes)
 // Public routes are read-only data endpoints that public users can access without login.
+// NOTE: Middleware is mounted via app.use('/api', ...) so req.path inside
+// the middleware has the '/api' prefix STRIPPED.  e.g. a request to
+// /api/stocks/score arrives with req.path === '/stocks/score'.
 const PUBLIC_ROUTE_PREFIXES = [
-  '/api/auth/',
-  '/api/stocks/score',        // Stock Picks + Stock Data (scored universe)
-  '/api/stocks/analyze/',     // Deep Analyzer (per-stock analysis) — AI sub-route is gated separately
-  '/api/stocks/bucket-stats', // Bucket stats
-  '/api/universe/',           // Universe list — stock dropdown for Analyzer, Picks, Holdings
-  '/api/mf/',                 // MF Picks data (but not import/rebuild which are admin POST)
-  // Holdings removed from public — admin only
-  '/api/picks/ai-review',     // GET cached AI review results (public can VIEW but not trigger)
-  '/api/mf/ai-review',        // GET cached MF AI review results
-  '/api/ai/reviews',          // GET cached AI reviews
-  '/api/ai/disagrees',        // GET cached AI disagreements
-  '/api/ai/status',           // AI status
-  '/api/ai/validation',       // GET cached AI validation results
-  '/api/health/',             // Health checks
-  '/api/portfolio/regime',    // Market regime data
-  '/api/portfolio/model',     // Portfolio model data (read-only)
-  '/api/portfolio/positions', // Portfolio positions (read-only)
-  '/api/portfolio/performance', // Portfolio performance (read-only)
-  '/api/portfolio/signals',   // Portfolio signals (read-only GET)
-  '/api/analytics/',          // Analytics data
+  '/auth/',
+  '/stocks/score',        // Stock Picks + Stock Data (scored universe)
+  '/stocks/analyze/',     // Deep Analyzer (per-stock analysis)
+  '/stocks/bucket-stats', // Bucket stats
+  '/universe/',           // Universe list — stock dropdown for Analyzer, Picks
+  '/mf/',                 // MF Picks data (but not import/rebuild which are admin POST)
+  '/picks/ai-review',     // GET cached AI review results (public can VIEW but not trigger)
+  '/ai/reviews',          // GET cached AI reviews
+  '/ai/disagrees',        // GET cached AI disagreements
+  '/ai/status',           // AI status
+  '/ai/validation',       // GET cached AI validation results
+  '/health/',             // Health checks
+  '/portfolio/regime',    // Market regime data
+  '/portfolio/model',     // Portfolio model data (read-only)
+  '/portfolio/positions', // Portfolio positions (read-only)
+  '/portfolio/performance', // Portfolio performance (read-only)
+  '/portfolio/signals',   // Portfolio signals (read-only GET)
+  '/analytics/',          // Analytics data
 ];
 // Admin-only routes that should NEVER be public even if prefix matches
 const ADMIN_ONLY_ROUTES = [
-  '/api/mf/import',
-  '/api/mf/rebuild-cache',
-  '/api/universe/refresh',
-  '/api/admin/',
-  '/api/mirofish/',
-  '/api/mirofish-lab/',
-  '/api/screener/',
-  '/api/fundamentals/',
-  '/api/test/',
-  '/api/stocks/rescore',
+  '/mf/import',
+  '/mf/rebuild-cache',
+  '/universe/refresh',
+  '/admin/',
+  '/mirofish/',
+  '/mirofish-lab/',
+  '/screener/',
+  '/fundamentals/',
+  '/test/',
+  '/stocks/rescore',
 ];
 function authMiddleware(req, res, next) {
   // Check if this is an admin-only route first
