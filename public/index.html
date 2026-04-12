@@ -2890,7 +2890,7 @@ async function fetchAll(){
     if(cr[0].status==="fulfilled"&&cr[0].value.ok){const d=await cr[0].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
     if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats = await cr[1].value.json();
   } catch(e){}
-  if(S.mode!=="mf" && S.mode!=="stockrec" && S.mode!=="holdings" && S.mode!=="admin") render(); // preserve MF + StockRec + Holdings + Admin tab content
+  if(S.mode!=="mf" && S.mode!=="stockrec" && S.mode!=="stockdata" && S.mode!=="stockanalyzer" && S.mode!=="holdings" && S.mode!=="mirofish" && S.mode!=="architecture" && S.mode!=="admin") render(); // preserve all custom-rendered tabs
 }
 
 async function fetchCryptoPrices(){
