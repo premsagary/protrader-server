@@ -241,11 +241,50 @@ select option{background:var(--bg3)}
   100%{transform:translateY(-10vh) scale(1);opacity:0}
 }
 
-/* ── Ambient glow behind card ── */
+/* ── Animated grid floor ── */
+.login-grid{position:absolute;inset:0;pointer-events:none;overflow:hidden;opacity:0.18}
+.login-grid::before{content:'';position:absolute;width:200%;height:200%;top:-50%;left:-50%;
+  background:
+    repeating-linear-gradient(90deg,rgba(59,130,246,0.15) 0px,transparent 1px,transparent 60px),
+    repeating-linear-gradient(0deg,rgba(139,92,246,0.10) 0px,transparent 1px,transparent 60px);
+  transform:perspective(400px) rotateX(60deg);transform-origin:center 70%;
+  animation:loginGridScroll 20s linear infinite}
+@keyframes loginGridScroll{0%{background-position:0 0}100%{background-position:0 60px}}
+
+/* ── Orbiting rings ── */
+.login-orbit{position:absolute;border-radius:50%;border:1px solid rgba(59,130,246,0.08);pointer-events:none}
+.login-orbit-1{width:500px;height:500px;animation:loginSpin 25s linear infinite}
+.login-orbit-2{width:650px;height:650px;animation:loginSpin 35s linear infinite reverse}
+.login-orbit-3{width:800px;height:800px;animation:loginSpin 45s linear infinite}
+.login-orbit::after{content:'';position:absolute;width:6px;height:6px;border-radius:50%;top:-3px;left:50%;
+  background:rgba(99,102,241,0.6);box-shadow:0 0 12px rgba(99,102,241,0.5)}
+.login-orbit-2::after{background:rgba(59,130,246,0.5);box-shadow:0 0 12px rgba(59,130,246,0.4);width:4px;height:4px;top:-2px}
+.login-orbit-3::after{background:rgba(168,85,247,0.4);box-shadow:0 0 10px rgba(168,85,247,0.3);width:5px;height:5px;top:-2.5px}
+@keyframes loginSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+
+/* ── Shooting stars ── */
+.login-shooters{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.login-shooter{position:absolute;width:80px;height:1px;
+  background:linear-gradient(90deg,rgba(99,102,241,0.8),transparent);
+  opacity:0;animation:loginShoot linear infinite}
+@keyframes loginShoot{
+  0%{transform:translate(0,0) rotate(-35deg);opacity:0}
+  5%{opacity:1}
+  30%{opacity:0.6}
+  40%{transform:translate(-400px,250px) rotate(-35deg);opacity:0}
+  100%{opacity:0}
+}
+
+/* ── Ambient glow behind card (dual orbs) ── */
 .login-glow{position:absolute;width:420px;height:420px;border-radius:50%;
   background:radial-gradient(circle,rgba(59,130,246,0.12) 0%,rgba(139,92,246,0.06) 40%,transparent 70%);
   filter:blur(40px);animation:loginPulse 4s ease-in-out infinite alternate;pointer-events:none}
+.login-glow-2{position:absolute;width:300px;height:300px;border-radius:50%;
+  background:radial-gradient(circle,rgba(168,85,247,0.10) 0%,rgba(59,130,246,0.04) 50%,transparent 70%);
+  filter:blur(50px);animation:loginPulse2 5s ease-in-out 1s infinite alternate;pointer-events:none;
+  transform:translate(120px,-80px)}
 @keyframes loginPulse{0%{transform:scale(1);opacity:0.7}100%{transform:scale(1.15);opacity:1}}
+@keyframes loginPulse2{0%{transform:translate(120px,-80px) scale(1);opacity:0.5}100%{transform:translate(120px,-80px) scale(1.2);opacity:0.8}}
 
 /* ── 3D Card ── */
 .login-card-wrap{perspective:800px;z-index:2}
@@ -307,10 +346,19 @@ select option{background:var(--bg3)}
 .login-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.06),transparent);margin:4px 0 16px}
 </style>
 
+<!-- Grid floor -->
+<div class="login-grid"></div>
+<!-- Orbiting rings -->
+<div class="login-orbit login-orbit-1" style="top:50%;left:50%;margin-top:-250px;margin-left:-250px"></div>
+<div class="login-orbit login-orbit-2" style="top:50%;left:50%;margin-top:-325px;margin-left:-325px"></div>
+<div class="login-orbit login-orbit-3" style="top:50%;left:50%;margin-top:-400px;margin-left:-400px"></div>
+<!-- Shooting stars -->
+<div class="login-shooters" id="login-shooters"></div>
 <!-- Particles -->
 <div class="login-particles" id="login-particles"></div>
 <!-- Glow -->
 <div class="login-glow"></div>
+<div class="login-glow-2"></div>
 
 <div class="login-card-wrap">
   <div class="login-card" id="login-card">
@@ -331,12 +379,18 @@ select option{background:var(--bg3)}
 
 <script>
 (function(){
-  /* Particles */
+  /* Particles — 60 for denser field */
   var pc=document.getElementById('login-particles');
-  if(pc){for(var i=0;i<35;i++){var s=document.createElement('span');
+  if(pc){for(var i=0;i<60;i++){var s=document.createElement('span');
     var sz=Math.random()*3+1;s.style.cssText='width:'+sz+'px;height:'+sz+'px;left:'+Math.random()*100+'%;'+
-    'animation-duration:'+(Math.random()*8+6)+'s;animation-delay:'+(Math.random()*10)+'s;'+
+    'animation-duration:'+(Math.random()*8+6)+'s;animation-delay:'+(Math.random()*12)+'s;'+
     'background:hsl('+(200+Math.random()*60)+',70%,'+(50+Math.random()*30)+'%)';pc.appendChild(s);}}
+  /* Shooting stars — spawn 5 with staggered delays */
+  var sh=document.getElementById('login-shooters');
+  if(sh){for(var j=0;j<5;j++){var st=document.createElement('div');st.className='login-shooter';
+    st.style.cssText='top:'+(5+Math.random()*40)+'%;left:'+(30+Math.random()*60)+'%;'+
+    'width:'+(60+Math.random()*80)+'px;animation-duration:'+(4+Math.random()*6)+'s;'+
+    'animation-delay:'+(j*2.5+Math.random()*2)+'s';sh.appendChild(st);}}
   /* 3D tilt */
   var card=document.getElementById('login-card'),sheen=document.getElementById('login-sheen');
   if(card){document.getElementById('login-screen').addEventListener('mousemove',function(e){
