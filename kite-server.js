@@ -4124,22 +4124,83 @@ app.get('/api/auth/me', async (req, res) => {
   } catch (e) { res.status(401).json({ error: 'Invalid session' }); }
 });
 
-// Auth middleware — protects all /api/* routes (except auth routes themselves)
+// Auth middleware — protects all /api/* routes (except auth routes and public routes)
+// Public routes are read-only data endpoints that public users can access without login.
+const PUBLIC_ROUTE_PREFIXES = [
+  '/api/auth/',
+  '/api/stocks/score',        // Stock Picks + Stock Data (scored universe)
+  '/api/stocks/analyze/',     // Deep Analyzer (per-stock analysis) — AI sub-route is gated separately
+  '/api/stocks/bucket-stats', // Bucket stats
+  '/api/universe/',           // Universe list — stock dropdown for Analyzer, Picks, Holdings
+  '/api/mf/',                 // MF Picks data (but not import/rebuild which are admin POST)
+  // Holdings removed from public — admin only
+  '/api/picks/ai-review',     // GET cached AI review results (public can VIEW but not trigger)
+  '/api/mf/ai-review',        // GET cached MF AI review results
+  '/api/ai/reviews',          // GET cached AI reviews
+  '/api/ai/disagrees',        // GET cached AI disagreements
+  '/api/ai/status',           // AI status
+  '/api/ai/validation',       // GET cached AI validation results
+  '/api/health/',             // Health checks
+  '/api/portfolio/regime',    // Market regime data
+  '/api/portfolio/model',     // Portfolio model data (read-only)
+  '/api/portfolio/positions', // Portfolio positions (read-only)
+  '/api/portfolio/performance', // Portfolio performance (read-only)
+  '/api/portfolio/signals',   // Portfolio signals (read-only GET)
+  '/api/analytics/',          // Analytics data
+];
+// Admin-only routes that should NEVER be public even if prefix matches
+const ADMIN_ONLY_ROUTES = [
+  '/api/mf/import',
+  '/api/mf/rebuild-cache',
+  '/api/universe/refresh',
+  '/api/admin/',
+  '/api/mirofish/',
+  '/api/mirofish-lab/',
+  '/api/screener/',
+  '/api/fundamentals/',
+  '/api/test/',
+  '/api/stocks/rescore',
+];
 function authMiddleware(req, res, next) {
-  // Allow auth routes through
-  if (req.path.startsWith('/api/auth/')) return next();
-  // Check Bearer header, then cookie, then query param — so direct browser access works
+  // Check if this is an admin-only route first
+  const isAdminOnly = ADMIN_ONLY_ROUTES.some(p => req.path.startsWith(p));
+  // Check if this is a public-accessible route
+  const isPublic = !isAdminOnly && PUBLIC_ROUTE_PREFIXES.some(p => req.path.startsWith(p));
+  // Write operations on public routes still require auth (AI triggers, holdings add/delete, etc.)
+  const isWriteOp = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+  const isAITrigger = isWriteOp && (
+    req.path.includes('/ai') || req.path.includes('/ai-review')
+  );
+  // All non-GET on public routes require auth (prevents public POST/DELETE to holdings, etc.)
+  const isPublicWrite = isPublic && isWriteOp;
+
+  // Check Bearer header, then cookie, then query param
   const token = (req.headers.authorization || '').replace('Bearer ', '')
     || (req.headers.cookie || '').split(';').map(c=>c.trim()).find(c=>c.startsWith('session_token='))?.split('=')[1]
     || req.query.token || '';
-  if (!token) return res.status(401).json({ error: 'Authentication required' });
-  pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
-    .then(result => {
-      if (result.rows.length === 0) return res.status(401).json({ error: 'Session expired' });
-      req.user = result.rows[0];
-      next();
-    })
-    .catch(() => res.status(401).json({ error: 'Auth error' }));
+
+  if (token) {
+    // Authenticated request — validate token
+    return pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
+      .then(result => {
+        if (result.rows.length > 0) {
+          req.user = result.rows[0];
+        }
+        next();
+      })
+      .catch(() => {
+        if (isPublic && !isPublicWrite) { req.user = { username: 'public', role: 'public' }; return next(); }
+        res.status(401).json({ error: 'Auth error' });
+      });
+  }
+
+  // No token — allow public GET routes through with a synthetic public user
+  if (isPublic && !isPublicWrite) {
+    req.user = { username: 'public', role: 'public' };
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Authentication required' });
 }
 
 // Apply auth middleware to all API routes
