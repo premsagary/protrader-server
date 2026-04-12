@@ -658,7 +658,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ═══════════════════════════════════════════════════════════════
    LANDING PAGE — public-facing, pre-auth
    ═══════════════════════════════════════════════════════════════ */
-.lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative;z-index:2}
+.lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative}
 .lp-nav{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;position:fixed;top:0;left:0;right:0;z-index:300;
   background:rgba(5,6,8,0.7);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.03)}
 .lp-logo{font-weight:600;font-size:15px;color:var(--shiva-silver);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
@@ -1700,14 +1700,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
   /* ── Renderer ── */
   var scene=new THREE.Scene();
-  scene.fog=new THREE.FogExp2(0x0e1430,0.00006);
+  scene.fog=new THREE.FogExp2(0x0a1028,0.00004);
   var camera=new THREE.PerspectiveCamera(50,W/H,1,1200);
   camera.position.set(0,12,70);
   camera.lookAt(0,0,0);
   var renderer=new THREE.WebGLRenderer({antialias:CONF.antialias,alpha:false,powerPreference:'high-performance'});
   renderer.setSize(W,H);
   renderer.setPixelRatio(dpr);
-  renderer.setClearColor(0x0e1430,1);
+  renderer.setClearColor(0x0a1028,1);
   container.appendChild(renderer.domElement);
 
   /* ── Zone mood system — smooth interpolation per tab ── */
@@ -2128,10 +2128,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       /* ── SCROLL-DRIVEN WORLD (landing page) ── */
       var w=storyLerp(_lpProgressSmooth);
 
-      /* Fog — continuous */
+      /* Fog — use STORY color, floor at visible blue */
       scene.fog.color.setRGB(w.fc[0]/255,w.fc[1]/255,w.fc[2]/255);
       scene.fog.density=w.fd;
-      renderer.setClearColor(scene.fog.color,1);
+      /* DEBUG: bright blue-purple clear color so we can see if canvas is rendering */
+      renderer.setClearColor(0x101840,1);
 
       /* Ambient light — continuous */
       ambLight.color.setHSL(w.h/360,w.s,w.l);
