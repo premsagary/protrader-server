@@ -1535,31 +1535,31 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
   /* ── Renderer ── */
   var scene=new THREE.Scene();
-  scene.fog=new THREE.FogExp2(0x080a10,0.0015);
-  var camera=new THREE.PerspectiveCamera(42,W/H,1,800);
-  camera.position.set(0,12,90);
+  scene.fog=new THREE.FogExp2(0x06080e,0.0006);
+  var camera=new THREE.PerspectiveCamera(50,W/H,1,1200);
+  camera.position.set(0,12,70);
   camera.lookAt(0,0,0);
   var renderer=new THREE.WebGLRenderer({antialias:CONF.antialias,alpha:false,powerPreference:'high-performance'});
   renderer.setSize(W,H);
   renderer.setPixelRatio(dpr);
-  renderer.setClearColor(0x080a10,1);
+  renderer.setClearColor(0x06080e,1);
   container.appendChild(renderer.domElement);
 
   /* ── Zone mood system — smooth interpolation per tab ── */
   var ZONES={
     // Each zone: fogColor, fogDensity, ambientHue(H,S,L), cameraY, lightIntensity
-    stockrec:      {fog:0x080a10,fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35},
-    stockanalyzer: {fog:0x0a0c14,fd:0.0012,hue:[230,0.20,0.07],cy:14,li:0.50},
-    stockdata:     {fog:0x080a10,fd:0.0016,hue:[215,0.12,0.05],cy:10,li:0.30},
-    holdings:      {fog:0x0a0b0e,fd:0.0013,hue:[200,0.10,0.06],cy:11,li:0.35},
-    mf:            {fog:0x090b10,fd:0.0014,hue:[210,0.14,0.06],cy:12,li:0.35},
-    mirofish:      {fog:0x0a0d14,fd:0.0011,hue:[240,0.18,0.07],cy:15,li:0.45},
-    admin:         {fog:0x080a10,fd:0.0015,hue:[220,0.10,0.05],cy:12,li:0.25},
-    architecture:  {fog:0x080a10,fd:0.0015,hue:[220,0.10,0.05],cy:12,li:0.25},
-    _default:      {fog:0x080a10,fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35}
+    stockrec:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6},
+    stockanalyzer: {fog:0x080c16,fd:0.0004,hue:[230,0.30,0.12],cy:14,li:0.8},
+    stockdata:     {fog:0x06080e,fd:0.0006,hue:[215,0.20,0.09],cy:10,li:0.5},
+    holdings:      {fog:0x080a10,fd:0.0005,hue:[200,0.18,0.10],cy:11,li:0.6},
+    mf:            {fog:0x070a10,fd:0.0005,hue:[210,0.22,0.10],cy:12,li:0.6},
+    mirofish:      {fog:0x0a0e18,fd:0.0004,hue:[240,0.28,0.12],cy:15,li:0.8},
+    admin:         {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
+    architecture:  {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
+    _default:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6}
   };
-  var zoneCur={fog:new THREE.Color(0x080a10),fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35};
-  var zoneTgt={fog:new THREE.Color(0x080a10),fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35};
+  var zoneCur={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
+  var zoneTgt={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
   var _lastZoneMode='';
 
   function updateZoneTarget(){
@@ -1584,9 +1584,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
 
   /* ── Ambient light (zone-reactive) ── */
-  var ambLight=new THREE.AmbientLight(0x182030,0.35);
+  var ambLight=new THREE.AmbientLight(0x304060,0.6);
   scene.add(ambLight);
-  var dirLight=new THREE.DirectionalLight(0x405880,0.25);
+  var dirLight=new THREE.DirectionalLight(0x5080b0,0.5);
   dirLight.position.set(30,50,40);
   scene.add(dirLight);
 
@@ -1603,7 +1603,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
   var starGeo=new THREE.BufferGeometry();
   starGeo.setAttribute('position',new THREE.BufferAttribute(starPos,3));
-  var starMat=new THREE.PointsMaterial({color:0xb0bcd0,size:tier===0?1.2:0.8,transparent:true,opacity:0.18,sizeAttenuation:true,depthWrite:false});
+  var starMat=new THREE.PointsMaterial({color:0xc0cce0,size:tier===0?2.0:1.5,transparent:true,opacity:0.55,sizeAttenuation:true,depthWrite:false});
   var stars=new THREE.Points(starGeo,starMat);
   scene.add(stars);
 
@@ -1620,7 +1620,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
   var dustGeo=new THREE.BufferGeometry();
   dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPos,3));
-  var dustMat=new THREE.PointsMaterial({color:0x8090a8,size:tier===0?1.0:0.5,transparent:true,opacity:0.12,sizeAttenuation:true,depthWrite:false});
+  var dustMat=new THREE.PointsMaterial({color:0x90a0c0,size:tier===0?1.8:1.2,transparent:true,opacity:0.35,sizeAttenuation:true,depthWrite:false});
   var dustField=new THREE.Points(dustGeo,dustMat);
   scene.add(dustField);
 
@@ -1628,11 +1628,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   var shapes=[];
   if(CONF.shapes>0){
     var shapeDefs=[
-      {geo:new THREE.IcosahedronGeometry(8,0),pos:[-35,20,-40],color:0x405880,op:0.04,spd:[0.008,0.006]},
-      {geo:new THREE.OctahedronGeometry(5,0),pos:[40,25,-50],color:0x506888,op:0.035,spd:[-0.006,0.009]},
-      {geo:new THREE.TetrahedronGeometry(6,0),pos:[-20,-15,-35],color:0x607090,op:0.03,spd:[0.01,-0.005]},
-      {geo:new THREE.DodecahedronGeometry(4,0),pos:[30,-10,-45],color:0x4a6080,op:0.03,spd:[-0.007,0.008]},
-      {geo:new THREE.IcosahedronGeometry(10,1),pos:[0,30,-60],color:0x384868,op:0.025,spd:[0.004,0.003]}
+      {geo:new THREE.IcosahedronGeometry(10,0),pos:[-30,18,-20],color:0x5080b0,op:0.15,spd:[0.008,0.006]},
+      {geo:new THREE.OctahedronGeometry(7,0),pos:[35,22,-30],color:0x6090b8,op:0.12,spd:[-0.006,0.009]},
+      {geo:new THREE.TetrahedronGeometry(8,0),pos:[-18,-12,-15],color:0x7098b0,op:0.10,spd:[0.01,-0.005]},
+      {geo:new THREE.DodecahedronGeometry(6,0),pos:[28,-8,-25],color:0x5a80a0,op:0.10,spd:[-0.007,0.008]},
+      {geo:new THREE.IcosahedronGeometry(14,1),pos:[0,28,-35],color:0x486888,op:0.08,spd:[0.004,0.003]}
     ];
     for(var s=0;s<CONF.shapes;s++){
       var sd=shapeDefs[s];
@@ -1648,31 +1648,31 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   /* ── Ground grid plane (medium+high only) ── */
   var gridHelper=null;
   if(CONF.gridSegs>0){
-    gridHelper=new THREE.GridHelper(300,CONF.gridSegs,0x182030,0x101820);
-    gridHelper.position.y=-30;
+    gridHelper=new THREE.GridHelper(300,CONF.gridSegs,0x304060,0x1a2840);
+    gridHelper.position.y=-25;
     gridHelper.material.transparent=true;
-    gridHelper.material.opacity=0.08;
+    gridHelper.material.opacity=0.20;
     gridHelper.material.depthWrite=false;
     scene.add(gridHelper);
   }
 
   /* ── Volumetric cone light (subtle god-ray from above) ── */
-  var coneGeo=new THREE.ConeGeometry(50,100,16,1,true);
-  var coneMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.008,side:THREE.DoubleSide,depthWrite:false});
+  var coneGeo=new THREE.ConeGeometry(60,120,16,1,true);
+  var coneMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0.035,side:THREE.DoubleSide,depthWrite:false});
   var lightCone=new THREE.Mesh(coneGeo,coneMat);
-  lightCone.position.set(0,50,0);lightCone.rotation.x=Math.PI;
+  lightCone.position.set(0,60,0);lightCone.rotation.x=Math.PI;
   scene.add(lightCone);
 
-  /* ── Central glow orb (very subtle focal point) ── */
-  var orbGeo=new THREE.SphereGeometry(3,16,16);
-  var orbMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.025,depthWrite:false});
+  /* ── Central glow orb (focal point with breathing) ── */
+  var orbGeo=new THREE.SphereGeometry(5,16,16);
+  var orbMat=new THREE.MeshBasicMaterial({color:0x5080b0,transparent:true,opacity:0.08,depthWrite:false});
   var orb=new THREE.Mesh(orbGeo,orbMat);
-  orb.position.set(0,5,-20);
+  orb.position.set(0,5,-10);
   scene.add(orb);
-  var orbOuterGeo=new THREE.SphereGeometry(7,16,16);
-  var orbOuterMat=new THREE.MeshBasicMaterial({color:0x304060,transparent:true,opacity:0.012,depthWrite:false});
+  var orbOuterGeo=new THREE.SphereGeometry(12,16,16);
+  var orbOuterMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.04,depthWrite:false});
   var orbOuter=new THREE.Mesh(orbOuterGeo,orbOuterMat);
-  orbOuter.position.set(0,5,-20);
+  orbOuter.position.set(0,5,-10);
   scene.add(orbOuter);
 
   /* ── Mouse parallax ── */
@@ -1776,34 +1776,34 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
     }
     dustGeo.attributes.position.needsUpdate=true;
-    dustMat.opacity=0.10+0.04*Math.sin(t*0.4);
+    dustMat.opacity=0.28+0.12*Math.sin(t*0.4);
 
     /* ── Wireframe shapes — rotate + bob ── */
     for(var si=0;si<shapes.length;si++){
       var sh=shapes[si];var ud=sh.userData;
       sh.rotation.x=t*ud.spd[0];
       sh.rotation.y=t*ud.spd[1];
-      sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*3;
-      // Zone reactive — slightly brighter in active zones
-      sh.material.opacity=ud.baseOp*(0.8+zoneCur.li*0.6);
+      sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*4;
+      // Zone reactive — brighter in active zones
+      sh.material.opacity=ud.baseOp*(0.7+zoneCur.li*0.8);
     }
 
     /* ── Ground grid parallax ── */
     if(gridHelper){
       gridHelper.position.z=scrollProg*(-20);
-      gridHelper.material.opacity=0.06+scrollProg*0.04;
+      gridHelper.material.opacity=0.15+scrollProg*0.08;
     }
 
     /* ── Light cone breathe ── */
-    coneMat.opacity=0.006+0.004*Math.sin(t*0.25);
+    coneMat.opacity=0.025+0.015*Math.sin(t*0.25);
     lightCone.rotation.y=t*0.015;
 
     /* ── Central orb breathe ── */
-    var bsc=1+0.12*Math.sin(t*0.35);
+    var bsc=1+0.15*Math.sin(t*0.35);
     orb.scale.set(bsc,bsc,bsc);
-    orbMat.opacity=0.018+0.012*Math.sin(t*0.4);
+    orbMat.opacity=0.06+0.03*Math.sin(t*0.4);
     orbOuter.scale.set(bsc*0.95,bsc*0.95,bsc*0.95);
-    orbOuterMat.opacity=0.008+0.006*Math.sin(t*0.3);
+    orbOuterMat.opacity=0.03+0.015*Math.sin(t*0.3);
 
     renderer.render(scene,camera);
   }
