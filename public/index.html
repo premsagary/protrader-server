@@ -17,10 +17,10 @@
   /* ── Core surfaces: charcoal → obsidian depth ── */
   --bg:#08090c;--bg2:#0e1014;--bg3:#15171d;--bg4:#1c1f28;
   /* ── Glass surfaces (for glassmorphism) ── */
-  --glass:rgba(14,16,20,0.7);--glass-border:rgba(255,255,255,0.04);
-  --glass-hover:rgba(20,22,28,0.8);--glass-glow:rgba(120,160,220,0.03);
+  --glass:rgba(14,16,20,0.82);--glass-border:rgba(255,255,255,0.06);
+  --glass-hover:rgba(20,22,28,0.88);--glass-glow:rgba(120,160,220,0.03);
   /* ── Typography: ash-white hierarchy ── */
-  --text:#d4d0c8;--text2:#8a8680;--text3:#5a5650;
+  --text:#e0ddd6;--text2:#a09c96;--text3:#706c66;
   /* ── Borders: barely-there silver ── */
   --border:#1a1d26;--border2:#252830;
   /* ── Semantic colors (muted, sophisticated) ── */
@@ -30,7 +30,7 @@
   --blue:#6098d0;--blue-bg:rgba(96,152,208,0.06);--blue-text:#6098d0;
   --purple:#9080c0;--purple-bg:rgba(144,128,192,0.06);--purple-text:#9080c0;
   --teal:#50b8a0;--accent:#7898c0;
-  --text4:#3a3830;--border3:#121418;
+  --text4:#4a4840;--border3:#121418;
   --amber-bright:#d4a040;--emerald:#50b8a0;
   /* ── Shiva sacred tokens ── */
   --shiva-blue:#4070a8;--shiva-blue-glow:rgba(64,112,168,0.12);
@@ -58,6 +58,18 @@ body.in-app{overflow:hidden}
 body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
   background:var(--bg);color:var(--text);font-size:13px;display:flex;flex-direction:column;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+
+/* ── Global contrast scrim — darkens center behind UI, above 3D canvas ── */
+#contrast-scrim{position:fixed;inset:0;pointer-events:none;z-index:1;
+  background:radial-gradient(ellipse 70% 60% at 50% 50%,rgba(8,9,12,0.55),rgba(8,9,12,0.25) 60%,transparent 100%)}
+/* ── Dynamic background dim on interaction (typing, modal, analyzer) ── */
+body.ui-focus #shiva-app-canvas,body.ui-focus #three-app,body.ui-focus .vol-light{opacity:0.45;transition:opacity 0.8s ease}
+#shiva-app-canvas,#three-app,.vol-light{transition:opacity 0.8s ease}
+/* ── Text backplate shadows for readability over particles ── */
+.lp-hero h1,.lp-hero-sub,.lp-section-title,.lp-section-label,.analyzer-header h1,
+.login-card div[style*="font-size:22px"],.sec-title,.picks-wrap>div:first-child{
+  text-shadow:0 1px 6px rgba(0,0,0,0.6),0 0 20px rgba(8,9,12,0.4)}
+.topbar,.stat-grid,.tw table th{text-shadow:0 1px 3px rgba(0,0,0,0.4)}
 
 /* -- LAYOUT -- */
 #app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative}
@@ -1063,7 +1075,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .login-card-wrap{perspective:900px;z-index:2}
 .login-card{
   position:relative;width:380px;padding:48px 40px 40px;border-radius:16px;text-align:center;
-  background:rgba(12,14,18,0.65);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);
+  background:rgba(12,14,18,0.82);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);
   border:1px solid rgba(255,255,255,0.04);
   box-shadow:0 30px 80px rgba(0,0,0,0.5),0 0 1px rgba(255,255,255,0.05);
   transform:rotateX(0deg) rotateY(0deg);transform-style:preserve-3d;
@@ -1087,11 +1099,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Inputs (premium dark glass) ── */
 .login-input{
   width:100%;box-sizing:border-box;padding:14px 16px;font-size:13px;font-weight:400;
-  background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.05);
-  border-radius:10px;color:#d4d0c8;outline:none;margin-bottom:12px;letter-spacing:0.2px;
+  background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);
+  border-radius:10px;color:#e0ddd6;outline:none;margin-bottom:12px;letter-spacing:0.2px;
   transition:all 0.3s ease;
 }
-.login-input::placeholder{color:rgba(138,134,128,0.4);font-weight:400}
+.login-input::placeholder{color:rgba(160,156,148,0.55);font-weight:400}
 .login-input:focus{border-color:rgba(128,160,200,0.2);background:rgba(128,160,200,0.02);
   box-shadow:0 0 0 3px rgba(128,160,200,0.04),0 0 30px rgba(128,160,200,0.02)}
 
@@ -1239,7 +1251,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     var starBufGeo=new THREE.BufferGeometry();
     starBufGeo.setAttribute('position',new THREE.BufferAttribute(starPositions,3));
     starBufGeo.setAttribute('size',new THREE.BufferAttribute(starSizes,1));
-    var starMat=new THREE.PointsMaterial({color:0xc8d0e0,size:1.2,transparent:true,opacity:0.4,sizeAttenuation:true});
+    var starMat=new THREE.PointsMaterial({color:0xc8d0e0,size:1.0,transparent:true,opacity:0.25,sizeAttenuation:true});
     var stars=new THREE.Points(starBufGeo,starMat);
     scene.add(stars);
 
@@ -1253,7 +1265,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     }
     var dustBufGeo=new THREE.BufferGeometry();
     dustBufGeo.setAttribute('position',new THREE.BufferAttribute(dustPositions,3));
-    var dustMat=new THREE.PointsMaterial({color:0xa09070,size:0.8,transparent:true,opacity:0.2,sizeAttenuation:true});
+    var dustMat=new THREE.PointsMaterial({color:0xa09070,size:0.7,transparent:true,opacity:0.12,sizeAttenuation:true});
     var dustCloud=new THREE.Points(dustBufGeo,dustMat);
     scene.add(dustCloud);
 
@@ -1462,6 +1474,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 <!-- Mahadev ambient canvas — subtle smoke & floating dust for main app -->
 <canvas id="shiva-app-canvas" style="position:fixed;inset:0;pointer-events:none;z-index:0"></canvas>
+<div id="contrast-scrim"></div>
 <script>
 (function(){
   var c=document.getElementById('shiva-app-canvas');if(!c)return;
@@ -1473,10 +1486,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   var smokeCount=isMobile?8:18;var dustCount=isMobile?6:15;
   var pts=[];for(var i=0;i<smokeCount;i++){pts.push({x:Math.random()*2000,y:Math.random()*2000,
     r:Math.random()*100+30,vx:(Math.random()-0.5)*0.08,vy:-Math.random()*0.12-0.02,
-    o:Math.random()*0.012+0.003,ph:Math.random()*6.28});}
+    o:Math.random()*0.008+0.002,ph:Math.random()*6.28});}
   var dots=[];for(var j=0;j<dustCount;j++){dots.push({x:Math.random()*2000,y:Math.random()*2000,
     r:Math.random()+0.3,vx:(Math.random()-0.5)*0.1,vy:-Math.random()*0.08-0.01,
-    o:Math.random()*0.12+0.03,ph:Math.random()*6.28});}
+    o:Math.random()*0.07+0.02,ph:Math.random()*6.28});}
   var paused=false;
   document.addEventListener('visibilitychange',function(){paused=document.hidden;if(!paused&&!reducedMotion)requestAnimationFrame(dr);});
   function dr(){if(paused||reducedMotion)return;ctx.clearRect(0,0,W,H);var t=Date.now()*0.001;
@@ -1532,7 +1545,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   }
   var sGeo=new THREE.BufferGeometry();
   sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
-  var sMat=new THREE.PointsMaterial({color:0xa0b0c8,size:0.6,transparent:true,opacity:0.15,sizeAttenuation:true});
+  var sMat=new THREE.PointsMaterial({color:0xa0b0c8,size:0.5,transparent:true,opacity:0.10,sizeAttenuation:true});
   var starField=new THREE.Points(sGeo,sMat);
   scene.add(starField);
 
@@ -1645,6 +1658,24 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     btn.style.overflow='hidden';
     btn.appendChild(ripple);
     setTimeout(function(){ripple.remove()},700);
+  });
+
+  /* ── Dynamic background dimming — dim particles when user is interacting ── */
+  var _uiFocusTimer=null;
+  function _setUiFocus(on){
+    clearTimeout(_uiFocusTimer);
+    if(on){document.body.classList.add('ui-focus');}
+    else{_uiFocusTimer=setTimeout(function(){document.body.classList.remove('ui-focus');},1200);}
+  }
+  document.addEventListener('focusin',function(e){
+    if(e.target.matches('input,textarea,select,[contenteditable]'))_setUiFocus(true);
+  });
+  document.addEventListener('focusout',function(e){
+    if(e.target.matches('input,textarea,select,[contenteditable]'))_setUiFocus(false);
+  });
+  document.addEventListener('keydown',function(){_setUiFocus(true);});
+  document.addEventListener('keyup',function(){
+    if(!document.activeElement||!document.activeElement.matches('input,textarea,select,[contenteditable]'))_setUiFocus(false);
   });
 })();
 </script>
