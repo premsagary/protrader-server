@@ -190,7 +190,10 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 
 /* -- TABLES -- */
 .tw{overflow-x:auto;border-radius:var(--radius-lg);border:1px solid var(--border);
-  box-shadow:0 2px 20px rgba(0,0,0,0.15)}
+  box-shadow:0 2px 20px rgba(0,0,0,0.15);
+  transition:box-shadow 0.4s var(--ease-out-expo),border-color 0.3s}
+.tw:hover{box-shadow:0 6px 28px rgba(0,0,0,0.22),0 0 0 1px rgba(64,112,168,0.06);
+  border-color:rgba(64,112,168,0.08)}
 table{width:100%;border-collapse:collapse;background:var(--bg2)}
 thead{background:var(--bg3)}
 th{
@@ -633,6 +636,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 @keyframes tabSlideIn{0%{opacity:0;transform:translateX(20px) translateZ(-10px)}100%{opacity:1;transform:translateX(0) translateZ(0)}}
 .tab-slide-enter{animation:tabSlideIn 0.4s var(--ease-out-expo) both}
 
+/* ── Disclaimer banner — visible on every page ── */
+#disclaimer-bar{position:fixed;bottom:0;left:0;right:0;z-index:999;
+  background:rgba(12,14,20,0.95);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-top:1px solid rgba(224,96,96,0.15);padding:8px 24px;
+  font-size:10px;color:var(--text3);text-align:center;line-height:1.6;letter-spacing:0.2px}
+#disclaimer-bar strong{color:var(--shiva-gold);font-weight:600}
+#disclaimer-bar .disc-close{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:var(--text4);cursor:pointer;font-size:14px;padding:4px 8px}
 /* ── Three.js canvas container ── */
 #three-login{position:absolute;inset:0;z-index:0}
 #three-login canvas{display:block}
@@ -1018,24 +1029,24 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   <div class="lp-logo"><span class="lp-logo-dot"></span>ProTrader</div>
   <div class="lp-nav-links">
     <a href="#how">How It Works</a>
-    <a href="#pricing">Pricing</a>
-    <a onclick="showLoginFromLanding()" class="lp-cta-sm" style="cursor:pointer">Sign In</a>
+    <a href="#features">Features</a>
+    <a onclick="enterFreeMode()" class="lp-cta-sm" style="cursor:pointer">Explore Free</a>
   </div>
 </nav>
 
 <!-- Hero — problem → solution → proof -->
 <section class="lp-hero">
-  <div class="lp-hero-badge">Varsity-grounded · 500+ NSE stocks · Real-time NSE data</div>
+  <div class="lp-hero-badge">Free Access · 500+ NSE stocks · Real-time NSE data</div>
   <h1>Stop guessing. <strong>Start analyzing.</strong></h1>
-  <p class="lp-hero-sub">Most retail traders rely on tips, gut feel, or a single screener. ProTrader runs every NSE stock through a 14-point Varsity checklist, maps exact buy zones, then sends it to 5 independent AI models for a second opinion — so you trade with evidence, not hope.</p>
+  <p class="lp-hero-sub">ProTrader runs every NSE stock through a 14-point Varsity checklist, maps exact buy zones, and scores them across 30+ indicators — completely free. No signup, no login, no card required.</p>
   <div class="lp-hero-cta">
-    <button class="lp-btn-primary" onclick="showLoginFromLanding()">Try Free — No Card Required</button>
+    <button class="lp-btn-primary" onclick="enterFreeMode()">Explore Now — It's Free</button>
     <a href="#example" class="lp-btn-ghost">See an Example Analysis</a>
   </div>
   <div class="lp-hero-trust">
-    <span>🔒 No payment info needed to start</span>
+    <span>🔓 No signup required</span>
     <span>📊 Full analysis in under 10 seconds</span>
-    <span>🧠 5 AI models cross-check every verdict</span>
+    <span>🆓 100% free — no hidden costs</span>
   </div>
 </section>
 
@@ -1092,7 +1103,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         <strong style="color:var(--text2)">AI Council Summary:</strong> 4 of 5 models rate bullish. Strong fundamentals (low debt, healthy margins), uptrend above 200DMA. Risk: P/E slightly elevated vs sector median. Buy zone: ₹1,220–₹1,260 with stop-loss at ₹1,180.
       </div>
       <div style="text-align:center;margin-top:16px">
-        <button class="lp-btn-primary" onclick="showLoginFromLanding()" style="font-size:12px;padding:10px 24px">Try it yourself — it's free</button>
+        <button class="lp-btn-primary" onclick="enterFreeMode()" style="font-size:12px;padding:10px 24px">Open Deep Analyzer — it's free</button>
       </div>
     </div>
   </div>
@@ -1137,19 +1148,20 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   </div>
 </section>
 
-<!-- Pricing — ROI framing -->
+<!-- Pricing — free access -->
 <hr class="lp-section-divider">
 <section class="lp-pricing" id="pricing" style="scroll-margin-top:80px">
-  <div class="lp-section-label">Plans</div>
-  <div class="lp-section-title">Less than a single brokerage fee</div>
+  <div class="lp-section-label">Access</div>
+  <div class="lp-section-title">Completely free. No strings attached.</div>
   <div style="text-align:center;font-size:12px;color:var(--text3);margin-top:-36px;margin-bottom:36px;max-width:480px;margin-left:auto;margin-right:auto;line-height:1.6">
-    One avoided bad trade saves more than a year of Pro. One well-timed entry based on real analysis pays for itself in a single session.
+    ProTrader is free during our public beta. No signup, no credit card, no trial expiration. Just open and start analyzing.
   </div>
-  <div class="lp-price-grid">
-    <div class="lp-price-card">
-      <div class="lp-price-name">Starter</div>
+  <div style="max-width:400px;margin:0 auto">
+    <div class="lp-price-card featured">
+      <div class="lp-price-badge" style="display:inline-block;background:rgba(94,204,138,0.1);color:var(--green)">Free Public Beta</div>
+      <div class="lp-price-name">Full Access</div>
       <div class="lp-price-cost">₹0<span> / forever</span></div>
-      <div class="lp-price-desc">Full platform access — no restrictions, no card required</div>
+      <div class="lp-price-desc">Everything included — no restrictions, no signup required</div>
       <ul class="lp-price-list">
         <li>Deep Analyzer — 14-point Varsity checklist, 30+ indicators</li>
         <li>Stock Picks — Rebound, Momentum &amp; Long-Term lists</li>
@@ -1157,44 +1169,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         <li>Holdings tracker with live P&amp;L</li>
         <li>Stock Data browser (500+ NSE stocks)</li>
         <li>Support/resistance, Fibonacci levels &amp; buy zones</li>
+        <li style="color:var(--text3);font-style:italic">AI Deep Analysis — Coming Soon</li>
       </ul>
-      <button class="lp-price-btn" onclick="showLoginFromLanding()">Start Free</button>
-    </div>
-    <div class="lp-price-card featured">
-      <div class="lp-price-badge" style="display:inline-block">Coming Soon</div>
-      <div class="lp-price-name">Pro</div>
-      <div class="lp-price-cost">₹499<span> / month</span></div>
-      <div class="lp-price-desc">For active traders who want every edge</div>
-      <ul class="lp-price-list">
-        <li>Everything in Starter — unlimited</li>
-        <li>AI Council Reviews — 5-model second opinion per stock</li>
-        <li>Holdings AI Review (entire portfolio)</li>
-        <li>Priority data refresh (15s vs 60s)</li>
-        <li>Advanced alerts &amp; notifications</li>
-        <li>Early access to new features</li>
-      </ul>
-      <button class="lp-price-btn" style="opacity:0.5;cursor:default" disabled>Launching Soon</button>
-      <div style="font-size:10px;color:var(--text4);margin-top:8px">We'll notify you when Pro is available.</div>
-    </div>
-    <div class="lp-price-card">
-      <div class="lp-price-badge" style="display:inline-block;background:rgba(160,136,72,0.12);color:var(--shiva-gold)">Coming Soon</div>
-      <div class="lp-price-name">Institutional</div>
-      <div class="lp-price-cost">₹2,499<span> / month</span></div>
-      <div class="lp-price-desc">For RIAs, advisors, and prop desks</div>
-      <ul class="lp-price-list">
-        <li>Everything in Pro — unlimited</li>
-        <li>API access for custom integrations</li>
-        <li>Custom scoring model parameters</li>
-        <li>Multi-portfolio management</li>
-        <li>Dedicated support channel</li>
-        <li>White-label reports</li>
-      </ul>
-      <button class="lp-price-btn" style="opacity:0.5;cursor:default" disabled>Launching Soon</button>
+      <button class="lp-price-btn" onclick="enterFreeMode()">Explore Now</button>
     </div>
   </div>
   <div class="lp-roi">
-    <div class="lp-roi-val">₹499 / month = ₹17 / day</div>
-    <div class="lp-roi-desc">That's less than a cup of chai. One well-researched trade that avoids a 5% loss on a ₹50,000 position saves you ₹2,500 — five months of Pro.</div>
+    <div class="lp-roi-val">Why free?</div>
+    <div class="lp-roi-desc">We believe retail traders deserve institutional-grade analysis tools. Premium AI features will be available later — but the core platform stays free.</div>
   </div>
 </section>
 
@@ -1213,8 +1195,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 <!-- Footer -->
 <div class="lp-footer">
   <div style="margin-bottom:8px"><span class="lp-logo" style="font-size:13px;display:inline-flex"><span class="lp-logo-dot" style="width:5px;height:5px"></span>ProTrader</span></div>
-  <div>Varsity-grounded analysis · Educational use only · Not SEBI-registered</div>
-  <div style="margin-top:6px;color:rgba(255,255,255,0.1)"></div>
+  <div style="max-width:700px;margin:0 auto;line-height:1.7;color:var(--text3)">
+    <strong style="color:var(--shiva-gold)">Disclaimer:</strong> ProTrader is <strong style="color:var(--text2)">not SEBI registered</strong> and does not provide financial advice. All data, scores, and AI outputs are for <strong style="color:var(--text2)">educational and informational purposes only</strong>. Data may be delayed or inaccurate. You are fully responsible for your own investment decisions, profits, and losses. This is a free tool for learning — not a substitute for professional financial advice.
+  </div>
+  <div style="margin-top:12px;font-size:9px;color:var(--text4)">Free public beta · <a onclick="showAdminLogin()" style="color:var(--text4);cursor:pointer;text-decoration:underline;opacity:0.5">Admin</a></div>
 </div>
 </div>
 
@@ -1341,9 +1325,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 <div class="login-card-wrap">
   <div class="login-card" id="login-card">
     <div class="login-sheen" id="login-sheen"></div>
-    <div style="font-weight:300;font-size:22px;margin-bottom:28px;color:#d4d0c8;letter-spacing:3px;text-transform:uppercase;
+    <div style="font-weight:300;font-size:22px;margin-bottom:6px;color:#d4d0c8;letter-spacing:3px;text-transform:uppercase;
       transform:translateZ(20px);animation:titleReveal 1s ease-out 0.5s both">ProTrader</div>
-    <input id="login-username" type="text" placeholder="Username" autocomplete="username" class="login-input" aria-label="Username"
+    <div style="font-size:10px;color:var(--text4);letter-spacing:1px;text-transform:uppercase;margin-bottom:24px;animation:fieldReveal 0.8s ease-out 0.6s both">Admin Access</div>
+    <input id="login-username" type="text" placeholder="Admin Username" autocomplete="username" class="login-input" aria-label="Username"
       onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()"
       oninput="document.getElementById('login-error').style.display='none'"
       style="animation:fieldReveal 0.8s ease-out 0.8s both"/>
@@ -1352,9 +1337,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       oninput="document.getElementById('login-error').style.display='none'"
       style="animation:fieldReveal 0.8s ease-out 0.9s both"/>
     <div id="login-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
-    <button onclick="doLogin()" id="login-btn" class="login-btn-3d" style="animation:fieldReveal 0.8s ease-out 1s both">Sign In</button>
+    <button onclick="doLogin()" id="login-btn" class="login-btn-3d" style="animation:fieldReveal 0.8s ease-out 1s both">Admin Sign In</button>
     <div class="login-divider"></div>
-    <div style="margin-top:12px"><a onclick="showLanding()" class="login-back-link">&larr; Back to home</a></div>
+    <div style="margin-top:12px"><a onclick="enterFreeMode()" class="login-back-link">&larr; Back to free platform</a></div>
   </div>
 </div>
 
@@ -1631,8 +1616,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   <!-- Step 1: Welcome + Quick start stocks -->
   <div class="ob-step active" data-step="0">
     <div class="ob-icon">🔍</div>
-    <div class="ob-title">Welcome to ProTrader</div>
-    <div class="ob-desc">Pick a stock to see a full Varsity-grounded analysis in seconds, or skip to explore on your own.</div>
+    <div class="ob-title">Welcome to ProTrader — It's Free</div>
+    <div class="ob-desc">No signup needed. Pick a stock to see a full Varsity-grounded analysis in seconds, or skip to explore on your own.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:20px">
       <div class="qs-stock" onclick="obGoAnalyze('RELIANCE')"><div class="qs-stock-sym">RELIANCE</div><div class="qs-stock-score" style="color:var(--text3)">Nifty 50</div></div>
       <div class="qs-stock" onclick="obGoAnalyze('TCS')"><div class="qs-stock-sym">TCS</div><div class="qs-stock-score" style="color:var(--text3)">Nifty 50</div></div>
@@ -2679,9 +2664,14 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
   <div style="display:flex;gap:8px;align-items:center;margin-left:12px;flex-shrink:0">
-    <span id="user-badge" style="font-size:11px;color:var(--text3)"></span>
+    <span id="free-badge" style="font-size:9px;color:var(--green);background:rgba(94,204,138,0.08);border:1px solid rgba(94,204,138,0.15);padding:3px 10px;border-radius:12px;letter-spacing:0.5px;font-weight:600">FREE BETA</span>
+    <span id="user-badge" style="font-size:11px;color:var(--text3);display:none"></span>
     <button id="logout-btn" onclick="doLogout()" style="font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;font-weight:600;display:none;transition:all 0.2s" onmouseover="this.style.background='rgba(224,96,96,0.06)';this.style.borderColor='rgba(224,96,96,0.15)'" onmouseout="this.style.background='transparent';this.style.borderColor='var(--border)'">Logout</button>
   </div>
+</div>
+<!-- DISCLAIMER STRIP -->
+<div id="app-disclaimer" style="background:rgba(160,136,72,0.06);border-bottom:1px solid rgba(160,136,72,0.1);padding:5px 16px;font-size:9.5px;color:var(--text3);text-align:center;letter-spacing:0.2px;line-height:1.5;flex-shrink:0">
+  <strong style="color:var(--shiva-gold)">Not financial advice</strong> · Not SEBI registered · Educational purpose only · Data may be delayed · You are responsible for your own investment decisions and outcomes
 </div>
 <!-- SUB TABS -->
 <div class="subtabs" id="subtabs"></div>
@@ -2947,6 +2937,11 @@ function _readHash(){
 }
 
 function setMode(mode){
+  /* Block public users from accessing admin-only modes */
+  var _publicModes = ['stockanalyzer','stockrec','mf','holdings','stockdata'];
+  if(_isPublicUser() && _publicModes.indexOf(mode) < 0){
+    mode = 'stockanalyzer'; /* fallback to Deep Analyzer */
+  }
   S.mode=mode;
   window._currentMode = mode;
   _updateHash();
@@ -2965,8 +2960,8 @@ function setMode(mode){
   try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab admin-only"+(mode==="admin"    ?" active":""); }catch(e){}
   // Re-enforce admin-only visibility after className reset
-  var _isAdmin = _authUser && _authUser.role === 'admin';
-  document.querySelectorAll('.admin-only').forEach(function(el){ el.style.display = _isAdmin ? '' : 'none'; });
+  var _isAdm = _authUser && _authUser.role === 'admin';
+  document.querySelectorAll('.admin-only').forEach(function(el){ el.style.display = _isAdm ? '' : 'none'; });
   if(mode==="mf"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){ console.log("renderTopBar error:", e.message); }
@@ -5101,7 +5096,7 @@ async function renderMFPage(){
       dniContainer.style.cssText='margin-bottom:24px;border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-lg);overflow:hidden;background:var(--bg2)';
       var dniHeader=document.createElement('div');
       dniHeader.style.cssText='display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.2)';
-      dniHeader.innerHTML='<span style="font-size:14px">🚫</span><span style="font-weight:700;font-size:13px;color:var(--red)">Do Not Invest</span><span style="font-size:11px;color:var(--text3);margin-left:4px">('+sortedDni.length+' funds flagged)</span>';
+      dniHeader.innerHTML='<span style="font-size:14px">⚠️</span><span style="font-weight:700;font-size:13px;color:var(--shiva-gold)">Warning Before Buying These MFs</span><span style="font-size:11px;color:var(--text3);margin-left:4px">('+sortedDni.length+' funds flagged)</span>';
       dniContainer.appendChild(dniHeader);
       var dniTable=document.createElement('table');
       dniTable.style.cssText='width:100%;border-collapse:collapse;font-size:11px';
@@ -6368,8 +6363,13 @@ function buildUI(d){
   html+='<div class="analyzer-section-title" style="color:var(--shiva-blue);margin-bottom:4px">AI Second Opinion</div>';
   html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">5-model AI council (Varsity + Pure lenses) → Claude Sonnet 4.6 judge → final verdict with score</div>';
   html+='</div>';
-  html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">';
-  html+='<span>Run AI Review</span></button></div>';
+  if(_isPublicUser()){
+    html+='<button disabled style="background:rgba(64,112,168,0.08);color:rgba(64,112,168,0.5);border:1px solid rgba(64,112,168,0.1);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:not-allowed;display:flex;align-items:center;gap:6px;opacity:0.65">';
+    html+='<span>🧠 AI Review — Coming Soon</span></button></div>';
+  } else {
+    html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">';
+    html+='<span>Run AI Review</span></button></div>';
+  }
   html+='<div id="ai-review-result" style="margin-top:8px"></div>';
   html+='</div>';
 
@@ -7569,6 +7569,11 @@ function _escHtml(s) {
 
 // The "🧠 Deep AI Review" button that sits next to each column header.
 function _picksAIButton(category) {
+  if(_isPublicUser()){
+    return '<button disabled title="AI Deep Review — available in a future update" '
+      + 'style="background:linear-gradient(135deg,rgba(139,92,246,0.3),rgba(100,100,120,0.3));color:rgba(255,255,255,0.5);border:none;border-radius:6px;padding:5px 12px;font-size:10px;font-weight:800;cursor:not-allowed;opacity:0.65;box-shadow:none;white-space:nowrap">'
+      + '🧠 AI Deep Review — Coming Soon</button>';
+  }
   var meta = _PICKS_CAT_META[category];
   var running = _picksAIRunning[category];
   var btnLabel = running ? '🧠 Running…' : '🧠 Deep AI Review';
@@ -7826,6 +7831,11 @@ var _MF_CAT_META = {
 
 // The "🧠 Deep AI Review" button that sits next to each MF category header.
 function _mfAIButton(category) {
+  if(_isPublicUser()){
+    return '<button disabled title="AI Deep Review — available in a future update" '
+      + 'style="background:linear-gradient(135deg,rgba(139,92,246,0.3),rgba(100,100,120,0.3));color:rgba(255,255,255,0.5);border:none;border-radius:6px;padding:5px 12px;font-size:10px;font-weight:800;cursor:not-allowed;opacity:0.65;box-shadow:none;white-space:nowrap">'
+      + '🧠 AI Deep Review — Coming Soon</button>';
+  }
   var meta = _MF_CAT_META[category];
   var running = _mfAIRunning[category];
   var btnLabel = running ? '🧠 Running…' : '🧠 Deep AI Review';
@@ -8403,23 +8413,23 @@ async function renderStockDataPage(){
   var mcFilters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
   mcFilters.forEach(function(f){
     var active = stockDataFilter===f;
-    html += '<button class="tilt-3d" onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:20px;border:1px solid '
+    html += '<button class="tilt-3d" onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
       + (active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
       + (active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px">'
+      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
       + f+'</button>';
   });
   html += '</div>';
 
   // ── Sub-tab bar ──
-  html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px">';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">';
   TAB_DEFS.forEach(function(t){
     var isActive = stockDataTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button class="tilt-3d" onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:var(--radius);border:1px solid '
-      + (isActive?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(isActive?'rgba(64,112,168,0.1)':'rgba(255,255,255,0.02)')
+    html += '<button class="tilt-3d" onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+      + (isActive?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(isActive?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
       + ';color:'+(isActive?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'600':'400')
-      + ';white-space:nowrap;letter-spacing:0.2px">'
+      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px)">'
       + t.label+' <span style="font-size:9px;opacity:0.5">('+colCount+')</span></button>';
   });
   html += '</div>';
@@ -9143,10 +9153,14 @@ function renderHoldingsPage(){
   // Header row
   h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">';
   h += '<div><div style="font-weight:300;font-size:20px;letter-spacing:0.5px;color:var(--text)">Holdings</div>';
-  h += '<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Your portfolio · live CMP + P&L · Varsity-grounded AI review across 5 models</div></div>';
+  h += '<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Your portfolio · live CMP + P&amp;L'+(_isAdmin()?' · Varsity-grounded AI review across 5 models':' · AI review coming soon')+'</div></div>';
   h += '<div style="margin-left:auto;display:flex;gap:8px">';
   h += '<button onclick="loadHoldings()" class="btn btn-sm">Refresh</button>';
-  h += '<button id="holdings-ai-btn" onclick="runHoldingsAIReview()" style="background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Deep AI Review</button>';
+  if(_isPublicUser()){
+    h += '<button disabled style="background:rgba(64,112,168,0.08);color:rgba(64,112,168,0.5);border:1px solid rgba(64,112,168,0.1);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:not-allowed;opacity:0.65;letter-spacing:0.3px">🧠 Deep AI Review — Coming Soon</button>';
+  } else {
+    h += '<button id="holdings-ai-btn" onclick="runHoldingsAIReview()" style="background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Deep AI Review</button>';
+  }
   h += '</div>';
   h += '</div>';
 
@@ -9891,7 +9905,11 @@ function psRenderLongTermTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">4-pillar Varsity model: Quality 40% + Growth 25% + Valuation 20% + Business 15%. Buy-and-hold · 12M horizon · Max 15 stocks · Max 3 per sector · 5–25% per position · DC floor 0.6.</div>';
-  h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  if(_isPublicUser()){
+    h+='<button disabled style="background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(34,211,238,.08));color:rgba(34,197,94,0.4);border:1px solid rgba(34,197,94,.12);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;opacity:0.65">🧠 AI Deep Review — Coming Soon</button>';
+  } else {
+    h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  }
   h+='</div>';
   h+='<div id="lt-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:10px;color:var(--text3);max-height:180px;overflow-y:auto"></div>';
   h+='</div>';
@@ -10155,7 +10173,11 @@ function psRenderModelTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">5-factor model: FA 30% + TA 25% + Valuation 15% + Momentum 15% + Risk 15%. Market regime-aware cash allocation. Sector diversification.</div>';
-  h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  if(_isPublicUser()){
+    h+='<button disabled style="background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(34,211,238,.08));color:rgba(34,197,94,0.4);border:1px solid rgba(34,197,94,.12);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;opacity:0.65">🧠 AI Deep Review — Coming Soon</button>';
+  } else {
+    h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+  }
   h+='</div>';
   h+='<div id="ps-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-family:monospace;font-size:10px;color:var(--text3);max-height:150px;overflow-y:auto"></div>';
   h+='</div>';
@@ -12213,7 +12235,7 @@ function _init() {
   _inited = true;
   // Restore tab from URL hash, or default to MF Recommendation
   var saved = _readHash();
-  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','admin'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','architecture'];
   var validStockTabs = ['overview','positions','signals','trades','market','chart','news'];
   var validCryptoTabs = ['overview','positions','signals','trades','market','chart','news'];
 
@@ -12236,7 +12258,7 @@ window.addEventListener('hashchange', function(){
   if(_hashUpdating) return;
   var h = _readHash();
   if(!h) return;
-  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','admin'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','architecture'];
   if(validModes.indexOf(h.mode) < 0) return;
   if(h.mode === S.mode && !h.tab) return;
   if(h.mode === 'stocks' && h.tab) S.stocksTab = h.tab;
@@ -12265,19 +12287,25 @@ window.fetch = function(url, opts) {
     }
   }
   return _origFetch.call(window, url, opts).then(function(resp){
-    // If 401 on any API call, force logout — but don't wipe login form if user is already there
+    // If 401 on any API call — for admin users, force logout; for public users, silently ignore
     if(resp.status === 401 && typeof url === 'string' && url.startsWith('/api') && !url.startsWith('/api/auth')){
-      _authToken = null;
-      _authUser = null;
-      try{ localStorage.removeItem('pt_token'); }catch(e){}
-      _clearFetchIntervals();
-      var loginVisible = document.getElementById('login-screen') && document.getElementById('login-screen').style.display === 'flex';
-      var landingVisible = document.getElementById('landing-page') && document.getElementById('landing-page').style.display !== 'none';
-      if(!loginVisible && !landingVisible) showLanding();
+      if(_authToken){
+        /* Admin session expired — clear and return to landing */
+        _authToken = null;
+        _authUser = null;
+        try{ localStorage.removeItem('pt_token'); }catch(e){}
+        _clearFetchIntervals();
+        showLanding();
+      }
+      /* Public users: 401 is expected for AI endpoints — silently handled */
     }
     return resp;
   });
 };
+
+/* ── Role helpers ── */
+function _isAdmin(){ return _authUser && _authUser.role === 'admin'; }
+function _isPublicUser(){ return !_authUser; }
 
 /* ── Landing page ↔ Login navigation ── */
 function showLanding() {
@@ -12286,47 +12314,64 @@ function showLanding() {
   document.getElementById('app').style.display = 'none';
   document.body.classList.remove('in-app');
 }
-function showLoginFromLanding() {
-  document.getElementById('landing-page').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.body.classList.add('in-app');
-  setTimeout(function(){ var u=document.getElementById('login-username'); if(u)u.focus(); }, 150);
+
+/* Enter free mode — no login required, public user access */
+function enterFreeMode(){
+  _authToken = null;
+  _authUser = null;
+  showApp();
+  _init();
 }
 
-function showLogin(skipClear) {
+/* Admin login — separate route, not visible to public */
+function showAdminLogin() {
   document.getElementById('landing-page').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
   document.body.classList.add('in-app');
-  if(!skipClear){
-    document.getElementById('login-error').style.display = 'none';
-    document.getElementById('login-username').value = '';
-    document.getElementById('login-password').value = '';
-  }
-  var logoutBtn = document.getElementById('logout-btn');
-  if(logoutBtn) logoutBtn.style.display = 'none';
-  _clearFetchIntervals();
-  _clearInactivityTimer();
-  if(!skipClear) setTimeout(function(){ document.getElementById('login-username').focus(); }, 100);
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  setTimeout(function(){ var u=document.getElementById('login-username'); if(u)u.focus(); }, 150);
 }
+
+/* Legacy — keep for backwards compat but redirect to admin login */
+function showLoginFromLanding() { showAdminLogin(); }
+function showLogin(skipClear) { showAdminLogin(); }
 
 function showApp() {
   document.getElementById('landing-page').style.display = 'none';
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = '';
   document.body.classList.add('in-app');
+
+  var isAdm = _isAdmin();
   var badge = document.getElementById('user-badge');
-  if(badge && _authUser) badge.textContent = '👤 ' + _authUser.username + (_authUser.role==='admin'?' (admin)':'');
   var logoutBtn = document.getElementById('logout-btn');
-  if(logoutBtn) logoutBtn.style.display = '';
-  // Show/hide admin-only tabs based on role
-  var isAdmin = _authUser && _authUser.role === 'admin';
+  var freeBadge = document.getElementById('free-badge');
+
+  if(isAdm){
+    /* Admin mode — show badge, logout, hide free badge */
+    if(badge){ badge.textContent = '👤 ' + _authUser.username + ' (admin)'; badge.style.display = ''; }
+    if(logoutBtn) logoutBtn.style.display = '';
+    if(freeBadge) freeBadge.style.display = 'none';
+  } else {
+    /* Public mode — show free badge, hide admin controls */
+    if(badge) badge.style.display = 'none';
+    if(logoutBtn) logoutBtn.style.display = 'none';
+    if(freeBadge) freeBadge.style.display = '';
+  }
+
+  /* Show/hide admin-only tabs */
   document.querySelectorAll('.admin-only').forEach(function(el){
-    el.style.display = isAdmin ? '' : 'none';
+    el.style.display = isAdm ? '' : 'none';
   });
-  // Start inactivity timer
+
+  /* Apply AI button states for public users */
+  _applyAIButtonStates();
+
   _resetInactivityTimer();
-  // Show onboarding for first-time users
+  /* Show onboarding for first-time users */
   try {
     if(!localStorage.getItem('pt_onboarded')){
       var ob=document.getElementById('onboarding-overlay');
@@ -12359,6 +12404,42 @@ function obGoAnalyze(sym){
   }, 200);
 }
 
+/* ── AI button state management for public vs admin ── */
+function _applyAIButtonStates(){
+  /* This is called from showApp() and after mode changes.
+     Individual button renderers already check _isPublicUser() at render time.
+     This function handles any dynamically created buttons that need post-render disabling. */
+  if(!_isPublicUser()) return;
+  /* Disable any AI buttons that might have been rendered before the role was set */
+  ['ai-review-btn','holdings-ai-btn','lt-ai-btn','ps-ai-btn'].forEach(function(id){
+    var btn = document.getElementById(id);
+    if(btn){
+      btn.disabled = true;
+      btn.style.cursor = 'not-allowed';
+      btn.style.opacity = '0.5';
+      btn.onclick = null;
+    }
+  });
+}
+
+/* Function-level AI gates — prevent public users from triggering AI at JS level */
+var _origRunSingleStockAI, _origRunPicksAIReview, _origRunMFAIReview, _origRunHoldingsAIReview, _origLtRunAIValidation, _origPsRunAIValidation;
+function _guardAI(fn){
+  return function(){
+    if(_isPublicUser()){ return; }
+    return fn.apply(this, arguments);
+  };
+}
+/* Guards will be applied after the functions are defined (they're hoisted) */
+setTimeout(function(){
+  if(typeof runSingleStockAI==='function'){ var _o=runSingleStockAI; runSingleStockAI=_guardAI(_o); }
+  if(typeof runPicksAIReview==='function'){ var _o=runPicksAIReview; runPicksAIReview=_guardAI(_o); }
+  if(typeof runMFAIReview==='function'){ var _o=runMFAIReview; runMFAIReview=_guardAI(_o); }
+  if(typeof runHoldingsAIReview==='function'){ var _o=runHoldingsAIReview; runHoldingsAIReview=_guardAI(_o); }
+  if(typeof ltRunAIValidation==='function'){ var _o=ltRunAIValidation; ltRunAIValidation=_guardAI(_o); }
+  if(typeof psRunAIValidation==='function'){ var _o=psRunAIValidation; psRunAIValidation=_guardAI(_o); }
+},0);
+
 async function doLogin() {
   var btn = document.getElementById('login-btn');
   var errEl = document.getElementById('login-error');
@@ -12377,6 +12458,9 @@ async function doLogin() {
     _authToken = d.token;
     _authUser = { username: d.username, role: d.role };
     try { localStorage.setItem('pt_token', d.token); } catch(e){}
+    /* Clear admin-login hash */
+    if(window.location.hash === '#admin-login') history.replaceState(null, '', window.location.pathname);
+    _inited = false; /* force re-init to pick up admin role */
     showApp();
     _init();
   } catch(e) {
@@ -12393,6 +12477,7 @@ async function doLogout() {
   _authToken = null;
   _authUser = null;
   try { localStorage.removeItem('pt_token'); } catch(e){}
+  history.replaceState(null, '', window.location.pathname);
   showLanding();
 }
 
@@ -12400,23 +12485,45 @@ async function doLogout() {
 function _resetInactivityTimer() {}
 function _clearInactivityTimer() {}
 
-// On page load — check for saved session
+// On page load — check for admin session, or enter free mode
 (async function checkSession() {
+  /* Handle #admin-login route — show admin login screen */
+  if(window.location.hash === '#admin-login'){
+    showAdminLogin();
+    return;
+  }
+
+  /* Check for saved admin session */
   var saved = null;
   try { saved = localStorage.getItem('pt_token'); } catch(e){}
-  if (!saved) { showLanding(); return; }
-  try {
-    var r = await _origFetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + saved } });
-    if (!r.ok) { showLanding(); return; }
-    var d = await r.json();
-    _authToken = saved;
-    _authUser = { username: d.username, role: d.role };
-    showApp();
-    _init();
-  } catch(e) { showLanding(); }
+  if (saved) {
+    try {
+      var r = await _origFetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + saved } });
+      if (r.ok) {
+        var d = await r.json();
+        _authToken = saved;
+        _authUser = { username: d.username, role: d.role };
+        showApp();
+        _init();
+        return;
+      }
+    } catch(e) {}
+    /* Token invalid — clear it */
+    try { localStorage.removeItem('pt_token'); } catch(e){}
+  }
+
+  /* No valid admin session — show landing page for first visit */
+  showLanding();
 })();
 </script>
 
+<!-- ═══════════════════════════════════════════════════════════════
+     DISCLAIMER BANNER — fixed bottom, visible on every page
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="disclaimer-bar">
+  <strong>Important Disclaimer:</strong> ProTrader is <strong>not SEBI registered</strong> and does <strong>not provide financial advice</strong>. All data, scores, and AI outputs are for <strong>educational and informational purposes only</strong>. Data may be delayed or inaccurate — do not rely solely on this platform for investment decisions. <strong>You are fully responsible for your own financial decisions, profits, and losses.</strong> We are not liable for any trading outcomes. This is a free tool built for learning and exploration — not a substitute for professional financial advice.
+  <button class="disc-close" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+</div>
 
 </div>
 </html>
