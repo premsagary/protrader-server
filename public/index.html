@@ -795,6 +795,124 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-footer{text-align:center;padding:40px 24px;border-top:1px solid var(--glass-border);font-size:10px;color:var(--text4);letter-spacing:0.3px}
 
 /* ═══════════════════════════════════════════════════════════════
+   IMMERSIVE LANDING PAGE — Scroll-driven cinematic experience
+   Sheen, glow, staged reveals, section atmospheres, parallax
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Hero cinematic entrance keyframes ── */
+@keyframes lpHeroIn{0%{opacity:0;transform:translateY(36px) scale(0.97);filter:blur(6px)}55%{filter:blur(0)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+@keyframes lpBadgeIn{0%{opacity:0;transform:translateY(18px) scale(0.92)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes lpHeroGlow{0%,100%{text-shadow:0 0 40px rgba(64,112,168,0)}50%{text-shadow:0 0 60px rgba(64,112,168,0.12),0 0 100px rgba(64,112,168,0.04)}}
+@keyframes lpBreatheCta{0%,100%{box-shadow:0 0 20px rgba(64,112,168,0.06),0 0 50px rgba(64,112,168,0.02)}50%{box-shadow:0 0 30px rgba(64,112,168,0.14),0 0 70px rgba(64,112,168,0.05)}}
+@keyframes lpFloatSlow{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes lpPulseNum{0%,100%{box-shadow:0 0 16px rgba(64,112,168,0.06)}50%{box-shadow:0 0 28px rgba(64,112,168,0.12)}}
+
+/* Hero cinematic entrance — staggered children */
+.lp-hero.lp-cinematic .lp-hero-badge{animation:lpBadgeIn 0.7s 0.15s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic h1{animation:lpHeroIn 0.9s 0.35s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-sub{animation:lpHeroIn 0.9s 0.55s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-cta{animation:lpHeroIn 0.7s 0.75s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic .lp-hero-trust{animation:lpHeroIn 0.7s 0.95s var(--ease-out-expo) both}
+.lp-hero.lp-cinematic h1 strong{animation:lpHeroGlow 4s 2s ease-in-out infinite}
+
+/* Breathing CTA */
+.lp-btn-primary{animation:lpBreatheCta 3s ease-in-out infinite}
+
+/* Hero trust badges float */
+.lp-hero.lp-cinematic .lp-hero-trust span{animation:lpFloatSlow 5s ease-in-out infinite}
+.lp-hero.lp-cinematic .lp-hero-trust span:nth-child(2){animation-delay:1.6s}
+.lp-hero.lp-cinematic .lp-hero-trust span:nth-child(3){animation-delay:3.2s}
+
+/* ── Sheen / light sweep on cards ── */
+.lp-sheen{position:relative;overflow:hidden}
+.lp-sheen::after{content:'';position:absolute;top:0;left:-130%;width:60%;height:100%;
+  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.025) 48%,rgba(255,255,255,0.04) 50%,rgba(255,255,255,0.025) 52%,transparent 70%);
+  transition:left 0.65s var(--ease-out-expo);pointer-events:none;z-index:2}
+.lp-sheen:hover::after{left:170%}
+
+/* ── Enhanced hover glow — layered depth shadows ── */
+.lp-feature:hover,.lp-step:hover{box-shadow:0 10px 36px rgba(0,0,0,0.3),0 0 50px rgba(64,112,168,0.04),0 0 0 1px rgba(255,255,255,0.04)}
+.lp-price-card:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.03),0 0 0 1px rgba(255,255,255,0.04)}
+.lp-price-card.featured:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.08),0 0 0 1px rgba(64,112,168,0.15)}
+.lp-example:hover{box-shadow:0 18px 55px rgba(0,0,0,0.35),0 0 70px rgba(64,112,168,0.04)}
+
+/* ── LP reveal animations ── */
+.lp-reveal-up{opacity:0;transform:translateY(36px);transition:opacity 0.75s var(--ease-out-expo),transform 0.75s var(--ease-out-expo)}
+.lp-reveal-up.visible{opacity:1;transform:translateY(0)}
+.lp-reveal-scale{opacity:0;transform:scale(0.93);transition:opacity 0.7s var(--ease-out-expo),transform 0.7s var(--ease-out-expo)}
+.lp-reveal-scale.visible{opacity:1;transform:scale(1)}
+.lp-reveal-left{opacity:0;transform:translateX(-36px);transition:opacity 0.7s var(--ease-out-expo),transform 0.7s var(--ease-out-expo)}
+.lp-reveal-left.visible{opacity:1;transform:translateX(0)}
+.lp-reveal-right{opacity:0;transform:translateX(36px);transition:opacity 0.7s var(--ease-out-expo),transform 0.7s var(--ease-out-expo)}
+.lp-reveal-right.visible{opacity:1;transform:translateX(0)}
+
+/* Stagger delays */
+[data-lp-delay="1"]{transition-delay:0.08s!important}
+[data-lp-delay="2"]{transition-delay:0.16s!important}
+[data-lp-delay="3"]{transition-delay:0.24s!important}
+[data-lp-delay="4"]{transition-delay:0.32s!important}
+[data-lp-delay="5"]{transition-delay:0.40s!important}
+[data-lp-delay="6"]{transition-delay:0.48s!important}
+
+/* ── Section atmosphere overlays ── */
+.lp [data-lp-zone]{position:relative}
+.lp [data-lp-zone]::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity 1.4s ease;z-index:0}
+[data-lp-zone="hero"]::before{background:radial-gradient(ellipse 60% 40% at 50% 30%,rgba(64,112,168,0.035),transparent)}
+[data-lp-zone="stats"]::before{background:linear-gradient(180deg,rgba(64,112,168,0.015),transparent 40%,transparent 60%,rgba(64,112,168,0.015))}
+[data-lp-zone="howit"]::before{background:radial-gradient(ellipse 80% 50% at 50% 50%,rgba(64,112,168,0.025),transparent)}
+[data-lp-zone="features"]::before{background:radial-gradient(ellipse 70% 45% at 50% 40%,rgba(64,112,168,0.02),transparent)}
+[data-lp-zone="pricing"]::before{background:radial-gradient(ellipse 55% 50% at 50% 50%,rgba(64,112,168,0.025),transparent)}
+.lp [data-lp-zone].lp-zone-active::before{opacity:1}
+
+/* ── Scroll progress bar ── */
+.lp-scroll-progress{position:fixed;top:0;left:0;width:100%;height:2px;z-index:400;pointer-events:none;
+  background:linear-gradient(90deg,rgba(64,112,168,0.5),rgba(64,112,168,0.15));transform-origin:left;transform:scaleX(0);transition:transform 0.12s linear}
+
+/* ── Sequential metric reveal in example card ── */
+.lp-example .lp-ex-metric{opacity:0;transform:perspective(800px) translateY(14px) scale(0.96);
+  transition:opacity 0.45s var(--ease-out-expo),transform 0.45s var(--ease-out-expo)}
+.lp-example.visible .lp-ex-metric{opacity:1;transform:perspective(800px) translateY(0) scale(1)}
+.lp-example.visible .lp-ex-metric:nth-child(1){transition-delay:0.1s}
+.lp-example.visible .lp-ex-metric:nth-child(2){transition-delay:0.2s}
+.lp-example.visible .lp-ex-metric:nth-child(3){transition-delay:0.3s}
+.lp-example.visible .lp-ex-metric:nth-child(4){transition-delay:0.4s}
+.lp-example.visible .lp-ex-metric:nth-child(5){transition-delay:0.5s}
+
+/* ── Step number pulse when visible ── */
+.lp-step.visible .lp-step-num{animation:lpPulseNum 3s 0.4s ease-in-out infinite}
+
+/* ── Stat value glow ── */
+.lp-stat.visible .lp-stat-val{text-shadow:0 0 28px rgba(64,112,168,0.08)}
+
+/* ── Featured price card border glow ── */
+.lp-price-card.featured{position:relative}
+.lp-price-card.featured::before{content:'';position:absolute;inset:-1px;border-radius:15px;
+  background:linear-gradient(135deg,rgba(64,112,168,0.12),rgba(64,112,168,0.02),rgba(64,112,168,0.08));
+  z-index:-1;opacity:0;transition:opacity 0.7s ease}
+.lp-price-card.featured.visible::before,.lp-price-card.featured:hover::before{opacity:1}
+
+/* ── ROI card shimmer ── */
+.lp-roi.visible{box-shadow:0 0 40px rgba(64,112,168,0.04);border-color:rgba(64,112,168,0.12)}
+
+/* ── Section divider glow ── */
+.lp-section-divider{height:1px;border:none;margin:0;
+  background:linear-gradient(90deg,transparent,rgba(64,112,168,0.1) 30%,rgba(64,112,168,0.1) 70%,transparent)}
+
+/* ── Parallax ── */
+.lp-parallax{will-change:transform}
+
+/* ── Mobile simplifications ── */
+@media(max-width:768px){
+  .lp-sheen::after{display:none}
+  .lp-parallax{transform:none!important}
+  .lp-hero.lp-cinematic h1,.lp-hero.lp-cinematic .lp-hero-sub,
+  .lp-hero.lp-cinematic .lp-hero-cta,.lp-hero.lp-cinematic .lp-hero-trust{animation-duration:0.4s}
+  .lp-hero.lp-cinematic .lp-hero-trust span{animation:none}
+  .lp-scroll-progress{display:none}
+  .lp-reveal-up,.lp-reveal-scale,.lp-reveal-left,.lp-reveal-right{transition-duration:0.4s!important}
+}
+
+/* ═══════════════════════════════════════════════════════════════
    ONBOARDING OVERLAY — first-time user flow
    ═══════════════════════════════════════════════════════════════ */
 .ob-overlay{position:fixed;inset:0;z-index:9999;background:rgba(5,6,8,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
@@ -893,6 +1011,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </section>
 
 <!-- The problem / why this exists -->
+<hr class="lp-section-divider">
 <div class="lp-stats">
   <div class="lp-stat"><div class="lp-stat-val">90%</div><div class="lp-stat-label">of retail traders lose money<br><span style="font-size:9px;color:var(--text4);text-transform:none;letter-spacing:0">(SEBI study, Jan 2023)</span></div></div>
   <div class="lp-stat"><div class="lp-stat-val">14</div><div class="lp-stat-label">Varsity checks per stock</div></div>
@@ -951,6 +1070,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </section>
 
 <!-- What's included — feature grid -->
+<hr class="lp-section-divider">
 <section class="lp-features" id="features" style="scroll-margin-top:80px">
   <div class="lp-section-label">Platform</div>
   <div class="lp-section-title">Everything you need to make better decisions</div>
@@ -989,6 +1109,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </section>
 
 <!-- Pricing — ROI framing -->
+<hr class="lp-section-divider">
 <section class="lp-pricing" id="pricing" style="scroll-margin-top:80px">
   <div class="lp-section-label">Plans</div>
   <div class="lp-section-title">Less than a single brokerage fee</div>
@@ -1049,6 +1170,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </section>
 
 <!-- Trust / methodology -->
+<hr class="lp-section-divider">
 <div class="lp-proof">
   <div style="font-size:11px;color:var(--shiva-blue);margin-bottom:12px;letter-spacing:1px;text-transform:uppercase;font-weight:600">Methodology</div>
   <div style="font-size:13px;color:var(--text2);line-height:1.7;max-width:560px;margin:0 auto;margin-bottom:16px">
@@ -1570,7 +1692,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     mirofish:      {fog:0x0a0e18,fd:0.0004,hue:[240,0.28,0.12],cy:15,li:0.8},
     admin:         {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
     architecture:  {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
-    _default:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6}
+    _default:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6},
+    /* Landing page scroll zones — section-specific moods */
+    lp_hero:       {fog:0x050810,fd:0.0003,hue:[220,0.20,0.08],cy:15,li:0.45},
+    lp_stats:      {fog:0x060a12,fd:0.0004,hue:[225,0.25,0.10],cy:13,li:0.55},
+    lp_howit:      {fog:0x080e1a,fd:0.0004,hue:[232,0.30,0.12],cy:14,li:0.7},
+    lp_features:   {fog:0x070b14,fd:0.0005,hue:[222,0.22,0.10],cy:11,li:0.6},
+    lp_pricing:    {fog:0x060910,fd:0.0005,hue:[216,0.18,0.09],cy:10,li:0.5}
   };
   var zoneCur={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
   var zoneTgt={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
@@ -1932,6 +2060,195 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   });
 })();
 </script>
+
+<!-- ══════════════════════════════════════════════════════════
+     LANDING PAGE IMMERSIVE SCROLL SYSTEM
+     Zone switching, staged reveals, parallax, cinematic hero
+     ══════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  'use strict';
+  var lpEl=document.getElementById('landing-page');
+  if(!lpEl)return;
+
+  /* ── 1. Programmatically annotate sections + add reveal/sheen classes ── */
+  var hero=lpEl.querySelector('.lp-hero');
+  var stats=lpEl.querySelector('.lp-stats');
+  var howitSec=lpEl.querySelector('.lp-features#how')||lpEl.querySelector('section.lp-features');
+  var featuresSec=lpEl.querySelector('.lp-features#features')||lpEl.querySelectorAll('section.lp-features')[1];
+  var pricingSec=lpEl.querySelector('.lp-pricing#pricing')||lpEl.querySelector('.lp-pricing');
+
+  /* Data-zone attributes */
+  if(hero)hero.dataset.lpZone='hero';
+  if(stats)stats.dataset.lpZone='stats';
+  if(howitSec)howitSec.dataset.lpZone='howit';
+  if(featuresSec)featuresSec.dataset.lpZone='features';
+  if(pricingSec)pricingSec.dataset.lpZone='pricing';
+
+  /* Stats — staggered reveal */
+  lpEl.querySelectorAll('.lp-stat').forEach(function(el,i){
+    el.classList.add('lp-reveal-up');el.dataset.lpDelay=i+1;
+  });
+
+  /* Section labels + titles */
+  lpEl.querySelectorAll('.lp-section-label,.lp-section-title').forEach(function(el){
+    el.classList.add('lp-reveal-up');
+  });
+
+  /* Steps — staggered */
+  lpEl.querySelectorAll('.lp-step').forEach(function(el,i){
+    el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
+  });
+
+  /* Example card — scale reveal */
+  lpEl.querySelectorAll('.lp-example').forEach(function(el){
+    el.classList.add('lp-reveal-scale','lp-sheen');
+  });
+
+  /* Feature cards — staggered + sheen */
+  lpEl.querySelectorAll('.lp-feature').forEach(function(el,i){
+    el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
+  });
+
+  /* Price cards — staggered + sheen */
+  lpEl.querySelectorAll('.lp-price-card').forEach(function(el,i){
+    el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
+  });
+
+  /* ROI */
+  lpEl.querySelectorAll('.lp-roi').forEach(function(el){el.classList.add('lp-reveal-up');});
+
+  /* Proof section */
+  var proofEl=lpEl.querySelector('.lp-proof');
+  if(proofEl)proofEl.classList.add('lp-reveal-up');
+
+  /* Footer */
+  var footerEl=lpEl.querySelector('.lp-footer');
+  if(footerEl)footerEl.classList.add('lp-reveal-up');
+
+  /* Hero trust badges — parallax */
+  var heroTrust=lpEl.querySelector('.lp-hero-trust');
+  if(heroTrust)heroTrust.classList.add('lp-parallax');
+
+  /* ── 2. Scroll progress bar ── */
+  var progressBar=document.createElement('div');
+  progressBar.className='lp-scroll-progress';
+  progressBar.id='lp-progress';
+  document.body.appendChild(progressBar);
+
+  /* ── 3. LP Reveal observer ── */
+  var lpRevealObs;
+  if('IntersectionObserver' in window){
+    lpRevealObs=new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){
+          e.target.classList.add('visible');
+          lpRevealObs.unobserve(e.target);
+        }
+      });
+    },{threshold:0.08,rootMargin:'0px 0px -50px 0px'});
+  }
+
+  function observeLpReveals(){
+    if(!lpRevealObs)return;
+    lpEl.querySelectorAll('.lp-reveal-up:not(.visible),.lp-reveal-scale:not(.visible),.lp-reveal-left:not(.visible),.lp-reveal-right:not(.visible)').forEach(function(el){
+      lpRevealObs.observe(el);
+    });
+  }
+
+  /* ── 4. Zone scroll observer — drives game-bg mood ── */
+  var zoneSections;
+  var zoneObs;
+  if('IntersectionObserver' in window){
+    zoneObs=new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting&&e.intersectionRatio>=0.25){
+          var zone='lp_'+e.target.dataset.lpZone;
+          window._currentMode=zone;
+          if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(ex){}
+          /* Toggle atmosphere overlay */
+          if(zoneSections)zoneSections.forEach(function(s){s.classList.remove('lp-zone-active');});
+          e.target.classList.add('lp-zone-active');
+        }
+      });
+    },{threshold:[0.25,0.5],rootMargin:'-8% 0px -8% 0px'});
+  }
+
+  function observeZones(){
+    zoneSections=lpEl.querySelectorAll('[data-lp-zone]');
+    if(!zoneObs||!zoneSections.length)return;
+    zoneSections.forEach(function(s){zoneObs.observe(s);});
+  }
+
+  /* ── 5. Scroll handler — progress bar + parallax ── */
+  var _scrollTicking=false;
+  function onLpScroll(){
+    if(_scrollTicking)return;
+    _scrollTicking=true;
+    requestAnimationFrame(function(){
+      var st=lpEl.scrollTop;
+      var sh=lpEl.scrollHeight-lpEl.clientHeight;
+      var pct=sh>0?st/sh:0;
+      progressBar.style.transform='scaleX('+pct+')';
+
+      /* Parallax */
+      var pEls=lpEl.querySelectorAll('.lp-parallax');
+      pEls.forEach(function(el){
+        var r=el.getBoundingClientRect();
+        var center=r.top+r.height/2;
+        var offset=(center-window.innerHeight/2)*-0.06;
+        el.style.transform='translateY('+offset+'px)';
+      });
+
+      _scrollTicking=false;
+    });
+  }
+  lpEl.addEventListener('scroll',onLpScroll,{passive:true});
+
+  /* ── 6. Cinematic hero entrance ── */
+  function triggerHeroCinematic(){
+    if(!hero||hero.classList.contains('lp-cinematic'))return;
+    setTimeout(function(){hero.classList.add('lp-cinematic');},80);
+  }
+
+  /* ── 7. Init/cleanup on LP show/hide ── */
+  var _lpActive=false;
+  function lpActivate(){
+    if(_lpActive)return;
+    _lpActive=true;
+    observeLpReveals();
+    observeZones();
+    triggerHeroCinematic();
+    progressBar.style.display='';
+    /* Set initial zone */
+    window._currentMode='lp_hero';
+    if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(e){}
+    if(hero)hero.classList.add('lp-zone-active');
+  }
+  function lpDeactivate(){
+    if(!_lpActive)return;
+    _lpActive=false;
+    progressBar.style.display='none';
+    progressBar.style.transform='scaleX(0)';
+  }
+
+  /* Watch for landing page visibility changes via MutationObserver */
+  var mo=new MutationObserver(function(){
+    if(lpEl.style.display!=='none'&&lpEl.offsetParent!==null){lpActivate();}
+    else{lpDeactivate();}
+  });
+  mo.observe(lpEl,{attributes:true,attributeFilter:['style']});
+
+  /* Also check immediately */
+  if(lpEl.style.display!=='none'&&lpEl.offsetParent!==null){lpActivate();}
+  else{progressBar.style.display='none';}
+
+  /* Expose for external calls (e.g., showLoginFromLanding) */
+  window._lpScrollDeactivate=lpDeactivate;
+  window._lpScrollActivate=lpActivate;
+})();
+</script>
+
 <!-- TOP BAR -->
 <div class="topbar">
   <div class="logo"><span class="logo-dot"></span>ProTrader</div>
