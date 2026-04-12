@@ -1906,6 +1906,97 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     }
   }
 
+  /* ══════════════════════════════════════════════════════════
+     LIFE SYSTEMS — flow streams, fish schools, bubbles
+     All tier-gated. Objects enter from above, pass through, exit below.
+     Three layers: near (fast), mid (moderate), far (slow).
+     ══════════════════════════════════════════════════════════ */
+
+  /* ── 1. FLOW STREAMS — curved sine/cosine paths, upward drift like current ── */
+  var FLOW_COUNT=[0,24,40][tier];
+  var flowPos=new Float32Array(FLOW_COUNT*3);
+  var flowData=[]; /* per-particle: phase, speed, amplitude, layer(0=far,1=mid,2=near) */
+  for(var fi2=0;fi2<FLOW_COUNT;fi2++){
+    var layer=fi2%3; /* 0=far, 1=mid, 2=near */
+    var depthZ=layer===0?(-60-Math.random()*40):(layer===1?(-20-Math.random()*30):(5+Math.random()*25));
+    flowPos[fi2*3]=(Math.random()-0.5)*120;
+    flowPos[fi2*3+1]=-55+Math.random()*110; /* full vertical spread */
+    flowPos[fi2*3+2]=depthZ;
+    flowData.push({
+      phase:Math.random()*6.28,
+      speed:0.012+Math.random()*0.018+(layer===2?0.015:0), /* near=faster */
+      amp:2+Math.random()*4+(layer===2?2:0),  /* near=wider curves */
+      freq:0.15+Math.random()*0.2,
+      layer:layer,
+      driftX:(Math.random()-0.5)*0.006 /* slight sideways drift */
+    });
+  }
+  var flowGeo=new THREE.BufferGeometry();
+  flowGeo.setAttribute('position',new THREE.BufferAttribute(flowPos,3));
+  var flowMat=new THREE.PointsMaterial({color:0x88b8e8,size:tier===0?0:2.2,transparent:true,opacity:0.0,sizeAttenuation:true,depthWrite:false});
+  var flowField=new THREE.Points(flowGeo,flowMat);
+  worldGroup.add(flowField);
+
+  /* ── 2. ABSTRACT FISH SCHOOLS — clusters of dots that move together ── */
+  var SCHOOL_COUNT=tier===0?0:(tier===1?2:3);
+  var schools=[];
+  for(var sc=0;sc<SCHOOL_COUNT;sc++){
+    var fishCount=10+Math.floor(Math.random()*8); /* 10-17 per school */
+    var sPos=new Float32Array(fishCount*3);
+    var centerX=(Math.random()-0.5)*60;
+    var centerY=(Math.random()-0.5)*40;
+    var centerZ=-15-Math.random()*30;
+    for(var sf=0;sf<fishCount;sf++){
+      sPos[sf*3]=centerX+(Math.random()-0.5)*6;
+      sPos[sf*3+1]=centerY+(Math.random()-0.5)*4;
+      sPos[sf*3+2]=centerZ+(Math.random()-0.5)*5;
+    }
+    var sGeo=new THREE.BufferGeometry();
+    sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
+    var sMat=new THREE.PointsMaterial({color:0x90c0f0,size:2.0,transparent:true,opacity:0.0,sizeAttenuation:true,depthWrite:false});
+    var sMesh=new THREE.Points(sGeo,sMat);
+    sMesh.userData={
+      cx:centerX,cy:centerY,cz:centerZ,
+      fishCount:fishCount,
+      dirAngle:Math.random()*6.28,   /* current heading */
+      turnRate:0.003+Math.random()*0.004, /* how fast heading changes */
+      speed:0.04+Math.random()*0.03,
+      spreadPhase:Math.random()*6.28,
+      basePositions:Array.from(sPos)  /* keep original spread pattern */
+    };
+    worldGroup.add(sMesh);
+    schools.push(sMesh);
+  }
+
+  /* ── 3. BUBBLE STREAMS — small circles rising, fading, varying size ── */
+  var BUBBLE_COUNT=[0,16,28][tier];
+  var bubblePos=new Float32Array(BUBBLE_COUNT*3);
+  var bubbleSizes=new Float32Array(BUBBLE_COUNT);
+  var bubbleData=[];
+  for(var bi=0;bi<BUBBLE_COUNT;bi++){
+    /* Start scattered vertically, multiple bubble columns */
+    var colX=(Math.random()-0.5)*80;
+    var colZ=-8-Math.random()*35;
+    bubblePos[bi*3]=colX+(Math.random()-0.5)*4;
+    bubblePos[bi*3+1]=-50+Math.random()*100;
+    bubblePos[bi*3+2]=colZ;
+    bubbleSizes[bi]=0.6+Math.random()*1.8;
+    bubbleData.push({
+      baseX:colX,
+      baseZ:colZ,
+      riseSpeed:0.025+Math.random()*0.04, /* faster than background particles */
+      wobblePhase:Math.random()*6.28,
+      wobbleAmp:0.3+Math.random()*0.8,
+      size:bubbleSizes[bi]
+    });
+  }
+  var bubbleGeo=new THREE.BufferGeometry();
+  bubbleGeo.setAttribute('position',new THREE.BufferAttribute(bubblePos,3));
+  bubbleGeo.setAttribute('size',new THREE.BufferAttribute(bubbleSizes,1));
+  var bubbleMat=new THREE.PointsMaterial({color:0xa0d0ff,size:1.5,transparent:true,opacity:0.0,sizeAttenuation:true,depthWrite:false});
+  var bubbleField=new THREE.Points(bubbleGeo,bubbleMat);
+  worldGroup.add(bubbleField);
+
   /* ── Landing page scroll-driven world story ── */
   /* Keyframes: progress → world state. Everything interpolated via smoothstep.
      PROGRESSIVE FORMATION: at Hero, only stars+dust exist. Grid, rings, column
@@ -2106,6 +2197,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       stars.position.y*=0.95;
       /* Fade forest columns */
       for(var fci=0;fci<forestCols.length;fci++){forestCols[fci].material.opacity*=0.92;}
+      /* Fade life systems in app mode */
+      flowMat.opacity*=0.92;
+      bubbleMat.opacity*=0.92;
+      for(var sci2=0;sci2<schools.length;sci2++){schools[sci2].material.opacity*=0.92;}
     }
 
     /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
@@ -2116,24 +2211,27 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     var lookZ=_lpActive?(-18-_lpProgressSmooth*48):0;
     camera.lookAt(mxSmooth*1.5,mySmooth*-0.6+Math.sin(t*0.06)*0.3,lookZ);
 
-    /* ── Star field — gentle rotation + scroll-driven roll ── */
+    /* ── Star field — alive rotation + scroll-driven roll + breathe ── */
     var scrollR=_lpActive?_lpProgressSmooth:scrollProg;
-    stars.rotation.y=t*0.004+scrollR*0.24;
-    stars.rotation.x=t*0.0015+scrollR*0.12;
+    stars.rotation.y=t*0.006+scrollR*0.28;
+    stars.rotation.x=t*0.002+scrollR*0.14;
+    starMat.opacity=0.60+0.12*Math.sin(t*0.15)+(_lpActive?wLi*0.12:0);
 
-    /* ── Dust field — drift (runs in both modes) ── */
+    /* ── Dust field — ALIVE drift with curved sine paths (runs in both modes) ── */
     var dPos=dustGeo.attributes.position.array;
+    var lpBoost=_lpActive?1.8:1.0; /* stronger motion on LP */
     for(var k=0;k<CONF.dust;k++){
       var k3=k*3;
-      dPos[k3]+=dustVel[k3]+Math.sin(t*0.3+k)*0.003;
-      dPos[k3+1]+=dustVel[k3+1]+Math.cos(t*0.2+k*0.5)*0.002;
-      dPos[k3+2]+=dustVel[k3+2];
+      /* Curved paths: layered sine for organic motion */
+      dPos[k3]+=dustVel[k3]+Math.sin(t*0.25+k*0.7)*0.008*lpBoost;
+      dPos[k3+1]+=dustVel[k3+1]+Math.cos(t*0.18+k*0.4)*0.006*lpBoost+(_lpActive?0.008:0); /* upward bias on LP */
+      dPos[k3+2]+=dustVel[k3+2]+Math.sin(t*0.15+k*1.1)*0.003;
       if(dPos[k3]>80)dPos[k3]=-80;if(dPos[k3]<-80)dPos[k3]=80;
-      if(dPos[k3+1]>50)dPos[k3+1]=-50;if(dPos[k3+1]<-50)dPos[k3+1]=50;
+      if(dPos[k3+1]>55)dPos[k3+1]=-55;if(dPos[k3+1]<-55)dPos[k3+1]=55;
       if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
     }
     dustGeo.attributes.position.needsUpdate=true;
-    dustMat.opacity=0.25+0.12*Math.sin(t*0.4)+(_lpActive?wLi*0.18:0);
+    dustMat.opacity=0.32+0.14*Math.sin(t*0.4)+(_lpActive?wLi*0.22:0);
     /* Near-layer extra parallax: dust moves faster than worldGroup */
     if(_lpActive){dustField.position.y+=(_lpProgressSmooth*28-dustField.position.y)*0.04;}
 
@@ -2172,20 +2270,117 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       gridHelper.material.opacity+=(wGo-gridHelper.material.opacity)*0.05;
     }
 
-    /* ── Light cone — scroll-driven intensity + breathe ── */
-    coneMat.opacity=wCo*(1+0.35*Math.sin(t*0.25));
-    lightCone.rotation.y=t*0.015;
+    /* ── Light cone — alive: sway, pulse, scroll-reactive ── */
+    var conePulse=1+0.45*Math.sin(t*0.2)+0.2*Math.sin(t*0.35+1.2);
+    coneMat.opacity=wCo*conePulse;
+    /* Sway: gentle rotation + pendulum tilt */
+    lightCone.rotation.y=t*0.02+Math.sin(t*0.08)*0.15;
+    lightCone.rotation.z=Math.sin(t*0.06+0.5)*0.08;
     if(_lpActive){
-      lightCone.position.y+=(46+_lpProgressSmooth*20-lightCone.position.y)*0.03;
+      lightCone.position.y+=(46+_lpProgressSmooth*22-lightCone.position.y)*0.03;
+      lightCone.position.x=Math.sin(t*0.04)*3; /* gentle side-to-side */
     }
 
-    /* ── Central orb — scroll-driven scale/glow + breathe ── */
-    var bsc=wOs*(1+0.08*Math.sin(t*0.35));
+    /* ── Central orb — alive: deep breathe + pulse + scroll glow ── */
+    var orbBreath=1+0.12*Math.sin(t*0.28)+0.06*Math.sin(t*0.45+0.8);
+    var bsc=wOs*orbBreath;
     orb.scale.set(bsc,bsc,bsc);
-    orbMat.opacity=wOg*(1+0.25*Math.sin(t*0.4));
-    var osc=bsc*(_lpActive?1.15:0.95);
+    orbMat.opacity=wOg*(1+0.35*Math.sin(t*0.32)+0.15*Math.sin(t*0.55));
+    var osc=bsc*(_lpActive?1.2:0.95);
     orbOuter.scale.set(osc,osc,osc);
-    orbOuterMat.opacity=wOg*0.45*(1+0.2*Math.sin(t*0.3));
+    orbOuterMat.opacity=wOg*0.55*(1+0.3*Math.sin(t*0.22)+0.1*Math.cos(t*0.4));
+
+    /* ══════════════════════════════════════════════════════
+       LIFE SYSTEMS ANIMATION — flow, schools, bubbles
+       Entry/exit: particles enter from above, exit below.
+       Three layers: near(fast), mid(moderate), far(slow).
+       ══════════════════════════════════════════════════════ */
+    var lifeAlpha=_lpActive?Math.min(_lpProgressSmooth*5,1):0; /* fade in as user scrolls */
+
+    /* ── 1. Flow streams — curved sine paths rising upward ── */
+    if(FLOW_COUNT>0){
+      var fArr=flowGeo.attributes.position.array;
+      for(var fl=0;fl<FLOW_COUNT;fl++){
+        var fl3=fl*3;
+        var fd3=flowData[fl];
+        /* Curved upward path */
+        fArr[fl3]+=Math.sin(t*fd3.freq+fd3.phase)*fd3.amp*0.012+fd3.driftX;
+        fArr[fl3+1]+=fd3.speed; /* always rising */
+        fArr[fl3+2]+=Math.cos(t*fd3.freq*0.7+fd3.phase*1.3)*0.003;
+        /* Entry/exit: reset to bottom when reaching top */
+        if(fArr[fl3+1]>55){
+          fArr[fl3+1]=-55;
+          fArr[fl3]=(Math.random()-0.5)*120;
+        }
+        /* Wrap X */
+        if(fArr[fl3]>65)fArr[fl3]=-65;
+        if(fArr[fl3]<-65)fArr[fl3]=65;
+      }
+      flowGeo.attributes.position.needsUpdate=true;
+      /* Layer-aware opacity: brighter with scroll, scales with lifeAlpha */
+      flowMat.opacity=lifeAlpha*0.42;
+      flowMat.size=tier===2?2.4:2.0;
+    }
+
+    /* ── 2. Fish schools — smooth heading changes, spread/regroup ── */
+    for(var sci=0;sci<schools.length;sci++){
+      var sch=schools[sci];
+      var sud=sch.userData;
+      /* Slowly turn heading */
+      sud.dirAngle+=Math.sin(t*0.05+sci*2.1)*sud.turnRate;
+      /* Move center along heading */
+      sud.cx+=Math.cos(sud.dirAngle)*sud.speed;
+      sud.cy+=Math.sin(sud.dirAngle)*sud.speed*0.6+0.01; /* slight upward bias */
+      sud.cz+=Math.sin(t*0.03+sci)*0.015;
+      /* Wrap center — entry/exit behavior */
+      if(sud.cy>50){sud.cy=-50;sud.cx=(Math.random()-0.5)*60;}
+      if(sud.cx>50)sud.cx=-50;if(sud.cx<-50)sud.cx=50;
+      if(sud.cz>0)sud.cz=-45;if(sud.cz<-50)sud.cz=-10;
+      /* Spread/regroup cycle */
+      var spreadFactor=1+0.35*Math.sin(t*0.12+sud.spreadPhase);
+      /* Update each fish position relative to moving center */
+      var sArr=sch.geometry.attributes.position.array;
+      for(var sfi=0;sfi<sud.fishCount;sfi++){
+        var sfi3=sfi*3;
+        var bx=sud.basePositions[sfi3]-sud.basePositions[0]; /* relative offset */
+        var by=sud.basePositions[sfi3+1]-sud.basePositions[1];
+        var bz=sud.basePositions[sfi3+2]-sud.basePositions[2];
+        /* Target = center + spread-modulated offset + individual wiggle */
+        var tgx=sud.cx+bx*spreadFactor+Math.sin(t*0.3+sfi*0.8)*0.5;
+        var tgy=sud.cy+by*spreadFactor+Math.cos(t*0.25+sfi*0.6)*0.4;
+        var tgz=sud.cz+bz*spreadFactor;
+        /* Smooth follow — gives cohesion feeling */
+        sArr[sfi3]+=(tgx-sArr[sfi3])*0.03;
+        sArr[sfi3+1]+=(tgy-sArr[sfi3+1])*0.03;
+        sArr[sfi3+2]+=(tgz-sArr[sfi3+2])*0.03;
+      }
+      sch.geometry.attributes.position.needsUpdate=true;
+      sch.material.opacity=lifeAlpha*0.38;
+    }
+
+    /* ── 3. Bubbles — rising, wobbling, fading at top ── */
+    if(BUBBLE_COUNT>0){
+      var bArr=bubbleGeo.attributes.position.array;
+      for(var bb=0;bb<BUBBLE_COUNT;bb++){
+        var bb3=bb*3;
+        var bd=bubbleData[bb];
+        /* Rise upward (faster than flow) */
+        bArr[bb3+1]+=bd.riseSpeed;
+        /* Wobble sideways */
+        bArr[bb3]=bd.baseX+Math.sin(t*0.3+bd.wobblePhase)*bd.wobbleAmp;
+        bArr[bb3+2]=bd.baseZ+Math.cos(t*0.2+bd.wobblePhase*0.7)*0.5;
+        /* Entry/exit: reset to bottom when reaching top */
+        if(bArr[bb3+1]>55){
+          bArr[bb3+1]=-55-Math.random()*10;
+          bd.baseX=(Math.random()-0.5)*80;
+          bd.baseZ=-8-Math.random()*35;
+          bd.wobblePhase=Math.random()*6.28;
+        }
+      }
+      bubbleGeo.attributes.position.needsUpdate=true;
+      bubbleMat.opacity=lifeAlpha*0.32;
+      bubbleMat.size=tier===2?1.8:1.4;
+    }
 
     renderer.render(scene,camera);
   }
