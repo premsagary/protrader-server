@@ -61,7 +61,10 @@ body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-
 
 /* ── Global contrast scrim — darkens center behind UI, above 3D canvas ── */
 #contrast-scrim{position:fixed;inset:0;pointer-events:none;z-index:1;
-  background:radial-gradient(ellipse 70% 60% at 50% 50%,rgba(8,9,12,0.55),rgba(8,9,12,0.25) 60%,transparent 100%)}
+  background:radial-gradient(ellipse 70% 60% at 50% 50%,rgba(8,9,12,0.55),rgba(8,9,12,0.25) 60%,transparent 100%);
+  transition:opacity 0.6s ease}
+/* Reduce scrim on landing page so 3D scene is clearly visible */
+body:not(.in-app) #contrast-scrim{opacity:0.3}
 /* ── Dynamic background dim on interaction (typing, modal, analyzer) ── */
 body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
 #game-bg{transition:opacity 0.8s ease}
@@ -655,7 +658,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ═══════════════════════════════════════════════════════════════
    LANDING PAGE — public-facing, pre-auth
    ═══════════════════════════════════════════════════════════════ */
-.lp{min-height:100vh;background:#050608;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative}
+.lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative;z-index:2}
 .lp-nav{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;position:fixed;top:0;left:0;right:0;z-index:300;
   background:rgba(5,6,8,0.7);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.03)}
 .lp-logo{font-weight:600;font-size:15px;color:var(--shiva-silver);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
@@ -2295,7 +2298,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
        Entry/exit: particles enter from above, exit below.
        Three layers: near(fast), mid(moderate), far(slow).
        ══════════════════════════════════════════════════════ */
-    var lifeAlpha=_lpActive?Math.min(_lpProgressSmooth*5,1):0; /* fade in as user scrolls */
+    var lifeAlpha=_lpActive?Math.min(0.15+_lpProgressSmooth*3.5,1):0; /* base 15% + fade in with scroll */
 
     /* ── 1. Flow streams — curved sine paths rising upward ── */
     if(FLOW_COUNT>0){
@@ -2609,6 +2612,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     });
   }
   lpEl.addEventListener('scroll',onLpScroll,{passive:true});
+  /* Fallback: also listen on window scroll in case LP content scrolls the page */
+  window.addEventListener('scroll',function(){
+    if(_lpActive)onLpScroll();
+  },{passive:true});
 
   /* ── 6. Cinematic hero entrance ── */
   function triggerHeroCinematic(){
