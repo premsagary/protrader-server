@@ -1944,16 +1944,19 @@ function setMode(mode){
   _updateHash();
   /* Cinematic page transition */
   try{var mc=document.getElementById('main-content');if(mc&&window.shivaPageTransition)shivaPageTransition(mc);}catch(e){}
-  try{ document.getElementById("mode-stocks").className   ="mode-tab stocks"  +(mode==="stocks"  ?" active":""); }catch(e){}
-  try{ document.getElementById("mode-crypto").className   ="mode-tab crypto"  +(mode==="crypto"  ?" active":""); }catch(e){}
+  try{ document.getElementById("mode-stocks").className   ="mode-tab stocks admin-only"+(mode==="stocks"  ?" active":""); }catch(e){}
+  try{ document.getElementById("mode-crypto").className   ="mode-tab crypto admin-only"+(mode==="crypto"  ?" active":""); }catch(e){}
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockanalyzer").className="mode-tab"   +(mode==="stockanalyzer"?" active":""); }catch(e){}
   try{ document.getElementById("mode-holdings").className ="mode-tab"      +(mode==="holdings"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-mirofish").className ="mode-tab"      +(mode==="mirofish"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-mirofish").className ="mode-tab admin-only"+(mode==="mirofish"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-architecture").className="mode-tab"   +(mode==="architecture"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-admin").className    ="mode-tab"         +(mode==="admin"    ?" active":""); }catch(e){}
+  try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-admin").className    ="mode-tab admin-only"+(mode==="admin"    ?" active":""); }catch(e){}
+  // Re-enforce admin-only visibility after className reset
+  var _isAdmin = _authUser && _authUser.role === 'admin';
+  document.querySelectorAll('.admin-only').forEach(function(el){ el.style.display = _isAdmin ? '' : 'none'; });
   if(mode==="mf"){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){ console.log("renderTopBar error:", e.message); }
