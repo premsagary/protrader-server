@@ -1692,13 +1692,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     mirofish:      {fog:0x0a0e18,fd:0.0004,hue:[240,0.28,0.12],cy:15,li:0.8},
     admin:         {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
     architecture:  {fog:0x06080e,fd:0.0006,hue:[220,0.15,0.08],cy:12,li:0.4},
-    _default:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6},
-    /* Landing page scroll zones — section-specific moods */
-    lp_hero:       {fog:0x050810,fd:0.0003,hue:[220,0.20,0.08],cy:15,li:0.45},
-    lp_stats:      {fog:0x060a12,fd:0.0004,hue:[225,0.25,0.10],cy:13,li:0.55},
-    lp_howit:      {fog:0x080e1a,fd:0.0004,hue:[232,0.30,0.12],cy:14,li:0.7},
-    lp_features:   {fog:0x070b14,fd:0.0005,hue:[222,0.22,0.10],cy:11,li:0.6},
-    lp_pricing:    {fog:0x060910,fd:0.0005,hue:[216,0.18,0.09],cy:10,li:0.5}
+    _default:      {fog:0x06080e,fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6}
+    /* LP zones removed — landing page now uses continuous scroll-driven STORY system */
   };
   var zoneCur={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
   var zoneTgt={fog:new THREE.Color(0x06080e),fd:0.0005,hue:[220,0.25,0.10],cy:12,li:0.6};
@@ -1817,6 +1812,45 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   orbOuter.position.set(0,5,-10);
   scene.add(orbOuter);
 
+  /* ── Landing page scroll-driven world story ── */
+  /* Keyframes: progress → world state. Everything interpolated via smoothstep. */
+  /* fc=fogColor(RGB 0-255), fd=fogDensity, cy=camY, cz=camZ, os=orbScale, og=orbGlow,
+     go=gridOpacity, gy=gridY, li=lightIntensity, h/s/l=ambientHSL, sp=shapeSpread,
+     sa=shapeAlignment(0=scattered,1=symmetric), co=coneOpacity */
+  var STORY=[
+    {p:0.00, fc:[5,8,16],   fd:0.00022, cy:19, cz:105, os:0.7, og:0.03, go:0.05, gy:-34, li:0.32, h:218,s:0.16,l:0.06, sp:1.6, sa:0.0,  co:0.018},
+    {p:0.12, fc:[6,10,18],  fd:0.00030, cy:17, cz:94,  os:0.85,og:0.045,go:0.09, gy:-31, li:0.42, h:222,s:0.20,l:0.075,sp:1.4, sa:0.1,  co:0.022},
+    {p:0.28, fc:[8,14,26],  fd:0.00036, cy:14, cz:78,  os:1.1, og:0.07, go:0.16, gy:-27, li:0.62, h:230,s:0.28,l:0.11, sp:1.05,sa:0.3,  co:0.032},
+    {p:0.45, fc:[9,16,30],  fd:0.00040, cy:11, cz:65,  os:1.5, og:0.13, go:0.22, gy:-24, li:0.82, h:228,s:0.34,l:0.13, sp:0.65,sa:0.65, co:0.048},
+    {p:0.62, fc:[8,13,24],  fd:0.00034, cy:13, cz:80,  os:1.25,og:0.09, go:0.19, gy:-26, li:0.68, h:224,s:0.26,l:0.10, sp:1.15,sa:0.35, co:0.035},
+    {p:0.80, fc:[6,10,18],  fd:0.00040, cy:11, cz:88,  os:1.05,og:0.065,go:0.23, gy:-23, li:0.52, h:218,s:0.20,l:0.09, sp:0.9, sa:0.75, co:0.028},
+    {p:1.00, fc:[5,8,14],   fd:0.00048, cy:10, cz:92,  os:0.95,og:0.05, go:0.26, gy:-21, li:0.45, h:214,s:0.16,l:0.08, sp:0.8, sa:0.9,  co:0.022}
+  ];
+  /* Aligned shape positions — symmetrical ring around focal point */
+  var shapeAlignedPos=[[-10,6,-8],[10,6,-8],[0,-6,-8],[-7,0,-16],[7,0,-16]];
+  /* Capture original shape positions for interpolation */
+  var shapeOrigPos=shapes.map(function(sh){return[sh.position.x,sh.position.y,sh.position.z];});
+
+  function storyLerp(p){
+    var a=STORY[0],b=STORY[STORY.length-1];
+    for(var i=0;i<STORY.length-1;i++){
+      if(p>=STORY[i].p&&p<=STORY[i+1].p){a=STORY[i];b=STORY[i+1];break;}
+    }
+    var range=b.p-a.p;
+    var t=range>0?(p-a.p)/range:0;
+    t=t*t*(3-2*t); /* smoothstep */
+    var out={};
+    var keys=['fd','cy','cz','os','og','go','gy','li','h','s','l','sp','sa','co'];
+    for(var k=0;k<keys.length;k++){var key=keys[k];out[key]=a[key]+(b[key]-a[key])*t;}
+    out.fc=[a.fc[0]+(b.fc[0]-a.fc[0])*t,a.fc[1]+(b.fc[1]-a.fc[1])*t,a.fc[2]+(b.fc[2]-a.fc[2])*t];
+    return out;
+  }
+
+  /* LP active state + scroll progress (set by LP scroll system) */
+  var _lpActive=false,_lpProgress=0,_lpProgressSmooth=0;
+  window._gameBgSetLpActive=function(active){_lpActive=active;if(!active)_lpProgressSmooth=_lpProgress;};
+  window._gameBgSetLpProgress=function(p){_lpProgress=p;};
+
   /* ── Mouse parallax ── */
   var mx=0,my=0,mxSmooth=0,mySmooth=0;
   document.addEventListener('mousemove',function(e){
@@ -1865,87 +1899,138 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   var frameBudget=1000/CONF.targetFPS;
 
   /* ── Main animation loop ── */
+  /* Unified: LP scroll-driven world OR app zone-based, never both */
   function animate(now){
     if(paused)return;
     requestAnimationFrame(animate);
 
-    // Idle detection — throttle to 15fps when idle for 30s
+    /* Idle detection — 15fps after 30s idle */
     if(Date.now()-lastActivity>30000){
       if(!isIdle){isIdle=true;}
-      if(now-lastFrame<66)return; // ~15fps
+      if(now-lastFrame<66)return;
     } else {
       if(now-lastFrame<frameBudget)return;
     }
     var dt=Math.min((now-lastFrame)/1000,0.1);
     lastFrame=now;
-
     var t=now*0.001;
 
-    /* ── Zone interpolation ── */
-    updateZoneTarget();
-    lerpZone(dt);
+    /* Smooth scroll progress (LP) — low alpha for buttery interpolation */
+    _lpProgressSmooth+=(_lpProgress-_lpProgressSmooth)*0.055;
 
-    /* ── Mouse parallax (smooth) ── */
+    /* Mouse parallax (always) */
     mxSmooth+=(mx-mxSmooth)*0.04;
     mySmooth+=(my-mySmooth)*0.04;
 
-    /* ── Camera — base + zone Y + parallax + subtle drift ── */
-    camera.position.x=mxSmooth*6+Math.sin(t*0.05)*2;
-    camera.position.y=zoneCur.cy+(-mySmooth*3)+Math.cos(t*0.04)*1.5;
-    camera.position.z=90+scrollProg*(-15)+Math.sin(t*0.03)*3;
-    camera.lookAt(mxSmooth*2,mySmooth*-1+Math.sin(t*0.06)*0.5,0);
+    /* ── World state: either scroll-driven (LP) or zone-driven (app) ── */
+    var wCy,wCz,wLi,wGo,wGy,wOs,wOg,wSp,wSa,wCo;
 
-    /* ── Ambient light — zone hue reactive ── */
-    var hue=zoneCur.hue;
-    ambLight.color.setHSL(hue[0]/360,hue[1],hue[2]);
-    ambLight.intensity=zoneCur.li;
-    dirLight.intensity=zoneCur.li*0.7;
+    if(_lpActive){
+      /* ── SCROLL-DRIVEN WORLD (landing page) ── */
+      var w=storyLerp(_lpProgressSmooth);
 
-    /* ── Star field — gentle rotation ── */
-    stars.rotation.y=t*0.004;
-    stars.rotation.x=t*0.0015+scrollProg*0.1;
+      /* Fog — continuous */
+      scene.fog.color.setRGB(w.fc[0]/255,w.fc[1]/255,w.fc[2]/255);
+      scene.fog.density=w.fd;
+      renderer.setClearColor(scene.fog.color,1);
 
-    /* ── Dust field — drift + breathe ── */
+      /* Ambient light — continuous */
+      ambLight.color.setHSL(w.h/360,w.s,w.l);
+      ambLight.intensity=w.li;
+      dirLight.intensity=w.li*0.65;
+
+      wCy=w.cy;wCz=w.cz;wLi=w.li;wGo=w.go;wGy=w.gy;
+      wOs=w.os;wOg=w.og;wSp=w.sp;wSa=w.sa;wCo=w.co;
+
+    } else {
+      /* ── ZONE-DRIVEN (app tabs) ── */
+      updateZoneTarget();
+      lerpZone(dt);
+      var hue=zoneCur.hue;
+      ambLight.color.setHSL(hue[0]/360,hue[1],hue[2]);
+      ambLight.intensity=zoneCur.li;
+      dirLight.intensity=zoneCur.li*0.7;
+
+      wCy=zoneCur.cy;wCz=90+scrollProg*(-15);wLi=zoneCur.li;
+      wGo=0.15+scrollProg*0.08;wGy=-25;
+      wOs=1;wOg=0.08;wSp=1;wSa=0;wCo=0.035;
+    }
+
+    /* ── Camera — scroll-driven position + mouse parallax + organic drift ── */
+    camera.position.x=mxSmooth*5+Math.sin(t*0.05)*1.2;
+    camera.position.y=wCy+(-mySmooth*2.5)+Math.cos(t*0.04)*0.8;
+    camera.position.z=wCz+Math.sin(t*0.03)*1.5;
+    var lookZ=_lpActive?(-8-_lpProgressSmooth*18):0;
+    camera.lookAt(mxSmooth*1.8,mySmooth*-0.8+Math.sin(t*0.06)*0.3,lookZ);
+
+    /* ── Star field — gentle rotation + scroll-driven roll ── */
+    var scrollR=_lpActive?_lpProgressSmooth:scrollProg;
+    stars.rotation.y=t*0.004+scrollR*0.18;
+    stars.rotation.x=t*0.0015+scrollR*0.08;
+
+    /* ── Dust field — drift (runs in both modes) ── */
     var dPos=dustGeo.attributes.position.array;
     for(var k=0;k<CONF.dust;k++){
       var k3=k*3;
       dPos[k3]+=dustVel[k3]+Math.sin(t*0.3+k)*0.003;
       dPos[k3+1]+=dustVel[k3+1]+Math.cos(t*0.2+k*0.5)*0.002;
       dPos[k3+2]+=dustVel[k3+2];
-      // Wrap around bounds
       if(dPos[k3]>80)dPos[k3]=-80;if(dPos[k3]<-80)dPos[k3]=80;
       if(dPos[k3+1]>50)dPos[k3+1]=-50;if(dPos[k3+1]<-50)dPos[k3+1]=50;
       if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
     }
     dustGeo.attributes.position.needsUpdate=true;
-    dustMat.opacity=0.28+0.12*Math.sin(t*0.4);
+    dustMat.opacity=0.25+0.12*Math.sin(t*0.4)+(_lpActive?wLi*0.06:0);
 
-    /* ── Wireframe shapes — rotate + bob ── */
+    /* ── Wireframe shapes — scroll-driven spread/alignment OR zone bob ── */
     for(var si=0;si<shapes.length;si++){
       var sh=shapes[si];var ud=sh.userData;
-      sh.rotation.x=t*ud.spd[0];
-      sh.rotation.y=t*ud.spd[1];
-      sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*4;
-      // Zone reactive — brighter in active zones
-      sh.material.opacity=ud.baseOp*(0.7+zoneCur.li*0.8);
+      if(_lpActive&&shapeOrigPos[si]){
+        /* Scroll-driven: interpolate between spread (original) and aligned positions */
+        var orig=shapeOrigPos[si];var aligned=shapeAlignedPos[si]||orig;
+        var tx=orig[0]*wSp*(1-wSa)+aligned[0]*wSa;
+        var ty=(orig[1]*wSp*(1-wSa)+aligned[1]*wSa)+Math.sin(t*0.15+si*1.2)*2.5;
+        var tz=orig[2]*wSp*(1-wSa)+aligned[2]*wSa - _lpProgressSmooth*12;
+        sh.position.x+=(tx-sh.position.x)*0.035;
+        sh.position.y+=(ty-sh.position.y)*0.035;
+        sh.position.z+=(tz-sh.position.z)*0.035;
+        /* Rotation slows as shapes align */
+        var rotFact=1-wSa*0.55;
+        sh.rotation.x=t*ud.spd[0]*rotFact;
+        sh.rotation.y=t*ud.spd[1]*rotFact;
+      } else {
+        sh.rotation.x=t*ud.spd[0];
+        sh.rotation.y=t*ud.spd[1];
+        sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*4;
+      }
+      sh.material.opacity=ud.baseOp*(0.55+wLi*0.9);
     }
 
-    /* ── Ground grid parallax ── */
+    /* ── Ground grid — scroll-driven depth OR app parallax ── */
     if(gridHelper){
-      gridHelper.position.z=scrollProg*(-20);
-      gridHelper.material.opacity=0.15+scrollProg*0.08;
+      if(_lpActive){
+        gridHelper.position.y+=(wGy-gridHelper.position.y)*0.04;
+        gridHelper.position.z=-_lpProgressSmooth*18;
+      } else {
+        gridHelper.position.z=scrollProg*(-20);
+      }
+      gridHelper.material.opacity+=(wGo-gridHelper.material.opacity)*0.05;
     }
 
-    /* ── Light cone breathe ── */
-    coneMat.opacity=0.025+0.015*Math.sin(t*0.25);
+    /* ── Light cone — scroll-driven intensity + breathe ── */
+    coneMat.opacity=wCo*(1+0.35*Math.sin(t*0.25));
     lightCone.rotation.y=t*0.015;
+    if(_lpActive){
+      lightCone.position.y+=(48+_lpProgressSmooth*14-lightCone.position.y)*0.03;
+    }
 
-    /* ── Central orb breathe ── */
-    var bsc=1+0.15*Math.sin(t*0.35);
+    /* ── Central orb — scroll-driven scale/glow + breathe ── */
+    var bsc=wOs*(1+0.08*Math.sin(t*0.35));
     orb.scale.set(bsc,bsc,bsc);
-    orbMat.opacity=0.06+0.03*Math.sin(t*0.4);
-    orbOuter.scale.set(bsc*0.95,bsc*0.95,bsc*0.95);
-    orbOuterMat.opacity=0.03+0.015*Math.sin(t*0.3);
+    orbMat.opacity=wOg*(1+0.25*Math.sin(t*0.4));
+    var osc=bsc*(_lpActive?1.15:0.95);
+    orbOuter.scale.set(osc,osc,osc);
+    orbOuterMat.opacity=wOg*0.45*(1+0.2*Math.sin(t*0.3));
 
     renderer.render(scene,camera);
   }
@@ -1960,7 +2045,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     renderer.setSize(W,H);
   });
 
-  /* ── Expose zone update for external calls ── */
+  /* ── Expose for external calls ── */
   window._gameBgZoneUpdate=updateZoneTarget;
 })();
 </script>
@@ -2062,8 +2147,10 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </script>
 
 <!-- ══════════════════════════════════════════════════════════
-     LANDING PAGE IMMERSIVE SCROLL SYSTEM
-     Zone switching, staged reveals, parallax, cinematic hero
+     LANDING PAGE SCROLL-DRIVEN STORYTELLING
+     Continuous progress (0→1), NO zone switching for background.
+     IntersectionObserver ONLY for UI element reveals.
+     Background world driven by scroll progress via game-bg.
      ══════════════════════════════════════════════════════════ -->
 <script>
 (function(){
@@ -2071,72 +2158,53 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   var lpEl=document.getElementById('landing-page');
   if(!lpEl)return;
 
-  /* ── 1. Programmatically annotate sections + add reveal/sheen classes ── */
+  /* ── 1. Section references + data-zone for CSS atmosphere overlays ── */
   var hero=lpEl.querySelector('.lp-hero');
   var stats=lpEl.querySelector('.lp-stats');
   var howitSec=lpEl.querySelector('.lp-features#how')||lpEl.querySelector('section.lp-features');
   var featuresSec=lpEl.querySelector('.lp-features#features')||lpEl.querySelectorAll('section.lp-features')[1];
   var pricingSec=lpEl.querySelector('.lp-pricing#pricing')||lpEl.querySelector('.lp-pricing');
-
-  /* Data-zone attributes */
   if(hero)hero.dataset.lpZone='hero';
   if(stats)stats.dataset.lpZone='stats';
   if(howitSec)howitSec.dataset.lpZone='howit';
   if(featuresSec)featuresSec.dataset.lpZone='features';
   if(pricingSec)pricingSec.dataset.lpZone='pricing';
+  var zoneSections=[hero,stats,howitSec,featuresSec,pricingSec].filter(Boolean);
 
-  /* Stats — staggered reveal */
+  /* ── 2. Programmatically add reveal/sheen classes ── */
   lpEl.querySelectorAll('.lp-stat').forEach(function(el,i){
     el.classList.add('lp-reveal-up');el.dataset.lpDelay=i+1;
   });
-
-  /* Section labels + titles */
   lpEl.querySelectorAll('.lp-section-label,.lp-section-title').forEach(function(el){
     el.classList.add('lp-reveal-up');
   });
-
-  /* Steps — staggered */
   lpEl.querySelectorAll('.lp-step').forEach(function(el,i){
     el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
   });
-
-  /* Example card — scale reveal */
   lpEl.querySelectorAll('.lp-example').forEach(function(el){
     el.classList.add('lp-reveal-scale','lp-sheen');
   });
-
-  /* Feature cards — staggered + sheen */
   lpEl.querySelectorAll('.lp-feature').forEach(function(el,i){
     el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
   });
-
-  /* Price cards — staggered + sheen */
   lpEl.querySelectorAll('.lp-price-card').forEach(function(el,i){
     el.classList.add('lp-reveal-up','lp-sheen');el.dataset.lpDelay=i+1;
   });
-
-  /* ROI */
   lpEl.querySelectorAll('.lp-roi').forEach(function(el){el.classList.add('lp-reveal-up');});
-
-  /* Proof section */
   var proofEl=lpEl.querySelector('.lp-proof');
   if(proofEl)proofEl.classList.add('lp-reveal-up');
-
-  /* Footer */
   var footerEl=lpEl.querySelector('.lp-footer');
   if(footerEl)footerEl.classList.add('lp-reveal-up');
-
-  /* Hero trust badges — parallax */
   var heroTrust=lpEl.querySelector('.lp-hero-trust');
   if(heroTrust)heroTrust.classList.add('lp-parallax');
 
-  /* ── 2. Scroll progress bar ── */
+  /* ── 3. Scroll progress bar ── */
   var progressBar=document.createElement('div');
   progressBar.className='lp-scroll-progress';
   progressBar.id='lp-progress';
   document.body.appendChild(progressBar);
 
-  /* ── 3. LP Reveal observer ── */
+  /* ── 4. UI reveal observer (IntersectionObserver — for element entrances ONLY) ── */
   var lpRevealObs;
   if('IntersectionObserver' in window){
     lpRevealObs=new IntersectionObserver(function(entries){
@@ -2148,7 +2216,6 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       });
     },{threshold:0.08,rootMargin:'0px 0px -50px 0px'});
   }
-
   function observeLpReveals(){
     if(!lpRevealObs)return;
     lpEl.querySelectorAll('.lp-reveal-up:not(.visible),.lp-reveal-scale:not(.visible),.lp-reveal-left:not(.visible),.lp-reveal-right:not(.visible)').forEach(function(el){
@@ -2156,31 +2223,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     });
   }
 
-  /* ── 4. Zone scroll observer — drives game-bg mood ── */
-  var zoneSections;
-  var zoneObs;
-  if('IntersectionObserver' in window){
-    zoneObs=new IntersectionObserver(function(entries){
-      entries.forEach(function(e){
-        if(e.isIntersecting&&e.intersectionRatio>=0.25){
-          var zone='lp_'+e.target.dataset.lpZone;
-          window._currentMode=zone;
-          if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(ex){}
-          /* Toggle atmosphere overlay */
-          if(zoneSections)zoneSections.forEach(function(s){s.classList.remove('lp-zone-active');});
-          e.target.classList.add('lp-zone-active');
-        }
-      });
-    },{threshold:[0.25,0.5],rootMargin:'-8% 0px -8% 0px'});
-  }
-
-  function observeZones(){
-    zoneSections=lpEl.querySelectorAll('[data-lp-zone]');
-    if(!zoneObs||!zoneSections.length)return;
-    zoneSections.forEach(function(s){zoneObs.observe(s);});
-  }
-
-  /* ── 5. Scroll handler — progress bar + parallax ── */
+  /* ── 5. CONTINUOUS scroll handler — drives everything ── */
+  /* NO IntersectionObserver for background. Pure progress value. */
   var _scrollTicking=false;
   function onLpScroll(){
     if(_scrollTicking)return;
@@ -2188,15 +2232,26 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     requestAnimationFrame(function(){
       var st=lpEl.scrollTop;
       var sh=lpEl.scrollHeight-lpEl.clientHeight;
-      var pct=sh>0?st/sh:0;
+      var pct=sh>0?Math.min(st/sh,1):0;
+
+      /* Progress bar */
       progressBar.style.transform='scaleX('+pct+')';
 
-      /* Parallax */
+      /* Feed continuous progress to game-bg (scroll-driven world) */
+      if(window._gameBgSetLpProgress)window._gameBgSetLpProgress(pct);
+
+      /* Atmosphere overlay — toggle based on progress ranges */
+      var activeEl=pct<0.10?hero:pct<0.22?stats:pct<0.46?howitSec:pct<0.70?featuresSec:pricingSec;
+      for(var z=0;z<zoneSections.length;z++){
+        zoneSections[z].classList.toggle('lp-zone-active',zoneSections[z]===activeEl);
+      }
+
+      /* Parallax for hero trust badges */
       var pEls=lpEl.querySelectorAll('.lp-parallax');
       pEls.forEach(function(el){
         var r=el.getBoundingClientRect();
         var center=r.top+r.height/2;
-        var offset=(center-window.innerHeight/2)*-0.06;
+        var offset=(center-window.innerHeight/2)*-0.05;
         el.style.transform='translateY('+offset+'px)';
       });
 
@@ -2211,18 +2266,17 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     setTimeout(function(){hero.classList.add('lp-cinematic');},80);
   }
 
-  /* ── 7. Init/cleanup on LP show/hide ── */
+  /* ── 7. Activate / Deactivate on LP show/hide ── */
   var _lpActive=false;
   function lpActivate(){
     if(_lpActive)return;
     _lpActive=true;
     observeLpReveals();
-    observeZones();
     triggerHeroCinematic();
     progressBar.style.display='';
-    /* Set initial zone */
-    window._currentMode='lp_hero';
-    if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(e){}
+    /* Tell game-bg: enter scroll-driven mode */
+    if(window._gameBgSetLpActive)window._gameBgSetLpActive(true);
+    if(window._gameBgSetLpProgress)window._gameBgSetLpProgress(0);
     if(hero)hero.classList.add('lp-zone-active');
   }
   function lpDeactivate(){
@@ -2230,20 +2284,20 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     _lpActive=false;
     progressBar.style.display='none';
     progressBar.style.transform='scaleX(0)';
+    /* Tell game-bg: return to zone mode */
+    if(window._gameBgSetLpActive)window._gameBgSetLpActive(false);
+    zoneSections.forEach(function(s){s.classList.remove('lp-zone-active');});
   }
 
-  /* Watch for landing page visibility changes via MutationObserver */
+  /* Watch for landing page visibility changes */
   var mo=new MutationObserver(function(){
     if(lpEl.style.display!=='none'&&lpEl.offsetParent!==null){lpActivate();}
     else{lpDeactivate();}
   });
   mo.observe(lpEl,{attributes:true,attributeFilter:['style']});
-
-  /* Also check immediately */
   if(lpEl.style.display!=='none'&&lpEl.offsetParent!==null){lpActivate();}
   else{progressBar.style.display='none';}
 
-  /* Expose for external calls (e.g., showLoginFromLanding) */
   window._lpScrollDeactivate=lpDeactivate;
   window._lpScrollActivate=lpActivate;
 })();
