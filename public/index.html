@@ -100,6 +100,35 @@ body.ui-focus #shiva-app-canvas,body.ui-focus #three-app,body.ui-focus .vol-ligh
 .mode-tab#mode-mf.active{color:var(--green)}
 .mode-tab.stockrec.active{color:var(--amber)}
 
+/* ══════════════════════════════════════════════════════════════
+   UNIFIED 3D PRESS — consistent click feel across entire app
+   Applies to: tabs, buttons, pills, filter chips, stock tiles
+   ══════════════════════════════════════════════════════════════ */
+.mode-tab,.btn,.btn-sm,.btn-primary,.stab,.qs-stock,.login-btn-3d,
+button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
+  transform:perspective(600px) translateZ(0);
+  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),
+             color var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);
+}
+.mode-tab:active,.btn:active,.btn-sm:active,.btn-primary:active,.stab:active,
+.qs-stock:active,.login-btn-3d:active,button:active{
+  transform:perspective(600px) translateZ(-4px) scale(0.96) !important;
+  box-shadow:0 1px 4px rgba(0,0,0,0.4),inset 0 1px 2px rgba(0,0,0,0.2) !important;
+  transition-duration:0.08s !important;
+}
+/* Hover lift for all clickable elements */
+.mode-tab:hover,.stab:hover{
+  transform:perspective(600px) translateZ(3px) translateY(-1px);
+}
+.btn:hover,.btn-primary:hover{
+  transform:perspective(600px) translateZ(3px) translateY(-1px);
+}
+@keyframes tabPress3d{
+  0%{transform:perspective(600px) translateZ(0)}
+  30%{transform:perspective(600px) translateZ(-4px) scale(0.97)}
+  100%{transform:perspective(600px) translateZ(2px) scale(1)}
+}
+
 /* -- HEADER STATS -- */
 .hstat{text-align:right}
 .hstat .l{font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;font-weight:500}
@@ -1653,10 +1682,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     });
   });
 
-  /* ── Button ripple effect ── */
+  /* ── Button ripple + 3D press animation ── */
   document.addEventListener('click',function(e){
-    var btn=e.target.closest('.btn,.login-btn-3d,button');
+    var btn=e.target.closest('.btn,.login-btn-3d,button,.mode-tab,.stab,.qs-stock');
     if(!btn)return;
+    /* Ripple */
     var ripple=document.createElement('span');
     var r=btn.getBoundingClientRect();
     var sz=Math.max(r.width,r.height)*2;
@@ -1667,6 +1697,11 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     btn.style.overflow='hidden';
     btn.appendChild(ripple);
     setTimeout(function(){ripple.remove()},700);
+    /* 3D press bounce */
+    btn.style.animation='none';
+    void btn.offsetWidth;
+    btn.style.animation='tabPress3d 0.35s var(--ease-out-expo)';
+    setTimeout(function(){btn.style.animation='';},400);
   });
 
   /* ── Dynamic background dimming — dim particles when user is interacting ── */
@@ -4122,6 +4157,7 @@ async function renderMFPage(){
       });
       var dniContainer=document.createElement('div');
       dniContainer.id='mf-dni-container';
+      dniContainer.className='tilt-3d';
       dniContainer.style.cssText='margin-bottom:24px;border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-lg);overflow:hidden;background:var(--bg2)';
       var dniHeader=document.createElement('div');
       dniHeader.style.cssText='display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.2)';
