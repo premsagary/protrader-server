@@ -1131,9 +1131,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       <p>Updated daily: <strong style="color:var(--shiva-gold)">Rebound</strong> (quality on sale), <strong style="color:var(--green)">Momentum</strong> (5-factor scoring), and <strong style="color:var(--shiva-blue)">Long-Term</strong> (Buffett-style criteria). Sortable, filterable, fully transparent.</p>
     </div>
     <div class="lp-feature">
-      <div class="lp-feature-icon">💼</div>
-      <h3>Holdings Tracker</h3>
-      <p>Add your real positions. See live P&L, allocation splits, and run portfolio-wide AI reviews to find risks and opportunities across your entire book.</p>
+      <div class="lp-feature-icon">📈</div>
+      <h3>Stock Data Browser</h3>
+      <p>Browse 500+ NSE stocks with scores, fundamentals, sector breakdown, and market-cap filters. Sortable columns — find the best stocks at a glance.</p>
     </div>
     <div class="lp-feature">
       <div class="lp-feature-icon">🏦</div>
@@ -1166,8 +1166,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
         <li>Deep Analyzer — 14-point Varsity checklist, 30+ indicators</li>
         <li>Stock Picks — Rebound, Momentum &amp; Long-Term lists</li>
         <li>Mutual Fund scoring across 4 categories (120 pts)</li>
-        <li>Holdings tracker with live P&amp;L</li>
-        <li>Stock Data browser (500+ NSE stocks)</li>
+        <li>Stock Data browser — 500+ NSE stocks with filters</li>
         <li>Support/resistance, Fibonacci levels &amp; buy zones</li>
         <li style="color:var(--text3);font-style:italic">AI Deep Analysis — Coming Soon</li>
       </ul>
@@ -1641,7 +1640,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
       <div class="ob-feat"><div class="ob-feat-title" style="color:var(--shiva-gold)">🔍 Deep Analyzer</div><div class="ob-feat-desc">Full Varsity analysis + AI second opinion for any stock</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:var(--amber)">📈 Stock Picks</div><div class="ob-feat-desc">3 curated lists updated daily: Rebound, Momentum, Long-Term</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:var(--green)">🏦 MF Picks</div><div class="ob-feat-desc">120-point scoring for mutual funds across 4 categories</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">💼 Holdings</div><div class="ob-feat-desc">Track your positions with live P&L and AI portfolio review</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">📊 Stock Data</div><div class="ob-feat-desc">Browse 500+ NSE stocks with scores, fundamentals &amp; sector filters</div></div>
     </div>
     <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span></div>
     <button class="ob-next" onclick="obDismiss()" style="background:rgba(94,204,138,0.15);color:var(--green);border-color:rgba(94,204,138,0.2)">Got it — let's go</button>
@@ -2656,7 +2655,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
     <button class="mode-tab" onclick="setMode('mf')" id="mode-mf">MF Picks</button>
     <button class="mode-tab stocks admin-only" onclick="setMode('stocks')" id="mode-stocks" style="display:none">Stocks RoboTrade</button>
     <button class="mode-tab crypto admin-only" onclick="setMode('crypto')" id="mode-crypto" style="display:none">Crypto RoboTrade</button>
-    <button class="mode-tab" onclick="setMode('holdings')" id="mode-holdings" style="color:#22d3ee">💼 Holdings</button>
+    <button class="mode-tab admin-only" onclick="setMode('holdings')" id="mode-holdings" style="color:#22d3ee">💼 Holdings</button>
     <button class="mode-tab admin-only" onclick="setMode('mirofish')" id="mode-mirofish" style="display:none;color:#22d3ee" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata" style="color:var(--shiva-blue)">📊 Stock Data</button>
     <button class="mode-tab admin-only" onclick="setMode('architecture')" id="mode-architecture" style="display:none;color:#f0abfc">🏛 Architecture</button>
@@ -2938,7 +2937,7 @@ function _readHash(){
 
 function setMode(mode){
   /* Block public users from accessing admin-only modes */
-  var _publicModes = ['stockanalyzer','stockrec','mf','holdings','stockdata'];
+  var _publicModes = ['stockanalyzer','stockrec','mf','stockdata'];
   if(_isPublicUser() && _publicModes.indexOf(mode) < 0){
     mode = 'stockanalyzer'; /* fallback to Deep Analyzer */
   }
@@ -2954,7 +2953,7 @@ function setMode(mode){
   try{ document.getElementById("mode-mf").className       ="mode-tab"         +(mode==="mf"      ?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockrec").className ="mode-tab stockrec"+(mode==="stockrec"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockanalyzer").className="mode-tab"   +(mode==="stockanalyzer"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-holdings").className ="mode-tab"      +(mode==="holdings"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-holdings").className ="mode-tab admin-only"+(mode==="holdings"?" active":""); }catch(e){}
   try{ document.getElementById("mode-mirofish").className ="mode-tab admin-only"+(mode==="mirofish"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
