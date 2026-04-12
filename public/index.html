@@ -20,17 +20,17 @@
   --glass:rgba(12,14,18,0.92);--glass-border:rgba(255,255,255,0.08);
   --glass-hover:rgba(18,20,26,0.94);--glass-glow:rgba(120,160,220,0.04);
   /* ── Typography: ash-white hierarchy — bolder for clarity ── */
-  --text:#e8e5de;--text2:#b0aca6;--text3:#807c76;
+  --text:#E6EAF2;--text2:#AAB2C0;--text3:#7A8191;
   /* ── Borders: slightly stronger ── */
   --border:#1e2130;--border2:#2a2d38;
   /* ── Semantic colors (muted, sophisticated) ── */
-  --green:#5ecc8a;--green-bg:rgba(94,204,138,0.06);--green-text:#5ecc8a;
-  --red:#e06060;--red-bg:rgba(224,96,96,0.06);--red-text:#e06060;
-  --amber:#d4a040;--amber-bg:rgba(212,160,64,0.06);--amber-text:#d4a040;
+  --green:#34d399;--green-bg:rgba(52,211,153,0.06);--green-text:#34d399;
+  --red:#fb7185;--red-bg:rgba(251,113,133,0.06);--red-text:#fb7185;
+  --amber:#facc15;--amber-bg:rgba(250,204,21,0.06);--amber-text:#facc15;
   --blue:#6098d0;--blue-bg:rgba(96,152,208,0.06);--blue-text:#6098d0;
   --purple:#9080c0;--purple-bg:rgba(144,128,192,0.06);--purple-text:#9080c0;
   --teal:#50b8a0;--accent:#7898c0;
-  --text4:#5a5850;--border3:#161820;
+  --text4:#6a6e7a;--border3:#161820;
   --amber-bright:#d4a040;--emerald:#50b8a0;
   /* ── Shiva sacred tokens ── */
   --shiva-blue:#4070a8;--shiva-blue-glow:rgba(64,112,168,0.12);
@@ -47,6 +47,9 @@
   --tier-accumulate-bg:rgba(212,160,64,0.06);--tier-accumulate-text:#d4a040;--tier-accumulate-border:rgba(212,160,64,0.12);
   --tier-watch-bg:rgba(138,134,128,0.06);--tier-watch-text:#8a8680;--tier-watch-border:rgba(138,134,128,0.10);
   --tier-avoid-bg:rgba(224,96,96,0.06);--tier-avoid-text:#e06060;--tier-avoid-border:rgba(224,96,96,0.12);
+  /* ── Surface tints: subtle per-section color separation ── */
+  --surface-base:rgba(15,20,30,0.75);--surface-blue:rgba(20,30,50,0.75);
+  --surface-green:rgba(20,40,35,0.75);--surface-gold:rgba(40,35,20,0.75);
   --radius:8px;--radius-lg:12px;
   /* ── Premium transitions ── */
   --ease-out-expo:cubic-bezier(0.16,1,0.3,1);--ease-out-quad:cubic-bezier(0.25,0.46,0.45,0.94);
@@ -74,6 +77,11 @@ body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
   text-shadow:0 1px 6px rgba(0,0,0,0.6),0 0 20px rgba(8,9,12,0.4)}
 .topbar,.stat-grid,.tw table th{text-shadow:0 1px 3px rgba(0,0,0,0.4)}
 
+/* ── Global UI contrast overlay — ensures text readable over 3D bg ── */
+#ui-contrast-layer{position:fixed;inset:0;pointer-events:none;z-index:1;
+  background:radial-gradient(circle at center,rgba(0,0,0,0.25),rgba(0,0,0,0.55))}
+body:not(.in-app) #ui-contrast-layer{opacity:0}
+
 /* -- LAYOUT -- */
 #app{display:flex;flex-direction:column;height:100vh;overflow:hidden;position:relative;z-index:1}
 /* ── Subtle Shiva aura — restrained top-line glow ── */
@@ -94,9 +102,10 @@ body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
 /* -- MODE SWITCHER -- */
 .mode-tabs{display:flex;gap:2px;background:rgba(255,255,255,0.03);border-radius:var(--radius);padding:3px;border:1px solid rgba(255,255,255,0.07)}
 .mode-tab{padding:5px 14px;border:none;background:transparent;cursor:pointer;font-size:11.5px;font-weight:600;
-  color:var(--text3);border-radius:6px;font-family:inherit;transition:all var(--transition-med);letter-spacing:0.2px}
-.mode-tab:hover{color:var(--text);background:rgba(255,255,255,0.04)}
-.mode-tab.active{background:rgba(255,255,255,0.07);color:var(--text);font-weight:700;
+  color:var(--text2);border-radius:6px;font-family:inherit;transition:all var(--transition-med);letter-spacing:0.2px}
+.mode-tab:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+.mode-tab.active{background:rgba(255,255,255,0.09);color:var(--text);font-weight:700;
+  border:1px solid rgba(255,255,255,0.10);
   box-shadow:0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,0.06)}
 .mode-tab.stocks.active{color:var(--shiva-blue)}
 .mode-tab.crypto.active{color:var(--purple)}
@@ -170,8 +179,8 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 /* -- STAT CARDS -- */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:18px}
 .sc{
-  background:rgba(12,14,18,0.93);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-  border:1px solid rgba(255,255,255,0.08);
+  background:rgba(20,25,35,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,0.06);
   border-radius:var(--radius-lg);padding:14px 16px;
   position:relative;overflow:hidden;
   box-shadow:0 2px 12px rgba(0,0,0,0.2);
@@ -182,8 +191,8 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 .sc::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);pointer-events:none;
   background:linear-gradient(135deg,rgba(255,255,255,0.02),transparent 60%);opacity:0;transition:opacity var(--transition-med)}
 .sc:hover{border-color:rgba(128,144,168,0.14);
-  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px);
-  box-shadow:0 20px 50px rgba(0,0,0,0.35),0 0 0 1px rgba(255,255,255,0.05)}
+  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px) translateY(-2px);
+  box-shadow:0 10px 25px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.05)}
 .sc:hover::before{opacity:1}
 .sc .l{font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px;font-weight:600}
 .sc .v{font-weight:700;font-size:18px;letter-spacing:-.5px;line-height:1}
@@ -207,7 +216,7 @@ th:hover{color:var(--text)}
 td{padding:9px 12px;font-size:12px;font-weight:500;border-bottom:1px solid rgba(30,33,48,0.9);vertical-align:middle;color:var(--text);
   transition:background var(--transition-fast)}
 tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:rgba(255,255,255,0.02)}
+tbody tr:hover td{background:rgba(255,255,255,0.03)}
 
 /* -- PILLS -- */
 .pill{display:inline-flex;align-items:center;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;letter-spacing:.1px}
@@ -258,23 +267,25 @@ tbody tr:hover td{background:rgba(255,255,255,0.02)}
 
 /* -- UNIFIED BUTTON SYSTEM -- */
 .btn{
-  background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);
+  background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.10);
   border-radius:var(--radius);padding:7px 16px;cursor:pointer;
-  font-size:12px;font-weight:600;font-family:inherit;color:var(--text2);
+  font-size:12px;font-weight:600;font-family:inherit;color:var(--text);
   transition:all var(--transition-med);backdrop-filter:blur(8px);
   letter-spacing:0.2px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.04);
 }
-.btn:hover{background:rgba(255,255,255,0.08);color:var(--text);border-color:rgba(255,255,255,0.12);
-  box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+.btn:hover{background:rgba(255,255,255,0.10);color:#fff;border-color:rgba(255,255,255,0.15);
+  box-shadow:0 4px 16px rgba(0,0,0,0.25);transform:perspective(600px) translateZ(3px) translateY(-1px)}
 .btn-sm{padding:5px 12px;font-size:11px;font-weight:600}
-.btn-primary{background:rgba(64,112,168,0.22);color:var(--shiva-blue);border-color:rgba(64,112,168,0.25);font-weight:700}
-.btn-primary:hover{background:rgba(64,112,168,0.32);border-color:rgba(64,112,168,0.35);color:#90c0f0;
-  box-shadow:0 4px 20px rgba(64,112,168,0.15)}
+.btn-primary{background:rgba(64,112,168,0.28);color:var(--shiva-blue);border-color:rgba(64,112,168,0.35);font-weight:700;
+  box-shadow:0 2px 8px rgba(64,112,168,0.15)}
+.btn-primary:hover{background:rgba(64,112,168,0.38);border-color:rgba(64,112,168,0.45);color:#90c0f0;
+  box-shadow:0 6px 24px rgba(64,112,168,0.25)}
 /* Disabled state — all buttons */
 .btn:disabled,.btn-primary:disabled,button:disabled{
   opacity:0.5 !important;cursor:not-allowed !important;
   transform:none !important;box-shadow:none !important;
-  filter:grayscale(0.3);
+  filter:grayscale(0.4);pointer-events:none;
 }
 .btn:disabled:hover,.btn-primary:disabled:hover,button:disabled:hover{
   transform:none !important;box-shadow:none !important;background:inherit;
@@ -284,6 +295,10 @@ tbody tr:hover td{background:rgba(255,255,255,0.02)}
   background:rgba(160,136,72,0.08);color:rgba(160,136,72,0.6);border:1px solid rgba(160,136,72,0.12);
   font-weight:600;cursor:not-allowed;opacity:0.7;letter-spacing:0.3px;
 }
+/* Analyze CTA — strong primary action */
+.btn-analyze:hover{transform:translateY(-2px) scale(1.03) !important;box-shadow:0 10px 25px rgba(80,120,255,0.55) !important}
+.btn-analyze:active{transform:scale(0.96) !important;box-shadow:0 4px 10px rgba(80,120,255,0.25) !important}
+@keyframes pulseGlow{0%,100%{box-shadow:0 6px 18px rgba(80,120,255,0.35)}50%{box-shadow:0 10px 28px rgba(80,120,255,0.55)}}
 input,select{
   background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);
   border-radius:var(--radius);padding:8px 12px;font-size:12px;font-weight:500;
@@ -297,13 +312,13 @@ select option{background:var(--bg3)}
 .fr{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .fpill{
   border-radius:20px;padding:5px 15px;font-size:11px;font-weight:600;
-  border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);
-  cursor:pointer;color:var(--text2);font-family:inherit;transition:all var(--transition-med);
+  border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);
+  cursor:pointer;color:#e6eaf2;font-family:inherit;transition:all var(--transition-med);
   backdrop-filter:blur(8px);letter-spacing:0.1px;
 }
-.fpill:hover{border-color:rgba(255,255,255,0.12);color:var(--text);background:rgba(255,255,255,0.05)}
-.fpill.active{background:rgba(64,112,168,0.18);color:var(--shiva-blue);border-color:rgba(64,112,168,0.25);font-weight:700;
-  box-shadow:0 2px 8px rgba(64,112,168,0.1)}
+.fpill:hover{border-color:rgba(120,160,255,0.4);color:#fff;background:rgba(80,120,255,0.12)}
+.fpill.active{background:rgba(80,120,255,0.20);color:#fff;border-color:rgba(120,160,255,0.6);font-weight:700;
+  box-shadow:0 0 12px rgba(80,120,255,0.4)}
 
 /* -- NEWS CARDS -- */
 .news-card{
@@ -345,8 +360,8 @@ select option{background:var(--bg3)}
 /* ── Deep Stock Analyzer (flagship) ── */
 .analyzer-wrap{max-width:1400px;margin:0 auto;padding:24px 4px}
 .analyzer-header{margin-bottom:28px}
-.analyzer-header h1{font-weight:400;font-size:22px;letter-spacing:1px;color:var(--text);margin-bottom:6px}
-.analyzer-header p{font-size:12px;color:var(--text2);line-height:1.6;max-width:680px;font-weight:400}
+.analyzer-header h1{font-weight:600;font-size:22px;letter-spacing:1px;color:var(--text);margin-bottom:6px}
+.analyzer-header p{font-size:12px;color:var(--text2);line-height:1.6;max-width:680px;font-weight:500}
 .analyzer-search{background:rgba(12,14,18,0.94);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
   border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:20px;margin-bottom:20px;
   box-shadow:0 4px 20px rgba(0,0,0,0.2);transition:border-color var(--transition-med)}
@@ -356,8 +371,9 @@ select option{background:var(--bg3)}
   position:relative;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.2)}
 .analyzer-verdict::before{content:'';position:absolute;inset:0;opacity:0.04;
   background:radial-gradient(circle at 50% 30%,currentColor,transparent 70%)}
-.analyzer-section{background:rgba(12,14,18,0.93);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:20px;margin-bottom:14px;
+.analyzer-section{background:linear-gradient(to bottom,rgba(255,255,255,0.03),rgba(0,0,0,0.25));
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-lg);padding:20px;margin-bottom:14px;
   box-shadow:0 2px 12px rgba(0,0,0,0.15)}
 .analyzer-section-title{font-weight:700;font-size:12px;letter-spacing:0.5px;color:var(--text);margin-bottom:14px;
   text-transform:uppercase}
@@ -375,16 +391,18 @@ select option{background:var(--bg3)}
 .picks-header{display:flex;align-items:baseline;gap:16px;margin-bottom:20px;flex-wrap:wrap}
 .picks-header h1{font-weight:400;font-size:20px;letter-spacing:0.5px}
 .picks-split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.picks-column{background:rgba(12,14,18,0.93);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:18px;overflow:hidden;
+.picks-column{background:linear-gradient(to bottom,rgba(255,255,255,0.03),rgba(0,0,0,0.25));
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-lg);padding:18px;overflow:hidden;
   box-shadow:0 2px 12px rgba(0,0,0,0.15)}
 .picks-column-title{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text);
   margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.06)}
 
 /* ── MF Picks ── */
 .mf-wrap{max-width:1500px;margin:0 auto}
-.mf-category-card{background:rgba(12,14,18,0.93);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:20px;margin-bottom:16px;
+.mf-category-card{background:linear-gradient(to bottom,rgba(255,255,255,0.03),rgba(0,0,0,0.25));
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-lg);padding:20px;margin-bottom:16px;
   box-shadow:0 2px 12px rgba(0,0,0,0.15);transition:all var(--transition-med)}
 .mf-category-card:hover{border-color:rgba(255,255,255,0.1)}
 .mf-category-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
@@ -812,7 +830,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* Quick-start bar (inside app, post-login) */
 .qs-bar{background:var(--glass);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:12px;
   padding:14px 18px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.015);border:1px solid var(--glass-border);border-radius:10px;padding:10px 18px;
+.qs-stock{position:relative;overflow:hidden;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 18px;
   cursor:pointer;transition:all 0.35s cubic-bezier(.4,0,.2,1);text-align:center;min-width:90px;font-family:inherit}
 .qs-stock::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--qs-accent,var(--shiva-gold));opacity:0.5;transition:opacity 0.3s}
 .qs-stock:hover{border-color:var(--qs-accent,var(--shiva-gold));box-shadow:0 4px 20px rgba(0,0,0,0.3),0 0 12px color-mix(in srgb,var(--qs-accent,var(--shiva-gold)) 15%,transparent)}
@@ -1673,6 +1691,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 
 <!-- Contrast scrim for readability over 3D background -->
 <div id="contrast-scrim"></div>
+<div id="ui-contrast-layer"></div>
 
 <!-- ══════════════════════════════════════════════════════════
      GAME-WORLD BACKGROUND — Unified Persistent WebGL Scene
@@ -4803,13 +4822,25 @@ async function fetchMFNav(code){
   }catch(e){return null;}
 }
 
+/* Scroll-preserving re-render — saves main-content scrollTop, re-renders,
+   then restores it. Used by all toggle/expand actions so the user doesn't
+   get thrown back to the top of the page. */
+function _mfRerender(){
+  var mc=document.getElementById('main-content');
+  var st=mc?mc.scrollTop:0;
+  renderMFPage().then(function(){
+    var mc2=document.getElementById('main-content');
+    if(mc2)mc2.scrollTop=st;
+  }).catch(function(){});
+}
+
 async function renderMFPage(){
   document.getElementById("subtabs").innerHTML="";
   var main=document.getElementById("main-content");
   main.innerHTML=
      '<div class="mf-wrap">'
     +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">'
-    +'<div><div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Mutual Fund Picks</div>'
+    +'<div><div style="font-weight:600;font-size:20px;letter-spacing:0.5px;color:var(--text)">Mutual Fund Picks</div>'
     +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Tickertape screener · 120-point scoring · Eligibility filters · Not SEBI advice</div></div>'
     +'<div style="display:flex;gap:6px;align-items:center">'
     +'<span id="mf-updated" style="font-size:9px;color:var(--text3);letter-spacing:0.3px"></span>'
@@ -4830,22 +4861,28 @@ async function renderMFPage(){
     var statusEl = document.getElementById("mf-status");
     var subEl = document.getElementById("mf-substatus");
     var data = null;
-    var attempts = 0;
-    while (attempts < 3) {
-      attempts++;
-      if(statusEl) statusEl.textContent = attempts === 1 ? "Loading fund data..." : "Retrying... ("+attempts+"/3)";
-      try {
-        var r = await fetch("/api/mf/funds");
-        if (!r.ok) throw new Error("Server error "+r.status);
-        data = await r.json();
-        if (data.funds && data.funds.length > 0) break;
-      } catch(fetchErr) {
-        if (attempts >= 3) throw fetchErr;
+    // Use cached fund data for re-renders (toggle/expand), only fetch on first load or refresh
+    if (window._mfCachedData && window._mfCachedData.funds && window._mfCachedData.funds.length > 0) {
+      data = window._mfCachedData;
+    } else {
+      var attempts = 0;
+      while (attempts < 3) {
+        attempts++;
+        if(statusEl) statusEl.textContent = attempts === 1 ? "Loading fund data..." : "Retrying... ("+attempts+"/3)";
+        try {
+          var r = await fetch("/api/mf/funds");
+          if (!r.ok) throw new Error("Server error "+r.status);
+          data = await r.json();
+          if (data.funds && data.funds.length > 0) break;
+        } catch(fetchErr) {
+          if (attempts >= 3) throw fetchErr;
+        }
+        if(subEl) subEl.textContent = "Server warming up... retrying in 5s";
+        await new Promise(res=>setTimeout(res,5000));
       }
-      if(subEl) subEl.textContent = "Server warming up... retrying in 5s";
-      await new Promise(res=>setTimeout(res,5000));
+      if (!data || !data.funds || data.funds.length === 0) throw new Error("Fund data not ready yet");
+      window._mfCachedData = data;
     }
-    if (!data || !data.funds || data.funds.length === 0) throw new Error("Fund data not ready yet");
 
     document.getElementById("mf-loading").style.display="none";
     document.getElementById("mf-cats").style.display="block";
@@ -5242,7 +5279,7 @@ async function renderMFPage(){
     if(loadEl) loadEl.innerHTML=
       '<div style="color:var(--red);font-size:13px;margin-bottom:8px">'+e.message+'</div>'
       +'<div style="font-size:11px;color:var(--text3);margin-bottom:16px">Check Railway logs -> look for MF refresh errors</div>'
-      +'<button class="btn" onclick="renderMFPage()">↻ Retry</button>';
+      +'<button class="btn" onclick="window._mfCachedData=null;renderMFPage()">↻ Retry</button>';
   }
 }
 
@@ -5250,6 +5287,7 @@ async function mfForceRefresh(){
   var btn=event.target;
   btn.textContent="Refreshing...";
   btn.disabled=true;
+  window._mfCachedData = null;
   await fetch("/api/mf/refresh",{method:"POST"});
   await new Promise(r=>setTimeout(r,3000));
   btn.textContent="↻ Refresh";
@@ -5408,7 +5446,7 @@ function mfAISummaryCardEl(category, topFunds, cfg) {
     row.onmouseout =function(){ row.style.borderColor='transparent'; };
     row.onclick=function(){
       _mfAIExpanded[category+':'+name] = !_mfAIExpanded[category+':'+name];
-      try { renderMFPage(); } catch(e) {}
+      try { _mfRerender(); } catch(e) {}
     };
 
     // Top line: medal + fund name + move arrow + confidence
@@ -5678,7 +5716,8 @@ function mfCardEl(f, rank, cfg, maxS) {
   // MiroFish Wealth Projection — for top 5 picks per category (matches
   // the Deep AI Review scope so every reviewed fund also gets a wealth
   // projection). Auto-calls MiroFish on render — no placeholder math.
-  if (rank <= 5) {
+  // Hidden for public/non-admin users (requires auth for /api/mirofish endpoint).
+  if (rank <= 5 && _isAdmin()) {
     var mfishBox = el('div');
     mfishBox.style.cssText = 'margin-top:12px;border-top:1px solid '+cfg.color+'30;padding-top:12px';
 
@@ -6171,8 +6210,8 @@ function renderStockAnalyzerPage(){
   h += '<div id="az-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:rgba(14,16,20,0.95);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--glass-border);border-radius:var(--radius);max-height:340px;overflow-y:auto;z-index:999;margin-top:4px;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>';
   h += '</div>';
 
-  h += '<button onclick="analyzeStock()" class="btn-primary" style="padding:12px 28px;border-radius:var(--radius);font-size:13px;letter-spacing:0.3px">Analyze</button>';
-  h += '<span id="az-status-chip" style="font-size:10px;color:var(--text3);margin-left:auto;letter-spacing:0.3px">'+seedCount+' stocks available</span>';
+  h += '<button onclick="analyzeStock()" class="btn-analyze" style="padding:12px 28px;border-radius:12px;font-size:13px;letter-spacing:0.3px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:linear-gradient(135deg,#4f7cff,#6aa8ff);color:#fff;box-shadow:0 6px 18px rgba(80,120,255,0.35);transition:all 0.3s var(--ease-out-expo);animation:pulseGlow 3s infinite ease-in-out">Analyze</button>';
+  h += '<span id="az-status-chip" style="font-size:10px;color:var(--text2);margin-left:auto;letter-spacing:0.3px;background:linear-gradient(135deg,rgba(40,70,120,0.25),rgba(20,30,50,0.55));border:1px solid rgba(120,160,255,0.25);backdrop-filter:blur(12px);border-radius:8px;padding:6px 12px;font-weight:500;box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),0 4px 12px rgba(0,0,0,0.3)">📊 '+seedCount+' stocks · Candles + fundamentals + news</span>';
   h += '</div>';
   h += '</div>';
 
@@ -7187,7 +7226,7 @@ function renderStockRecPage(){
 
   html += '<div class="picks-header reveal">';
   html += '<div>'
-    +'<div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Stock Picks</div>'
+    +'<div style="font-weight:600;font-size:20px;letter-spacing:0.5px;color:var(--text)">Stock Picks</div>'
     +'<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">'
     +'Checklist scoring · Trend + Quality + Momentum + Value + Technical · '
     +(data.last_refresh?'Scored '+data.last_refresh:'Scoring...')
@@ -7256,10 +7295,11 @@ function renderStockRecPage(){
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px;justify-content:center">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
-    html += '<button class="tilt-3d" onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      +(active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
-      +(active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      +';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
+    html += '<button onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+      +(active?'rgba(120,160,255,0.6)':'rgba(255,255,255,0.08)')+';background:'
+      +(active?'rgba(80,120,255,0.20)':'rgba(255,255,255,0.04)')
+      +';color:'+(active?'#fff':'#e6eaf2')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'600')+';letter-spacing:0.3px;backdrop-filter:blur(8px);transition:all 0.25s'
+      +(active?';box-shadow:0 0 12px rgba(80,120,255,0.4)':'')+'">'
       +f+'</button>';
   });
   html += '</div>';
@@ -7300,9 +7340,9 @@ function renderStockRecPage(){
   // row. This guarantees all three picks columns look identical regardless of
   // how long the description is (old flex-wrap:wrap approach would leave the
   // button inline next to the title if the description was short enough).
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(160,136,72,0.25)">';
+  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(160,136,72,0.25);background:var(--surface-gold)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-gold);letter-spacing:0.3px">Rebound Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-weight:600;font-size:15px;color:var(--shiva-gold);letter-spacing:0.3px">Rebound Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Quality stocks down ≥20% from 52W high, RSI ≤50, D/E ≤2</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('rebound');
@@ -7353,9 +7393,9 @@ function renderStockRecPage(){
   // ----- MIDDLE COLUMN: MOMENTUM PICKS (5-factor composite, Buy+ tier) -----
   // Same vertically stacked header layout as Rebound Picks (title → desc →
   // button+count row) — identical to all three picks columns.
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(34,197,94,0.25)">';
+  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(34,197,94,0.25);background:var(--surface-green)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--green);letter-spacing:0.3px">Momentum Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-weight:600;font-size:15px;color:var(--green);letter-spacing:0.3px">Momentum Picks <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Momentum Score ≥55 — FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('momentum');
@@ -7401,9 +7441,9 @@ function renderStockRecPage(){
 
   // ----- RIGHT COLUMN: LONG TERM TRADES (high-quality, not collapsing) -----
   // Same vertically stacked header layout as the other two picks columns.
-  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(64,112,168,0.25)">';
+  html += '<div class="picks-column spatial-card reveal" style="border-top:2px solid rgba(64,112,168,0.25);background:var(--surface-blue)">';
   html += '<div style="margin-bottom:10px">';
-  html += '<div style="font-weight:500;font-size:14px;color:var(--shiva-blue);letter-spacing:0.3px">Long-Term Investments <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
+  html += '<div style="font-weight:600;font-size:15px;color:var(--shiva-blue);letter-spacing:0.3px">Long-Term Investments <span style="font-size:10px;color:var(--text3);font-weight:400">· '+scopeLbl+'</span></div>';
   html += '<div style="font-size:10px;color:var(--text3);margin-top:3px">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('longterm');
@@ -8027,7 +8067,7 @@ function togglemfAIDetail(category, fundName) {
   var k = category+':'+fundName;
   if (_mfAIExpanded[k]) delete _mfAIExpanded[k];
   else _mfAIExpanded[k] = true;
-  try { renderMFPage(); } catch(e) {}
+  try { _mfRerender(); } catch(e) {}
 }
 
 // Load cached MF reviews + rankings from DB (no AI call). Called
@@ -8051,7 +8091,7 @@ async function loadMFAIReviews(category) {
     _mfAICouncilRankings[category] = {};
   } finally {
     _mfAILoading[category] = false;
-    try { renderMFPage(); } catch(e) {}
+    try { _mfRerender(); } catch(e) {}
   }
 }
 
@@ -8062,7 +8102,7 @@ async function runMFAIReview(category) {
   if (_mfAIRunning[category]) return;
   _mfAIRunning[category] = true;
   _mfCouncilStatus[category] = { running: true, at: Date.now() };
-  try { renderMFPage(); } catch(e) {}
+  try { _mfRerender(); } catch(e) {}
   try {
     var r = await fetch('/api/mf/ai-review?category=' + category, { method: 'POST' });
     var d = await r.json();
@@ -8419,8 +8459,8 @@ async function renderStockDataPage(){
   var html = '<div class="stockdata-wrap">';
   html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
   html += '<div>'
-    + '<div style="font-weight:300;font-size:18px;letter-spacing:0.5px;color:var(--text)">Stock Data</div>'
-    + '<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Full universe · '+allStocks.length+' stocks · sortable columns · search</div>'
+    + '<div style="font-weight:600;font-size:20px;letter-spacing:0.5px;color:var(--text)">Stock Data</div>'
+    + '<div style="font-size:11px;color:var(--text2);margin-top:4px;letter-spacing:0.2px;font-weight:500">Full universe · '+allStocks.length+' stocks · sortable columns · search</div>'
     + '</div>';
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
   html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockDataPage()">Refresh</button>';
@@ -8435,10 +8475,11 @@ async function renderStockDataPage(){
   var mcFilters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
   mcFilters.forEach(function(f){
     var active = stockDataFilter===f;
-    html += '<button class="tilt-3d" onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
-      + (active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
+    html += '<button onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+      + (active?'rgba(120,160,255,0.6)':'rgba(255,255,255,0.08)')+';background:'
+      + (active?'rgba(80,120,255,0.20)':'rgba(255,255,255,0.04)')
+      + ';color:'+(active?'#fff':'#e6eaf2')+';font-size:11px;cursor:pointer;font-weight:'+(active?'700':'600')+';letter-spacing:0.3px;backdrop-filter:blur(8px);transition:all 0.25s'
+      + (active?';box-shadow:0 0 12px rgba(80,120,255,0.4)':'')+'">'
       + f+'</button>';
   });
   html += '</div>';
@@ -8448,11 +8489,12 @@ async function renderStockDataPage(){
   TAB_DEFS.forEach(function(t){
     var isActive = stockDataTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button class="tilt-3d" onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
-      + (isActive?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(isActive?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(isActive?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'600':'400')
-      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px)">'
-      + t.label+' <span style="font-size:9px;opacity:0.5">('+colCount+')</span></button>';
+    html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+      + (isActive?'rgba(120,160,255,0.6)':'rgba(255,255,255,0.08)')+';background:'+(isActive?'rgba(80,120,255,0.20)':'rgba(255,255,255,0.04)')
+      + ';color:'+(isActive?'#fff':'#e6eaf2')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'700':'600')
+      + ';white-space:nowrap;letter-spacing:0.3px;backdrop-filter:blur(8px);transition:all 0.25s'
+      + (isActive?';box-shadow:0 0 12px rgba(80,120,255,0.4)':'')+'">'
+      + t.label+' <span style="font-size:9px;opacity:0.6">('+colCount+')</span></button>';
   });
   html += '</div>';
 
@@ -8481,7 +8523,7 @@ async function renderStockDataPage(){
   }
 
   // ── Table ──
-  html += '<div class="tilt-3d" style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
+  html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px">';
 
   // Header row
