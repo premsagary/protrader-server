@@ -63,8 +63,8 @@ body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-
 #contrast-scrim{position:fixed;inset:0;pointer-events:none;z-index:1;
   background:radial-gradient(ellipse 70% 60% at 50% 50%,rgba(8,9,12,0.55),rgba(8,9,12,0.25) 60%,transparent 100%)}
 /* ── Dynamic background dim on interaction (typing, modal, analyzer) ── */
-body.ui-focus #shiva-app-canvas,body.ui-focus #three-app,body.ui-focus .vol-light{opacity:0.45;transition:opacity 0.8s ease}
-#shiva-app-canvas,#three-app,.vol-light{transition:opacity 0.8s ease}
+body.ui-focus #game-bg{opacity:0.4;transition:opacity 0.8s ease}
+#game-bg{transition:opacity 0.8s ease}
 /* ── Text backplate shadows for readability over particles ── */
 .lp-hero h1,.lp-hero-sub,.lp-section-title,.lp-section-label,.analyzer-header h1,
 .login-card div[style*="font-size:22px"],.sec-title,.picks-wrap>div:first-child{
@@ -494,11 +494,7 @@ select option{background:var(--bg3)}
    3D IMMERSION LAYER — spatial depth, cinematic motion, premium UX
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── Volumetric light overlay (top-down godray) ── */
-.vol-light{position:fixed;top:0;left:0;right:0;height:40vh;pointer-events:none;z-index:0;
-  background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(64,112,168,0.04),transparent 70%);
-  opacity:0;animation:volFadeIn 3s ease-out 0.5s forwards}
-@keyframes volFadeIn{to{opacity:1}}
+/* ── (vol-light removed — replaced by game-bg light cone) ── */
 
 /* ── Depth blur layers for parallax illusion ── */
 .depth-layer{position:fixed;inset:0;pointer-events:none;z-index:0}
@@ -634,15 +630,13 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Three.js canvas container ── */
 #three-login{position:absolute;inset:0;z-index:0}
 #three-login canvas{display:block}
-#three-app{pointer-events:none}
-#three-app canvas{display:block}
+#game-bg{position:fixed;inset:0;pointer-events:none;z-index:0}
+#game-bg canvas{display:block}
 
 /* ── Mobile optimizations ── */
 @media(max-width:767px){
   .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
-  #three-app{display:none}
-  .vol-light{opacity:0.5}
   .cascade>*{animation:none !important;opacity:1;transform:none}
 }
 
@@ -651,8 +645,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   *,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important}
   .spatial-card:hover,.tilt-3d:hover,.tw:hover,.qs-stock:hover{transform:none !important}
   .float-hover:hover{transform:none !important}
-  .vol-light{display:none}
-  #three-login,#three-app{display:none}
+  #three-login,#game-bg{display:none}
   .reveal,.reveal-left,.reveal-right,.reveal-scale{opacity:1;transform:none}
 }
 
@@ -1506,125 +1499,327 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 </div>
 </div>
 
-<!-- Mahadev ambient canvas — subtle smoke & floating dust for main app -->
-<canvas id="shiva-app-canvas" style="position:fixed;inset:0;pointer-events:none;z-index:0"></canvas>
+<!-- Contrast scrim for readability over 3D background -->
 <div id="contrast-scrim"></div>
-<script>
-(function(){
-  var c=document.getElementById('shiva-app-canvas');if(!c)return;
-  var ctx=c.getContext('2d');var W,H;
-  var isMobile=window.innerWidth<768;
-  var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  function rs(){W=c.width=window.innerWidth;H=c.height=window.innerHeight}
-  rs();window.addEventListener('resize',function(){isMobile=window.innerWidth<768;rs()});
-  var smokeCount=isMobile?8:18;var dustCount=isMobile?6:15;
-  var pts=[];for(var i=0;i<smokeCount;i++){pts.push({x:Math.random()*2000,y:Math.random()*2000,
-    r:Math.random()*100+30,vx:(Math.random()-0.5)*0.08,vy:-Math.random()*0.12-0.02,
-    o:Math.random()*0.008+0.002,ph:Math.random()*6.28});}
-  var dots=[];for(var j=0;j<dustCount;j++){dots.push({x:Math.random()*2000,y:Math.random()*2000,
-    r:Math.random()+0.3,vx:(Math.random()-0.5)*0.1,vy:-Math.random()*0.08-0.01,
-    o:Math.random()*0.07+0.02,ph:Math.random()*6.28});}
-  var paused=false;
-  document.addEventListener('visibilitychange',function(){paused=document.hidden;if(!paused&&!reducedMotion)requestAnimationFrame(dr);});
-  function dr(){if(paused||reducedMotion)return;ctx.clearRect(0,0,W,H);var t=Date.now()*0.001;
-    for(var i=0;i<pts.length;i++){var p=pts[i];
-      p.x+=p.vx+Math.sin(t*0.2+p.ph)*0.05;p.y+=p.vy;
-      if(p.y<-p.r*2){p.y=H+p.r;p.x=Math.random()*W}
-      var g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r);
-      var a=p.o*(0.5+0.5*Math.sin(t*0.3+p.ph));
-      g.addColorStop(0,'rgba(50,65,95,'+a+')');g.addColorStop(1,'rgba(20,25,40,0)');
-      ctx.fillStyle=g;ctx.fillRect(p.x-p.r,p.y-p.r,p.r*2,p.r*2);}
-    for(var k=0;k<dots.length;k++){var d=dots[k];
-      d.x+=d.vx+Math.sin(t*0.6+d.ph)*0.15;d.y+=d.vy;
-      if(d.y<-5){d.y=H+5;d.x=Math.random()*W}
-      ctx.beginPath();ctx.arc(d.x,d.y,d.r,0,6.28);
-      ctx.fillStyle='rgba(160,170,190,'+(d.o*(0.5+0.5*Math.sin(t+d.ph)))+')';ctx.fill();}
-    requestAnimationFrame(dr);}
-  if(!reducedMotion)dr();
-})();
-</script>
-
-<!-- Volumetric light overlay -->
-<div class="vol-light"></div>
 
 <!-- ══════════════════════════════════════════════════════════
-     THREE.JS AMBIENT 3D BACKGROUND — Main App Shell
-     Subtle floating geometry, distant star drift, spatial depth
+     GAME-WORLD BACKGROUND — Unified Persistent WebGL Scene
+     Abstract geometric, scroll+tab zone shifts, mouse parallax
+     Quality tiers: high (desktop), medium (laptop), low (mobile)
      ══════════════════════════════════════════════════════════ -->
-<div id="three-app" style="position:fixed;inset:0;pointer-events:none;z-index:0"></div>
+<div id="game-bg"></div>
 <script>
 (function(){
-  var container=document.getElementById('three-app');
-  var isMobile=window.innerWidth<768;
+  'use strict';
+  var container=document.getElementById('game-bg');
+  if(!container||typeof THREE==='undefined')return;
   var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  if(!container||reducedMotion||typeof THREE==='undefined')return;
+  if(reducedMotion)return;
 
+  /* ── Quality tier detection ── */
+  var W=window.innerWidth,H=window.innerHeight;
+  var isMobile=W<768;
+  var dpr=Math.min(window.devicePixelRatio||1,1.5);
+  var pixels=W*H*dpr*dpr;
+  // Tier: 0=low(mobile), 1=medium(laptop/lowGPU), 2=high(desktop)
+  var tier=isMobile?0:(pixels>2500000?2:1);
+  var CONF={
+    stars:    [80,200,400][tier],
+    dust:     [30,80,160][tier],
+    shapes:   [0,3,5][tier],       // wireframe polyhedra count
+    gridSegs: [0,20,40][tier],     // ground grid segments (0=skip)
+    antialias:tier>=2,
+    targetFPS:tier===0?30:60,
+    bloomPass:false                // kept off per requirement
+  };
+
+  /* ── Renderer ── */
   var scene=new THREE.Scene();
-  var camera=new THREE.PerspectiveCamera(45,window.innerWidth/window.innerHeight,0.1,1500);
-  camera.position.set(0,0,100);
-  var renderer=new THREE.WebGLRenderer({antialias:false,alpha:true});
-  renderer.setSize(window.innerWidth,window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.5));
-  renderer.setClearColor(0x000000,0);
+  scene.fog=new THREE.FogExp2(0x080a10,0.0015);
+  var camera=new THREE.PerspectiveCamera(42,W/H,1,800);
+  camera.position.set(0,12,90);
+  camera.lookAt(0,0,0);
+  var renderer=new THREE.WebGLRenderer({antialias:CONF.antialias,alpha:false,powerPreference:'high-performance'});
+  renderer.setSize(W,H);
+  renderer.setPixelRatio(dpr);
+  renderer.setClearColor(0x080a10,1);
   container.appendChild(renderer.domElement);
 
-  /* Distant star field */
-  var sCount=isMobile?120:300;
-  var sPos=new Float32Array(sCount*3);
-  for(var i=0;i<sCount;i++){
-    var th=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1),r=200+Math.random()*600;
-    sPos[i*3]=r*Math.sin(ph)*Math.cos(th);
-    sPos[i*3+1]=r*Math.sin(ph)*Math.sin(th);
-    sPos[i*3+2]=r*Math.cos(ph);
-  }
-  var sGeo=new THREE.BufferGeometry();
-  sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
-  var sMat=new THREE.PointsMaterial({color:0xa0b0c8,size:0.5,transparent:true,opacity:0.10,sizeAttenuation:true});
-  var starField=new THREE.Points(sGeo,sMat);
-  scene.add(starField);
+  /* ── Zone mood system — smooth interpolation per tab ── */
+  var ZONES={
+    // Each zone: fogColor, fogDensity, ambientHue(H,S,L), cameraY, lightIntensity
+    stockrec:      {fog:0x080a10,fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35},
+    stockanalyzer: {fog:0x0a0c14,fd:0.0012,hue:[230,0.20,0.07],cy:14,li:0.50},
+    stockdata:     {fog:0x080a10,fd:0.0016,hue:[215,0.12,0.05],cy:10,li:0.30},
+    holdings:      {fog:0x0a0b0e,fd:0.0013,hue:[200,0.10,0.06],cy:11,li:0.35},
+    mf:            {fog:0x090b10,fd:0.0014,hue:[210,0.14,0.06],cy:12,li:0.35},
+    mirofish:      {fog:0x0a0d14,fd:0.0011,hue:[240,0.18,0.07],cy:15,li:0.45},
+    admin:         {fog:0x080a10,fd:0.0015,hue:[220,0.10,0.05],cy:12,li:0.25},
+    architecture:  {fog:0x080a10,fd:0.0015,hue:[220,0.10,0.05],cy:12,li:0.25},
+    _default:      {fog:0x080a10,fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35}
+  };
+  var zoneCur={fog:new THREE.Color(0x080a10),fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35};
+  var zoneTgt={fog:new THREE.Color(0x080a10),fd:0.0014,hue:[220,0.15,0.06],cy:12,li:0.35};
+  var _lastZoneMode='';
 
-  /* Subtle floating wireframe geometry */
-  if(!isMobile){
-    var wGeo=new THREE.TorusGeometry(20,0.06,8,60);
-    var wMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.04,wireframe:true});
-    var wTorus=new THREE.Mesh(wGeo,wMat);
-    wTorus.position.set(-40,30,-50);scene.add(wTorus);
-
-    var wGeo2=new THREE.TorusGeometry(14,0.04,8,40);
-    var wMat2=new THREE.MeshBasicMaterial({color:0x8090a8,transparent:true,opacity:0.03,wireframe:true});
-    var wTorus2=new THREE.Mesh(wGeo2,wMat2);
-    wTorus2.position.set(35,-20,-30);scene.add(wTorus2);
-
-    var icoGeo=new THREE.IcosahedronGeometry(6,0);
-    var icoMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.03,wireframe:true});
-    var ico=new THREE.Mesh(icoGeo,icoMat);
-    ico.position.set(50,40,-60);scene.add(ico);
+  function updateZoneTarget(){
+    var mode=window._currentMode||'_default';
+    if(mode===_lastZoneMode)return;
+    _lastZoneMode=mode;
+    var z=ZONES[mode]||ZONES._default;
+    zoneTgt.fog=new THREE.Color(z.fog);
+    zoneTgt.fd=z.fd;zoneTgt.hue=z.hue;zoneTgt.cy=z.cy;zoneTgt.li=z.li;
   }
 
-  var paused=false;
-  document.addEventListener('visibilitychange',function(){paused=document.hidden;if(!paused)appAnimate();});
+  function lerpZone(dt){
+    var s=1-Math.pow(0.03,dt); // ~0.97 per frame at 60fps — very smooth
+    zoneCur.fog.lerp(zoneTgt.fog,s);
+    zoneCur.fd+=(zoneTgt.fd-zoneCur.fd)*s;
+    zoneCur.cy+=(zoneTgt.cy-zoneCur.cy)*s;
+    zoneCur.li+=(zoneTgt.li-zoneCur.li)*s;
+    for(var i=0;i<3;i++)zoneCur.hue[i]+=(zoneTgt.hue[i]-zoneCur.hue[i])*s;
+    scene.fog.color.copy(zoneCur.fog);
+    scene.fog.density=zoneCur.fd;
+    renderer.setClearColor(zoneCur.fog,1);
+  }
 
-  function appAnimate(){
-    if(paused)return;
-    requestAnimationFrame(appAnimate);
-    var t=Date.now()*0.001;
-    starField.rotation.y=t*0.003;
-    starField.rotation.x=t*0.001;
-    if(!isMobile){
-      wTorus.rotation.z=t*0.02;wTorus.rotation.x=t*0.015;
-      wTorus2.rotation.z=-t*0.015;wTorus2.rotation.y=t*0.01;
-      ico.rotation.x=t*0.01;ico.rotation.y=t*0.008;
-      ico.position.y=40+Math.sin(t*0.2)*5;
+  /* ── Ambient light (zone-reactive) ── */
+  var ambLight=new THREE.AmbientLight(0x182030,0.35);
+  scene.add(ambLight);
+  var dirLight=new THREE.DirectionalLight(0x405880,0.25);
+  dirLight.position.set(30,50,40);
+  scene.add(dirLight);
+
+  /* ── Star field (point sprites) ── */
+  var starPos=new Float32Array(CONF.stars*3);
+  var starAlpha=new Float32Array(CONF.stars);
+  for(var i=0;i<CONF.stars;i++){
+    var th=Math.random()*6.2832,ph=Math.acos(2*Math.random()-1);
+    var r=80+Math.random()*350;
+    starPos[i*3]=r*Math.sin(ph)*Math.cos(th);
+    starPos[i*3+1]=r*Math.sin(ph)*Math.sin(th);
+    starPos[i*3+2]=r*Math.cos(ph);
+    starAlpha[i]=Math.random();
+  }
+  var starGeo=new THREE.BufferGeometry();
+  starGeo.setAttribute('position',new THREE.BufferAttribute(starPos,3));
+  var starMat=new THREE.PointsMaterial({color:0xb0bcd0,size:tier===0?1.2:0.8,transparent:true,opacity:0.18,sizeAttenuation:true,depthWrite:false});
+  var stars=new THREE.Points(starGeo,starMat);
+  scene.add(stars);
+
+  /* ── Dust / particle motes (closer, warmer) ── */
+  var dustPos=new Float32Array(CONF.dust*3);
+  var dustVel=new Float32Array(CONF.dust*3);
+  for(var j=0;j<CONF.dust;j++){
+    dustPos[j*3]=(Math.random()-0.5)*160;
+    dustPos[j*3+1]=(Math.random()-0.5)*100;
+    dustPos[j*3+2]=(Math.random()-0.5)*80-10;
+    dustVel[j*3]=(Math.random()-0.5)*0.02;
+    dustVel[j*3+1]=(Math.random()-0.5)*0.015;
+    dustVel[j*3+2]=(Math.random()-0.5)*0.01;
+  }
+  var dustGeo=new THREE.BufferGeometry();
+  dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPos,3));
+  var dustMat=new THREE.PointsMaterial({color:0x8090a8,size:tier===0?1.0:0.5,transparent:true,opacity:0.12,sizeAttenuation:true,depthWrite:false});
+  var dustField=new THREE.Points(dustGeo,dustMat);
+  scene.add(dustField);
+
+  /* ── Abstract wireframe polyhedra (desktop/laptop only) ── */
+  var shapes=[];
+  if(CONF.shapes>0){
+    var shapeDefs=[
+      {geo:new THREE.IcosahedronGeometry(8,0),pos:[-35,20,-40],color:0x405880,op:0.04,spd:[0.008,0.006]},
+      {geo:new THREE.OctahedronGeometry(5,0),pos:[40,25,-50],color:0x506888,op:0.035,spd:[-0.006,0.009]},
+      {geo:new THREE.TetrahedronGeometry(6,0),pos:[-20,-15,-35],color:0x607090,op:0.03,spd:[0.01,-0.005]},
+      {geo:new THREE.DodecahedronGeometry(4,0),pos:[30,-10,-45],color:0x4a6080,op:0.03,spd:[-0.007,0.008]},
+      {geo:new THREE.IcosahedronGeometry(10,1),pos:[0,30,-60],color:0x384868,op:0.025,spd:[0.004,0.003]}
+    ];
+    for(var s=0;s<CONF.shapes;s++){
+      var sd=shapeDefs[s];
+      var mat=new THREE.MeshBasicMaterial({color:sd.color,transparent:true,opacity:sd.op,wireframe:true});
+      var mesh=new THREE.Mesh(sd.geo,mat);
+      mesh.position.set(sd.pos[0],sd.pos[1],sd.pos[2]);
+      mesh.userData={spd:sd.spd,baseY:sd.pos[1],baseOp:sd.op};
+      scene.add(mesh);
+      shapes.push(mesh);
     }
+  }
+
+  /* ── Ground grid plane (medium+high only) ── */
+  var gridHelper=null;
+  if(CONF.gridSegs>0){
+    gridHelper=new THREE.GridHelper(300,CONF.gridSegs,0x182030,0x101820);
+    gridHelper.position.y=-30;
+    gridHelper.material.transparent=true;
+    gridHelper.material.opacity=0.08;
+    gridHelper.material.depthWrite=false;
+    scene.add(gridHelper);
+  }
+
+  /* ── Volumetric cone light (subtle god-ray from above) ── */
+  var coneGeo=new THREE.ConeGeometry(50,100,16,1,true);
+  var coneMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.008,side:THREE.DoubleSide,depthWrite:false});
+  var lightCone=new THREE.Mesh(coneGeo,coneMat);
+  lightCone.position.set(0,50,0);lightCone.rotation.x=Math.PI;
+  scene.add(lightCone);
+
+  /* ── Central glow orb (very subtle focal point) ── */
+  var orbGeo=new THREE.SphereGeometry(3,16,16);
+  var orbMat=new THREE.MeshBasicMaterial({color:0x405880,transparent:true,opacity:0.025,depthWrite:false});
+  var orb=new THREE.Mesh(orbGeo,orbMat);
+  orb.position.set(0,5,-20);
+  scene.add(orb);
+  var orbOuterGeo=new THREE.SphereGeometry(7,16,16);
+  var orbOuterMat=new THREE.MeshBasicMaterial({color:0x304060,transparent:true,opacity:0.012,depthWrite:false});
+  var orbOuter=new THREE.Mesh(orbOuterGeo,orbOuterMat);
+  orbOuter.position.set(0,5,-20);
+  scene.add(orbOuter);
+
+  /* ── Mouse parallax ── */
+  var mx=0,my=0,mxSmooth=0,mySmooth=0;
+  document.addEventListener('mousemove',function(e){
+    mx=(e.clientX/W-0.5)*2;
+    my=(e.clientY/H-0.5)*2;
+  });
+
+  /* ── Scroll progress (0-1, page scroll depth) ── */
+  var scrollProg=0;
+  function updateScroll(){
+    var mc=document.getElementById('main-content');
+    if(!mc)return;
+    var h=mc.scrollHeight-mc.clientHeight;
+    scrollProg=h>0?Math.min(mc.scrollTop/h,1):0;
+  }
+  // Attach to main-content scroll (SPA — content scrolls inside a container)
+  // Also listen on window in case the page itself scrolls
+  window.addEventListener('scroll',updateScroll,{passive:true});
+  // Re-attach when main-content might be available
+  var _scrollAttached=false;
+  function tryAttachScroll(){
+    if(_scrollAttached)return;
+    var mc=document.getElementById('main-content');
+    if(mc){mc.addEventListener('scroll',updateScroll,{passive:true});_scrollAttached=true;}
+  }
+  setInterval(tryAttachScroll,2000);
+
+  /* ── Inactivity throttle — reduce to 15fps after 30s idle ── */
+  var lastActivity=Date.now();
+  var isIdle=false;
+  function onActivity(){lastActivity=Date.now();isIdle=false;}
+  document.addEventListener('mousemove',onActivity,{passive:true});
+  document.addEventListener('keydown',onActivity,{passive:true});
+  document.addEventListener('scroll',onActivity,{passive:true});
+  document.addEventListener('touchstart',onActivity,{passive:true});
+
+  /* ── Visibility pause ── */
+  var paused=false;
+  document.addEventListener('visibilitychange',function(){
+    paused=document.hidden;
+    if(!paused){lastFrame=0;requestAnimationFrame(animate);}
+  });
+
+  /* ── Frame limiter ── */
+  var lastFrame=0;
+  var frameBudget=1000/CONF.targetFPS;
+
+  /* ── Main animation loop ── */
+  function animate(now){
+    if(paused)return;
+    requestAnimationFrame(animate);
+
+    // Idle detection — throttle to 15fps when idle for 30s
+    if(Date.now()-lastActivity>30000){
+      if(!isIdle){isIdle=true;}
+      if(now-lastFrame<66)return; // ~15fps
+    } else {
+      if(now-lastFrame<frameBudget)return;
+    }
+    var dt=Math.min((now-lastFrame)/1000,0.1);
+    lastFrame=now;
+
+    var t=now*0.001;
+
+    /* ── Zone interpolation ── */
+    updateZoneTarget();
+    lerpZone(dt);
+
+    /* ── Mouse parallax (smooth) ── */
+    mxSmooth+=(mx-mxSmooth)*0.04;
+    mySmooth+=(my-mySmooth)*0.04;
+
+    /* ── Camera — base + zone Y + parallax + subtle drift ── */
+    camera.position.x=mxSmooth*6+Math.sin(t*0.05)*2;
+    camera.position.y=zoneCur.cy+(-mySmooth*3)+Math.cos(t*0.04)*1.5;
+    camera.position.z=90+scrollProg*(-15)+Math.sin(t*0.03)*3;
+    camera.lookAt(mxSmooth*2,mySmooth*-1+Math.sin(t*0.06)*0.5,0);
+
+    /* ── Ambient light — zone hue reactive ── */
+    var hue=zoneCur.hue;
+    ambLight.color.setHSL(hue[0]/360,hue[1],hue[2]);
+    ambLight.intensity=zoneCur.li;
+    dirLight.intensity=zoneCur.li*0.7;
+
+    /* ── Star field — gentle rotation ── */
+    stars.rotation.y=t*0.004;
+    stars.rotation.x=t*0.0015+scrollProg*0.1;
+
+    /* ── Dust field — drift + breathe ── */
+    var dPos=dustGeo.attributes.position.array;
+    for(var k=0;k<CONF.dust;k++){
+      var k3=k*3;
+      dPos[k3]+=dustVel[k3]+Math.sin(t*0.3+k)*0.003;
+      dPos[k3+1]+=dustVel[k3+1]+Math.cos(t*0.2+k*0.5)*0.002;
+      dPos[k3+2]+=dustVel[k3+2];
+      // Wrap around bounds
+      if(dPos[k3]>80)dPos[k3]=-80;if(dPos[k3]<-80)dPos[k3]=80;
+      if(dPos[k3+1]>50)dPos[k3+1]=-50;if(dPos[k3+1]<-50)dPos[k3+1]=50;
+      if(dPos[k3+2]>40)dPos[k3+2]=-50;if(dPos[k3+2]<-50)dPos[k3+2]=40;
+    }
+    dustGeo.attributes.position.needsUpdate=true;
+    dustMat.opacity=0.10+0.04*Math.sin(t*0.4);
+
+    /* ── Wireframe shapes — rotate + bob ── */
+    for(var si=0;si<shapes.length;si++){
+      var sh=shapes[si];var ud=sh.userData;
+      sh.rotation.x=t*ud.spd[0];
+      sh.rotation.y=t*ud.spd[1];
+      sh.position.y=ud.baseY+Math.sin(t*0.15+si*1.2)*3;
+      // Zone reactive — slightly brighter in active zones
+      sh.material.opacity=ud.baseOp*(0.8+zoneCur.li*0.6);
+    }
+
+    /* ── Ground grid parallax ── */
+    if(gridHelper){
+      gridHelper.position.z=scrollProg*(-20);
+      gridHelper.material.opacity=0.06+scrollProg*0.04;
+    }
+
+    /* ── Light cone breathe ── */
+    coneMat.opacity=0.006+0.004*Math.sin(t*0.25);
+    lightCone.rotation.y=t*0.015;
+
+    /* ── Central orb breathe ── */
+    var bsc=1+0.12*Math.sin(t*0.35);
+    orb.scale.set(bsc,bsc,bsc);
+    orbMat.opacity=0.018+0.012*Math.sin(t*0.4);
+    orbOuter.scale.set(bsc*0.95,bsc*0.95,bsc*0.95);
+    orbOuterMat.opacity=0.008+0.006*Math.sin(t*0.3);
+
     renderer.render(scene,camera);
   }
-  appAnimate();
+  requestAnimationFrame(animate);
 
+  /* ── Resize handler ── */
   window.addEventListener('resize',function(){
-    camera.aspect=window.innerWidth/window.innerHeight;
+    W=window.innerWidth;H=window.innerHeight;
+    isMobile=W<768;
+    camera.aspect=W/H;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth,window.innerHeight);
+    renderer.setSize(W,H);
   });
+
+  /* ── Expose zone update for external calls ── */
+  window._gameBgZoneUpdate=updateZoneTarget;
 })();
 </script>
 
@@ -2012,6 +2207,8 @@ function setMode(mode){
   S.mode=mode;
   window._currentMode = mode;
   _updateHash();
+  /* Notify game-bg of zone change */
+  if(window._gameBgZoneUpdate)try{window._gameBgZoneUpdate();}catch(e){}
   /* Cinematic page transition */
   try{var mc=document.getElementById('main-content');if(mc&&window.shivaPageTransition)shivaPageTransition(mc);}catch(e){}
   try{ document.getElementById("mode-stocks").className   ="mode-tab stocks admin-only"+(mode==="stocks"  ?" active":""); }catch(e){}
@@ -5440,7 +5637,7 @@ function buildUI(d){
   html+='<div style="display:flex;gap:4px">';
   ['3M','1Y','3Y','10Y','MAX'].forEach(function(tf){
     var a=tf===analyzerTab;
-    html+='<button onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(a?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')+';color:'+(a?'var(--shiva-blue)':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?600:400)+';transition:all var(--transition-fast);letter-spacing:0.2px">'+tf+'</button>';
+    html+='<button class="tilt-3d" onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(a?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')+';color:'+(a?'var(--shiva-blue)':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?600:400)+';letter-spacing:0.2px">'+tf+'</button>';
   });
   html+='</div></div>';
   html+='<div style="font-size:9px;color:var(--text3);margin-bottom:6px;letter-spacing:0.3px">Support · Resistance · Buy Zone · 50DMA · 200DMA</div>';
@@ -6257,7 +6454,7 @@ function renderStockRecPage(){
     {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'var(--green)'},
   ];
   pills.forEach(function(p){
-    html+='<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:7px 13px;transition:all var(--transition-fast)">'
+    html+='<div class="tilt-3d" style="background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:7px 13px">'
       +'<div style="font-size:9px;color:var(--text3);letter-spacing:0.3px">'+p.l+'</div>'
       +'<div style="font-size:16px;font-weight:600;color:'+p.c+'">'+p.v+'</div>'
       +'</div>';
@@ -6294,10 +6491,10 @@ function renderStockRecPage(){
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px;justify-content:center">';
   filters.forEach(function(f){
     var active = stockRecFilter===f;
-    html += '<button onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
+    html += '<button class="tilt-3d" onclick="stockRecFilter=\''+f+'\';renderStockRec()" style="padding:6px 18px;border-radius:20px;border:1px solid '
       +(active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
       +(active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      +';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;transition:all var(--transition-fast);backdrop-filter:blur(8px)">'
+      +';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;backdrop-filter:blur(8px)">'
       +f+'</button>';
   });
   html += '</div>';
@@ -7463,10 +7660,10 @@ async function renderStockDataPage(){
   var mcFilters = ['ALL','NIFTY50','NEXT50','MIDCAP','SMALLCAP'];
   mcFilters.forEach(function(f){
     var active = stockDataFilter===f;
-    html += '<button onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:20px;border:1px solid '
+    html += '<button class="tilt-3d" onclick="stockDataFilter=\''+f+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:20px;border:1px solid '
       + (active?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'
       + (active?'rgba(64,112,168,0.12)':'rgba(255,255,255,0.02)')
-      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px;transition:all var(--transition-fast)">'
+      + ';color:'+(active?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(active?'600':'400')+';letter-spacing:0.3px">'
       + f+'</button>';
   });
   html += '</div>';
@@ -7476,10 +7673,10 @@ async function renderStockDataPage(){
   TAB_DEFS.forEach(function(t){
     var isActive = stockDataTab === t.id;
     var colCount = (TAB_COLS[t.id]||[]).length;
-    html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:var(--radius);border:1px solid '
+    html += '<button class="tilt-3d" onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:var(--radius);border:1px solid '
       + (isActive?'rgba(64,112,168,0.3)':'var(--glass-border)')+';background:'+(isActive?'rgba(64,112,168,0.1)':'rgba(255,255,255,0.02)')
       + ';color:'+(isActive?'var(--shiva-blue)':'var(--text2)')+';font-size:11px;cursor:pointer;font-weight:'+(isActive?'600':'400')
-      + ';white-space:nowrap;transition:all var(--transition-fast);letter-spacing:0.2px">'
+      + ';white-space:nowrap;letter-spacing:0.2px">'
       + t.label+' <span style="font-size:9px;opacity:0.5">('+colCount+')</span></button>';
   });
   html += '</div>';
@@ -7509,7 +7706,7 @@ async function renderStockDataPage(){
   }
 
   // ── Table ──
-  html += '<div style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
+  html += '<div class="tilt-3d" style="overflow-x:auto;border:1px solid var(--border);border-radius:10px">'
     + '<table style="width:100%;border-collapse:collapse;font-size:11px">';
 
   // Header row
