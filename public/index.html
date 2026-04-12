@@ -6232,15 +6232,8 @@ function renderStockRecPage(){
     +'</div>'
     +(data.loading?'<div style="font-size:10px;color:var(--shiva-gold);margin-top:2px">Scraping real fundamentals from Yahoo Finance... Rebound Picks updating</div>':'')
     +'</div>';
-  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
   html += '<span style="font-size:9px;color:var(--text3);letter-spacing:0.3px">'+(marketOpen?'Live':'Closed')+'</span>';
-  html += '<button class="btn btn-sm" onclick="stockRecData=null;renderStockRec(true)">Refresh</button>';
-  html += '<button class="btn btn-sm" onclick="fetch(\'/api/stocks/score?scoreVersion=2\').then(function(r){return r.json();}).then(function(d){stockRecData=d;renderStockRec();})">Rescore</button>';
-  html += '<button class="btn btn-sm" title="Force re-scrape Yahoo Finance then rescore" onclick="'
-    +'fetch(\'/api/fundamentals/refresh\',{method:\'POST\'}).then(function(){'
-    +'setTimeout(function(){stockRecData=null;renderStockRec(true);},5000)'
-    +'})">Refresh Data</button>';
-  html += '</div></div>';
+  html += '</div>';
 
   // Conviction tier summary removed — was always stuck on Watch:567 during v1
   // scoring pass and added no signal. Market-cap pills + Swing/Long Term
