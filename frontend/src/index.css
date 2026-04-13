@@ -1,0 +1,354 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===================================================
+   DESIGN TOKENS — LIGHT MODE (default)
+   =================================================== */
+:root {
+  /* Surfaces */
+  --bg: #F7F8FA;
+  --bg2: #FFFFFF;
+  --bg3: #F0F1F3;
+  --bg4: #E5E7EB;
+
+  /* Text */
+  --text: #1A1A2E;
+  --text2: #6B7280;
+  --text3: #9CA3AF;
+  --text4: #D1D5DB;
+
+  /* Borders */
+  --border: #E5E7EB;
+  --border2: #D1D5DB;
+  --border3: #F0F1F3;
+
+  /* Semantic Colors */
+  --green: #16A34A;
+  --green-bg: #F0FDF4;
+  --green-text: #15803D;
+  --red: #DC2626;
+  --red-bg: #FEF2F2;
+  --red-text: #B91C1C;
+  --amber: #D97706;
+  --amber-bg: #FFFBEB;
+  --amber-text: #92400E;
+  --blue: #2563EB;
+  --blue-bg: #EFF6FF;
+  --blue-text: #1D4ED8;
+  --purple: #7C3AED;
+  --purple-bg: #F5F3FF;
+  --purple-text: #6D28D9;
+  --teal: #0D9488;
+  --accent: #2563EB;
+  --emerald: #10B981;
+  --amber-bright: #F59E0B;
+
+  /* Conviction tiers */
+  --tier-strong-buy-bg: #F0FDF4;
+  --tier-strong-buy-text: #15803D;
+  --tier-strong-buy-border: #BBF7D0;
+  --tier-buy-bg: #F0FDF4;
+  --tier-buy-text: #16A34A;
+  --tier-buy-border: #D1FAE5;
+  --tier-accumulate-bg: #FFFBEB;
+  --tier-accumulate-text: #92400E;
+  --tier-accumulate-border: #FDE68A;
+  --tier-watch-bg: #F3F4F6;
+  --tier-watch-text: #6B7280;
+  --tier-watch-border: #D1D5DB;
+  --tier-avoid-bg: #FEF2F2;
+  --tier-avoid-text: #B91C1C;
+  --tier-avoid-border: #FECACA;
+
+  /* Chart colors */
+  --chart-line1: #2563EB;
+  --chart-line2: #16A34A;
+  --chart-line3: #D97706;
+  --chart-line4: #7C3AED;
+  --chart-fill1: rgba(37, 99, 235, 0.1);
+  --chart-fill2: rgba(22, 163, 74, 0.1);
+  --chart-grid: #E5E7EB;
+  --chart-text: #9CA3AF;
+
+  /* Nav */
+  --nav-bg: #FFFFFF;
+  --nav-border: #E5E7EB;
+  --nav-active: #2563EB;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.08), 0 4px 6px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.1);
+
+  /* Radius */
+  --radius: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+}
+
+/* ===================================================
+   DESIGN TOKENS — DARK MODE
+   =================================================== */
+.dark {
+  --bg: #0B0F19;
+  --bg2: #161b22;
+  --bg3: #21262d;
+  --bg4: #30363d;
+
+  --text: #e6edf3;
+  --text2: #8b949e;
+  --text3: #6e7681;
+  --text4: #484f58;
+
+  --border: #30363d;
+  --border2: #444c56;
+  --border3: #21262d;
+
+  --green: #3fb950;
+  --green-bg: #0d2818;
+  --green-text: #3fb950;
+  --red: #f85149;
+  --red-bg: #2d1117;
+  --red-text: #f85149;
+  --amber: #d29922;
+  --amber-bg: #272115;
+  --amber-text: #d29922;
+  --blue: #58a6ff;
+  --blue-bg: #0c2041;
+  --blue-text: #58a6ff;
+  --purple: #bc8cff;
+  --purple-bg: #1f1535;
+  --purple-text: #bc8cff;
+  --teal: #39d353;
+  --accent: #1f6feb;
+  --emerald: #10b981;
+  --amber-bright: #f59e0b;
+
+  --tier-strong-buy-bg: #0d2818;
+  --tier-strong-buy-text: #3fb950;
+  --tier-strong-buy-border: #1a4428;
+  --tier-buy-bg: #0c1f0e;
+  --tier-buy-text: #57ab5a;
+  --tier-buy-border: #1a3a1c;
+  --tier-accumulate-bg: #272115;
+  --tier-accumulate-text: #d29922;
+  --tier-accumulate-border: #3d2e0f;
+  --tier-watch-bg: #1c1c24;
+  --tier-watch-text: #8b949e;
+  --tier-watch-border: #30363d;
+  --tier-avoid-bg: #2d1117;
+  --tier-avoid-text: #f85149;
+  --tier-avoid-border: #4a1a1a;
+
+  --chart-line1: #58a6ff;
+  --chart-line2: #3fb950;
+  --chart-line3: #d29922;
+  --chart-line4: #bc8cff;
+  --chart-fill1: rgba(88, 166, 255, 0.1);
+  --chart-fill2: rgba(63, 185, 80, 0.1);
+  --chart-grid: #21262d;
+  --chart-text: #6e7681;
+
+  --nav-bg: #161b22;
+  --nav-border: #30363d;
+  --nav-active: #58a6ff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4), 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ===================================================
+   BASE STYLES
+   =================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: "SF Pro Text", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  font-feature-settings: "tnum" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular numbers for all numeric content */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ===================================================
+   SCROLLBAR STYLING
+   =================================================== */
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--bg4);
+  border-radius: 2px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text4);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg4) transparent;
+}
+
+/* ===================================================
+   KEYFRAME ANIMATIONS
+   =================================================== */
+@keyframes shimmer {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  0% { opacity: 0; transform: translateX(-8px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes logoDot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.4); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+}
+
+@keyframes mfPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.9; }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+/* ===================================================
+   UTILITY CLASSES
+   =================================================== */
+.animate-shimmer {
+  animation: shimmer 1.6s infinite;
+}
+
+.animate-pulse-custom {
+  animation: pulse 1.5s infinite;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.2s ease-out;
+}
+
+.animate-logoDot {
+  animation: logoDot 2s infinite;
+}
+
+/* ===================================================
+   BASE COMPONENT STYLES
+   =================================================== */
+
+/* Focus ring */
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.dark input:focus,
+.dark select:focus,
+.dark button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.25);
+}
+
+/* Selection */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Transition defaults */
+.transition-colors {
+  transition-property: color, background-color, border-color;
+  transition-timing-function: ease;
+  transition-duration: 150ms;
+}
+
+/* Table sticky header */
+.sticky-header th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg3);
+}
+
+/* Hide scrollbar for subtabs */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Shake animation for error feedback */
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+/* Responsive breakpoints */
+@media (max-width: 768px) {
+  .hide-md { display: none !important; }
+}
+
+@media (max-width: 600px) {
+  .topbar-responsive {
+    padding: 0 12px !important;
+    gap: 8px !important;
+  }
+}
