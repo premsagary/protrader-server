@@ -3800,7 +3800,7 @@ function _updateHash(){
   else if(S.mode==='crypto') h += '/' + S.cryptoTab;
   if(location.hash !== '#'+h){
     _hashUpdating = true;
-    history.replaceState(null, '', '#'+h);
+    history.pushState(null, '', '#'+h);
     _hashUpdating = false;
   }
 }
