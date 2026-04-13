@@ -8751,6 +8751,21 @@ app.post('/api/admin/unified-pipeline', async (req, res) => {
   res.json({ status: 'started', force, message: 'Unified Kite pipeline triggered' + (force ? ' (force — ignoring market hours)' : '') });
 });
 
+// Diagnostic endpoint — shows pipeline state without triggering anything
+app.get('/api/admin/pipeline-status', (req, res) => {
+  res.json({
+    pipelineRunning: _unifiedPipelineRunning,
+    dayTradeCacheCount: _dayTradeCache.length,
+    dayTradeCacheTs: _dayTradeCacheTs ? new Date(_dayTradeCacheTs).toISOString() : null,
+    stockFundamentalsCount: Object.keys(stockFundamentals).length,
+    validTokensCount: Object.keys(validTokens || {}).length,
+    kiteInitialized: !!kite,
+    kiteTokenSet: !!process.env.KITE_ACCESS_TOKEN,
+    marketOpen: isMarketOpen(),
+    stockFundReady: typeof stockFundReady !== 'undefined' ? stockFundReady : 'unknown',
+  });
+});
+
 // ===============================================================================
 // UNIFIED KITE PIPELINE — fetch once, rescore + daytrade in parallel
 // ===============================================================================
