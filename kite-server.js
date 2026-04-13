@@ -8809,6 +8809,31 @@ app.get('/api/admin/pipeline-test', async (req, res) => {
       try {
         const fiveMin = await kite.getHistoricalData(token, '5minute', weekAgo, today);
         results.steps.push(`${sym}: 5min candles = ${fiveMin ? fiveMin.length : 'null'}`);
+        if (fiveMin && fiveMin.length > 0) {
+          // Show candle date format for debugging
+          const lastC = fiveMin[fiveMin.length - 1];
+          const firstC = fiveMin[0];
+          results.steps.push(`${sym}: first candle date = ${JSON.stringify(firstC.date || firstC.timestamp)}`);
+          results.steps.push(`${sym}: last candle date = ${JSON.stringify(lastC.date || lastC.timestamp)}`);
+          results.steps.push(`${sym}: candle keys = ${Object.keys(lastC).join(',')}`);
+          results.steps.push(`${sym}: last candle = ${JSON.stringify(lastC)}`);
+
+          // Show today filter results
+          const todayStr = new Date().toISOString().split('T')[0];
+          const todayCandles = fiveMin.filter(c => {
+            const d = c.date || c.timestamp;
+            return d && String(d).startsWith(todayStr);
+          });
+          results.steps.push(`${sym}: todayStr=${todayStr}, todayCandles=${todayCandles.length}`);
+
+          // Show fallback date
+          const lastDate = String(lastC.date || lastC.timestamp).split('T')[0];
+          const fallbackCandles = fiveMin.filter(c => {
+            const d = c.date || c.timestamp;
+            return d && String(d).startsWith(lastDate);
+          });
+          results.steps.push(`${sym}: fallbackDate=${lastDate}, fallbackCandles=${fallbackCandles.length}`);
+        }
         if (fiveMin && fiveMin.length >= 30) {
           const scored = scoreDayTrade(fiveMin, sym);
           results.steps.push(`${sym}: dayTrade score = ${scored ? scored.dayTradeScore : 'null'}`);
