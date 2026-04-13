@@ -330,6 +330,7 @@ async function fetchCompany(sym) {
   if (topMetrics.roe != null) raw.top_roe = topMetrics.roe;
   if (topMetrics.bookValue != null) raw.book_value = topMetrics.bookValue;
   if (topMetrics.industryPE != null) raw.industry_pe = raw.industry_pe || topMetrics.industryPE;
+  if (topMetrics.pledgedPct != null) raw.pledged_pct = topMetrics.pledgedPct;
 
   return raw;
 }
@@ -453,6 +454,7 @@ function parseTopMetrics(html) {
     if (label.includes('roe') && !label.includes('roce')) metrics.roe = numVal;
     if (label.includes('face value')) metrics.faceValue = parseFloat(value) || null;
     if (label.includes('industry pe') || label.includes('sector pe')) metrics.industryPE = numVal;
+    if (label.includes('pledged')) metrics.pledgedPct = numVal;
   }
 
   // Strategy 2: broader fallback — find any <span class="name"> / <span class="number"> pairs
