@@ -8141,6 +8141,7 @@ function computeRSIDivergence(C, period=20) {
 let _dayTradeCache    = [];      // scored picks — refreshed every 5 min
 let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
+let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
 function scoreDayTrade(candles, sym) {
   const n = candles.length;
@@ -8777,6 +8778,7 @@ app.get('/api/admin/pipeline-status', (req, res) => {
     kiteTokenSet: !!process.env.KITE_ACCESS_TOKEN,
     marketOpen: isMarketOpen(),
     stockFundReady: typeof stockFundReady !== 'undefined' ? stockFundReady : 'unknown',
+    lastRun: _pipelineLastRun,
   });
 });
 
@@ -8879,6 +8881,7 @@ async function runUnifiedKitePipeline(force = false) {
   }
 
   _unifiedPipelineRunning = true;
+  _pipelineLastRun = { startedAt: new Date().toISOString(), status: 'running' };
   const t0 = Date.now();
   let okTA = 0, okDT = 0, failTA = 0, failDT = 0;
   const dayTradeResults = [];
@@ -8968,8 +8971,10 @@ async function runUnifiedKitePipeline(force = false) {
     ]);
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length };
     console.log(`🔄 Unified pipeline: TA ${okTA}ok/${failTA}fail · DayTrade ${okDT}ok/${failDT}fail · ${dayTradeResults.length} setups · ${elapsed}s`);
   } catch (e) {
+    _pipelineLastRun = { ..._pipelineLastRun, status: 'error', error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') };
     console.error('🔄 Unified pipeline error:', e.message);
   } finally {
     _unifiedPipelineRunning = false;
