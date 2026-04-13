@@ -14084,10 +14084,12 @@ async function fetchAllScreenerBulk(token) {
 
 // ── getstockdetails mode: parse rich Screener.in page data into flat fundamentals ──
 function parseScreenerDetails(sym, raw) {
-  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
+  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'').replace(/%/g,'')); return isNaN(n)?null:n; };
+  // Helper: normalize metric name — screener adds " +" suffix to expandable rows
+  const normMetric = s => (s||'').replace(/\s*\+\s*$/, '').trim();
   // Helper: get latest annual value from P&L / Balance Sheet array
   const latestAnnual = (arr, metric) => {
-    const row = (arr||[]).find(r => r.Metric === metric);
+    const row = (arr||[]).find(r => normMetric(r.Metric) === metric || normMetric(r.Metric).startsWith(metric));
     if (!row) return null;
     // Keys are like "Mar 2025", "Mar 2024", "TTM" — get the last numeric year key
     const keys = Object.keys(row).filter(k => k !== 'Metric').sort();
@@ -14099,11 +14101,11 @@ function parseScreenerDetails(sym, raw) {
     const item = (arr||[]).find(o => Object.keys(o)[0]?.includes(label));
     return item ? pn(Object.values(item)[0]) : null;
   };
-  // Helper: get latest shareholding value
+  // Helper: get latest shareholding value — check both '' and 'Metric' keys
   const latestSH = (arr, label) => {
-    const row = (arr||[]).find(r => (r['']||'').includes(label));
+    const row = (arr||[]).find(r => (r['']||r['Metric']||'').includes(label));
     if (!row) return null;
-    const keys = Object.keys(row).filter(k => k !== '').sort();
+    const keys = Object.keys(row).filter(k => k !== '' && k !== 'Metric').sort();
     return keys.length ? pn(row[keys[keys.length-1]]) : null;
   };
 
@@ -14162,9 +14164,9 @@ function parseScreenerDetails(sym, raw) {
   const promoter = latestSH(sh, 'Promoters');
   // Promoter change: latest - previous quarter
   let promoterChg = null;
-  const promRow = (sh||[]).find(r => (r['']||'').includes('Promoters'));
+  const promRow = (sh||[]).find(r => (r['']||r['Metric']||'').includes('Promoters'));
   if (promRow) {
-    const pKeys = Object.keys(promRow).filter(k => k !== '').sort();
+    const pKeys = Object.keys(promRow).filter(k => k !== '' && k !== 'Metric').sort();
     if (pKeys.length >= 2) promoterChg = pn((pn(promRow[pKeys[pKeys.length-1]]) - pn(promRow[pKeys[pKeys.length-2]])).toFixed(2));
   }
 
@@ -14181,8 +14183,8 @@ function parseScreenerDetails(sym, raw) {
   // Quarterly YoY growth — compare latest quarter vs same quarter last year
   let patQtrYoy = null, salesQtrYoy = null;
   if (qtrs.length) {
-    const salesRow = (qtrs||[]).find(r => r.Metric === 'Sales');
-    const patRow = (qtrs||[]).find(r => r.Metric === 'Net Profit');
+    const salesRow = (qtrs||[]).find(r => normMetric(r.Metric) === 'Sales' || normMetric(r.Metric).startsWith('Sales'));
+    const patRow = (qtrs||[]).find(r => normMetric(r.Metric) === 'Net Profit' || normMetric(r.Metric).startsWith('Net Profit'));
     if (salesRow) {
       const qKeys = Object.keys(salesRow).filter(k => k !== 'Metric').sort();
       if (qKeys.length >= 5) { // need at least 5 quarters for YoY
@@ -14208,10 +14210,10 @@ function parseScreenerDetails(sym, raw) {
   if (currentAssets > 0 && currentLiabilities > 0) computedCurrentRatio = pn((currentAssets / currentLiabilities).toFixed(2));
 
   // Pledged percentage from shareholding
-  const pledgedRow = (sh||[]).find(r => (r['']||'').toLowerCase().includes('pledg'));
+  const pledgedRow = (sh||[]).find(r => (r['']||r['Metric']||'').toLowerCase().includes('pledg'));
   let pledgedPct = null;
   if (pledgedRow) {
-    const pKeys = Object.keys(pledgedRow).filter(k => k !== '').sort();
+    const pKeys = Object.keys(pledgedRow).filter(k => k !== '' && k !== 'Metric').sort();
     if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
   }
 

@@ -167,16 +167,30 @@ function stripHtml(html) {
 // "Compounded Sales Growth"  10 Years: X%  5 Years: Y%  3 Years: Z%  TTM: W%
 function parseGrowthSection(html, sectionTitle) {
   const results = [];
-  // Find section by title
-  const sectionRegex = new RegExp(sectionTitle + '[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>', 'i');
-  const match = html.match(sectionRegex);
+  // Find the ranges-table containing this title (title is inside <th>)
+  const sectionRegex = new RegExp(`<table[^>]*class="[^"]*ranges-table[^"]*"[^>]*>[\\s\\S]*?${sectionTitle}[\\s\\S]*?<\\/table>`, 'i');
+  let match = html.match(sectionRegex);
+  // Fallback: find title anywhere then grab the next table
+  if (!match) {
+    const fallback = new RegExp(sectionTitle + '[\\s\\S]*?(<table[^>]*>[\\s\\S]*?<\\/table>)', 'i');
+    match = html.match(fallback);
+    if (!match) {
+      // Try: title is in a th, followed by tr rows in same table
+      const altRegex = new RegExp(sectionTitle + '<\\/th>[\\s\\S]*?(<\\/table>)', 'i');
+      const altMatch = html.match(new RegExp(`<table[^>]*>[\\s\\S]*?${sectionTitle}[\\s\\S]*?<\\/table>`, 'i'));
+      if (altMatch) match = [altMatch[0], altMatch[0]];
+    }
+  }
   if (!match) return results;
 
+  const tableHtml = match[0] || match[1];
   const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let trMatch;
-  while ((trMatch = trRegex.exec(match[1])) !== null) {
+  while ((trMatch = trRegex.exec(tableHtml)) !== null) {
+    // Skip header rows (contain <th>)
+    if (trMatch[1].includes('<th')) continue;
     const cells = [];
-    const tdRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     let tdMatch;
     while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
       cells.push(stripHtml(tdMatch[1]).trim());
@@ -209,13 +223,16 @@ async function fetchCompany(sym) {
     || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   raw.company_name = nameMatch ? stripHtml(nameMatch[1]).trim() : sym;
 
-  // Industry / Sector
-  const industryMatch = html.match(/Industry[:\s]*<a[^>]*>([^<]+)/i)
+  // Industry / Sector — screener uses links within company-info section
+  const industryMatch = html.match(/company-info[\s\S]{0,2000}?(?:Industry|Sector)\s*[:\s]*<a[^>]*>([^<]+)/i)
+    || html.match(/Industry[:\s]*<a[^>]*>([^<]+)/i)
     || html.match(/Sector[:\s]*<a[^>]*>([^<]+)/i);
   raw.industry = industryMatch ? stripHtml(industryMatch[1]).trim() : null;
 
-  // Industry PE
-  const indPeMatch = html.match(/Industry\s*PE[:\s]*<[^>]*>([0-9.]+)/i);
+  // Industry PE — sometimes shown as "Industry PE" in the ratios section
+  const indPeMatch = html.match(/Industry\s*PE[\s\S]{0,100}?<span[^>]*class="[^"]*number[^"]*"[^>]*>([0-9.]+)/i)
+    || html.match(/Industry\s*PE[:\s]*<[^>]*>([0-9.]+)/i)
+    || html.match(/Industry\s*PE[:\s]*([0-9.]+)/i);
   raw.industry_pe = indPeMatch ? parseFloat(indPeMatch[1]) : null;
 
   // ── Find all data sections by their IDs or headings ──
@@ -359,19 +376,28 @@ function parseFinancialTable(tableHtml) {
 // ── Parse top-level metrics (market cap, price, PE etc.) ────────────────────
 function parseTopMetrics(html) {
   const metrics = {};
-  // Look for the company-ratios section with <li> items
-  const liRegex = /<li[^>]*>\s*<span[^>]*class="[^"]*name[^"]*"[^>]*>([\s\S]*?)<\/span>\s*<span[^>]*class="[^"]*(?:number|value)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
+  // Extract the top-ratios section first to narrow scope
+  const ratiosSection = html.match(/id="top-ratios"[\s\S]*?<\/ul>/i);
+  const searchHtml = ratiosSection ? ratiosSection[0] : html;
+
+  // Match <li> with <span class="name"> and <span class="nowrap value"> (with generous whitespace)
+  const liRegex = /<li[^>]*>[\s\S]*?<span[^>]*class="[^"]*name[^"]*"[^>]*>([\s\S]*?)<\/span>[\s\S]*?<span[^>]*class="[^"]*(?:number|value|nowrap)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
   let m;
-  while ((m = liRegex.exec(html)) !== null) {
+  while ((m = liRegex.exec(searchHtml)) !== null) {
     const label = stripHtml(m[1]).toLowerCase().trim();
-    const value = stripHtml(m[2]).replace(/[₹,]/g, '').trim();
-    if (label.includes('market cap')) metrics.marketCap = parseFloat(value) || null;
-    if (label.includes('current price')) metrics.currentPrice = parseFloat(value) || null;
-    if (label.includes('book value')) metrics.bookValue = parseFloat(value) || null;
-    if (label.includes('stock p/e') || label === 'p/e') metrics.pe = parseFloat(value) || null;
-    if (label.includes('dividend yield')) metrics.divYield = parseFloat(value) || null;
-    if (label.includes('roce')) metrics.roce = parseFloat(value) || null;
-    if (label.includes('roe')) metrics.roe = parseFloat(value) || null;
+    const valueHtml = m[2];
+    // Extract number from nested <span class="number"> if present
+    const numMatch = valueHtml.match(/<span[^>]*class="[^"]*number[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+    const value = numMatch ? stripHtml(numMatch[1]).replace(/[₹,]/g, '').trim()
+                           : stripHtml(valueHtml).replace(/[₹,]/g, '').replace(/Cr\.?/g, '').trim();
+    const numVal = parseFloat(value) || null;
+    if (label.includes('market cap')) metrics.marketCap = numVal;
+    if (label.includes('current price')) metrics.currentPrice = numVal;
+    if (label.includes('book value')) metrics.bookValue = numVal;
+    if (label.includes('stock p/e') || label === 'p/e') metrics.pe = numVal;
+    if (label.includes('dividend yield')) metrics.divYield = numVal;
+    if (label.includes('roce')) metrics.roce = numVal;
+    if (label.includes('roe') && !label.includes('roce')) metrics.roe = numVal;
     if (label.includes('face value')) metrics.faceValue = parseFloat(value) || null;
   }
   return metrics;
@@ -446,4 +472,5 @@ module.exports = {
   isLoggedIn,
   parseFinancialTable,
   stripHtml,
+  _getCookies: () => sessionCookies,
 };
