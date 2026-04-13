@@ -14416,6 +14416,17 @@ app.post('/api/admin/screener-csv', async (req, res) => {
 });
 
 // Admin endpoint: trigger per-stock scrape
+// Admin endpoint: clear screener data
+app.post('/api/admin/screener-clear', async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM screener_fundamentals');
+    console.log(`🗑️ Cleared screener_fundamentals: ${result.rowCount} rows deleted`);
+    res.json({ success: true, deleted: result.rowCount });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/admin/screener-scrape', async (req, res) => {
   try {
     if (screenerRunning) return res.json({ error: 'Already running', progress: screenerProgress });
