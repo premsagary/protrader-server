@@ -8743,11 +8743,12 @@ app.get('/api/stocks/picks/daytrade', (req, res) => {
   });
 });
 
-// Admin trigger for unified pipeline
+// Admin trigger for unified pipeline (?force=1 bypasses market-hours check for testing)
 app.post('/api/admin/unified-pipeline', async (req, res) => {
   if (_unifiedPipelineRunning) return res.json({ status: 'already_running' });
-  runUnifiedKitePipeline().catch(e => console.error('Manual pipeline error:', e.message));
-  res.json({ status: 'started', message: 'Unified Kite pipeline triggered — fetching + scoring in parallel' });
+  const force = req.query.force === '1' || req.body?.force === true;
+  runUnifiedKitePipeline(force).catch(e => console.error('Manual pipeline error:', e.message));
+  res.json({ status: 'started', force, message: 'Unified Kite pipeline triggered' + (force ? ' (force — ignoring market hours)' : '') });
 });
 
 // ===============================================================================
@@ -8759,9 +8760,9 @@ app.post('/api/admin/unified-pipeline', async (req, res) => {
 // simultaneously. Also: TA rescore happens incrementally (score per batch, not wait
 // for all stocks) so picks update faster during market hours.
 
-async function runUnifiedKitePipeline() {
+async function runUnifiedKitePipeline(force = false) {
   if (_unifiedPipelineRunning) { console.log('🔄 Unified pipeline already running, skipping'); return; }
-  if (!isMarketOpen()) return;
+  if (!force && !isMarketOpen()) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
 
   _unifiedPipelineRunning = true;
