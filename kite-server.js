@@ -8177,16 +8177,30 @@ function scoreDayTrade(candles, sym) {
   function _penalty(bucket, pts, reason) { _track.push({bucket, pts: -Math.abs(pts), reason, type:'penalty'}); return -Math.abs(pts); }
 
   // ── Isolate today's candles vs previous day (Varsity M2: intraday = session-only) ──
-  const todayStart = new Date().toISOString().split('T')[0];
-  const todayCandles = candles.filter(c => {
+  // When market is closed (force mode / off-hours), use the LAST trading day's candles
+  // so DayTrade picks still show something meaningful (last session's setups).
+  let todayStart = new Date().toISOString().split('T')[0];
+  let todayCandles = candles.filter(c => {
     const d = c.date || c.timestamp;
     return d && String(d).startsWith(todayStart);
   });
+  // Fallback: if no candles for today (weekend/holiday/after-hours), use the last trading day
+  if (todayCandles.length < 3) {
+    const lastCandle = candles[candles.length - 1];
+    const lastDate = lastCandle.date || lastCandle.timestamp;
+    if (lastDate) {
+      todayStart = String(lastDate).split('T')[0];
+      todayCandles = candles.filter(c => {
+        const d = c.date || c.timestamp;
+        return d && String(d).startsWith(todayStart);
+      });
+    }
+  }
   const prevDayCandles = candles.filter(c => {
     const d = c.date || c.timestamp;
     return d && !String(d).startsWith(todayStart);
   });
-  if (todayCandles.length < 3) return null; // need at least 15 min of today's data
+  if (todayCandles.length < 3) return null; // need at least 15 min of session data
 
   // ── Shared indicators ─────────────────────────────────────────────────
 
