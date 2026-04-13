@@ -14273,13 +14273,28 @@ function parseScreenerDetails(sym, raw) {
   const currentLiabilities = latestAnnual(bs, 'Other Liabilities'); // proxy for current liabilities
   if (currentAssets > 0 && currentLiabilities > 0) computedCurrentRatio = pn((currentAssets / currentLiabilities).toFixed(2));
 
-  // Pledged percentage from shareholding
+  // Pledged percentage — try multiple sources:
+  // 1. Shareholding table row containing "pledg"
+  // 2. Top-ratios box (raw.pledged_pct from scraper)
+  // 3. Ratios table row containing "pledg"
   const pledgedRow = (sh||[]).find(r => (r['']||r['Metric']||'').toLowerCase().includes('pledg'));
   let pledgedPct = null;
   if (pledgedRow) {
     const pKeys = Object.keys(pledgedRow).filter(k => k !== '' && k !== 'Metric').sort();
     if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
   }
+  // Fallback: top-ratios box from scraper
+  if (pledgedPct == null && raw.pledged_pct != null) pledgedPct = pn(raw.pledged_pct);
+  // Fallback: ratios table
+  if (pledgedPct == null) {
+    const pledgeRatioRow = (ratios||[]).find(r => (r.Metric||'').toLowerCase().includes('pledg'));
+    if (pledgeRatioRow) {
+      const prKeys = Object.keys(pledgeRatioRow).filter(k => k !== 'Metric').sort();
+      if (prKeys.length) pledgedPct = pn(pledgeRatioRow[prKeys[prKeys.length-1]]);
+    }
+  }
+  // Default to 0 if we have promoter data but no pledge info (means nothing pledged)
+  if (pledgedPct == null && promoter != null) pledgedPct = 0;
 
   // Cash flow data for FCF — use direct "Free Cash Flow" row if available, else compute
   const cf = raw.cash_flow || [];
