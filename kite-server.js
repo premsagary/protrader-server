@@ -14217,13 +14217,14 @@ function parseScreenerDetails(sym, raw) {
     if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
   }
 
-  // Cash flow data for FCF — try multiple possible metric names
+  // Cash flow data for FCF — use direct "Free Cash Flow" row if available, else compute
   const cf = raw.cash_flow || [];
+  const directFcf = latestAnnual(cf, 'Free Cash Flow');
   const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity')
     ?? latestAnnual(cf, 'Cash from Operations');
   const capex = latestAnnual(cf, 'Fixed Assets Purchased')
     ?? latestAnnual(cf, 'Fixed Assets');  // usually negative
-  const fcf = (cfFromOps != null && capex != null) ? cfFromOps + capex : null;
+  const fcf = directFcf ?? ((cfFromOps != null && capex != null) ? cfFromOps + capex : null);
 
   // Dividend from P&L for yield calc
   const dividendPayout = latestAnnual(annual, 'Dividend Payout %');
@@ -14251,9 +14252,10 @@ function parseScreenerDetails(sym, raw) {
   const computedEvEbitda = (computedMktCap && operatingProfit > 0)
     ? pn(((computedMktCap + (borrowings||0)) / operatingProfit).toFixed(1)) : null;
 
-  // Dividend Yield: dividendPayout% * EPS / price * 100 (approximate)
-  const computedDivYield = (dividendPayout > 0 && eps > 0 && livePrice > 0)
-    ? pn((dividendPayout * eps / livePrice).toFixed(2)) : null;
+  // Dividend Yield — prefer screener's top-metric value, else compute from payout%
+  const computedDivYield = raw.div_yield != null ? pn(raw.div_yield)
+    : (dividendPayout > 0 && eps > 0 && livePrice > 0)
+      ? pn((dividendPayout * eps / livePrice).toFixed(2)) : null;
 
   // Industry PE from raw metadata if available
   const computedIndustryPE = raw.industry_pe || raw.industryPE || null;
@@ -14458,6 +14460,11 @@ app.post('/api/admin/screener-stock/:sym', async (req, res) => {
         ratios_metrics: (raw.ratios||[]).map(r => r.Metric),
         sh_count: (raw.shareholding?.quarterly||[]).length,
         sh_metrics: (raw.shareholding?.quarterly||[]).map(r => r.Metric),
+        div_yield: raw.div_yield,
+        top_pe: raw.top_pe,
+        top_roce: raw.top_roce,
+        top_roe: raw.top_roe,
+        book_value: raw.book_value,
       }});
     }
 

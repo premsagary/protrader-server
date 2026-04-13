@@ -226,33 +226,54 @@ async function fetchCompany(sym) {
     || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   raw.company_name = nameMatch ? stripHtml(nameMatch[1]).trim() : sym;
 
-  // Industry / Sector — screener.in shows these as links in the company-ratios section
-  // Pattern: <a href="/company/compare/...">Industry Name</a> or near "Sector:" text
-  const industryPatterns = [
-    /company-ratios[\s\S]{0,3000}?Sector\s*:\s*<[^>]*>([^<]+)/i,
-    /company-info[\s\S]{0,3000}?(?:Industry|Sector)\s*[:\s]*<a[^>]*>([^<]+)/i,
-    /(?:Industry|Sector)\s*:\s*<a[^>]*>([^<]+)/i,
-    /<a[^>]*href="\/company\/compare\/[^"]*"[^>]*>([^<]+)<\/a>/i,
-    /Sector\s*:[\s\S]{0,100}?<a[^>]*>([^<]+)/i,
-  ];
+  // Industry / Sector — multiple strategies to find on screener.in
   raw.industry = null;
-  for (const pat of industryPatterns) {
-    const m = html.match(pat);
-    if (m && m[1]) {
-      const val = stripHtml(m[1]).trim();
-      if (val && val.length > 1 && val.length < 100 && !val.includes('http')) {
-        raw.industry = val;
-        break;
+
+  // Strategy 1: find company-compare links (screener links industry to /company/compare/XXXXX/)
+  const compareLinks = html.match(/<a[^>]*href="\/company\/compare\/[^"]*"[^>]*>[^<]+<\/a>/gi) || [];
+  for (const link of compareLinks) {
+    const val = stripHtml(link).trim();
+    if (val && val.length > 1 && val.length < 80 && !/^\d+$/.test(val)) {
+      raw.industry = val;
+      break;
+    }
+  }
+
+  // Strategy 2: look near "Sector" or "Industry" text
+  if (!raw.industry) {
+    const industryPatterns = [
+      /(?:Industry|Sector)\s*:\s*<a[^>]*>([^<]+)/i,
+      /(?:Industry|Sector)\s*<\/[^>]+>\s*<[^>]+>\s*<a[^>]*>([^<]+)/i,
+      /(?:Industry|Sector)[\s\S]{0,200}?<a[^>]*>([^<]+)/i,
+    ];
+    for (const pat of industryPatterns) {
+      const m = html.match(pat);
+      if (m && m[1]) {
+        const val = stripHtml(m[1]).trim();
+        if (val && val.length > 1 && val.length < 80) { raw.industry = val; break; }
       }
     }
   }
 
-  // Industry PE — shown in the peer comparison or ratios section
+  // Strategy 3: look in the sub-heading / breadcrumb area near h1
+  if (!raw.industry) {
+    const h1Idx = html.indexOf('</h1>');
+    if (h1Idx > 0) {
+      const afterH1 = html.slice(h1Idx, h1Idx + 1000);
+      const linkMatch = afterH1.match(/<a[^>]*href="[^"]*(?:compare|sector|industry)[^"]*"[^>]*>([^<]+)/i);
+      if (linkMatch) {
+        const val = stripHtml(linkMatch[1]).trim();
+        if (val.length > 1 && val.length < 80) raw.industry = val;
+      }
+    }
+  }
+
+  // Industry PE — shown in peer comparison section
   const indPePatterns = [
     /Industry\s*PE[\s\S]{0,200}?<span[^>]*class="[^"]*number[^"]*"[^>]*>([\d.]+)/i,
     /Industry\s*PE[\s\S]{0,100}?>([\d.]+)/i,
-    /Industry\s*PE\s*[:\s]*([\d.]+)/i,
     /Sector\s*PE[\s\S]{0,100}?>([\d.]+)/i,
+    /Industry\s*PE\s*[:\s]*([\d.]+)/i,
   ];
   raw.industry_pe = null;
   for (const pat of indPePatterns) {
@@ -303,6 +324,12 @@ async function fetchCompany(sym) {
   const topMetrics = parseTopMetrics(html);
   if (topMetrics.currentPrice) raw.current_price = topMetrics.currentPrice;
   if (topMetrics.marketCap) raw.market_cap = topMetrics.marketCap;
+  if (topMetrics.divYield != null) raw.div_yield = topMetrics.divYield;
+  if (topMetrics.pe != null) raw.top_pe = topMetrics.pe;
+  if (topMetrics.roce != null) raw.top_roce = topMetrics.roce;
+  if (topMetrics.roe != null) raw.top_roe = topMetrics.roe;
+  if (topMetrics.bookValue != null) raw.book_value = topMetrics.bookValue;
+  if (topMetrics.industryPE != null) raw.industry_pe = raw.industry_pe || topMetrics.industryPE;
 
   return raw;
 }
@@ -401,17 +428,18 @@ function parseFinancialTable(tableHtml) {
 // ── Parse top-level metrics (market cap, price, PE etc.) ────────────────────
 function parseTopMetrics(html) {
   const metrics = {};
-  // Extract the top-ratios section first to narrow scope
-  const ratiosSection = html.match(/id="top-ratios"[\s\S]*?<\/ul>/i);
-  const searchHtml = ratiosSection ? ratiosSection[0] : html;
+  // Extract the top-ratios or company-ratios section to narrow scope
+  const ratiosSection = html.match(/id="top-ratios"[\s\S]*?<\/ul>/i)
+    || html.match(/class="[^"]*company-ratios[^"]*"[\s\S]*?<\/ul>/i)
+    || html.match(/class="[^"]*top-ratios[^"]*"[\s\S]*?<\/ul>/i);
+  const searchHtml = ratiosSection ? ratiosSection[0] : html.slice(0, 20000); // limit scope
 
-  // Match <li> with <span class="name"> and <span class="nowrap value"> (with generous whitespace)
+  // Strategy 1: Match <li> with <span class="name"> and <span class="nowrap value">
   const liRegex = /<li[^>]*>[\s\S]*?<span[^>]*class="[^"]*name[^"]*"[^>]*>([\s\S]*?)<\/span>[\s\S]*?<span[^>]*class="[^"]*(?:number|value|nowrap)[^"]*"[^>]*>([\s\S]*?)<\/span>/gi;
   let m;
   while ((m = liRegex.exec(searchHtml)) !== null) {
     const label = stripHtml(m[1]).toLowerCase().trim();
     const valueHtml = m[2];
-    // Extract number from nested <span class="number"> if present
     const numMatch = valueHtml.match(/<span[^>]*class="[^"]*number[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
     const value = numMatch ? stripHtml(numMatch[1]).replace(/[₹,]/g, '').trim()
                            : stripHtml(valueHtml).replace(/[₹,]/g, '').replace(/Cr\.?/g, '').trim();
@@ -424,7 +452,23 @@ function parseTopMetrics(html) {
     if (label.includes('roce')) metrics.roce = numVal;
     if (label.includes('roe') && !label.includes('roce')) metrics.roe = numVal;
     if (label.includes('face value')) metrics.faceValue = parseFloat(value) || null;
+    if (label.includes('industry pe') || label.includes('sector pe')) metrics.industryPE = numVal;
   }
+
+  // Strategy 2: broader fallback — find any <span class="name"> / <span class="number"> pairs
+  if (!metrics.marketCap && !metrics.currentPrice) {
+    const pairRegex = /<span[^>]*class="name"[^>]*>([\s\S]*?)<\/span>[\s\S]*?<span[^>]*class="number"[^>]*>([\s\S]*?)<\/span>/gi;
+    while ((m = pairRegex.exec(searchHtml)) !== null) {
+      const label = stripHtml(m[1]).toLowerCase().trim();
+      const value = stripHtml(m[2]).replace(/[₹,]/g, '').replace(/Cr\.?/g, '').trim();
+      const numVal = parseFloat(value) || null;
+      if (label.includes('market cap') && !metrics.marketCap) metrics.marketCap = numVal;
+      if (label.includes('current price') && !metrics.currentPrice) metrics.currentPrice = numVal;
+      if (label.includes('dividend yield') && metrics.divYield == null) metrics.divYield = numVal;
+      if (label.includes('industry pe') && !metrics.industryPE) metrics.industryPE = numVal;
+    }
+  }
+
   return metrics;
 }
 
