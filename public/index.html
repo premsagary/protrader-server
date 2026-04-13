@@ -763,12 +763,12 @@ tbody tr:hover{box-shadow:none}
 .lp-nav-links a:not(.lp-cta-sm):hover::after{transform:scaleX(1)}
 
 /* ── CTA button — Apple solid blue ── */
-.lp-cta-sm{background:#0A84FF;color:#fff;
-  border:none;border-radius:var(--btn-radius);
+.lp-cta-sm{background:rgba(255,255,255,0.06);color:#F5F5F7;
+  border:1px solid rgba(255,255,255,0.08);border-radius:var(--btn-radius);
   padding:11px 28px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.2px;
-  box-shadow:0 1px 3px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.10),inset 0 1px 0 rgba(255,255,255,0.1);transition:all 0.2s ease;text-decoration:none}
-.lp-cta-sm:hover{background:#0070E0;color:#ffffff;
-  transform:none;box-shadow:0 2px 6px rgba(0,0,0,0.15),0 4px 14px rgba(0,0,0,0.18)}
+  box-shadow:none;transition:all 0.2s ease;text-decoration:none}
+.lp-cta-sm:hover{background:rgba(255,255,255,0.10);color:#ffffff;
+  transform:none;box-shadow:none}
 .lp-cta-sm:active{transform:scale(0.98)}
 
 /* Hero */
@@ -5975,15 +5975,15 @@ async function renderMFPage(){
       var dniContainer=document.createElement('div');
       dniContainer.id='mf-dni-container';
       dniContainer.className='tilt-3d';
-      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(255,69,58,0.25);border-radius:16px;overflow:hidden;background:rgba(28,28,30,0.98);box-shadow:0 4px 16px rgba(0,0,0,0.25)';
+      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(255,255,255,0.06);border-radius:16px;overflow:hidden;background:var(--bg3);box-shadow:0 4px 16px rgba(0,0,0,0.25)';
       var dniHeader=document.createElement('div');
-      dniHeader.style.cssText='display:flex;align-items:center;gap:10px;padding:14px 18px;background:rgba(239,68,68,0.10);border-bottom:1px solid rgba(239,68,68,0.20)';
-      dniHeader.innerHTML='<span style="font-size:16px">⚠️</span><span style="font-weight:800;font-size:14px;letter-spacing:0.03em;color:var(--red)">Warning Before Buying These MFs</span><span style="font-size:11px;color:var(--text2);margin-left:6px;font-weight:500">('+sortedDni.length+' funds flagged)</span>';
+      dniHeader.style.cssText='display:flex;align-items:center;gap:10px;padding:14px 18px;background:var(--bg3);border-bottom:1px solid rgba(255,255,255,0.06);border-left:3px solid var(--red)';
+      dniHeader.innerHTML='<span style="font-size:16px">⚠️</span><span style="font-weight:800;font-size:14px;letter-spacing:0.03em;color:#F5F5F7">Warning Before Buying These MFs</span><span style="font-size:11px;color:var(--text2);margin-left:6px;font-weight:500">('+sortedDni.length+' funds flagged)</span>';
       dniContainer.appendChild(dniHeader);
       var dniTable=document.createElement('table');
       dniTable.style.cssText='width:100%;border-collapse:collapse;font-size:11px';
       var dniHead=document.createElement('thead');
-      dniHead.innerHTML='<tr style="background:rgba(17,17,19,0.98);border-bottom:1px solid rgba(255,69,58,0.08)"><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
+      dniHead.innerHTML='<tr style="background:rgba(17,17,19,0.98);border-bottom:1px solid rgba(255,255,255,0.06)"><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
       dniTable.appendChild(dniHead);
       var dniTbody=document.createElement('tbody');
       var dniRows=[];
@@ -5992,7 +5992,7 @@ async function renderMFPage(){
         var row=document.createElement('tr');
         var rowBg=i%2===0?'rgba(255,255,255,0.01)':'rgba(255,255,255,0.025)';
         row.style.cssText='border-bottom:1px solid rgba(255,255,255,0.04);background:'+rowBg+';transition:background 0.2s ease;'+(i>=DNI_INITIAL?'display:none;':'');
-        row.onmouseenter=function(){this.style.background='rgba(239,68,68,0.06)'};
+        row.onmouseenter=function(){this.style.background='rgba(255,255,255,0.04)'};
         row.onmouseleave=(function(bg){return function(){this.style.background=bg}})(rowBg);
         var lvlColor=f.dni.level==='red'?'var(--red)':'#8E8E93';
         var lvlBg=f.dni.level==='red'?'rgba(255,105,97,0.06)':'rgba(142,142,147,0.06)';
@@ -6007,9 +6007,9 @@ async function renderMFPage(){
       dniContainer.appendChild(dniTable);
       if(sortedDni.length > DNI_INITIAL){
         var dniMore = document.createElement('div');
-        dniMore.style.cssText = 'text-align:center;padding:14px;background:rgba(14,18,30,0.95);border-top:1px solid rgba(255,105,97,0.08);cursor:pointer';
+        dniMore.style.cssText = 'text-align:center;padding:14px;background:var(--bg3);border-top:1px solid rgba(255,255,255,0.06);cursor:pointer';
         var dniMoreBtn = document.createElement('span');
-        dniMoreBtn.style.cssText = 'font-size:11px;color:var(--red);font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(255,69,58,0.20);border-radius:999px;background:rgba(255,69,58,0.08);transition:all 0.25s ease;letter-spacing:0.02em';
+        dniMoreBtn.style.cssText = 'font-size:11px;color:var(--text2);font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(255,255,255,0.08);border-radius:999px;background:rgba(255,255,255,0.04);transition:all 0.25s ease;letter-spacing:0.02em';
         var dniExpanded = false;
         dniMoreBtn.textContent = 'Show all '+(sortedDni.length - DNI_INITIAL)+' more flagged funds ▾';
         dniMoreBtn.onclick = function(){
@@ -8088,13 +8088,13 @@ function renderStockRecPage(){
   var pills = [
     {l:'Total',           v:allStocks.length,    c:'var(--text)'},
     {l:'Rebound',         v:swingAllCount,       c:'var(--shiva-gold)'},
-    {l:'Momentum',        v:momAllCount,         c:'var(--green)'},
-    {l:'ROE ≥15%',        v:highRoe,             c:'var(--green)'},
-    {l:'Golden Cross',    v:golden,              c:'var(--shiva-gold)'},
-    {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--text2)'},
-    {l:'Next50',          v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length,  c:'var(--shiva-silver)'},
-    {l:'Midcap',          v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length,  c:'var(--shiva-gold)'},
-    {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'var(--green)'},
+    {l:'Momentum',        v:momAllCount,         c:'var(--text)'},
+    {l:'ROE ≥15%',        v:highRoe,             c:'var(--text)'},
+    {l:'Golden Cross',    v:golden,              c:'var(--text)'},
+    {l:'Nifty50',         v:allStocks.filter(function(s){return s.grp==='NIFTY50';}).length, c:'var(--text)'},
+    {l:'Next50',          v:allStocks.filter(function(s){return s.grp==='NEXT50';}).length,  c:'var(--text)'},
+    {l:'Midcap',          v:allStocks.filter(function(s){return s.grp==='MIDCAP';}).length,  c:'var(--text)'},
+    {l:'Smallcap',        v:allStocks.filter(function(s){return s.grp==='SMALLCAP';}).length,c:'var(--text)'},
   ];
   pills.forEach(function(p){
     html+='<div style="background:var(--bg3);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius);padding:7px 13px">'
@@ -8124,7 +8124,7 @@ function renderStockRecPage(){
   var _longtermSorted = longTermPicks.slice().sort(function(a,b){return (b.scoreV2||0)-(a.scoreV2||0);});
   html+=_qsBar('Rebound','#8E8E93',_reboundSorted,'pctScore','🔄');
   html+=_qsBar('Momentum','var(--text)',_momentumSorted,'composite','⚡');
-  html+=_qsBar('Long-Term','#0A84FF',_longtermSorted,'scoreV2','🏦');
+  html+=_qsBar('Long-Term','var(--text2)',_longtermSorted,'scoreV2','🏦');
   if(_reboundSorted.length||_momentumSorted.length||_longtermSorted.length) html+='<div style="height:8px"></div>';
 
   // Market-cap filter row — centered, FALLEN removed (Fallen Angels are the
