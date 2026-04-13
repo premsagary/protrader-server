@@ -39,20 +39,20 @@
      Layered depth through subtle brightness shifts.
      ════════════════════════════════════════════════════════════════ */
   /* ── Core surfaces: near-seamless layering ── */
-  --bg:#0A0A0B;--bg2:#111113;--bg3:#1B1B1E;--bg4:#232326;
+  --bg:#0B0B0C;--bg2:#111113;--bg3:#1C1C1E;--bg4:#232326;
   /* ── Surfaces (solid, no heavy glass) ── */
-  --glass:rgba(17,17,19,0.97);--glass-border:rgba(255,255,255,0.04);
+  --glass:rgba(17,17,19,0.97);--glass-border:rgba(255,255,255,0.06);
   --glass-hover:rgba(26,26,29,0.98);--glass-glow:transparent;
   /* ── Typography: clean white hierarchy ── */
-  --text:#F5F5F7;--text2:rgba(245,245,247,0.7);--text3:rgba(245,245,247,0.45);
+  --text:#F5F5F7;--text2:#A1A1AA;--text3:#71717A;
   /* ── Borders: ultra subtle ── */
-  --border:#232326;--border2:#2C2C2F;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.08);
   /* ── Semantic colors (Apple-tuned, calm) ── */
   --green:#30D158;--green-bg:rgba(48,209,88,0.06);--green-text:#32D74B;
-  --red:#FF6961;--red-bg:rgba(255,105,97,0.06);--red-text:#FF6961;
+  --red:#FF453A;--red-bg:rgba(255,69,58,0.06);--red-text:#FF453A;
   --amber:#8E8E93;--amber-bg:rgba(142,142,147,0.08);--amber-text:#8E8E93;
-  --blue:#0A84FF;--blue-bg:rgba(10,132,255,0.08);--blue-text:#0A84FF;
-  --purple:#BF5AF2;--purple-bg:rgba(191,90,242,0.08);--purple-text:#BF5AF2;
+  --blue:#0A84FF;--blue-bg:rgba(0,0,0,0.08);--blue-text:#0A84FF;
+  --purple:#A1A1AA;--purple-bg:rgba(255,255,255,0.06);--purple-text:#A1A1AA;
   --teal:#64D2FF;--accent:#0A84FF;
   --text4:#48484A;--border3:#1C1C1E;
   --amber-bright:#8E8E93;--emerald:#30D158;
@@ -70,7 +70,7 @@
   --tier-buy-bg:rgba(48,209,88,0.06);--tier-buy-text:#30D158;--tier-buy-border:rgba(48,209,88,0.12);
   --tier-accumulate-bg:rgba(142,142,147,0.08);--tier-accumulate-text:#8E8E93;--tier-accumulate-border:rgba(142,142,147,0.14);
   --tier-watch-bg:rgba(142,142,147,0.08);--tier-watch-text:#8E8E93;--tier-watch-border:rgba(142,142,147,0.12);
-  --tier-avoid-bg:rgba(255,105,97,0.06);--tier-avoid-text:#FF6961;--tier-avoid-border:rgba(255,105,97,0.10);
+  --tier-avoid-bg:rgba(255,69,58,0.06);--tier-avoid-text:#FF453A;--tier-avoid-border:rgba(255,69,58,0.10);
   /* ── Surface tints: minimal, near-transparent ── */
   --surface-base:rgba(17,17,19,0.90);--surface-blue:rgba(17,17,19,0.90);
   --surface-green:rgba(17,17,19,0.90);--surface-gold:rgba(17,17,19,0.90);
@@ -80,7 +80,7 @@
   --transition-fast:0.15s ease;--transition-med:0.2s ease;--transition-slow:0.35s ease;
   /* ── Button tokens — clean, no glow ── */
   --btn-radius:12px;--btn-height:38px;--btn-height-sm:32px;
-  --btn-gradient:linear-gradient(135deg,#0A84FF,#0070E0);
+  --btn-gradient:#0A84FF;
   --btn-glow:none;
   --btn-border:rgba(255,255,255,0.10);
 }
@@ -300,10 +300,10 @@ tbody tr:hover td{background:rgba(255,255,255,0.025)}
 .btn-primary{
   background:#0A84FF;color:#fff;
   border:none;font-weight:600;
-  box-shadow:0 1px 4px rgba(0,0,0,0.10),0 2px 8px rgba(10,132,255,0.08);
+  box-shadow:0 1px 4px rgba(0,0,0,0.15);
 }
-.btn-primary:hover{background:#0070E0;color:#fff;
-  box-shadow:0 2px 8px rgba(0,0,0,0.12),0 4px 16px rgba(10,132,255,0.12)}
+.btn-primary:hover{background:#007AFF;color:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,0.2)}
 .btn-primary:active{transform:scale(0.98);
   background:#0070E0;transition-duration:0.08s}
 /* Disabled state — all buttons */
@@ -321,8 +321,8 @@ tbody tr:hover td{background:rgba(255,255,255,0.025)}
   font-weight:500;cursor:not-allowed;opacity:0.5;letter-spacing:0.2px;border-radius:var(--btn-radius);
 }
 /* Analyze CTA — strong primary action */
-.btn-analyze:hover{transform:none !important;
-  box-shadow:0 2px 8px rgba(10,132,255,0.3) !important}
+.btn-analyze:hover{transform:none !important;background:#007AFF !important;
+  box-shadow:0 4px 12px rgba(0,0,0,0.25) !important}
 .btn-analyze:active{transform:scale(0.98) !important}
 @keyframes pulseGlow{0%,100%{box-shadow:none}50%{box-shadow:none}}
 input,select{
@@ -332,7 +332,7 @@ input,select{
   transition:all 0.2s ease;box-shadow:inset 0 1px 2px rgba(0,0,0,0.06);
 }
 input:focus,select:focus{border-color:rgba(10,132,255,0.5);
-  box-shadow:0 0 0 3px rgba(10,132,255,0.12);
+  box-shadow:0 0 0 3px rgba(0,0,0,0.12);
   background:rgba(255,255,255,0.06)}
 input::placeholder{color:var(--text3);font-weight:400}
 select option{background:var(--bg3)}
@@ -531,7 +531,7 @@ select option{background:var(--bg3)}
 
 /* ── Progress bar (premium) ── */
 .shiva-progress{height:2px;background:rgba(255,255,255,0.04);border-radius:2px;overflow:hidden}
-.shiva-progress-fill{height:100%;background:linear-gradient(90deg,#0A84FF,rgba(10,132,255,0.5));
+.shiva-progress-fill{height:100%;background:#0A84FF;
   border-radius:2px;transition:width 0.6s var(--ease-out-expo)}
 
 /* ── Signal badge ── */
@@ -638,7 +638,7 @@ select option{background:var(--bg3)}
 /* ── Input focus ring — Apple blue ring ── */
 input:focus,select:focus{
   border-color:rgba(10,132,255,0.5) !important;
-  box-shadow:0 0 0 3px rgba(10,132,255,0.15) !important;
+  box-shadow:0 0 0 3px rgba(0,0,0,0.15) !important;
 }
 
 /* ── Row hover — clean ── */
@@ -766,9 +766,9 @@ tbody tr:hover{box-shadow:none}
 .lp-cta-sm{background:#0A84FF;color:#fff;
   border:none;border-radius:var(--btn-radius);
   padding:11px 28px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.2px;
-  box-shadow:0 1px 3px rgba(0,0,0,0.12),0 2px 8px rgba(10,132,255,0.10),inset 0 1px 0 rgba(255,255,255,0.1);transition:all 0.2s ease;text-decoration:none}
+  box-shadow:0 1px 3px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.10),inset 0 1px 0 rgba(255,255,255,0.1);transition:all 0.2s ease;text-decoration:none}
 .lp-cta-sm:hover{background:#0070E0;color:#ffffff;
-  transform:none;box-shadow:0 2px 6px rgba(0,0,0,0.15),0 4px 14px rgba(10,132,255,0.18)}
+  transform:none;box-shadow:0 2px 6px rgba(0,0,0,0.15),0 4px 14px rgba(0,0,0,0.18)}
 .lp-cta-sm:active{transform:scale(0.98)}
 
 /* Hero */
@@ -795,9 +795,9 @@ tbody tr:hover{box-shadow:none}
 .lp-btn-primary{background:#0A84FF;color:#fff;
   border:none;border-radius:var(--btn-radius);padding:14px 34px;font-size:14px;font-weight:600;
   cursor:pointer;letter-spacing:0.1px;font-family:inherit;
-  box-shadow:0 1px 3px rgba(0,0,0,0.15),0 2px 8px rgba(10,132,255,0.12),inset 0 1px 0 rgba(255,255,255,0.1);transition:all 0.2s ease}
+  box-shadow:0 1px 3px rgba(0,0,0,0.15),0 2px 8px rgba(0,0,0,0.12),inset 0 1px 0 rgba(255,255,255,0.1);transition:all 0.2s ease}
 .lp-btn-primary:hover{background:#0070E0;transform:none;
-  box-shadow:0 2px 6px rgba(0,0,0,0.18),0 4px 16px rgba(10,132,255,0.2);color:#fff}
+  box-shadow:0 2px 6px rgba(0,0,0,0.18),0 4px 16px rgba(0,0,0,0.2);color:#fff}
 .lp-btn-primary:active{transform:scale(0.98)}
 .lp-btn-ghost{background:rgba(255,255,255,0.05);color:var(--text);border:1px solid rgba(255,255,255,0.08);border-radius:var(--btn-radius);
   padding:14px 30px;font-size:13px;font-weight:500;cursor:pointer;letter-spacing:0.1px;
@@ -822,7 +822,7 @@ tbody tr:hover{box-shadow:none}
 .lp-feature::before{display:none}
 .lp-feature:hover{border-color:rgba(255,255,255,0.08);box-shadow:0 4px 12px rgba(0,0,0,0.25);transform:translateY(-2px)}
 .lp-feature-icon{font-size:24px;margin-bottom:14px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;
-  background:rgba(10,132,255,0.10);border-radius:var(--radius);border:none}
+  background:rgba(0,0,0,0.10);border-radius:var(--radius);border:none}
 .lp-feature h3{font-size:15px;font-weight:600;color:var(--text);margin-bottom:10px;letter-spacing:-0.1px}
 .lp-feature p{font-size:12px;color:var(--text2);line-height:1.65;font-weight:400}
 
@@ -845,7 +845,7 @@ tbody tr:hover{box-shadow:none}
 .lp-price-card.featured{border-color:rgba(10,132,255,0.20);background:var(--bg3);
   box-shadow:0 1px 4px rgba(0,0,0,0.12)}
 .lp-price-card.featured .lp-price-badge{display:inline-block}
-.lp-price-badge{display:none;background:rgba(10,132,255,0.12);color:#0A84FF;border-radius:999px;padding:4px 14px;
+.lp-price-badge{display:none;background:rgba(0,0,0,0.12);color:#0A84FF;border-radius:999px;padding:4px 14px;
   font-size:9px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:14px}
 .lp-price-name{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-0.1px;margin-bottom:6px}
 .lp-price-cost{font-size:36px;font-weight:700;margin:14px 0;letter-spacing:-0.5px;
@@ -863,14 +863,14 @@ tbody tr:hover{box-shadow:none}
 .lp-price-card.featured .lp-price-btn{background:#0A84FF;color:#fff;
   border:none;box-shadow:none}
 .lp-price-card.featured .lp-price-btn:hover{background:#0070E0;
-  box-shadow:0 2px 8px rgba(10,132,255,0.3);color:#fff}
+  box-shadow:0 2px 8px rgba(0,0,0,0.25);color:#fff}
 
 /* How it works */
 .lp-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:960px;margin:0 auto}
 .lp-step{text-align:center;position:relative;background:var(--bg3);border:1px solid rgba(255,255,255,0.05);
   border-radius:var(--radius);padding:28px 22px;box-shadow:0 1px 3px rgba(0,0,0,0.08),0 4px 12px rgba(0,0,0,0.05),inset 0 1px 0 rgba(255,255,255,0.03);transition:all 0.2s ease-out}
 .lp-step:hover{border-color:rgba(255,255,255,0.08);box-shadow:0 4px 12px rgba(0,0,0,0.25);transform:translateY(-2px)}
-.lp-step-num{width:36px;height:36px;border-radius:50%;border:none;background:rgba(10,132,255,0.12);
+.lp-step-num{width:36px;height:36px;border-radius:50%;border:none;background:rgba(0,0,0,0.12);
   display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:13px;font-weight:600;color:#0A84FF;
   transition:none}
 .lp-step h4{font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px}
@@ -1073,7 +1073,7 @@ tbody tr:hover{box-shadow:none}
 .lp-step.visible .lp-step-num{animation:lpPulseNum 3s 0.4s ease-in-out infinite}
 
 /* ── Stat value glow ── */
-.lp-stat.visible .lp-stat-val{text-shadow:0 0 28px rgba(10,132,255,0.08)}
+.lp-stat.visible .lp-stat-val{text-shadow:0 0 28px rgba(0,0,0,0.08)}
 
 /* ── Featured price card — no glow border ── */
 .lp-price-card.featured{position:relative}
@@ -1149,7 +1149,7 @@ tbody tr:hover{box-shadow:none}
 
 .ob-icon{font-size:36px;margin-bottom:18px;
   width:64px;height:64px;display:flex;align-items:center;justify-content:center;margin-left:auto;margin-right:auto;
-  background:rgba(10,132,255,0.10);border:none;border-radius:16px;
+  background:rgba(0,0,0,0.10);border:none;border-radius:16px;
   box-shadow:none;animation:none}
 
 .ob-title{font-weight:700;font-size:22px;color:var(--text);letter-spacing:-0.2px;margin-bottom:10px;
@@ -1176,7 +1176,7 @@ tbody tr:hover{box-shadow:none}
   font-family:inherit;position:relative;overflow:hidden;
   box-shadow:none;transition:all 0.2s ease;animation:none}
 .ob-next:hover{background:#0070E0;transform:none;
-  box-shadow:0 2px 8px rgba(10,132,255,0.3)}
+  box-shadow:0 2px 8px rgba(0,0,0,0.25)}
 .ob-next:active{transform:scale(0.98)!important;transition-duration:0.08s}
 .ob-next::before{display:none}
 
@@ -1815,12 +1815,12 @@ img,video,canvas,svg{max-width:100%;height:auto}
   <p class="lp-hero-sub">14-point Varsity checklist, AI council of 5 models, exact buy zones, and 30+ indicators for every NSE stock. No signup required — just open and analyze.</p>
   <div class="lp-hero-cta">
     <button class="lp-btn-primary" onclick="enterFreeMode()">Start Analyzing — Free</button>
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">No Signup Needed</button>
-    <a href="#example" class="lp-btn-primary" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15));text-decoration:none">See Live Example ↓</a>
+    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:#0A84FF">No Signup Needed</button>
+    <a href="#example" class="lp-btn-primary" style="background:#0A84FF;text-decoration:none">See Live Example ↓</a>
   </div>
   <div class="lp-hero-cta" style="margin-top:10px">
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">⚡ Results in under 10s</button>
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">🆓 100% free forever</button>
+    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:#0A84FF">⚡ Results in under 10s</button>
+    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:#0A84FF">🆓 100% free forever</button>
   </div>
 </section>
 
@@ -2058,7 +2058,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
 }
 .login-input::placeholder{color:rgba(160,165,180,0.5);font-weight:400}
 .login-input:focus{border-color:rgba(10,132,255,0.25);background:rgba(10,132,255,0.02);
-  box-shadow:0 0 0 3px rgba(10,132,255,0.08)}
+  box-shadow:0 0 0 3px rgba(0,0,0,0.08)}
 
 /* ── Button (Apple solid blue) ── */
 .login-btn-3d{
@@ -2452,7 +2452,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     </div>
     <div class="ob-dots"><span class="ob-dot" onclick="obGoTo(0)"></span><span class="ob-dot" onclick="obGoTo(1)"></span><span class="ob-dot" onclick="obGoTo(2)"></span><span class="ob-dot active" onclick="obGoTo(3)"></span><span class="ob-dot" onclick="obGoTo(4)"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-      <button class="ob-next" onclick="obGoToTab('mf')" style="background:rgba(10,132,255,0.15);color:#0A84FF;border-color:rgba(10,132,255,0.2)">🏦 See MF Picks</button>
+      <button class="ob-next" onclick="obGoToTab('mf')" style="background:rgba(0,0,0,0.15);color:#0A84FF;border-color:rgba(0,0,0,0.2)">🏦 See MF Picks</button>
       <button class="ob-next" onclick="obNext()">Next</button>
     </div>
   </div>
@@ -2469,7 +2469,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
       <button class="ob-next" onclick="obGoToTab('stockrec')" style="width:100%;background:rgba(142,142,147,0.08);color:rgba(245,245,247,0.7);border-color:rgba(142,142,147,0.10);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
         <span style="font-size:18px">📈</span><span><b>Stock Picks</b><br><span style="font-size:10px;color:var(--text3)">Rebound, Momentum &amp; Long-Term — updated daily</span></span>
       </button>
-      <button class="ob-next" onclick="obGoToTab('mf')" style="width:100%;background:rgba(10,132,255,0.12);color:#0A84FF;border-color:rgba(10,132,255,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
+      <button class="ob-next" onclick="obGoToTab('mf')" style="width:100%;background:rgba(0,0,0,0.12);color:#0A84FF;border-color:rgba(0,0,0,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
         <span style="font-size:18px">🏦</span><span><b>MF Picks</b><br><span style="font-size:10px;color:var(--text3)">120-point mutual fund scoring across 4 categories</span></span>
       </button>
       <button class="ob-next" onclick="obGoToTab('stockdata')" style="width:100%;background:rgba(255,255,255,0.06);color:var(--text2);border-color:rgba(255,255,255,0.08);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
@@ -5579,10 +5579,10 @@ const MF_FUNDS = [
 ];
 
 var MF_CAT = {
-  largecap:  {label:"Large Cap Funds", color:"#0A84FF",bg:"rgba(10,132,255,0.12)",desc:"Core stability · Nifty 100 universe",  bm3:13,bm5:11},
+  largecap:  {label:"Large Cap Funds", color:"#F5F5F7",bg:"rgba(255,255,255,0.06)",desc:"Core stability · Nifty 100 universe",  bm3:13,bm5:11},
   midcap:    {label:"Mid Cap Funds",   color:"#F5F5F7",bg:"rgba(255,255,255,0.06)",desc:"Moderate-high risk · 5+ year horizon", bm3:16,bm5:14},
-  smallcap:  {label:"Small Cap Funds", color:"#8E8E93",bg:"rgba(142,142,147,0.08)",desc:"High risk · 7+ year horizon",         bm3:18,bm5:16},
-  flexicap:  {label:"Flexi Cap Funds", color:"var(--text2)",bg:"rgba(20,184,166,0.12)",desc:"Dynamic allocation · 3+ year horizon", bm3:14,bm5:12}
+  smallcap:  {label:"Small Cap Funds", color:"#F5F5F7",bg:"rgba(255,255,255,0.06)",desc:"High risk · 7+ year horizon",         bm3:18,bm5:16},
+  flexicap:  {label:"Flexi Cap Funds", color:"#F5F5F7",bg:"rgba(255,255,255,0.06)",desc:"Dynamic allocation · 3+ year horizon", bm3:14,bm5:12}
 };
 
 function mfAnn(old,nav,yrs){if(!old||old<=0)return null;return +((Math.pow(nav/old,1/yrs)-1)*100).toFixed(1);}
@@ -5801,7 +5801,7 @@ async function renderMFPage(){
         var stickyStyle = isHash ? 'position:sticky;left:0;z-index:5;background:rgba(17,17,19,0.98);' : isFund ? 'position:sticky;left:44px;z-index:5;background:rgba(17,17,19,0.98);' : '';
         var widthStyle = isHash ? 'min-width:44px;width:44px;' : isFund ? 'min-width:200px;' : 'min-width:78px;';
         var borderRight = groupEndIdx[i] ? 'border-right:2px solid rgba(255,255,255,0.06);' : '';
-        html+='<th style="padding:8px 10px;text-align:'+(i<2?"left":"right")+';background:rgba(17,17,19,0.99);color:var(--text2);font-weight:700;font-size:10px;letter-spacing:0.04em;border-bottom:2px solid rgba(10,132,255,0.12);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
+        html+='<th style="padding:8px 10px;text-align:'+(i<2?"left":"right")+';background:rgba(17,17,19,0.99);color:var(--text2);font-weight:700;font-size:10px;letter-spacing:0.04em;border-bottom:2px solid rgba(0,0,0,0.12);'+stickyStyle+widthStyle+borderRight+'">'+h+'</th>';
       });
       html+='</tr></thead><tbody>';
       // Build the "top 5 for AI review" subset ONCE per category, outside the
@@ -5822,7 +5822,7 @@ async function renderMFPage(){
         var isTop = isEligible && eligibleRank <= 5;
         var topAIRank = topAIRankByName[f.name] || 0;
         var rowTopBg = isTop ? 'rgba(16,21,35,0.96)' : (i%2===0?'rgba(12,16,28,0.95)':'rgba(18,24,38,0.95)');
-        var rowHighlight = isTop ? 'border-left:3px solid '+cfg.color+';' : '';
+        var rowHighlight = isTop ? 'border-left:3px solid rgba(255,255,255,0.15);' : '';
         function rv(v,dec){ 
           if(v==null||v===undefined) return '<span style="color:var(--text4)">-</span>';
           var n=parseFloat(v);
@@ -5975,7 +5975,7 @@ async function renderMFPage(){
       var dniContainer=document.createElement('div');
       dniContainer.id='mf-dni-container';
       dniContainer.className='tilt-3d';
-      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(239,68,68,0.30);border-radius:16px;overflow:hidden;background:linear-gradient(135deg,rgba(30,12,12,0.95),rgba(14,18,30,0.95));box-shadow:0 0 30px rgba(239,68,68,0.08),0 4px 24px rgba(0,0,0,0.35)';
+      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(255,69,58,0.25);border-radius:16px;overflow:hidden;background:rgba(28,28,30,0.98);box-shadow:0 4px 16px rgba(0,0,0,0.25)';
       var dniHeader=document.createElement('div');
       dniHeader.style.cssText='display:flex;align-items:center;gap:10px;padding:14px 18px;background:rgba(239,68,68,0.10);border-bottom:1px solid rgba(239,68,68,0.20)';
       dniHeader.innerHTML='<span style="font-size:16px">⚠️</span><span style="font-weight:800;font-size:14px;letter-spacing:0.03em;color:var(--red)">Warning Before Buying These MFs</span><span style="font-size:11px;color:var(--text2);margin-left:6px;font-weight:500">('+sortedDni.length+' funds flagged)</span>';
@@ -5983,7 +5983,7 @@ async function renderMFPage(){
       var dniTable=document.createElement('table');
       dniTable.style.cssText='width:100%;border-collapse:collapse;font-size:11px';
       var dniHead=document.createElement('thead');
-      dniHead.innerHTML='<tr style="background:rgba(17,17,19,0.98);border-bottom:1px solid rgba(239,68,68,0.12)"><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
+      dniHead.innerHTML='<tr style="background:rgba(17,17,19,0.98);border-bottom:1px solid rgba(255,69,58,0.08)"><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:var(--text2);font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
       dniTable.appendChild(dniHead);
       var dniTbody=document.createElement('tbody');
       var dniRows=[];
@@ -6009,7 +6009,7 @@ async function renderMFPage(){
         var dniMore = document.createElement('div');
         dniMore.style.cssText = 'text-align:center;padding:14px;background:rgba(14,18,30,0.95);border-top:1px solid rgba(255,105,97,0.08);cursor:pointer';
         var dniMoreBtn = document.createElement('span');
-        dniMoreBtn.style.cssText = 'font-size:11px;color:var(--red);font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(248,113,113,0.30);border-radius:999px;background:rgba(248,113,113,0.10);transition:all 0.25s ease;letter-spacing:0.02em';
+        dniMoreBtn.style.cssText = 'font-size:11px;color:var(--red);font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(255,69,58,0.20);border-radius:999px;background:rgba(255,69,58,0.08);transition:all 0.25s ease;letter-spacing:0.02em';
         var dniExpanded = false;
         dniMoreBtn.textContent = 'Show all '+(sortedDni.length - DNI_INITIAL)+' more flagged funds ▾';
         dniMoreBtn.onclick = function(){
@@ -6137,13 +6137,13 @@ function mfAISummaryCardEl(category, topFunds, cfg) {
   function div(style){ return el('div',{style:style}); }
   function span(style,text){ return el('span',{style:style},text); }
 
-  var card=div('background:linear-gradient(165deg,rgba(14,18,32,0.96),rgba(124,58,237,.08));border:1.5px solid rgba(124,58,237,.40);border-radius:16px;padding:16px 14px 12px;position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;box-shadow:0 0 30px rgba(124,58,237,0.08),0 4px 20px rgba(0,0,0,0.25)');
+  var card=div('background:#1C1C1E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:16px 14px 12px;position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;box-shadow:0 6px 20px rgba(0,0,0,0.25)');
 
   // Header badge
   var hdr=div('display:flex;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid rgba(124,58,237,.30)');
   var icon=span('font-size:16px'); icon.textContent='⚖';
   var title=div('flex:1;min-width:0');
-  var t1=div('font-weight:800;font-size:13px;background:linear-gradient(90deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:.4px');
+  var t1=div('font-weight:800;font-size:13px;background:rgba(255,255,255,0.12);-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:.4px');
   t1.textContent='JUDGE FINAL RANKING';
   var t2=div('font-size:10px;color:var(--text2);margin-top:2px;font-weight:500');
   t2.textContent='5 council AIs vote · Claude Sonnet 4.6 decides';
@@ -6399,14 +6399,14 @@ function mfCardEl(f, rank, cfg, maxS) {
   function span(style,text){ return el('span',{style:style},text); }
   function app(parent){ var args=[].slice.call(arguments,1); args.forEach(function(c){if(c) parent.appendChild(c);}); return parent; }
 
-  var cardBg = isTop1 ? 'rgba(16,21,35,0.98)' : isTop2 ? 'rgba(16,21,35,0.96)' : 'rgba(16,21,35,0.90)';
-  var cardBorder = isTop1 ? '2px solid '+cfg.color : isTop2 ? '1.5px solid '+cfg.color+'aa' : '1px solid rgba(255,255,255,0.06)';
-  var cardShadow = isTop1 ? '0 0 30px '+cfg.color+'20,0 4px 20px rgba(0,0,0,0.3)' : isTop2 ? '0 4px 20px rgba(0,0,0,0.25)' : '0 2px 12px rgba(0,0,0,0.2)';
-  var card=div('background:'+cardBg+';border:'+cardBorder+';border-radius:14px;padding:'+(isTop1?'16px':'14px')+';position:relative;transition:all 0.25s ease;box-shadow:'+cardShadow);
+  var cardBg = isTop1 ? '#232326' : '#1C1C1E';
+  var cardBorder = isTop1 ? '1px solid rgba(255,255,255,0.10)' : '1px solid rgba(255,255,255,0.06)';
+  var cardShadow = isTop1 ? '0 6px 20px rgba(0,0,0,0.25)' : '0 4px 16px rgba(0,0,0,0.2)';
+  var card=div('background:'+cardBg+';border:'+cardBorder+';border-radius:16px;padding:'+(isTop1?'18px':'16px')+';position:relative;transition:all 0.25s ease;box-shadow:'+cardShadow);
 
   // Badge
   if(rank<=2){
-    var badge=div('position:absolute;top:-1px;right:14px;background:'+cfg.color+';color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:0 0 8px 8px;letter-spacing:0.2px');
+    var badge=div('position:absolute;top:12px;right:14px;background:rgba(255,255,255,0.12);color:#F5F5F7;font-size:10px;font-weight:500;padding:4px 10px;border-radius:999px;letter-spacing:0.2px');
     badge.textContent=rank===1?'Top Pick':'Runner Up';
     card.appendChild(badge);
   }
@@ -6415,14 +6415,14 @@ function mfCardEl(f, rank, cfg, maxS) {
   // DO NOT INVEST banner - shown prominently at top of card
   if(f.dni){
     var isRed = f.dni.level==='red';
-    var dniBg  = isRed ? 'rgba(239,68,68,0.12)' : 'rgba(142,142,147,0.08)';
-    var dniBdr = isRed ? 'var(--red)' : 'var(--amber)';
-    var dniClr = isRed ? 'var(--red)' : 'var(--text3)';
+    var dniBg  = isRed ? 'rgba(255,69,58,0.08)' : 'rgba(255,255,255,0.04)';
+    var dniBdr = isRed ? 'rgba(255,69,58,0.25)' : 'rgba(255,255,255,0.08)';
+    var dniClr = isRed ? '#FF453A' : '#A1A1AA';
     var dniIcon= isRed ? '🚫' : '⚠️';
-    var dniEl=div('background:'+dniBg+';border:1.5px solid '+dniBdr+';border-radius:6px;padding:7px 10px;margin-bottom:8px');
-    var dniTitle=div('font-size:11px;font-weight:700;color:'+dniClr+';margin-bottom:3px');
+    var dniEl=div('background:'+dniBg+';border:1px solid '+dniBdr+';border-radius:8px;padding:8px 12px;margin-bottom:8px');
+    var dniTitle=div('font-size:11px;font-weight:600;color:'+dniClr+';margin-bottom:3px');
     dniTitle.textContent=dniIcon+' '+f.dni.short;
-    var dniReason=div('font-size:10px;color:'+dniClr+';line-height:1.5;opacity:0.9');
+    var dniReason=div('font-size:10px;color:#E5E5EA;line-height:1.5');
     dniReason.textContent=f.dni.reason;
     app(dniEl,dniTitle,dniReason);
     card.appendChild(dniEl);
@@ -6439,7 +6439,7 @@ function mfCardEl(f, rank, cfg, maxS) {
   }
 
   if(f.amc_warning){
-    var warn=div('background:rgba(239,68,68,0.1);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5');
+    var warn=div('background:rgba(255,69,58,0.08);border:1px solid var(--red);border-radius:5px;padding:5px 8px;font-size:10px;color:var(--red);margin-bottom:8px;line-height:1.5');
     warn.textContent=f.amc_warning;
     card.appendChild(warn);
   }
@@ -6467,15 +6467,15 @@ function mfCardEl(f, rank, cfg, maxS) {
   var sebiTxt=f.amc_sebi==='probe'?'🔴 Investigation':f.amc_sebi==='action'?'⚠️ Past Action':f.amc_sebi==='minor'?'⚠️ Minor Fine':'✅ SEBI Clean';
   var scoreCol=div('text-align:right;flex-shrink:0');
   var scoreSz = isTop1 ? '30px' : isTop2 ? '26px' : '22px';
-  var scoreNum=div('font-size:'+scoreSz+';font-weight:800;line-height:1;color:'+cfg.color); scoreNum.textContent=(f.score||0);
-  var scoreSub=div('font-size:10px;color:var(--text2);margin-top:2px;font-weight:500'); scoreSub.textContent='/ 100 pts';
+  var scoreNum=div('font-size:'+scoreSz+';font-weight:700;line-height:1;color:#F5F5F7'); scoreNum.textContent=(f.score||0);
+  var scoreSub=div('font-size:10px;color:#A1A1AA;margin-top:2px;font-weight:500'); scoreSub.textContent='/ 100 pts';
   var sebiEl=div('margin-top:2px;font-size:10px;font-weight:600;color:'+sebiColor); sebiEl.textContent=sebiTxt;
   app(scoreCol,scoreNum,scoreSub,sebiEl);
   app(header,medalEl,nameCol,scoreCol);
 
   // Progress bar
   var barBg=div('height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;margin-bottom:10px');
-  var barFg=div('width:'+pct+'%;height:100%;background:'+cfg.color+';border-radius:2px');
+  var barFg=div('width:'+pct+'%;height:100%;background:rgba(255,255,255,0.25);border-radius:2px');
   app(barBg,barFg); card.appendChild(barBg);
 
   // Returns grid
@@ -6933,7 +6933,7 @@ async function renderStockRec(forceRefresh){
       +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">'
       +'<div style="background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:20px;border-top:2px solid rgba(142,142,147,0.08)"><div class="skel skel-line w60"></div><div class="skel skel-line w40"></div><div class="skel skel-block" style="height:120px"></div></div>'
       +'<div style="background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:20px;border-top:2px solid rgba(255,255,255,0.06)"><div class="skel skel-line w60"></div><div class="skel skel-line w40"></div><div class="skel skel-block" style="height:120px"></div></div>'
-      +'<div style="background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:20px;border-top:2px solid rgba(10,132,255,0.12)"><div class="skel skel-line w60"></div><div class="skel skel-line w40"></div><div class="skel skel-block" style="height:120px"></div></div>'
+      +'<div style="background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:20px;border-top:2px solid rgba(0,0,0,0.12)"><div class="skel skel-line w60"></div><div class="skel skel-line w40"></div><div class="skel skel-block" style="height:120px"></div></div>'
       +'</div></div>';
     await pollStockRec();
     return;
@@ -7037,13 +7037,13 @@ function renderStockAnalyzerPage(){
   h += '<input id="stock-analyzer-input" type="text" placeholder="Search stock..." maxlength="40"'
     +' autocomplete="off"'
     +' style="width:100%;background:rgba(255,255,255,0.03);border:1px solid var(--glass-border);border-radius:var(--radius);color:var(--text);padding:12px 16px;font-size:13px;box-sizing:border-box;transition:all var(--transition-med)"'
-    +' oninput="azFilter(this.value)" onkeydown="azKey(event)" onfocus="azFilter(this.value);this.parentElement.parentElement.parentElement.style.borderColor=\'rgba(10,132,255,0.12)\'" onblur="setTimeout(azHide,200);this.parentElement.parentElement.parentElement.style.borderColor=\'var(--glass-border)\'"'
+    +' oninput="azFilter(this.value)" onkeydown="azKey(event)" onfocus="azFilter(this.value);this.parentElement.parentElement.parentElement.style.borderColor=\'rgba(0,0,0,0.12)\'" onblur="setTimeout(azHide,200);this.parentElement.parentElement.parentElement.style.borderColor=\'var(--glass-border)\'"'
     +'/>';
   h += '<input type="hidden" id="az-sym"/>';
   h += '<div id="az-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:rgba(14,16,20,0.95);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--glass-border);border-radius:var(--radius);max-height:340px;overflow-y:auto;z-index:999;margin-top:4px;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>';
   h += '</div>';
 
-  h += '<button onclick="analyzeStock()" class="btn-analyze" style="padding:12px 24px;border-radius:10px;font-size:14px;letter-spacing:0.3px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:linear-gradient(135deg,#0A84FF,#0A84FF);color:#fff;box-shadow:0 8px 25px rgba(10,132,255,0.35);transition:all 0.3s var(--ease-out-expo);animation:pulseGlow 3s infinite ease-in-out;display:inline-flex;align-items:center;gap:6px"><span style="font-size:16px">⚡</span> Analyze</button>';
+  h += '<button onclick="analyzeStock()" class="btn-analyze" style="padding:12px 28px;border-radius:12px;font-size:15px;letter-spacing:0.3px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:#0A84FF;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.2);transition:all 0.2s ease;display:inline-flex;align-items:center;gap:8px"><span style="font-size:18px;color:#FFFFFF">⚡</span> Analyze</button>';
   h += '<span id="az-status-chip" style="font-size:10px;color:var(--text2);margin-left:auto;letter-spacing:0.3px;background:var(--bg3);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:6px 12px;font-weight:500;box-shadow:0 1px 3px rgba(0,0,0,0.15),inset 0 1px 0 rgba(255,255,255,0.04)">📊 '+seedCount+' stocks · Candles + fundamentals + news</span>';
   h += '</div>';
   h += '</div>';
@@ -7130,7 +7130,7 @@ function azKey(e) {
     azHide(); return;
   } else { return; }
   items.forEach(function(el, i){
-    el.style.background = i === _azSel ? 'rgba(10,132,255,0.10)' : '';
+    el.style.background = i === _azSel ? 'rgba(0,0,0,0.10)' : '';
   });
   if (items[_azSel]) items[_azSel].scrollIntoView({ block: 'nearest' });
   e.preventDefault();
@@ -7271,7 +7271,7 @@ function buildUI(d){
     html+='<button disabled style="background:rgba(120,140,180,0.18);color:var(--text2);border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 18px;font-size:12px;font-weight:600;cursor:not-allowed;display:flex;align-items:center;gap:6px;font-family:inherit">';
     html+='<span>🧠 AI Review — Coming Soon</span></button></div>';
   } else {
-    html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:rgba(10,132,255,0.12);color:var(--shiva-blue);border:1px solid rgba(10,132,255,0.15);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">';
+    html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:rgba(0,0,0,0.12);color:var(--shiva-blue);border:1px solid rgba(0,0,0,0.15);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">';
     html+='<span>Run AI Review</span></button></div>';
   }
   html+='<div id="ai-review-result" style="margin-top:8px"></div>';
@@ -7284,7 +7284,7 @@ function buildUI(d){
   html+='<div style="display:flex;gap:4px">';
   ['3M','1Y','3Y','10Y','MAX'].forEach(function(tf){
     var a=tf===analyzerTab;
-    html+='<button class="tilt-3d" onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'rgba(10,132,255,0.20)':'var(--glass-border)')+';background:'+(a?'rgba(10,132,255,0.10)':'rgba(255,255,255,0.02)')+';color:'+(a?'var(--shiva-blue)':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?600:400)+';letter-spacing:0.2px">'+tf+'</button>';
+    html+='<button class="tilt-3d" onclick="switchTab(\''+tf+'\')" style="padding:3px 10px;border-radius:5px;border:1px solid '+(a?'rgba(10,132,255,0.20)':'var(--glass-border)')+';background:'+(a?'rgba(0,0,0,0.10)':'rgba(255,255,255,0.02)')+';color:'+(a?'var(--shiva-blue)':'var(--text3)')+';font-size:10px;cursor:pointer;font-weight:'+(a?600:400)+';letter-spacing:0.2px">'+tf+'</button>';
   });
   html+='</div></div>';
   html+='<div style="font-size:9px;color:var(--text3);margin-bottom:6px;letter-spacing:0.3px">Support · Resistance · Buy Zone · 50DMA · 200DMA</div>';
@@ -7305,7 +7305,7 @@ function buildUI(d){
     html+='<div class="analyzer-cell" style="border-left:3px solid '+gc+';background:rgba(15,20,35,0.9)">';
     html+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
     html+='<div style="font-size:11px;font-weight:500;color:#F5F5F7;flex:1"><span style="color:'+gc+';margin-right:6px;font-weight:700">'+gi+'</span>'+c.label+'</div>';
-    html+='<div style="font-size:11px;font-weight:700;color:'+gc+';flex-shrink:0;margin-left:8px;background:'+(c.pass?'rgba(255,255,255,0.06)':'rgba(239,68,68,0.12)')+';border-radius:6px;padding:1px 8px">'+c.pts+'/'+c.max+'</div></div>';
+    html+='<div style="font-size:11px;font-weight:700;color:'+gc+';flex-shrink:0;margin-left:8px;background:'+(c.pass?'rgba(255,255,255,0.06)':'rgba(255,69,58,0.08)')+';border-radius:6px;padding:1px 8px">'+c.pts+'/'+c.max+'</div></div>';
     html+='<div style="font-size:10px;color:var(--text2);margin-top:4px;line-height:1.5;font-weight:500">'+c.detail+'</div>';
     html+='</div>';
   });
@@ -7382,7 +7382,7 @@ function buildUI(d){
     });
   } else html+='<div style="font-size:10px;color:var(--text3)">Need more candle history</div>';
   html+='</div>';
-  html+='<div class="analyzer-section reveal spatial-card" style="margin-bottom:0;border-color:rgba(10,132,255,0.10)">';
+  html+='<div class="analyzer-section reveal spatial-card" style="margin-bottom:0;border-color:rgba(0,0,0,0.10)">';
   html+='<div class="analyzer-section-title" style="color:var(--shiva-blue)">When To Buy</div>';
   if(d.whenToBuy&&d.whenToBuy.length){
     d.whenToBuy.slice(0,5).forEach(function(w){
@@ -7403,7 +7403,7 @@ function buildUI(d){
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
     [['23.6%',d.fibs.r236],['38.2%',d.fibs.r382],['50%',d.fibs.r500],['61.8%',d.fibs.r618],['78.6%',d.fibs.r786],['100%',d.fibs.r1000]].forEach(function(fb){
       var near=px&&Math.abs(px-fb[1])/px<0.03;
-      html+='<div class="analyzer-cell" style="text-align:center;'+(near?'border-color:rgba(10,132,255,0.15);background:var(--shiva-blue-glow)':'')+'">';
+      html+='<div class="analyzer-cell" style="text-align:center;'+(near?'border-color:rgba(0,0,0,0.15);background:var(--shiva-blue-glow)':'')+'">';
       html+='<div style="font-size:9px;color:var(--shiva-silver);letter-spacing:0.3px">'+fb[0]+'</div>';
       html+='<div style="font-size:11px;font-weight:600;color:var(--text)">₹'+fb[1]+'</div>';
       if(near) html+='<div style="font-size:9px;color:var(--shiva-blue)">Near price</div>';
@@ -7896,7 +7896,7 @@ function switchTab(tf){
   document.querySelectorAll('#stock-analyzer-result button').forEach(function(b){
     var a=b.textContent===tf;
     b.style.borderColor=a?'rgba(10,132,255,0.20)':'var(--glass-border)';
-    b.style.background=a?'rgba(10,132,255,0.10)':'rgba(255,255,255,0.02)';
+    b.style.background=a?'rgba(0,0,0,0.10)':'rgba(255,255,255,0.02)';
     b.style.color=a?'var(--shiva-blue)':'var(--text3)';
     b.style.fontWeight=a?'600':'400';
   });
@@ -7922,11 +7922,11 @@ function drawChart(d,tf){
   var ann={};
   if(d.supports) d.supports.slice(0,4).forEach(function(s,i){ann['s'+i]={type:'line',yMin:s.price,yMax:s.price,borderColor:'rgba(48,209,88,0.3)',borderWidth:1,borderDash:[4,3],label:{display:s.strength>3,content:'S'+s.price,color:'var(--text)',font:{size:8},position:'start'}};});
   if(d.resistances) d.resistances.slice(0,4).forEach(function(r,i){ann['r'+i]={type:'line',yMin:r.price,yMax:r.price,borderColor:'rgba(255,105,97,0.3)',borderWidth:1,borderDash:[4,3],label:{display:r.strength>3,content:'R'+r.price,color:'var(--red)',font:{size:8},position:'end'}};});
-  if(d.buyZone&&d.buyZone.low&&d.buyZone.high) ann.bz={type:'box',yMin:d.buyZone.low,yMax:d.buyZone.high,backgroundColor:'rgba(10,132,255,0.08)',borderColor:'rgba(10,132,255,0.3)',borderWidth:1};
+  if(d.buyZone&&d.buyZone.low&&d.buyZone.high) ann.bz={type:'box',yMin:d.buyZone.low,yMax:d.buyZone.high,backgroundColor:'rgba(0,0,0,0.08)',borderColor:'rgba(0,0,0,0.25)',borderWidth:1};
   if(t.dma50&&(tf==='1Y'||tf==='3Y')) ann.d50={type:'line',yMin:t.dma50,yMax:t.dma50,borderColor:'rgba(142,142,147,0.5)',borderWidth:1.5,label:{display:true,content:'50D',color:'var(--shiva-gold)',font:{size:8},position:'start'}};
   if(t.dma200&&tf!=='3M') ann.d200={type:'line',yMin:t.dma200,yMax:t.dma200,borderColor:'rgba(10,132,255,0.6)',borderWidth:1.5,label:{display:true,content:'200D',color:'var(--shiva-blue)',font:{size:8},position:'start'}};
   if(d.fibs&&(tf==='1Y'||tf==='3Y')){
-    ann.fib618={type:'line',yMin:d.fibs.r618,yMax:d.fibs.r618,borderColor:'rgba(10,132,255,0.3)',borderWidth:1,borderDash:[2,4],label:{display:true,content:'61.8%',color:'var(--shiva-blue)',font:{size:8},position:'end'}};
+    ann.fib618={type:'line',yMin:d.fibs.r618,yMax:d.fibs.r618,borderColor:'rgba(0,0,0,0.25)',borderWidth:1,borderDash:[2,4],label:{display:true,content:'61.8%',color:'var(--shiva-blue)',font:{size:8},position:'end'}};
     ann.fib382={type:'line',yMin:d.fibs.r382,yMax:d.fibs.r382,borderColor:'rgba(10,132,255,0.4)',borderWidth:1,borderDash:[2,4],label:{display:true,content:'38.2%',color:'var(--shiva-blue)',font:{size:8},position:'end'}};
   }
   analyzerChart=new Chart(canvas,{
@@ -8286,7 +8286,7 @@ function renderStockRecPage(){
   html += '<div style="font-size:12px;color:var(--text2);margin-top:4px;font-weight:500">Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">';
   html += _picksAIButton('longterm');
-  html += '<span style="background:rgba(10,132,255,0.12);color:var(--shiva-blue);border-radius:999px;padding:3px 12px;font-size:11px;font-weight:600">'+longTermPicks.length+'</span>';
+  html += '<span style="background:rgba(0,0,0,0.12);color:var(--shiva-blue);border-radius:999px;padding:3px 12px;font-size:11px;font-weight:600">'+longTermPicks.length+'</span>';
   html += '</div>';
   html += '</div>';
   if (_picksCouncilStatus['longterm']) {
@@ -8413,7 +8413,7 @@ function _renderCouncilRow(entry, running, isJudge) {
     ? '<div style="font-size:9px;color:var(--red);margin-top:2px;font-family:ui-monospace,monospace;word-break:break-all">'+_escHtml(String(entry.error).slice(0,140))+'</div>'
     : '';
   var badge = isJudge
-    ? '<span style="background:linear-gradient(135deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));color:#fff;font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;margin-left:6px">JUDGE</span>'
+    ? '<span style="background:rgba(255,255,255,0.12);color:#fff;font-size:8px;font-weight:800;padding:1px 6px;border-radius:3px;margin-left:6px">JUDGE</span>'
     : '';
   return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">'
     + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
@@ -8481,7 +8481,7 @@ function _picksAIButton(category) {
   var disabled = running ? 'disabled' : '';
   var onclick = running ? '' : 'runPicksAIReview(\''+category+'\')';
   return '<button '+disabled+' onclick="'+onclick+'" title="Run Deep AI Review on the top 10 '+meta.label+' Picks across all 5 AI models (full Varsity payload per stock)." '
-    + 'style="background:linear-gradient(135deg,var(--text3),'+meta.color+');color:#fff;border:none;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:'+(running?'wait':'pointer')+';opacity:'+(running?'0.7':'1')+';box-shadow:0 2px 8px rgba(10,132,255,.20);white-space:nowrap;font-family:inherit">'
+    + 'style="background:rgba(255,255,255,0.08);color:#fff;border:none;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:'+(running?'wait':'pointer')+';opacity:'+(running?'0.7':'1')+';box-shadow:0 2px 6px rgba(0,0,0,0.2);white-space:nowrap;font-family:inherit">'
     + btnLabel + '</button>';
 }
 
@@ -8532,7 +8532,7 @@ function _picksAIReviewsCell(category, sym, rowIdx) {
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'var(--text2)':jv===jv==='CAUTION'?'var(--text2)':jv==='DISAGREE'?'var(--red)':'var(--text3)';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,rgba(124,58,237,0.12),'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:rgba(255,255,255,0.06);color:'+jc+';border:1px solid '+jc+'66;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -8630,9 +8630,9 @@ function _picksAIExpandedPanel(category, sym) {
     var jv = (judge.verdict||'').toUpperCase();
     var jCol = verdictColor(jv);
     var jIcon = verdictIcon(jv);
-    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(100,210,255,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
+    h += '<div style="background:rgba(255,255,255,0.04);border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
     h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
-    h += '<span style="background:linear-gradient(90deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="background:rgba(255,255,255,0.12);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
     h += '<span style="color:var(--text4);font-size:9px">· '+(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
@@ -8726,10 +8726,10 @@ async function runPicksAIReview(category) {
 // shipping Large Cap Fund rows.
 // =============================================================================
 var _MF_CAT_META = {
-  largecap: { label: 'Large Cap', color: 'var(--shiva-gold)', icon: '🏦' },
-  midcap:   { label: 'Mid Cap',   color: 'var(--shiva-blue)', icon: '💎' },
-  smallcap: { label: 'Small Cap', color: 'var(--red)', icon: '🔥' },
-  flexicap: { label: 'Flexi Cap', color: 'var(--text2)', icon: '🏛' },
+  largecap: { label: 'Large Cap', color: '#F5F5F7', icon: '🏦' },
+  midcap:   { label: 'Mid Cap',   color: '#F5F5F7', icon: '💎' },
+  smallcap: { label: 'Small Cap', color: '#F5F5F7', icon: '🔥' },
+  flexicap: { label: 'Flexi Cap', color: '#F5F5F7', icon: '🏛' },
 };
 
 // The "🧠 Deep AI Review" button that sits next to each MF category header.
@@ -8745,7 +8745,7 @@ function _mfAIButton(category) {
   var disabled = running ? 'disabled' : '';
   var onclick = running ? '' : 'runMFAIReview(\''+category+'\')';
   return '<button '+disabled+' onclick="'+onclick+'" title="Run Deep AI Review on the top 5 '+meta.label+' funds across all 5 council models + 1 judge. Full MF payload + Varsity M11 knowledge." '
-    + 'style="background:linear-gradient(135deg,var(--text3),'+meta.color+');color:#fff;border:none;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:'+(running?'wait':'pointer')+';opacity:'+(running?'0.7':'1')+';box-shadow:0 2px 8px rgba(10,132,255,.20);white-space:nowrap;font-family:inherit">'
+    + 'style="background:rgba(255,255,255,0.08);color:#fff;border:none;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:'+(running?'wait':'pointer')+';opacity:'+(running?'0.7':'1')+';box-shadow:0 2px 6px rgba(0,0,0,0.2);white-space:nowrap;font-family:inherit">'
     + btnLabel + '</button>';
 }
 
@@ -8793,7 +8793,7 @@ function _mfAIReviewsCell(category, fundName, topRank) {
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'var(--text2)':jv===jv==='CAUTION'?'var(--text2)':jv==='DISAGREE'?'var(--red)':'var(--text3)';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,rgba(124,58,237,0.12),'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:rgba(255,255,255,0.06);color:'+jc+';border:1px solid '+jc+'66;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -8879,9 +8879,9 @@ function _mfAIExpandedPanel(category, fundName) {
     var jv = (judge.verdict||'').toUpperCase();
     var jCol = verdictColor(jv);
     var jIcon = verdictIcon(jv);
-    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(100,210,255,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
+    h += '<div style="background:rgba(255,255,255,0.04);border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:6px;padding:10px 12px">';
     h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
-    h += '<span style="background:linear-gradient(90deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="background:rgba(255,255,255,0.12);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:11px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
     h += '<span style="color:var(--text4);font-size:9px">· '+_escHtml(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:12px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:9px;color:var(--text3)">'+judge.confidence+'%</span>';
@@ -9317,7 +9317,7 @@ async function renderStockDataPage(){
     + 'value="'+((stockDataSearch||'').replace(/"/g,'&quot;'))+'" '
     + 'oninput="stockDataSearch=this.value;clearTimeout(window._sdSearchT);window._sdSearchT=setTimeout(renderStockDataPage,180);sdShowSuggestions(this.value)" '
     + 'onkeydown="sdSuggestKey(event)" '
-    + 'onfocus="sdShowSuggestions(this.value);this.style.borderColor=\'rgba(10,132,255,0.3)\';this.style.boxShadow=\'0 0 12px rgba(10,132,255,0.12)\'" '
+    + 'onfocus="sdShowSuggestions(this.value);this.style.borderColor=\'rgba(0,0,0,0.25)\';this.style.boxShadow=\'0 0 12px rgba(0,0,0,0.12)\'" '
     + 'onblur="setTimeout(sdHideSuggestions,200);this.style.borderColor=\'rgba(255,255,255,0.12)\';this.style.boxShadow=\'none\'" '
     + 'style="width:100%;background:var(--bg2);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:var(--text);padding:9px 14px;font-size:13px;font-weight:500;box-sizing:border-box;transition:border-color 0.25s ease"/>';
   html += '<div id="sd-suggest-list" style="display:none;position:absolute;top:100%;left:0;right:0;background:rgba(14,20,35,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.10);border-radius:10px;max-height:320px;overflow-y:auto;z-index:999;margin-top:4px;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>';
@@ -9341,7 +9341,7 @@ async function renderStockDataPage(){
     var colCount = (TAB_COLS[t.id]||[]).length;
     html += '<button onclick="stockDataTab=\''+t.id+'\';renderStockDataPage()" style="padding:6px 14px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;letter-spacing:0.3px;transition:all 0.25s ease;'
       + (isActive
-        ? 'background:rgba(10,132,255,0.18);border:1px solid rgba(10,132,255,0.20);color:#ffffff;font-weight:700;box-shadow:0 4px 12px rgba(10,132,255,0.15)'
+        ? 'background:rgba(0,0,0,0.18);border:1px solid rgba(10,132,255,0.20);color:#ffffff;font-weight:700;box-shadow:0 4px 12px rgba(0,0,0,0.15)'
         : 'background:rgba(40,55,90,0.45);border:1px solid rgba(255,255,255,0.08);color:var(--text2);font-weight:500')
       + '">'
       + t.label+' <span style="font-size:9px;opacity:0.55">('+colCount+')</span></button>';
@@ -9487,7 +9487,7 @@ function sdShowSuggestions(val) {
     var gc = {NIFTY50:'var(--blue)',NEXT50:'var(--text3)',MIDCAP:'var(--text2)',SMALLCAP:'var(--text)'}[s.grp] || 'var(--text2)';
     return '<div id="sd-sg-'+i+'" onmousedown="sdSelectSuggestion(\''+s.sym+'\')" '
       + 'style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06);transition:background 0.15s ease" '
-      + 'onmouseover="this.style.background=\'rgba(10,132,255,0.08)\'" onmouseout="this.style.background=\'\'">'
+      + 'onmouseover="this.style.background=\'rgba(0,0,0,0.08)\'" onmouseout="this.style.background=\'\'">'
       + '<div style="min-width:72px;font-family:\'SF Mono\',monospace;font-size:12px;font-weight:700;color:#F5F5F7">'+s.sym+'</div>'
       + '<div style="flex:1;font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(s.name||'')+'</div>'
       + '<div style="font-size:10px;color:'+gc+';font-weight:600;min-width:60px;text-align:center">'+s.grp+'</div>'
@@ -9525,7 +9525,7 @@ function sdSuggestKey(e) {
     sdHideSuggestions(); return;
   } else { return; }
   items.forEach(function(it, idx) {
-    it.style.background = idx === _sdSuggestSel ? 'rgba(10,132,255,0.10)' : '';
+    it.style.background = idx === _sdSuggestSel ? 'rgba(0,0,0,0.10)' : '';
   });
   if (items[_sdSuggestSel]) items[_sdSuggestSel].scrollIntoView({ block: 'nearest' });
 }
@@ -9781,7 +9781,7 @@ async function renderMiroFish() {
     if(!mfishPolling) mfishPolling = setInterval(function(){ if(S.mode==="mirofish") renderMiroFish(); }, 8000);
   } else {
     if(mfishPolling){ clearInterval(mfishPolling); mfishPolling=null; }
-    h += '<button onclick="startMiroFish()" style="background:linear-gradient(135deg,var(--text3),var(--text3));color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer">🚀 Run Simulation</button>';
+    h += '<button onclick="startMiroFish()" style="background:var(--bg4);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer">🚀 Run Simulation</button>';
     if(status.lastRun) h += '<div style="font-size:10px;color:var(--text3);align-self:center">Last: '+status.lastRun+'</div>';
   }
   h += '</div></div>';
@@ -9795,7 +9795,7 @@ async function renderMiroFish() {
     h += 'MiroFish will analyze your current Fallen Angels using 5 AI agents with different investment philosophies. Each agent independently picks their top recovery candidates. A synthesis agent produces the final consensus report.';
     h += '</div>';
     if(status.apiKeyConfigured) {
-      h += '<button onclick="startMiroFish()" style="background:linear-gradient(135deg,var(--text3),var(--text3));color:#fff;border:none;border-radius:8px;padding:12px 32px;font-size:14px;font-weight:700;cursor:pointer">🚀 Start Simulation</button>';
+      h += '<button onclick="startMiroFish()" style="background:var(--bg4);color:#fff;border:none;border-radius:8px;padding:12px 32px;font-size:14px;font-weight:700;cursor:pointer">🚀 Start Simulation</button>';
     } else {
       h += '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:12px 20px;font-size:12px;color:var(--red);display:inline-block">';
       h += 'Set ANTHROPIC_API_KEY in Railway → Settings → Variables, then redeploy';
@@ -9928,7 +9928,7 @@ async function renderMiroFish() {
 
   // Re-run button
   h += '<div style="text-align:center;padding:16px 0">';
-  h += '<button onclick="mfishData=null;startMiroFish()" style="background:linear-gradient(135deg,var(--text3),var(--text3));color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer;margin-right:8px">🔄 Re-run Simulation</button>';
+  h += '<button onclick="mfishData=null;startMiroFish()" style="background:var(--bg4);color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer;margin-right:8px">🔄 Re-run Simulation</button>';
   h += '<button onclick="mfishData=null;renderMiroFish()" class="btn btn-sm">↻ Reload Last Result</button>';
   h += '</div>';
 
@@ -10150,7 +10150,7 @@ function renderHoldingsPage(){
   if(_isPublicUser()){
     h += '<button disabled style="background:rgba(120,140,180,0.18);color:var(--text2);border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:9px 18px;font-size:12px;font-weight:600;cursor:not-allowed;letter-spacing:0.3px;font-family:inherit">🧠 Deep AI Review — Coming Soon</button>';
   } else {
-    h += '<button id="holdings-ai-btn" onclick="runHoldingsAIReview()" style="background:rgba(10,132,255,0.12);color:var(--shiva-blue);border:1px solid rgba(10,132,255,0.15);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Deep AI Review</button>';
+    h += '<button id="holdings-ai-btn" onclick="runHoldingsAIReview()" style="background:rgba(0,0,0,0.12);color:var(--shiva-blue);border:1px solid rgba(0,0,0,0.15);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Deep AI Review</button>';
   }
   h += '</div>';
   h += '</div>';
@@ -10177,7 +10177,7 @@ function renderHoldingsPage(){
   h += '<input id="holdings-qty" type="number" step="1" min="0" placeholder="Qty" style="width:100px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:13px"/>';
   h += '<input id="holdings-avg" type="number" step="0.01" min="0" placeholder="Avg Buy ₹" style="width:140px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:13px"/>';
 
-  h += '<button onclick="addHolding()" style="background:rgba(10,132,255,0.12);color:var(--shiva-blue);border:1px solid rgba(10,132,255,0.15);border-radius:var(--radius);padding:10px 22px;font-weight:600;font-size:12px;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Add</button>';
+  h += '<button onclick="addHolding()" style="background:rgba(0,0,0,0.12);color:var(--shiva-blue);border:1px solid rgba(0,0,0,0.15);border-radius:var(--radius);padding:10px 22px;font-weight:600;font-size:12px;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Add</button>';
   h += '<span id="hz-status-chip" style="font-size:11px;color:var(--text4);margin-left:auto;align-self:center">Loading universe…</span>';
   h += '<div id="holdings-form-msg" style="flex-basis:100%;font-size:11px;color:var(--text4);margin-top:4px"></div>';
   h += '</div>';
@@ -10332,7 +10332,7 @@ async function runHoldingsAIReview(){
       + '<div style="font-size:13px;font-weight:700;color:var(--text2);margin-bottom:4px">Running Deep AI Review on '+_holdingsData.holdings.length+' holdings…</div>'
       + '<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Sending full Varsity payload (fundamentals · technicals · ownership · macro · breadth) to all 5 models in parallel, then synthesising with the judge</div>'
       + '<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:240px;margin:0 auto">'
-      + '<div style="height:100%;background:linear-gradient(90deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
+      + '<div style="height:100%;background:rgba(255,255,255,0.12);width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
       + '</div>';
   }
   try{
@@ -10499,7 +10499,7 @@ function _holdingsRenderAIReviewsCell(h0){
     var jv = (judge.verdict||'').toUpperCase();
     var jc = jv==='AGREE'?'var(--text2)':jv===jv==='CAUTION'?'var(--text2)':jv==='DISAGREE'?'var(--red)':'var(--text3)';
     var jl = jv==='AGREE'?'✓ Agree':jv==='CAUTION'?'⚠ Caution':jv==='DISAGREE'?'✗ Disagree':'— N/A';
-    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(90deg,var(--text3)22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
+    h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:rgba(255,255,255,0.06);color:'+jc+';border:1px solid '+jc+'66;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;width:fit-content"><span style="color:var(--shiva-blue)">⚖ JUDGE</span> '+jl+'</span>';
   }
   h += '</div>';
   return h;
@@ -10520,7 +10520,7 @@ function _holdingsRenderJudgeCell(h0){
   var jl = jv==='AGREE'?'✓ HOLD':jv==='CAUTION'?'⚠ CAUTION':jv==='DISAGREE'?'✗ EXIT':'— N/A';
   var conf = (judge.confidence!=null) ? Math.round(judge.confidence) : null;
   var h = '<div style="display:flex;flex-direction:column;align-items:center;gap:3px">';
-  h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:linear-gradient(135deg,var(--text3)22,'+jc+'22);color:'+jc+';border:1px solid '+jc+'88;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">'+jl+'</span>';
+  h += '<span title="Claude Sonnet 4.6 final synthesis" style="background:rgba(255,255,255,0.06);color:'+jc+';border:1px solid '+jc+'88;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap;display:inline-flex;align-items:center;gap:4px">'+jl+'</span>';
   if (conf!=null){
     h += '<div style="font-size:9px;color:var(--text4);font-weight:600">'+conf+'% conf</div>';
   }
@@ -10585,9 +10585,9 @@ function _holdingsAIExpandedPanel(h0){
     var jv = (judge.verdict||'').toUpperCase();
     var jCol = verdictColor(jv);
     var jIcon = verdictIcon(jv);
-    h += '<div style="background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(100,210,255,.08));border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:8px;padding:12px 14px">';
+    h += '<div style="background:rgba(255,255,255,0.04);border:1px solid '+jCol+'55;border-left:3px solid '+jCol+';border-radius:8px;padding:12px 14px">';
     h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-    h += '<span style="background:linear-gradient(90deg,rgba(255,255,255,0.5),rgba(255,255,255,0.8));-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:12px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
+    h += '<span style="background:rgba(255,255,255,0.12);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:900;font-size:12px;letter-spacing:1px">⚖ AI JUDGE · FINAL DECISION</span>';
     h += '<span style="color:var(--text4);font-size:10px">· '+(judge.model_name||'Claude Sonnet 4.6')+'</span>';
     h += '<span style="color:'+jCol+';font-weight:800;font-size:13px;margin-left:auto">'+jIcon+' '+jv+'</span>';
     if (judge.confidence!=null) h += '<span style="font-size:10px;color:var(--text3)">'+judge.confidence+'%</span>';
@@ -10722,7 +10722,7 @@ async function ltRunAIValidation(){
       +'<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:4px">Long-Term Investments AI Deep Review in progress…</div>'
       +'<div style="font-size:10px;color:var(--text3);margin-bottom:10px">Querying 5 AI models with full Varsity v2 data — 4 pillars, fundamentals, expected return, timing overlay, peers, macro</div>'
       +'<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:240px;margin:0 auto">'
-      +'<div style="height:100%;background:linear-gradient(90deg,var(--shiva-gold),var(--shiva-blue));width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
+      +'<div style="height:100%;background:rgba(255,255,255,0.3);width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
       +'<div id="lt-ai-progress-models" style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-top:10px"></div>'
       +'<div id="lt-ai-progress-text" style="font-size:10px;color:var(--text4);margin-top:6px">Starting…</div>'
       +'</div>';
@@ -10802,7 +10802,7 @@ function psRenderLTAIValidation(){
   h+='<div id="lt-ai-validation-panel" style="margin-top:14px">';
 
   // Header card — Varsity v2 Multi-model consensus
-  h+='<div style="background:linear-gradient(135deg,rgba(142,142,147,0.06),rgba(100,210,255,.06));border:1px solid rgba(142,142,147,0.08);border-radius:16px;padding:14px;margin-bottom:14px">';
+  h+='<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(142,142,147,0.08);border-radius:16px;padding:14px;margin-bottom:14px">';
   h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">';
   h+='<div style="font-size:12px;font-weight:800;color:rgba(245,245,247,0.7);display:flex;align-items:center;gap:6px">🏛 Long-Term Investments AI Consensus <span style="font-size:9px;color:var(--text4);font-weight:600">· Varsity v2 · 4-pillar · 12M horizon</span></div>';
   var modelsInfo=(v.models_used||1)+'/'+(v.models_total||1)+' models';
@@ -10892,14 +10892,14 @@ function psRenderLongTermTab(){
   amounts.forEach(function(a){
     h+='<button onclick="document.getElementById(\'lt-amount\').value='+a.v+';ltPortfolioAmount='+a.v+'" style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:5px;padding:5px 10px;font-size:10px;cursor:pointer;font-weight:600">'+a.l+'</button>';
   });
-  h+='<button onclick="ltGenerate()" id="lt-gen-btn" style="background:rgba(10,132,255,0.12);color:var(--shiva-blue);border:1px solid rgba(10,132,255,0.15);border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
+  h+='<button onclick="ltGenerate()" id="lt-gen-btn" style="background:rgba(0,0,0,0.12);color:var(--shiva-blue);border:1px solid rgba(0,0,0,0.15);border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">4-pillar Varsity model: Quality 40% + Growth 25% + Valuation 20% + Business 15%. Buy-and-hold · 12M horizon · Max 15 stocks · Max 3 per sector · 5–25% per position · DC floor 0.6.</div>';
   if(_isPublicUser()){
     h+='<button disabled style="background:rgba(120,140,180,0.18);color:var(--text2);border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Coming Soon</button>';
   } else {
-    h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(48,209,88,0.08),rgba(100,210,255,.15));color:var(--text);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+    h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:rgba(255,255,255,0.06);color:var(--text);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   }
   h+='</div>';
   h+='<div id="lt-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:10px;color:var(--text3);max-height:180px;overflow-y:auto"></div>';
@@ -11160,14 +11160,14 @@ function psRenderModelTab(){
   amounts.forEach(function(a){
     h+='<button onclick="document.getElementById(\'ps-amount\').value='+a.v+';_psAmount='+a.v+'" style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:5px;padding:5px 10px;font-size:10px;cursor:pointer;font-weight:600">'+a.l+'</button>';
   });
-  h+='<button onclick="psGenerate()" id="ps-gen-btn" style="background:linear-gradient(135deg,#0A84FF,#0070E0);color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
+  h+='<button onclick="psGenerate()" id="ps-gen-btn" style="background:#0A84FF;color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:800;cursor:pointer;margin-left:auto">Generate Portfolio</button>';
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">5-factor model: FA 30% + TA 25% + Valuation 15% + Momentum 15% + Risk 15%. Market regime-aware cash allocation. Sector diversification.</div>';
   if(_isPublicUser()){
     h+='<button disabled style="background:rgba(120,140,180,0.18);color:var(--text2);border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Coming Soon</button>';
   } else {
-    h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:linear-gradient(135deg,rgba(48,209,88,0.08),rgba(100,210,255,.15));color:var(--text);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
+    h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:rgba(255,255,255,0.06);color:var(--text);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   }
   h+='</div>';
   h+='<div id="ps-ai-log" style="display:none;margin-top:6px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-family:monospace;font-size:10px;color:var(--text3);max-height:150px;overflow-y:auto"></div>';
@@ -11580,7 +11580,7 @@ function psRenderAIValidation(){
   h+='<div id="ps-ai-validation-panel">';
 
   // Overall assessment card — Multi-model consensus
-  h+='<div style="background:linear-gradient(135deg,rgba(34,197,94,.06),rgba(100,210,255,.06));border:1px solid rgba(34,197,94,.2);border-radius:16px;padding:14px;margin-bottom:14px">';
+  h+='<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:14px;margin-bottom:14px">';
   h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
   h+='<div style="font-size:12px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:6px">🤖 AI Multi-Model Consensus</div>';
   var modelsInfo=(v.models_used||1)+'/'+(v.models_total||1)+' models';
@@ -11685,7 +11685,7 @@ async function psRunAIValidation(mode){
       +'<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px">AI Deep Review in progress...</div>'
       +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">Querying 5 AI models with full portfolio + fundamentals + technicals</div>'
       +'<div style="height:3px;background:var(--bg4);border-radius:2px;overflow:hidden;max-width:240px;margin:0 auto">'
-      +'<div style="height:100%;background:linear-gradient(90deg,#0A84FF,#0070E0);width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
+      +'<div style="height:100%;background:#0A84FF;width:60%;animation:mfpulse 1.2s ease-in-out infinite;border-radius:2px"></div></div>'
       +'<div id="ps-ai-progress-models" style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-top:12px"></div>'
       +'<div id="ps-ai-progress-text" style="font-size:10px;color:var(--text4);margin-top:8px">Starting...</div>'
       +'</div>';
