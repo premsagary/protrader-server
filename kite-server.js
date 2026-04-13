@@ -5240,9 +5240,13 @@ async function buildMFCache() {
     console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
 }
-// Build MF cache immediately on startup and every 6h
+// Build MF cache on startup + every 30 min Mon-Fri 8AM-5PM IST
 buildMFCache();
-cron.schedule('0 */6 * * *', buildMFCache);
+cron.schedule('*/30 8-16 * * 1-5', () => {
+  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  console.log(`🏦 ${hour}: Mutual fund rescore starting...`);
+  buildMFCache();
+}, { timezone: 'Asia/Kolkata' });
 
 
 
@@ -8322,7 +8326,7 @@ async function refreshAllFundamentals() {
           salesAnnual:  ext?.salesAnnual  ?? null,
           patQtrYoy:    ext?.patQtrYoy    ?? null,
           salesQtrYoy:  ext?.salesQtrYoy  ?? null,
-          // Yahoo Finance exclusive fields
+          // Extended fields (Screener.in + Yahoo fallback)
           fwdPE:        ext?.fwdPE        ?? null,
           grossMgn:     ext?.grossMgn     ?? null,
           profMgn:      ext?.profMgn      ?? null,
@@ -8333,6 +8337,16 @@ async function refreshAllFundamentals() {
           fiiHolding:   ext?.fiiHolding   ?? null,
           diiHolding:   ext?.diiHolding   ?? null,
           numShareholders: ext?.numShareholders ?? null,
+          // Pre-computed DuPont, CCC, WC from screener data
+          dupontNetMargin:       ext?.dupontNetMargin       ?? null,
+          dupontAssetTurnover:   ext?.dupontAssetTurnover   ?? null,
+          dupontEquityMultiplier:ext?.dupontEquityMultiplier ?? null,
+          dupontROE:             ext?.dupontROE             ?? null,
+          cashConversionCycle:   ext?.cashConversionCycle   ?? null,
+          workingCapitalHealth:  ext?.workingCapitalHealth  ?? null,
+          debtorDays:            ext?.debtorDays            ?? null,
+          invTurnover:           ext?.invTurnover           ?? null,
+          assetTurnover:         ext?.assetTurnover         ?? null,
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
@@ -8381,49 +8395,53 @@ async function refreshAllFundamentals() {
         }
 
         // ═══ DuPont ROE Decomposition (Varsity M3: Net Margin × Asset Turnover × Equity Multiplier) ═══
-        // Compute Net Profit Margin: PAT / Sales × 100
-        let _npm = sf.profMgn ?? ext?.profMgn;
+        // Prefer pre-computed values from screener (uses actual Total Assets / Net Worth)
+        // Fall back to estimation if screener data not yet available
+        let _npm = sf.dupontNetMargin ?? sf.profMgn ?? ext?.profMgn;
         if (_npm == null && _pat > 0 && _sales > 0) {
           _npm = +(_pat / _sales * 100).toFixed(2);
-          sf.profMgn = _npm;
         }
-        // Compute Asset Turnover: Sales / Total Assets
-        // Total Assets ≈ Equity × (1 + D/E), where Equity ≈ BookValue × Shares, Shares ≈ MktCap / Price
-        let _assetTurn = sf.assetTurnover ?? ext?.assetTurnover;
+        if (_npm != null) sf.profMgn = +_npm;
+
+        let _assetTurn = sf.dupontAssetTurnover ?? sf.assetTurnover ?? ext?.assetTurnover;
         const _de2 = sf.debtToEq ?? ext?.de;
         if (_assetTurn == null && _sales > 0 && sf.bookValue > 0 && _px > 0 && sf.mktCap > 0) {
-          const sharesEst = sf.mktCap / _px;           // shares in Cr units (mktCap in Cr, price in Rs)
-          const equity = sf.bookValue * sharesEst;      // equity in Cr
-          const totalAssets = equity * (1 + (_de2 || 0)); // Total Assets = Equity × Equity Multiplier
-          if (totalAssets > 0) {
-            _assetTurn = +(_sales / totalAssets).toFixed(2);
-            sf.assetTurnover = _assetTurn;
-          }
+          const sharesEst = sf.mktCap / _px;
+          const equity = sf.bookValue * sharesEst;
+          const totalAssets = equity * (1 + (_de2 || 0));
+          if (totalAssets > 0) _assetTurn = +(_sales / totalAssets).toFixed(2);
         }
-        if (_npm != null && _assetTurn != null && _de2 != null) {
+        if (_assetTurn != null) sf.assetTurnover = +_assetTurn;
+
+        let _em = sf.dupontEquityMultiplier;
+        if (_em == null && _de2 != null) _em = +(1 + _de2).toFixed(2);
+
+        if (_npm != null && _assetTurn != null && _em != null) {
           sf.dupontNetMargin = +_npm;
           sf.dupontAssetTurnover = +_assetTurn;
-          sf.dupontEquityMultiplier = +(1 + (_de2 || 0)).toFixed(2);
-          sf.dupontROE = +(_npm/100 * _assetTurn * (1 + (_de2 || 0)) * 100).toFixed(1);
+          sf.dupontEquityMultiplier = +_em;
+          sf.dupontROE = +(_npm/100 * _assetTurn * _em * 100).toFixed(1);
+        }
+
+        // ═══ Gross Margin — compute if not already set from screener ═══
+        if (sf.grossMgn == null && _sales > 0 && sf.opMargin != null) {
+          sf.grossMgn = +sf.opMargin; // OPM% is the best proxy from screener P&L
+        }
+
+        // ═══ Institutional Holding — FII + DII if not set ═══
+        if (sf.instHeld == null && (sf.fiiHolding != null || sf.diiHolding != null)) {
+          sf.instHeld = +((sf.fiiHolding || 0) + (sf.diiHolding || 0)).toFixed(1);
         }
 
         // ═══ Cash Conversion Cycle (Varsity M13: Debtor Days + Inv Days - Payable Days) ═══
-        let _debtorDays = sf.debtorDays ?? ext?.debtorDays;
-        let _invTurnover = sf.invTurnover ?? ext?.invTurnover;
-        // Compute debtor days fallback: (Receivables/Sales) × 365 ≈ from receivables turnover
-        // Compute inventory days fallback: if we have invTurnover
-        if (_debtorDays == null && _sales > 0 && sf.currentRatio != null && sf.debt != null) {
-          // Rough estimate: debtorDays ≈ 365 / (sales / (mktCap × currentRatio / PE)) — too approximate
-          // Skip — debtorDays needs actual receivables data
-        }
-        if (_invTurnover == null && _sales > 0 && sf.mktCap > 0) {
-          // Rough inventory turnover from COGS/Inventory — not reliable without data
-          // Skip — invTurnover needs actual inventory data
-        }
-        if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
-          const invDays = +(365 / _invTurnover).toFixed(0);
-          sf.inventoryDays = invDays;
-          sf.cashConversionCycle = +(_debtorDays + invDays).toFixed(0);
+        // Prefer pre-computed CCC from screener ratios table
+        if (sf.cashConversionCycle == null) {
+          const _debtorDays = sf.debtorDays ?? ext?.debtorDays;
+          const _invTurnover = sf.invTurnover ?? ext?.invTurnover;
+          if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
+            sf.inventoryDays = +(365 / _invTurnover).toFixed(0);
+            sf.cashConversionCycle = +(_debtorDays + sf.inventoryDays).toFixed(0);
+          }
         }
 
         // ═══ NEW: Sharpe Ratio (Varsity M10: (Return - RiskFree) / StdDev) ═══
@@ -12762,16 +12780,14 @@ cron.schedule('45 15 * * 1-5', async () => {
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
 
-// 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
-// Stock scoring + TA pipeline 3x daily: 7AM, 12PM, 4PM IST (aligned with screener scrape)
-['0 7 * * *', '0 12 * * *', '0 16 * * *'].forEach(cronExpr => {
-  cron.schedule(cronExpr, async () => {
-    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-    console.log(`📊 ${hour}: Stock scoring + TA pipeline starting...`);
-    await refreshMissingFundamentals(); // Yahoo scraper for any missing FUND data
-    await refreshAllFundamentals();     // Kite candles → score → save to stock_scores DB
-  }, { timezone: 'Asia/Kolkata' });
-});
+// Stock scoring + TA pipeline: every 30 min, Mon-Fri, 8AM-5PM IST
+// Fetches Kite candles → computes ALL technicals (Ichimoku, RSI, MACD etc.) → scores → saves
+cron.schedule('*/30 8-16 * * 1-5', async () => {
+  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  console.log(`📊 ${hour}: Stock scoring + TA pipeline starting...`);
+  await refreshMissingFundamentals();
+  await refreshAllFundamentals();
+}, { timezone: 'Asia/Kolkata' });
 
 // 8AM IST — refresh stock universe from NSE CSVs → stock_universe DB
 cron.schedule('0 8 * * *', async () => {
@@ -14320,24 +14336,27 @@ function parseScreenerDetails(sym, raw) {
     return keys.length ? pn(row[keys[keys.length-1]]) : null;
   };
 
-  const debtorDays   = latestRatio('Debtor Days');
-  const invTurnover  = latestRatio('Inventory Turnover');
-  const assetTurnover = latestRatio('Asset Turnover');
-  const cashConvCycle = latestRatio('Cash Conversion Cycle');
-  const wcDays       = latestRatio('Working Capital Days');
+  // ── Ratios table values (screener uses: Debtor Days, Inventory Days, Days Payable, CCC, WC Days, ROCE%) ──
+  const debtorDays    = latestRatio('Debtor Days');
+  const inventoryDays = latestRatio('Inventory Days');         // screener has "Inventory Days" not "Inventory Turnover"
+  const daysPay       = latestRatio('Days Payable');
+  const cashConvCycle = latestRatio('Cash Conversion Cycle');  // screener computes this directly
+  const wcDays        = latestRatio('Working Capital Days');
+  const invTurnover   = (inventoryDays != null && inventoryDays > 0) ? pn((365 / inventoryDays).toFixed(2)) : null;
+  const assetTurnover = latestRatio('Asset Turnover');         // some companies have this
 
-  // Quick Ratio from ratios table (screener has "Quick Ratio" row in some companies)
-  const quickRatio   = latestRatio('Quick Ratio');
+  // Quick Ratio from ratios table (not all companies have it)
+  const quickRatio    = latestRatio('Quick Ratio');
 
   // ── Computed margins from P&L ──
-  // Gross Margin = (Sales - Raw Material Cost) / Sales × 100
-  const rawMaterialCost = latestAnnual(annual, 'Raw Material Cost') ?? latestAnnual(annual, 'Material Cost');
+  // Gross Margin = (Sales - Expenses) / Sales × 100 = Operating Profit / Sales × 100
+  // Screener P&L: Sales → Expenses → Operating Profit → OPM%
+  // "Expenses" is total operating expenses, so Gross Margin ≈ OPM% (Operating Profit Margin)
   const expenses = latestAnnual(annual, 'Expenses');
-  const grossMargin = (sales > 0 && rawMaterialCost != null)
-    ? pn(((sales - rawMaterialCost) / sales * 100).toFixed(1))
-    : (sales > 0 && expenses != null && opm != null)
-      ? pn(opm) // fallback: use OPM as proxy when raw material cost not available
-      : null;
+  const operProfit = latestAnnual(annual, 'Operating Profit');
+  const grossMargin = (sales > 0 && operProfit != null)
+    ? pn((operProfit / sales * 100).toFixed(1))
+    : (opm != null) ? pn(opm) : null;
 
   // Profit Margin (Net Margin) = Net Profit / Sales × 100
   const profitMargin = (sales > 0 && netProfit != null)
@@ -14349,11 +14368,13 @@ function parseScreenerDetails(sym, raw) {
     ? pn(((fiiHolding || 0) + (diiHolding || 0)).toFixed(1))
     : null;
 
-  // ── DuPont components (pre-compute so they're available even before scoring) ──
+  // ── DuPont decomposition: ROE = Net Margin × Asset Turnover × Equity Multiplier ──
   const dupontNetMargin = profitMargin;
+  // Asset Turnover = Sales / Total Assets (compute from BS since ratios table rarely has it)
   const dupontAssetTurn = assetTurnover ?? (
     (sales > 0 && totalAssets > 0) ? pn((sales / totalAssets).toFixed(2)) : null
   );
+  // Equity Multiplier = Total Assets / Net Worth (or 1 + D/E)
   const dupontEquityMult = (netWorth > 0 && totalAssets > 0)
     ? pn((totalAssets / netWorth).toFixed(2))
     : (de != null ? pn((1 + de).toFixed(2)) : null);
@@ -14361,10 +14382,10 @@ function parseScreenerDetails(sym, raw) {
     ? pn((dupontNetMargin / 100 * dupontAssetTurn * dupontEquityMult * 100).toFixed(1))
     : null;
 
-  // ── Cash Conversion Cycle (use screener row if available, else compute) ──
+  // ── Cash Conversion Cycle (screener provides directly, else compute from components) ──
   const computedCCC = cashConvCycle ?? (
-    (debtorDays != null && invTurnover != null && invTurnover > 0)
-      ? pn((debtorDays + (365 / invTurnover)).toFixed(0))
+    (debtorDays != null && inventoryDays != null)
+      ? pn((debtorDays + inventoryDays - (daysPay || 0)).toFixed(0))
       : null
   );
 
