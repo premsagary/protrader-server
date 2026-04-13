@@ -12755,10 +12755,14 @@ cron.schedule('0 9 * * 1-5', async () => {
 
 // 7AM IST — fetch Screener.in fundamentals daily (pre-market, data is fresh from prev close)
 // After scrape completes, refreshAllFundamentals() rescores all stocks automatically.
-cron.schedule('0 7 * * *', () => {
-  console.log('📊 7AM: Screener fundamentals refresh (pre-market)...');
-  fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
+// Screener scrape 3x daily: 7AM (pre-market), 12PM (midday), 4PM (pre-close)
+['0 7 * * *', '0 12 * * *', '0 16 * * *'].forEach(cronExpr => {
+  cron.schedule(cronExpr, () => {
+    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+    console.log(`📊 ${hour}: Screener fundamentals refresh...`);
+    fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
+  }, { timezone: 'Asia/Kolkata' });
+});
 
 // =============================================================================
 // SCORE V2 DAILY SNAPSHOT WRITER
@@ -14506,7 +14510,7 @@ app.get('/api/admin/pipeline', async (req, res) => {
 
     res.json({
       universe:     { count: parseInt(univResult.rows[0].total), lastSync: univLast, age: ageLabel(univLast), schedule: 'Daily 8AM IST' },
-      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: 'Daily 8PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length,
+      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: '3x daily: 7AM, 12PM, 4PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length,
         // Diagnostic: how many FUND_EXT entries have key screener fields populated
         withFII: Object.values(global.FUND_EXT||{}).filter(e=>e.fiiHolding!=null).length,
         withDII: Object.values(global.FUND_EXT||{}).filter(e=>e.diiHolding!=null).length,
@@ -14866,7 +14870,7 @@ app.get('/api/screener/status', async (req, res) => {
       db_last_import: result.rows[0].last_import,
       in_memory:      Object.keys(global.FUND_EXT||{}).filter(s=>global.FUND_EXT[s]?.source==='Screener.in').length,
       last_fetch:     last ? JSON.parse(last) : null,
-      schedule:       'Daily 8PM IST',
+      schedule:       '3x daily: 7AM, 12PM, 4PM IST',
     });
   } catch(e) { res.json({ error: e.message }); }
 });
