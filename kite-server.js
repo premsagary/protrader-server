@@ -8762,8 +8762,22 @@ app.post('/api/admin/unified-pipeline', async (req, res) => {
 
 async function runUnifiedKitePipeline(force = false) {
   if (_unifiedPipelineRunning) { console.log('🔄 Unified pipeline already running, skipping'); return; }
-  if (!force && !isMarketOpen()) return;
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
+  if (!force && !isMarketOpen()) { console.log('🔄 Pipeline skipped: market closed (force=false)'); return; }
+
+  // Auto-recover Kite token from DB if env var missing
+  if (!process.env.KITE_ACCESS_TOKEN) {
+    const dbToken = await dbGet('kite_access_token');
+    if (dbToken) {
+      console.log('🔑 Recovered Kite token from DB');
+      process.env.KITE_ACCESS_TOKEN = dbToken;
+      if (kite) kite.setAccessToken(dbToken);
+    }
+  }
+  if (!kite) { initKite(process.env.KITE_ACCESS_TOKEN); }
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) {
+    console.log('🔄 Pipeline skipped: no Kite token available');
+    return;
+  }
 
   _unifiedPipelineRunning = true;
   const t0 = Date.now();
@@ -8785,6 +8799,8 @@ async function runUnifiedKitePipeline(force = false) {
     } catch (e) { /* non-critical */ }
 
     const syms = Object.keys(stockFundamentals);
+    console.log(`🔄 Unified pipeline starting: ${syms.length} symbols, force=${force}, kiteToken=${process.env.KITE_ACCESS_TOKEN ? 'SET' : 'MISSING'}`);
+    if (syms.length === 0) { console.log('🔄 Pipeline: no symbols in stockFundamentals — skipping'); _unifiedPipelineRunning = false; return; }
     const today   = new Date().toISOString().split('T')[0];
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
