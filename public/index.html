@@ -224,6 +224,155 @@ select option{background:var(--bg3)}
   .stat-grid{grid-template-columns:repeat(auto-fit,minmax(110px,1fr))}
   .mode-tab{padding:4px 8px;font-size:11px}
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE — Deep Analyzer + All In-App Sections
+   Fixes inline-styled JS-rendered content on phones & tablets
+   ═══════════════════════════════════════════════════════════════ */
+@media(max-width:768px){
+  /* ── Global overflow protection ── */
+  html,body{overflow-x:hidden;max-width:100vw}
+
+  /* ── Topbar — scrollable tabs ── */
+  .topbar{height:auto;min-height:44px;padding:8px 12px;flex-wrap:wrap;gap:8px}
+  .mode-tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;width:100%;order:3}
+  .mode-tabs::-webkit-scrollbar{display:none}
+  .mode-tab{flex-shrink:0;white-space:nowrap}
+
+  /* ── Main content ── */
+  .main{padding:12px 10px}
+
+  /* ── Tables — horizontal scroll ── */
+  .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;
+    margin-left:-10px;margin-right:-10px;width:calc(100% + 20px)}
+
+  /* ── Panels ── */
+  .shiva-panel{width:100%;max-width:100%}
+
+  /* ── Deep Analyzer — search input ── */
+  #az-wrap{width:100%!important;max-width:100%!important}
+  #stock-analyzer-input{width:100%!important;font-size:16px!important;padding:12px 14px!important}
+
+  /* ── Deep Analyzer — all grids force single column ── */
+  #stock-analyzer-result div[style*="grid-template-columns:1fr 1fr 1fr"],
+  #stock-analyzer-result div[style*="grid-template-columns: 1fr 1fr 1fr"]{
+    grid-template-columns:1fr!important}
+  #stock-analyzer-result div[style*="grid-template-columns:1fr 1fr"],
+  #stock-analyzer-result div[style*="grid-template-columns: 1fr 1fr"]{
+    grid-template-columns:1fr!important}
+  #stock-analyzer-result div[style*="repeat(auto-fill"]{
+    grid-template-columns:repeat(auto-fill,minmax(120px,1fr))!important}
+
+  /* ── Chart — shorter on mobile ── */
+  #stock-analyzer-result div[style*="height:300px"]{
+    height:200px!important}
+  #deep-chart{height:200px!important}
+
+  /* ── Header flex — stack verdict below stock info ── */
+  #stock-analyzer-result>div>div:first-child{
+    flex-direction:column!important}
+  #stock-analyzer-result div[style*="min-width:190px"],
+  #stock-analyzer-result div[style*="min-width: 190px"]{
+    min-width:unset!important;width:100%!important}
+
+  /* ── Flex rows — stack on mobile ── */
+  #stock-analyzer-result div[style*="display:flex"][style*="gap:12px"],
+  #stock-analyzer-result div[style*="display:flex"][style*="gap:10px"]{
+    flex-wrap:wrap!important}
+
+  /* ── Buying plan grid → single column ── */
+  #stock-analyzer-result div[style*="grid-template-columns:1fr 1fr 1fr"][style*="margin-bottom:10px"]{
+    grid-template-columns:1fr!important}
+
+  /* ── Fibonacci — wrap ── */
+  #stock-analyzer-result div[style*="display:flex"][style*="gap:6px"][style*="flex-wrap:wrap"]{
+    gap:8px!important}
+  #stock-analyzer-result div[style*="display:flex"][style*="gap:6px"][style*="flex-wrap:wrap"]>div{
+    min-width:calc(33% - 8px)!important;flex:1 1 calc(33% - 8px)!important}
+
+  /* ── AI review section — stack ── */
+  #stock-analyzer-result div[style*="display:flex"][style*="justify-content:space-between"][style*="flex-wrap:wrap"]{
+    flex-direction:column!important;gap:10px!important}
+
+  /* ── Font sizes — ensure readability ── */
+  #stock-analyzer-result div[style*="font-size:26px"]{font-size:22px!important}
+  #stock-analyzer-result div[style*="font-size:20px"]{font-size:18px!important}
+  #stock-analyzer-result div[style*="font-size:22px"][style*="font-weight:800"]{font-size:20px!important}
+  #stock-analyzer-result div[style*="font-size:30px"]{font-size:24px!important}
+
+  /* ── Padding — tighter on mobile ── */
+  #stock-analyzer-result>div>div{padding-left:0!important;padding-right:0!important}
+  #stock-analyzer-result div[style*="padding:14px"],
+  #stock-analyzer-result div[style*="padding:16px"],
+  #stock-analyzer-result div[style*="padding:18px"]{
+    padding:12px!important}
+  #stock-analyzer-result div[style*="padding:20px"]{
+    padding:12px 10px!important}
+
+  /* ── Analyze button — full width ── */
+  #stock-analyzer-result~div button[onclick*="analyzeStock"],
+  button[onclick*="analyzeStock"]{
+    width:100%!important;padding:12px!important;font-size:15px!important;margin-top:8px}
+
+  /* ── Search bar flex — stack ── */
+  #az-wrap~button{width:100%!important;margin-top:4px}
+  #az-wrap~span{width:100%!important;text-align:center;margin-top:4px;margin-left:0!important}
+  div[style*="display:flex"][style*="gap:10px"][style*="flex-wrap:wrap"]:has(#az-wrap){
+    flex-direction:column!important}
+
+  /* ── Analysis text paragraphs — readable line height ── */
+  #stock-analyzer-result div[style*="line-height:1.7"]{
+    font-size:12px!important;line-height:1.6!important}
+
+  /* ── Picks ── */
+  .picks-split{grid-template-columns:1fr!important}
+
+  /* ── Holdings ── */
+  .holdings-summary{grid-template-columns:1fr!important}
+
+  /* ── Stock Data controls ── */
+  .stockdata-controls{flex-direction:column!important}
+  .stockdata-controls input,.stockdata-controls select,.stockdata-controls button{width:100%!important}
+
+  /* ── Buttons — touch-friendly ── */
+  button,.btn,.btn-primary{min-height:44px;-webkit-tap-highlight-color:transparent}
+
+  /* ── LP nav links hide on mobile ── */
+  .lp-nav-links a:not(.lp-cta-sm){display:none}
+
+  /* ── LP grids — single column ── */
+  .lp-feature-grid{grid-template-columns:1fr!important}
+  .lp-price-grid{grid-template-columns:1fr!important}
+  .lp-steps{grid-template-columns:1fr!important}
+  .lp-stats{flex-direction:column;gap:16px}
+  .lp-hero-cta{flex-direction:column;width:100%}
+  .lp-hero-cta .lp-btn-primary,.lp-hero-cta .lp-btn-ghost,.lp-hero-cta a{
+    width:100%;text-align:center;display:flex;align-items:center;justify-content:center}
+  .lp-hero h1{font-size:26px!important}
+  .lp-hero-sub{font-size:14px!important}
+  .lp-ex-row{flex-direction:column}
+
+  /* ── Onboarding ── */
+  .ob-features{grid-template-columns:1fr}
+  .ob-card{padding:24px 16px;width:calc(100% - 32px)}
+}
+
+/* ── Extra small phones ── */
+@media(max-width:380px){
+  .main{padding:8px}
+  .mode-tab{padding:4px 6px;font-size:10px}
+  #stock-analyzer-result div[style*="repeat(auto-fill"]{
+    grid-template-columns:1fr!important}
+  .lp-hero h1{font-size:22px!important}
+}
+
+/* ── Safe area (notch) support ── */
+@supports(padding:env(safe-area-inset-top)){
+  .topbar{padding-top:max(8px,env(safe-area-inset-top))}
+  .main{padding-left:max(10px,env(safe-area-inset-left));
+    padding-right:max(10px,env(safe-area-inset-right))}
+}
 </style>
 </head>
 <body>
