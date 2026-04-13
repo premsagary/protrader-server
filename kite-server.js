@@ -304,6 +304,17 @@ async function initDB() {
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS cash_equiv DECIMAL(18,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_3y_avg DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_5y_avg DECIMAL(10,2)`).catch(()=>{});
+    // NEW: Computed margins, DuPont, CCC columns
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS gross_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS profit_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS inst_pct DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS cash_conversion_cycle DECIMAL(10,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS wc_days DECIMAL(10,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS wc_health VARCHAR(20)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_net_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_asset_turnover DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_equity_multiplier DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_roe DECIMAL(10,2)`).catch(()=>{});
 
     // ── Portfolio Manager tables ──────────────────────────────────────────────
     // Tracks user's actual held positions (what they bought from suggestions)
@@ -5693,6 +5704,13 @@ function patchScreenerIntoFUND(sym, d) {
     from52wHigh: d.from_52w_high, debtorDays: d.debtor_days,
     invTurnover: d.inv_turnover, assetTurnover: d.asset_turnover,
     cashEquiv: d.cash_equiv, roce3yAvg: d.roce_3y_avg, roce5yAvg: d.roce_5y_avg,
+    // NEW: computed margins, ratios, DuPont, CCC from screener
+    grossMgn: d.gross_margin, profMgn: d.profit_margin,
+    instHeld: d.inst_pct,  // instHeld is the field name used by the scoring pipeline
+    cashConversionCycle: d.cash_conversion_cycle, wcDays: d.wc_days,
+    workingCapitalHealth: d.wc_health,
+    dupontNetMargin: d.dupont_net_margin, dupontAssetTurnover: d.dupont_asset_turnover,
+    dupontEquityMultiplier: d.dupont_equity_multiplier, dupontROE: d.dupont_roe,
   };
   // Only overwrite with non-null values — keeps existing data from other CSVs
   for (const [k, v] of Object.entries(newFields)) {
@@ -5765,6 +5783,12 @@ async function loadScreenerFundamentals() {
       inv_turnover: row.inv_turnover, asset_turnover: row.asset_turnover,
       cash_equiv: row.cash_equiv, roce_3y_avg: row.roce_3y_avg,
       roce_5y_avg: row.roce_5y_avg,
+      // NEW: computed margins, DuPont, CCC
+      gross_margin: row.gross_margin, profit_margin: row.profit_margin,
+      inst_pct: row.inst_pct, cash_conversion_cycle: row.cash_conversion_cycle,
+      wc_days: row.wc_days, wc_health: row.wc_health,
+      dupont_net_margin: row.dupont_net_margin, dupont_asset_turnover: row.dupont_asset_turnover,
+      dupont_equity_multiplier: row.dupont_equity_multiplier, dupont_roe: row.dupont_roe,
     }));
     console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
     return rows.length;
@@ -8455,7 +8479,11 @@ async function refreshAllFundamentals() {
       'priceToFCF','priceToSales','earningsYield','roce','promoter','promoterChg','intCov',
       'mktCap','roa','pb','peg','evEbitda','industryPE','eps','debt',
       'salesGr1y','salesGr5y','epsGr1y','epsGr5y','roe3yAvg','roe5yAvg',
-      'ret1y','ret3y','ret5y','roe','debtToEq','pe','revGrowth','earGrowth','opMargin'];
+      'ret1y','ret3y','ret5y','roe','debtToEq','pe','revGrowth','earGrowth','opMargin',
+      // NEW: computed margins, DuPont, CCC from screener
+      'grossMgn','profMgn','instHeld','debtorDays','invTurnover','assetTurnover',
+      'cashConversionCycle','workingCapitalHealth',
+      'dupontNetMargin','dupontAssetTurnover','dupontEquityMultiplier','dupontROE'];
     // Map FUND_EXT field names that differ from stockFundamentals field names
     const extKeyMap = { debtToEq:'de', revGrowth:'revGr', earGrowth:'epsGr', opMargin:'opMgn' };
     let merged = 0;
@@ -12735,11 +12763,15 @@ cron.schedule('45 15 * * 1-5', async () => {
 }, { timezone: 'Asia/Kolkata' });
 
 // 7AM IST — fetch Kite candles, compute ALL technicals, score all stocks → stock_scores + scored_stocks_cache
-cron.schedule('0 7 * * *', async () => {
-  console.log('📊 7AM: Daily stock scoring starting...');
-  await refreshMissingFundamentals(); // Yahoo scraper for any missing FUND data
-  await refreshAllFundamentals();     // Kite candles → score → save to stock_scores DB
-}, { timezone: 'Asia/Kolkata' });
+// Stock scoring + TA pipeline 3x daily: 7AM, 12PM, 4PM IST (aligned with screener scrape)
+['0 7 * * *', '0 12 * * *', '0 16 * * *'].forEach(cronExpr => {
+  cron.schedule(cronExpr, async () => {
+    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+    console.log(`📊 ${hour}: Stock scoring + TA pipeline starting...`);
+    await refreshMissingFundamentals(); // Yahoo scraper for any missing FUND data
+    await refreshAllFundamentals();     // Kite candles → score → save to stock_scores DB
+  }, { timezone: 'Asia/Kolkata' });
+});
 
 // 8AM IST — refresh stock universe from NSE CSVs → stock_universe DB
 cron.schedule('0 8 * * *', async () => {
@@ -13837,7 +13869,12 @@ async function upsertScreenerData(data) {
        ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
        pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
        roce,earnings_yield,price_to_fcf,price_to_sales,
-       fii_holding,dii_holding,num_shareholders,imported_at)
+       fii_holding,dii_holding,num_shareholders,
+       gross_margin,profit_margin,inst_pct,quick_ratio,
+       debtor_days,inv_turnover,asset_turnover,
+       cash_conversion_cycle,wc_days,wc_health,
+       dupont_net_margin,dupont_asset_turnover,dupont_equity_multiplier,dupont_roe,
+       imported_at)
     VALUES
       ($1,$2,$3,$4,$5,$6,
        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -13847,7 +13884,12 @@ async function upsertScreenerData(data) {
        $35,$36,$37,$38,$39,$40,
        $41,$42,$43,$44,
        $45,$46,$47,$48,
-       $49,$50,$51,NOW())
+       $49,$50,$51,
+       $52,$53,$54,$55,
+       $56,$57,$58,
+       $59,$60,$61,
+       $62,$63,$64,$65,
+       NOW())
     ON CONFLICT (sym) DO UPDATE SET
       name=EXCLUDED.name, industry=EXCLUDED.industry,
       roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -13871,6 +13913,20 @@ async function upsertScreenerData(data) {
       fii_holding=COALESCE(EXCLUDED.fii_holding, screener_fundamentals.fii_holding),
       dii_holding=COALESCE(EXCLUDED.dii_holding, screener_fundamentals.dii_holding),
       num_shareholders=COALESCE(EXCLUDED.num_shareholders, screener_fundamentals.num_shareholders),
+      gross_margin=COALESCE(EXCLUDED.gross_margin, screener_fundamentals.gross_margin),
+      profit_margin=COALESCE(EXCLUDED.profit_margin, screener_fundamentals.profit_margin),
+      inst_pct=COALESCE(EXCLUDED.inst_pct, screener_fundamentals.inst_pct),
+      quick_ratio=COALESCE(EXCLUDED.quick_ratio, screener_fundamentals.quick_ratio),
+      debtor_days=COALESCE(EXCLUDED.debtor_days, screener_fundamentals.debtor_days),
+      inv_turnover=COALESCE(EXCLUDED.inv_turnover, screener_fundamentals.inv_turnover),
+      asset_turnover=COALESCE(EXCLUDED.asset_turnover, screener_fundamentals.asset_turnover),
+      cash_conversion_cycle=COALESCE(EXCLUDED.cash_conversion_cycle, screener_fundamentals.cash_conversion_cycle),
+      wc_days=COALESCE(EXCLUDED.wc_days, screener_fundamentals.wc_days),
+      wc_health=COALESCE(EXCLUDED.wc_health, screener_fundamentals.wc_health),
+      dupont_net_margin=COALESCE(EXCLUDED.dupont_net_margin, screener_fundamentals.dupont_net_margin),
+      dupont_asset_turnover=COALESCE(EXCLUDED.dupont_asset_turnover, screener_fundamentals.dupont_asset_turnover),
+      dupont_equity_multiplier=COALESCE(EXCLUDED.dupont_equity_multiplier, screener_fundamentals.dupont_equity_multiplier),
+      dupont_roe=COALESCE(EXCLUDED.dupont_roe, screener_fundamentals.dupont_roe),
       imported_at=NOW()
   `, [
     data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -13884,6 +13940,10 @@ async function upsertScreenerData(data) {
     data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
     data.roce, data.earnings_yield, data.price_to_fcf, data.price_to_sales,
     data.fii_holding??null, data.dii_holding??null, data.num_shareholders??null,
+    data.gross_margin??null, data.profit_margin??null, data.inst_pct??null, data.quick_ratio??null,
+    data.debtor_days??null, data.inv_turnover??null, data.asset_turnover??null,
+    data.cash_conversion_cycle??null, data.wc_days??null, data.wc_health??null,
+    data.dupont_net_margin??null, data.dupont_asset_turnover??null, data.dupont_equity_multiplier??null, data.dupont_roe??null,
   ]);
   patchScreenerIntoFUND(data.sym, data);
 }
@@ -14233,6 +14293,71 @@ function parseScreenerDetails(sym, raw) {
   // Dividend from P&L for yield calc
   const dividendPayout = latestAnnual(annual, 'Dividend Payout %');
 
+  // ── Ratios table extraction (Debtor Days, Inventory Turnover, etc.) ──
+  // Helper: get latest value from ratios table by metric name (fuzzy match)
+  const latestRatio = (metric) => {
+    const row = (ratios||[]).find(r => {
+      const m = normMetric(r.Metric).toLowerCase();
+      return m === metric.toLowerCase() || m.startsWith(metric.toLowerCase());
+    });
+    if (!row) return null;
+    const keys = Object.keys(row).filter(k => k !== 'Metric').sort();
+    return keys.length ? pn(row[keys[keys.length-1]]) : null;
+  };
+
+  const debtorDays   = latestRatio('Debtor Days');
+  const invTurnover  = latestRatio('Inventory Turnover');
+  const assetTurnover = latestRatio('Asset Turnover');
+  const cashConvCycle = latestRatio('Cash Conversion Cycle');
+  const wcDays       = latestRatio('Working Capital Days');
+
+  // Quick Ratio from ratios table (screener has "Quick Ratio" row in some companies)
+  const quickRatio   = latestRatio('Quick Ratio');
+
+  // ── Computed margins from P&L ──
+  // Gross Margin = (Sales - Raw Material Cost) / Sales × 100
+  const rawMaterialCost = latestAnnual(annual, 'Raw Material Cost') ?? latestAnnual(annual, 'Material Cost');
+  const expenses = latestAnnual(annual, 'Expenses');
+  const grossMargin = (sales > 0 && rawMaterialCost != null)
+    ? pn(((sales - rawMaterialCost) / sales * 100).toFixed(1))
+    : (sales > 0 && expenses != null && opm != null)
+      ? pn(opm) // fallback: use OPM as proxy when raw material cost not available
+      : null;
+
+  // Profit Margin (Net Margin) = Net Profit / Sales × 100
+  const profitMargin = (sales > 0 && netProfit != null)
+    ? pn((netProfit / sales * 100).toFixed(1))
+    : null;
+
+  // Institutional holding = FII + DII
+  const instPct = (fiiHolding != null || diiHolding != null)
+    ? pn(((fiiHolding || 0) + (diiHolding || 0)).toFixed(1))
+    : null;
+
+  // ── DuPont components (pre-compute so they're available even before scoring) ──
+  const dupontNetMargin = profitMargin;
+  const dupontAssetTurn = assetTurnover ?? (
+    (sales > 0 && totalAssets > 0) ? pn((sales / totalAssets).toFixed(2)) : null
+  );
+  const dupontEquityMult = (netWorth > 0 && totalAssets > 0)
+    ? pn((totalAssets / netWorth).toFixed(2))
+    : (de != null ? pn((1 + de).toFixed(2)) : null);
+  const dupontROE = (dupontNetMargin != null && dupontAssetTurn != null && dupontEquityMult != null)
+    ? pn((dupontNetMargin / 100 * dupontAssetTurn * dupontEquityMult * 100).toFixed(1))
+    : null;
+
+  // ── Cash Conversion Cycle (use screener row if available, else compute) ──
+  const computedCCC = cashConvCycle ?? (
+    (debtorDays != null && invTurnover != null && invTurnover > 0)
+      ? pn((debtorDays + (365 / invTurnover)).toFixed(0))
+      : null
+  );
+
+  // ── Working Capital Health ──
+  const wcHealth = computedCurrentRatio != null
+    ? (computedCurrentRatio >= 1.5 ? 'strong' : computedCurrentRatio >= 1.0 ? 'adequate' : 'weak')
+    : null;
+
   // Industry from raw metadata
   const industry = raw.industry || raw.sector || null;
 
@@ -14286,6 +14411,13 @@ function parseScreenerDetails(sym, raw) {
     pat_qtr_yoy: patQtrYoy, sales_qtr_yoy: salesQtrYoy,
     roce, earnings_yield: earningsYield, price_to_fcf: priceToFcf, price_to_sales: priceToSales,
     fii_holding: fiiHolding, dii_holding: diiHolding, num_shareholders: numShareholders,
+    // NEW: computed margins, ratios, DuPont, CCC
+    gross_margin: grossMargin, profit_margin: profitMargin, inst_pct: instPct,
+    quick_ratio: quickRatio,
+    debtor_days: debtorDays, inv_turnover: invTurnover, asset_turnover: assetTurnover,
+    cash_conversion_cycle: computedCCC, wc_days: wcDays, wc_health: wcHealth,
+    dupont_net_margin: dupontNetMargin, dupont_asset_turnover: dupontAssetTurn,
+    dupont_equity_multiplier: dupontEquityMult, dupont_roe: dupontROE,
   };
 }
 
