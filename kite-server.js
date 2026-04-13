@@ -19,6 +19,7 @@
 
 require("dotenv").config();
 const express   = require("express");
+const screenerScraper = require("./screener-scraper");
 
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
@@ -303,6 +304,17 @@ async function initDB() {
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS cash_equiv DECIMAL(18,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_3y_avg DECIMAL(10,2)`).catch(()=>{});
     await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS roce_5y_avg DECIMAL(10,2)`).catch(()=>{});
+    // NEW: Computed margins, DuPont, CCC columns
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS gross_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS profit_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS inst_pct DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS cash_conversion_cycle DECIMAL(10,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS wc_days DECIMAL(10,1)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS wc_health VARCHAR(20)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_net_margin DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_asset_turnover DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_equity_multiplier DECIMAL(10,2)`).catch(()=>{});
+    await pool.query(`ALTER TABLE screener_fundamentals ADD COLUMN IF NOT EXISTS dupont_roe DECIMAL(10,2)`).catch(()=>{});
 
     // ── Portfolio Manager tables ──────────────────────────────────────────────
     // Tracks user's actual held positions (what they bought from suggestions)
@@ -1902,771 +1914,6 @@ function selectAndRunStrategy(candles, dailyCandles=null) {
     sellVotes,
     mtfConfirmation,
   };
-}
-
-// =============================================================================
-// DAY TRADING PICKS — All-in-one intraday scanner (Varsity M2)
-// Scans UNIVERSE every 5 min (aligned with 5-min candle close) on 5-min candles,
-// scores each stock across 4 setup types: VWAP Reclaim, Gap & Go, Breakout,
-// Oversold Bounce. Light quality gate (not penny, min FA, decent volume).
-// Admin-only for now.
-// =============================================================================
-let _dayTradeCache    = [];      // scored picks — refreshed every 5 min
-let _dayTradeCacheTs  = 0;
-let _dayTradeScanning = false;
-
-function scoreDayTrade(candles, sym) {
-  const n = candles.length;
-  if (n < 30) return null;
-
-  const C = candles.map(c => c.close);
-  const H = candles.map(c => c.high || c.close);
-  const L = candles.map(c => c.low  || c.close);
-  const V = candles.map(c => c.volume || 0);
-  const last = candles[n - 1];
-  const px = last.close;
-  if (!px || px <= 0) return null;
-
-  // ── Light quality gate ────────────────────────────────────────────────
-  const f = stockFundamentals[sym];
-  if (px < 20) return null;                                // no penny stocks
-  if (f && f.score != null && f.score < 20) return null;   // junk fundamentals
-  const avg20Vol = V.slice(-20).reduce((a, b) => a + b, 0) / 20;
-  if (avg20Vol < 5000) return null;                        // illiquid
-
-  // Varsity M2: skip if latest 5-min candle range is extreme (>3% on a single bar = abnormal)
-  const lastCandleRange = last.high > 0 ? (last.high - last.low) / last.close * 100 : 0;
-  if (lastCandleRange > 3) return null;
-
-  // Varsity M9: avoid new entries in last 30 min before market close (3:00-3:30 PM IST)
-  const now = new Date();
-  const istHour = (now.getUTCHours() + 5) % 24 + (now.getUTCMinutes() + 30 >= 60 ? 1 : 0);
-  const istMin = (now.getUTCMinutes() + 30) % 60;
-  const isLateTrade = (istHour === 15 && istMin >= 0) || istHour > 15;
-
-  // Score explanation tracker
-  const _track = [];
-  function _gain(bucket, pts, reason) { _track.push({bucket, pts, reason, type:'gain'}); return pts; }
-  function _penalty(bucket, pts, reason) { _track.push({bucket, pts: -Math.abs(pts), reason, type:'penalty'}); return -Math.abs(pts); }
-
-  // ── Isolate today's candles vs previous day (Varsity M2: intraday = session-only) ──
-  const todayStart = new Date().toISOString().split('T')[0];
-  const todayCandles = candles.filter(c => {
-    const d = c.date || c.timestamp;
-    return d && String(d).startsWith(todayStart);
-  });
-  const prevDayCandles = candles.filter(c => {
-    const d = c.date || c.timestamp;
-    return d && !String(d).startsWith(todayStart);
-  });
-  if (todayCandles.length < 3) return null; // need at least 15 min of today's data
-
-  // ── Shared indicators ─────────────────────────────────────────────────
-
-  // VWAP: Varsity M2 Ch13 — VWAP resets at session open. It is a SAME-DAY indicator.
-  // Using only today's candles ensures VWAP is pure session VWAP.
-  const todayVWAPs = vwap(todayCandles);
-  const lastVWAP   = todayVWAPs[todayVWAPs.length - 1];
-  const pctVWAP    = ((px - lastVWAP) / lastVWAP * 100);
-
-  // Track if price was recently below VWAP (for VWAP Reclaim detection)
-  // Varsity M2 Ch13: reclaim = price was below VWAP, then crossed back above
-  const recentVWAPBelow = todayVWAPs.length >= 4 &&
-    todayVWAPs.slice(-6, -1).some((v, i) => {
-      const idx = todayCandles.length - 6 + i;
-      return idx >= 0 && todayCandles[idx] && todayCandles[idx].close < v;
-    });
-
-  const rsiArr   = rsi(C, 14);
-  const lastRSI  = rsiArr[n - 1];
-  const lastVol  = V[n - 1] || 0;
-  const volRatio = lastVol / (avg20Vol || 1);
-
-  // EMA 9 / 20 for trend
-  const calcEma = (arr, p) => { const k = 2 / (p + 1); let e = arr[0]; return arr.map(v => { e = v * k + e * (1 - k); return e; }); };
-  const ema9  = calcEma(C, 9);
-  const ema20 = calcEma(C, 20);
-
-  // MACD on 5-min
-  const e12 = calcEma(C, 12), e26 = calcEma(C, 26);
-  const macdLine  = e12.map((v, i) => v - e26[i]);
-  const sigLine   = calcEma(macdLine, 9);
-  const macdBull  = macdLine[n - 1] > sigLine[n - 1];
-  const macdCross = macdLine[n - 2] < sigLine[n - 2] && macdBull; // fresh bull cross
-
-  // Bollinger %B
-  const dma20 = C.slice(n - 20).reduce((a, b) => a + b, 0) / 20;
-  const bbStd = Math.sqrt(C.slice(n - 20).reduce((a, v) => a + (v - dma20) ** 2, 0) / 20);
-  const bbUpper = dma20 + 2 * bbStd;
-  const bbLower = dma20 - 2 * bbStd;
-  const bbPct   = bbUpper > bbLower ? (px - bbLower) / (bbUpper - bbLower) : 0.5;
-
-  // Stochastic K/D on 5-min (Varsity M2 Ch18: stochastic confirms oversold/overbought)
-  const stochPeriod = 14;
-  const stochSlice  = C.slice(-stochPeriod);
-  const stochHSlice = H.slice(-stochPeriod);
-  const stochLSlice = L.slice(-stochPeriod);
-  const stochHH     = Math.max(...stochHSlice);
-  const stochLL     = Math.min(...stochLSlice);
-  const stochK      = stochHH > stochLL ? ((px - stochLL) / (stochHH - stochLL)) * 100 : 50;
-
-  // Opening Range — Varsity M2 Ch7: uses first 15-30 min candles OF TODAY
-  // First 6 five-min candles = 9:15–9:45 IST (first 30 min of today)
-  const todayFirst6 = todayCandles.slice(0, Math.min(6, todayCandles.length));
-  const orHigh = Math.max(...todayFirst6.map(c => c.high));
-  const orLow  = Math.min(...todayFirst6.map(c => c.low));
-  const orRange = orHigh - orLow;
-
-  // Day's high/low from today's candles
-  const dayHigh = Math.max(...todayCandles.map(c => c.high));
-  const dayLow  = Math.min(...todayCandles.map(c => c.low));
-
-  // Previous close (last candle of previous day) — for gap calculation
-  const prevClose = prevDayCandles.length ? prevDayCandles[prevDayCandles.length - 1].close : C[0];
-  const gapPct    = prevClose > 0 ? ((todayCandles[0].open || C[0]) - prevClose) / prevClose * 100 : 0;
-
-  // Previous day high/low — Varsity M2 Ch7: PDH/PDL are key S/R levels for intraday
-  const pdHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.high)) : dayHigh;
-  const pdLow  = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.low))  : dayLow;
-
-  // Supertrend on 5-min
-  let stBull = false;
-  try {
-    const atrArr = candles.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)));
-    const atr14 = atrArr.slice(-14).reduce((a, b) => a + b, 0) / 14;
-    let st = C[0], trend = 1;
-    for (let i = 1; i < n; i++) {
-      const mid = (H[i] + L[i]) / 2;
-      const up = mid + 3 * (atrArr[i - 1] || atr14), dn = mid - 3 * (atrArr[i - 1] || atr14);
-      if (trend === 1) st = Math.max(st, dn); else st = Math.min(st, up);
-      if (C[i] < st && trend === 1) { trend = -1; st = up; } else if (C[i] > st && trend === -1) { trend = 1; st = dn; }
-    }
-    stBull = trend === 1;
-  } catch (e) { /* ok */ }
-
-  // ADX on 5-min
-  const adxVal = adx(candles, 14);
-
-  // ── SETUP 1: VWAP RECLAIM (Varsity M2 Ch13: institutional reference price) ──
-  // Price was below VWAP recently and is now reclaiming it from below with volume.
-  // Varsity: VWAP is THE institutional benchmark; reclaim = institutions defending the level.
-  let vwapScore = 0, vwapDetail = [];
-  // Core requirement: price must have been below VWAP recently (last 5 bars) and now at/above
-  if (recentVWAPBelow && pctVWAP > -0.3 && pctVWAP < 2.0) {
-    // Actual reclaim pattern detected
-    if (pctVWAP > 0.1 && pctVWAP < 2.0) {
-      vwapScore += _gain('VWAP', 30, `Reclaimed VWAP (+${pctVWAP.toFixed(1)}%)`);  // just crossed above — the sweet spot
-      vwapDetail.push(`Reclaimed VWAP (+${pctVWAP.toFixed(1)}%)`);
-    } else if (pctVWAP >= -0.3 && pctVWAP <= 0.1) {
-      vwapScore += _gain('VWAP', 20, 'Testing VWAP from below'); // approaching VWAP from below — potential reclaim in progress
-      vwapDetail.push('Testing VWAP from below');
-    }
-  } else if (!recentVWAPBelow && pctVWAP > 0 && pctVWAP < 0.5) {
-    vwapScore += _gain('VWAP', 10, 'At VWAP (no recent break)'); // sitting at VWAP but no reclaim pattern — weak signal
-    vwapDetail.push('At VWAP (no recent break)');
-  }
-  // Volume confirmation — Varsity M2: volume validates the move
-  if (volRatio > 2.0) { vwapScore += _gain('VWAP', 15, `Vol ${volRatio.toFixed(1)}x surge`); vwapDetail.push(`Vol ${volRatio.toFixed(1)}x surge`); }
-  else if (volRatio > 1.5) { vwapScore += _gain('VWAP', 10, `Vol ${volRatio.toFixed(1)}x`); vwapDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
-  if (lastRSI > 40 && lastRSI < 60) { vwapScore += _gain('VWAP', 8, 'RSI neutral zone'); vwapDetail.push('RSI neutral zone'); }
-  if (ema9[n - 1] > ema20[n - 1]) { vwapScore += _gain('VWAP', 8, 'EMA9>20 bullish'); vwapDetail.push('EMA9>20 bullish'); }
-  if (macdBull) { vwapScore += _gain('VWAP', 8, 'MACD bull'); vwapDetail.push('MACD bull'); }
-  if (macdCross) { vwapScore += _gain('VWAP', 6, 'Fresh MACD cross'); vwapDetail.push('Fresh MACD cross'); }
-  if (stBull) { vwapScore += _gain('VWAP', 5, 'ST bull'); vwapDetail.push('ST bull'); }
-  // Stochastic confirmation (Varsity M2 Ch18)
-  if (stochK > 20 && stochK < 80) { vwapScore += _gain('VWAP', 4, 'Stoch healthy'); vwapDetail.push('Stoch healthy'); }
-  // PDH/PDL context — Varsity M2: reclaim near PDL = institutional support level
-  if (Math.abs(px - pdLow) / pdLow < 0.01) { vwapScore += _gain('VWAP', 5, 'Near PDL support'); vwapDetail.push('Near PDL support'); }
-  // Penalty: too far above VWAP = chasing, not reclaim
-  if (pctVWAP > 2.0) { vwapScore += _penalty('VWAP', 20, 'Extended from VWAP — chasing'); vwapDetail.push('Extended from VWAP — chasing'); }
-  if (pctVWAP < -1.5) { vwapScore += _penalty('VWAP', 25, 'Still well below VWAP'); vwapDetail.push('Still well below VWAP'); }
-  vwapScore = Math.max(0, Math.min(100, vwapScore));
-
-  // ── SETUP 2: GAP & GO (Varsity M2 Ch7: gap theory + follow-through) ──
-  // Varsity: unfilled gaps with volume confirmation signal strong directional conviction.
-  // "Gap up + hold above gap fill level = bullish continuation." Must NOT have filled the gap.
-  let gapScore = 0, gapDetail = [];
-  const absGap = Math.abs(gapPct);
-  const gapFillLevel = prevClose; // the level the gap would "fill" to
-  const gapUnfilled  = gapPct > 0 ? (dayLow > gapFillLevel) : (gapPct < 0 ? (dayHigh < gapFillLevel) : false);
-  if (absGap >= 1.0 && absGap <= 6.0) {
-    gapScore += _gain('GAP', 20, `Gap ${gapPct > 0 ? '+' : ''}${gapPct.toFixed(1)}%`);
-    gapDetail.push(`Gap ${gapPct > 0 ? '+' : ''}${gapPct.toFixed(1)}%`);
-  }
-  // Varsity M2 Ch7: unfilled gap = much stronger signal than a partially filled one
-  if (gapUnfilled && absGap >= 1.0) {
-    gapScore += _gain('GAP', 15, 'Gap unfilled — strong conviction');
-    gapDetail.push('Gap unfilled — strong conviction');
-  }
-  // Follow-through: price at/above gap high (bullish) or at/below gap low (bearish)
-  if (gapPct > 0.5 && px > orHigh) {
-    gapScore += _gain('GAP', 20, 'Follow-through above OR');  // bullish gap with follow-through above OR high
-    gapDetail.push('Follow-through above OR');
-  } else if (gapPct < -0.5 && px < orLow) {
-    gapScore += _gain('GAP', 20, 'Gap-down break below OR');  // bearish gap with break below OR
-    gapDetail.push('Gap-down break below OR');
-  }
-  // Volume — Varsity M2: gap must be backed by volume to distinguish from noise
-  if (volRatio > 2.5) { gapScore += _gain('GAP', 20, `Vol spike ${volRatio.toFixed(1)}x`); gapDetail.push(`Vol spike ${volRatio.toFixed(1)}x`); }
-  else if (volRatio > 2.0) { gapScore += _gain('GAP', 15, `Vol ${volRatio.toFixed(1)}x`); gapDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
-  else if (volRatio > 1.5) { gapScore += _gain('GAP', 8, `Vol ${volRatio.toFixed(1)}x`); gapDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
-  if (adxVal > 25) { gapScore += _gain('GAP', 8, `ADX ${adxVal.toFixed(0)} trending`); gapDetail.push(`ADX ${adxVal.toFixed(0)} trending`); }
-  if (macdCross) { gapScore += _gain('GAP', 8, 'Fresh MACD cross'); gapDetail.push('Fresh MACD cross'); }
-  // RSI in momentum zone (50-75) — not exhausted but not dead (Varsity M2 Ch14)
-  if (gapPct > 0 && lastRSI > 50 && lastRSI < 75) { gapScore += _gain('GAP', 6, 'RSI momentum zone'); gapDetail.push('RSI momentum zone'); }
-  // EMA alignment — trend confirming the gap direction
-  if (gapPct > 0 && ema9[n - 1] > ema20[n - 1]) { gapScore += _gain('GAP', 5, 'EMA aligned bullish'); gapDetail.push('EMA aligned bullish'); }
-  // Penalty: gap too large = likely to fade (Varsity: >5% gaps often see partial retracement)
-  if (absGap > 6) { gapScore += _penalty('GAP', 20, 'Gap too wide — fade risk'); gapDetail.push('Gap too wide — fade risk'); }
-  else if (absGap > 4) { gapScore += _penalty('GAP', 5, 'Wide gap — partial fade risk'); gapDetail.push('Wide gap — partial fade risk'); }
-  // Penalty: gap filled = the thesis is invalidated
-  if (!gapUnfilled && absGap >= 1.0) { gapScore += _penalty('GAP', 15, 'Gap filled — weak'); gapDetail.push('Gap filled — weak'); }
-  if (absGap < 0.5) { gapScore = 0; gapDetail = ['No gap']; } // no gap = no setup
-  gapScore = Math.max(0, Math.min(100, gapScore));
-
-  // ── SETUP 3: BREAKOUT (Varsity M2 Ch7+16: S/R breakout + volume expansion) ──
-  // Varsity M2 Ch7: "A breakout accompanied by volume surge validates the move."
-  // Ch16: "Range contraction leads to range expansion" — Bollinger Squeeze precedes breakout.
-  // Price breaking above OR high, day high, or PDH with volume surge.
-  let breakoutScore = 0, breakoutDetail = [];
-  const nearDayHigh = px >= dayHigh * 0.998;  // within 0.2% of day high
-  const aboveOR     = px > orHigh;
-  const abovePDH    = px > pdHigh;  // Varsity M2: PDH is a key intraday resistance
-  if (nearDayHigh) { breakoutScore += _gain('BRK', 20, 'At day high'); breakoutDetail.push('At day high'); }
-  if (aboveOR) { breakoutScore += _gain('BRK', 15, 'Above OR'); breakoutDetail.push('Above OR'); }
-  if (abovePDH) { breakoutScore += _gain('BRK', 10, 'Above PDH — strong'); breakoutDetail.push('Above PDH — strong'); }
-  // Varsity M2 Ch7: volume MUST confirm the breakout — this is non-negotiable
-  if (volRatio > 2.5) { breakoutScore += _gain('BRK', 20, `Vol ${volRatio.toFixed(1)}x surge`); breakoutDetail.push(`Vol ${volRatio.toFixed(1)}x surge`); }
-  else if (volRatio > 2.0) { breakoutScore += _gain('BRK', 15, `Vol ${volRatio.toFixed(1)}x`); breakoutDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
-  else if (volRatio > 1.5) { breakoutScore += _gain('BRK', 8, `Vol ${volRatio.toFixed(1)}x`); breakoutDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
-  // Varsity M2 Ch16: Bollinger squeeze preceding breakout = compressed energy releasing
-  if (bbPct > 0.95) { breakoutScore += _gain('BRK', 10, 'BB upper breakout'); breakoutDetail.push('BB upper breakout'); }
-  // ADX > 25 = trend forming (Varsity M2: ADX measures trend STRENGTH)
-  if (adxVal > 30) { breakoutScore += _gain('BRK', 10, `ADX ${adxVal.toFixed(0)} strong trend`); breakoutDetail.push(`ADX ${adxVal.toFixed(0)} strong trend`); }
-  else if (adxVal > 25) { breakoutScore += _gain('BRK', 6, `ADX ${adxVal.toFixed(0)} trending`); breakoutDetail.push(`ADX ${adxVal.toFixed(0)} trending`); }
-  if (ema9[n - 1] > ema20[n - 1]) { breakoutScore += _gain('BRK', 5, 'EMA aligned'); breakoutDetail.push('EMA aligned'); }
-  if (stBull) { breakoutScore += _gain('BRK', 5, 'ST bull'); breakoutDetail.push('ST bull'); }
-  if (macdBull) { breakoutScore += _gain('BRK', 5, 'MACD bull'); breakoutDetail.push('MACD bull'); }
-  // Varsity M2 Ch18: Stochastic > 50 during breakout = momentum confirming
-  if (stochK > 50 && stochK < 85) { breakoutScore += _gain('BRK', 4, 'Stoch confirming'); breakoutDetail.push('Stoch confirming'); }
-  // OR range target: Varsity M2 Ch7: measure the OR range, project it above breakout
-  // This is implicit in the TGT calc but helps score — narrow OR = tight setup
-  if (orRange > 0 && orRange / px < 0.015) { breakoutScore += _gain('BRK', 3, 'Tight OR range'); breakoutDetail.push('Tight OR range'); }
-  // Penalty: breakout with weak volume = fake-out (Varsity M2 Ch7: "volume is the litmus test")
-  if (nearDayHigh && volRatio < 1.0) { breakoutScore += _penalty('BRK', 25, 'Low vol — likely fake-out'); breakoutDetail.push('Low vol — likely fake-out'); }
-  // Penalty: RSI overbought = exhaustion breakout
-  if (lastRSI > 80) { breakoutScore += _penalty('BRK', 15, 'RSI exhaustion zone'); breakoutDetail.push('RSI exhaustion zone'); }
-  else if (lastRSI > 75) { breakoutScore += _penalty('BRK', 8, 'RSI overbought'); breakoutDetail.push('RSI overbought'); }
-  breakoutScore = Math.max(0, Math.min(100, breakoutScore));
-
-  // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
-  // Varsity M2 Ch14: "RSI below 30 = oversold, historically 78% base rate of bounce within days."
-  // Ch15: "Bollinger bands — price touching lower band in liquid stock = mean-reversion setup."
-  // Ch18: "Stochastic %K < 20 + rising = early reversal confirmation."
-  let bounceScore = 0, bounceDetail = [];
-  if (lastRSI < 25) { bounceScore += _gain('BOUNCE', 30, `RSI ${lastRSI.toFixed(0)} extreme`); bounceDetail.push(`RSI ${lastRSI.toFixed(0)} extreme`); }
-  else if (lastRSI < 30) { bounceScore += _gain('BOUNCE', 25, `RSI ${lastRSI.toFixed(0)} oversold`); bounceDetail.push(`RSI ${lastRSI.toFixed(0)} oversold`); }
-  else if (lastRSI < 35) { bounceScore += _gain('BOUNCE', 15, `RSI ${lastRSI.toFixed(0)} near oversold`); bounceDetail.push(`RSI ${lastRSI.toFixed(0)} near oversold`); }
-  else if (lastRSI < 40) { bounceScore += _gain('BOUNCE', 5, `RSI ${lastRSI.toFixed(0)}`); bounceDetail.push(`RSI ${lastRSI.toFixed(0)}`); }
-  // Varsity M2 Ch18: Stochastic oversold confirmation — double-oversold = strongest signal
-  if (stochK < 15) { bounceScore += _gain('BOUNCE', 12, `Stoch ${stochK.toFixed(0)} extreme`); bounceDetail.push(`Stoch ${stochK.toFixed(0)} extreme`); }
-  else if (stochK < 20) { bounceScore += _gain('BOUNCE', 8, `Stoch ${stochK.toFixed(0)} oversold`); bounceDetail.push(`Stoch ${stochK.toFixed(0)} oversold`); }
-  // Price at lower BB = statistical extreme (Varsity M2 Ch15)
-  if (bbPct < 0.05) { bounceScore += _gain('BOUNCE', 18, 'Below lower BB'); bounceDetail.push('Below lower BB'); }
-  else if (bbPct < 0.15) { bounceScore += _gain('BOUNCE', 10, 'Near lower BB'); bounceDetail.push('Near lower BB'); }
-  // VWAP below = deeply discounted vs session average
-  if (pctVWAP < -2.0) { bounceScore += _gain('BOUNCE', 10, 'Well below VWAP'); bounceDetail.push('Well below VWAP'); }
-  else if (pctVWAP < -1.0) { bounceScore += _gain('BOUNCE', 5, 'Below VWAP'); bounceDetail.push('Below VWAP'); }
-  // Near PDL support — Varsity M2: PDL is institutional memory level
-  if (Math.abs(px - pdLow) / pdLow < 0.008) { bounceScore += _gain('BOUNCE', 5, 'Near PDL support'); bounceDetail.push('Near PDL support'); }
-  // Volume = capitulation / exhaustion (Varsity M2 Ch12: volume spike on selloff = exhaustion)
-  if (volRatio > 3.0) { bounceScore += _gain('BOUNCE', 15, 'Capitulation vol spike'); bounceDetail.push('Capitulation vol spike'); }
-  else if (volRatio > 2.0) { bounceScore += _gain('BOUNCE', 10, 'High vol exhaustion'); bounceDetail.push('High vol exhaustion'); }
-  else if (volRatio > 1.5) { bounceScore += _gain('BOUNCE', 5, 'Elevated vol'); bounceDetail.push('Elevated vol'); }
-  // Reversal candle pattern: current candle closing above its midpoint (hammer-like)
-  // Varsity M2 Ch11: "Hammer at support = buyers stepping in"
-  const candleMid = (last.high + last.low) / 2;
-  const longLowerWick = (Math.min(last.open, px) - last.low) > (last.high - last.low) * 0.6;
-  if (px > candleMid && last.low < L[n - 2]) {
-    bounceScore += _gain('BOUNCE', 8, 'Reversal candle'); bounceDetail.push('Reversal candle');
-    if (longLowerWick) { bounceScore += _gain('BOUNCE', 5, 'Hammer pattern'); bounceDetail.push('Hammer pattern'); }
-  }
-  // MACD turning — momentum shift (Varsity M2 Ch15)
-  if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
-  else if (macdBull) { bounceScore += _gain('BOUNCE', 4, 'MACD bull'); bounceDetail.push('MACD bull'); }
-  // Penalty: not actually oversold — RSI > 45 kills the thesis
-  if (lastRSI > 45) { bounceScore = 0; bounceDetail = ['Not oversold']; }
-  bounceScore = Math.max(0, Math.min(100, bounceScore));
-
-  // ── PICK BEST SETUP ────────────────────────────────────────────────────
-  const setups = [
-    { type: 'VWAP_RECLAIM', score: vwapScore, detail: vwapDetail, emoji: '🔵' },
-    { type: 'GAP_AND_GO',   score: gapScore,  detail: gapDetail,  emoji: '🚀' },
-    { type: 'BREAKOUT',     score: breakoutScore, detail: breakoutDetail, emoji: '📈' },
-    { type: 'OVERSOLD_BOUNCE', score: bounceScore, detail: bounceDetail, emoji: '🔄' },
-  ];
-  setups.sort((a, b) => b.score - a.score);
-  const best = setups[0];
-
-  // Overall day trade score = best setup score, boosted by multi-setup confirmation
-  const secondary = setups[1];
-  let overall = best.score;
-  if (secondary.score >= 40) overall = Math.min(100, overall + Math.round(secondary.score * 0.15));
-
-  // Multi-timeframe: daily trend alignment (Varsity M2 Ch22: "daily must align with weekly")
-  // Intraday long setups that align with the daily trend have much higher win rates.
-  const dailyF2 = stockFundamentals[sym];
-  if (dailyF2) {
-    let dailyBullSignals = 0;
-    // Golden cross (50DMA > 200DMA) = daily trend structurally bullish
-    if (dailyF2.goldenCross) { overall = Math.min(100, overall + _gain('MULTI', 5, 'Golden cross on daily (50DMA > 200DMA)')); dailyBullSignals++; }
-    // Price above 200DMA = long-term bullish context
-    if (dailyF2.pctAbove200 > 0) { overall = Math.min(100, overall + _gain('MULTI', 3, 'Price above daily 200DMA')); dailyBullSignals++; }
-    // Daily RSI in healthy zone (not overbought on daily while we trade intraday long)
-    if (dailyF2.rsi != null && dailyF2.rsi > 40 && dailyF2.rsi < 65) { overall = Math.min(100, overall + _gain('MULTI', 2, 'Daily RSI in healthy zone')); dailyBullSignals++; }
-    // Weekly trend confirmed — Varsity M2: the ultimate multi-timeframe signal
-    if (dailyF2.weeklyTrendConfirmed) { overall = Math.min(100, overall + _gain('MULTI', 4, 'Weekly trend confirmed')); dailyBullSignals++; }
-    // Daily supertrend bullish
-    if (dailyF2.supertrendSig === 'BUY' || dailyF2.supertrendSig === 'bullish') { overall = Math.min(100, overall + _gain('MULTI', 2, 'Daily Supertrend bullish')); dailyBullSignals++; }
-    // Dow Theory uptrend on daily — strongest structural confirmation
-    if (dailyF2.dowTheoryTrend === 'UPTREND') { overall = Math.min(100, overall + _gain('MULTI', 3, 'Dow Theory uptrend on daily')); dailyBullSignals++; }
-    // Penalty: daily trend bearish and we're taking intraday longs — lower conviction
-    // Varsity M2: "never fight the higher timeframe trend"
-    if (dailyF2.pctAbove200 < -5 && dailyF2.rsi < 35) overall = Math.max(0, overall + _penalty('MULTI', 10, 'Daily trend bearish (price below 200DMA, RSI extreme)'));
-    if (dailyF2.dowTheoryTrend === 'DOWNTREND') overall = Math.max(0, overall + _penalty('MULTI', 5, 'Dow Theory downtrend on daily'));
-  }
-
-  // Late session penalty
-  if (isLateTrade) { overall = Math.max(0, overall + _penalty('MULTI', 15, 'Late session penalty (after 3PM IST — Varsity M9)')); }
-
-  if (overall < 30) return null; // below threshold — not worth showing
-
-  // Stop loss + target based on setup type
-  // Varsity M9 (Risk Management): "Always define SL BEFORE entering. Never risk more than
-  // you expect to gain." Each setup uses structure-based SL, not arbitrary percentages.
-  let sl, tgt, rrRatio;
-  if (best.type === 'OVERSOLD_BOUNCE') {
-    // SL below the oversold candle's low or day low (Varsity M9: structural SL)
-    sl  = +(Math.min(dayLow, last.low) * 0.997).toFixed(2);
-    tgt = +(px + (px - sl) * 2).toFixed(2);  // 2:1 R:R — mean reversion targets are generous
-  } else if (best.type === 'BREAKOUT') {
-    // SL at OR midpoint — Varsity M2 Ch7: "if price re-enters the range, breakout failed"
-    const orMid = (orHigh + orLow) / 2;
-    sl  = +(Math.max(orMid, dayLow * 0.998)).toFixed(2);
-    // TGT: project OR range above breakout level (Varsity: measured move)
-    tgt = +(px + Math.max(orRange * 1.5, (px - sl) * 2)).toFixed(2);
-  } else if (best.type === 'GAP_AND_GO') {
-    // SL at gap fill level (prev close) — Varsity M2 Ch7: "gap fill = thesis invalidated"
-    sl  = +(prevClose * 0.998).toFixed(2);
-    tgt = +(px + Math.abs(gapPct / 100 * px) * 1.2).toFixed(2);
-    // Fallback if gap is tiny
-    if (tgt <= px) tgt = +(px + (px - sl) * 1.5).toFixed(2);
-  } else { // VWAP_RECLAIM
-    // SL below VWAP — Varsity M2 Ch13: "if price drops back below VWAP, reclaim failed"
-    sl  = +(lastVWAP * 0.995).toFixed(2);
-    tgt = +(px + (px - sl) * 2).toFixed(2);
-  }
-
-  // Varsity M9: ATR-based stop loss — SL must be at least 1 ATR away from entry
-  const atrSlice = candles.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)));
-  const atr14val = atrSlice.slice(-14).reduce((a, b) => a + b, 0) / 14;
-  const minSLDist = atr14val;
-  if (px - sl < minSLDist) sl = +(px - minSLDist).toFixed(2);
-  // Recalc targets and RR after ATR adjustment
-  tgt = +(px + (px - sl) * Math.max(1.5, rrRatio || 1.5)).toFixed(2);
-  rrRatio = sl < px ? +((tgt - px) / (px - sl)).toFixed(1) : 0;
-
-  // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward
-  if (rrRatio < 1.0) return null;
-
-  // ── RISK MANAGEMENT PLAN (Varsity M9 + M2) ──────────────────────────────
-  // Comprehensive SL/TGT/position-sizing recommendation grounded in Varsity knowledge
-
-  const riskPerTrade = px * 0.02;  // Varsity M9: max 2% of capital risk per trade (proxy: 2% of price)
-  const slDist = +(px - sl).toFixed(2);
-  const slPct  = +((px - sl) / px * 100).toFixed(2);
-  const tgtDist = +(tgt - px).toFixed(2);
-  const tgtPct  = +((tgt - px) / px * 100).toFixed(2);
-
-  // Position sizing: Varsity M9 Ch2 — "Risk per trade = Capital × 2%. Qty = Risk / (Entry − SL)"
-  // We compute qty for ₹1L, ₹5L, ₹10L capital
-  const qtyPer1L  = slDist > 0 ? Math.floor((100000 * 0.02) / slDist) : 0;
-  const qtyPer5L  = slDist > 0 ? Math.floor((500000 * 0.02) / slDist) : 0;
-  const qtyPer10L = slDist > 0 ? Math.floor((1000000 * 0.02) / slDist) : 0;
-
-  // SL reason — WHY this stop loss level
-  let slReason, slVarsityRef;
-  if (best.type === 'OVERSOLD_BOUNCE') {
-    slReason = 'Below the oversold candle low / day low — if price makes a new low, the bounce thesis is dead';
-    slVarsityRef = 'Varsity M9: structural SL below the reversal candle';
-  } else if (best.type === 'BREAKOUT') {
-    slReason = 'At Opening Range midpoint — if price re-enters the range, the breakout failed';
-    slVarsityRef = 'Varsity M2 Ch7: breakout failure = price returning inside the base';
-  } else if (best.type === 'GAP_AND_GO') {
-    slReason = 'At previous close (gap fill level) — if the gap fills completely, the momentum thesis is invalidated';
-    slVarsityRef = 'Varsity M2 Ch7: gap fill = directional conviction lost';
-  } else {
-    slReason = 'Below VWAP — if price drops back below VWAP after reclaiming, institutions are not defending';
-    slVarsityRef = 'Varsity M2 Ch13: failed VWAP reclaim = no institutional support';
-  }
-
-  // ATR context
-  const atrPct = +((atr14val / px) * 100).toFixed(2);
-  const slIsATRWidened = slDist >= atr14val * 0.95; // was SL widened by ATR floor?
-
-  // Trailing SL levels — Varsity M9: "trail your SL to lock in profits as the trade moves in your favour"
-  const trail1 = +(px + (tgt - px) * 0.33).toFixed(2); // after 33% of target reached, trail SL to entry (breakeven)
-  const trail2 = +(px + (tgt - px) * 0.5).toFixed(2);  // after 50%, trail SL to +25% of move
-  const trail3 = +(px + (tgt - px) * 0.75).toFixed(2); // after 75%, trail SL to +50% of move
-  const trailSLBreakeven = +px.toFixed(2); // breakeven SL
-  const trailSL50 = +(px + (tgt - px) * 0.25).toFixed(2); // SL at 25% of move
-  const trailSL75 = +(px + (tgt - px) * 0.5).toFixed(2);  // SL at 50% of move
-
-  // Partial exit targets — Varsity M9: "book partial profits to reduce risk"
-  const tgt1 = +(px + (tgt - px) * 0.5).toFixed(2);   // partial exit at 50% of target
-  const tgt2 = tgt;                                     // full target
-  const tgt3 = +(px + (tgt - px) * 1.5).toFixed(2);   // extended target if momentum continues
-
-  // Time-based exit — Varsity M9: don't hold intraday positions into close without a reason
-  let timeExit = 'Exit by 3:15 PM IST if target not hit — avoid overnight risk on intraday positions';
-  if (best.type === 'OVERSOLD_BOUNCE') {
-    timeExit = 'Mean reversion targets should hit within 30-60 min. If RSI recovers above 50 but price stalls, exit. Must exit by 3:15 PM.';
-  } else if (best.type === 'GAP_AND_GO') {
-    timeExit = 'Gap momentum is strongest in the first 60-90 min. If price stalls after OR period, tighten SL to breakeven. Exit by 3:15 PM.';
-  } else if (best.type === 'BREAKOUT') {
-    timeExit = 'Breakout should show follow-through within 2-3 candles (10-15 min). If no follow-through with declining volume, exit at breakeven. Exit by 3:15 PM.';
-  }
-
-  // Re-entry rules
-  let reEntryRule;
-  if (best.type === 'VWAP_RECLAIM') {
-    reEntryRule = 'If stopped out, re-enter only if price reclaims VWAP again with higher volume than the first attempt.';
-  } else if (best.type === 'BREAKOUT') {
-    reEntryRule = 'If stopped out on fake-out, wait for a 2nd breakout attempt with volume > 2x avg before re-entering.';
-  } else if (best.type === 'GAP_AND_GO') {
-    reEntryRule = 'Do NOT re-enter if gap has filled. A filled gap means the thesis is completely invalidated.';
-  } else {
-    reEntryRule = 'If stopped out, wait for RSI to make a new low below 25 before attempting a second bounce entry.';
-  }
-
-  // Build the riskPlan object
-  const riskPlan = {
-    // SL details
-    sl, slDist, slPct,
-    slReason, slVarsityRef,
-    atr14: +atr14val.toFixed(2), atrPct,
-    slIsATRWidened,
-    slNote: slIsATRWidened ? 'SL widened to 1 ATR (' + atr14val.toFixed(2) + ') from entry — Varsity M9: SL must respect volatility' : 'Setup-specific SL is wider than ATR — good structural level',
-
-    // TGT details
-    tgt, tgtDist, tgtPct, rrRatio,
-    partialTargets: [
-      { label: 'T1 (50%)', price: tgt1, action: 'Book 50% position, trail SL to breakeven', pct: +((tgt1 - px) / px * 100).toFixed(1) },
-      { label: 'T2 (Full)', price: tgt2, action: 'Book remaining position at full target', pct: tgtPct },
-      { label: 'T3 (Extended)', price: tgt3, action: 'Only if strong momentum + volume continues past T2', pct: +((tgt3 - px) / px * 100).toFixed(1) },
-    ],
-
-    // Trailing SL plan
-    trailingPlan: [
-      { trigger: 'Price hits ' + trail1.toFixed(2) + ' (+33% to target)', newSL: trailSLBreakeven, label: 'Move SL to breakeven (' + trailSLBreakeven + ')' },
-      { trigger: 'Price hits ' + trail2.toFixed(2) + ' (+50% to target)', newSL: trailSL50, label: 'Trail SL to ' + trailSL50 + ' (lock +25% of move)' },
-      { trigger: 'Price hits ' + trail3.toFixed(2) + ' (+75% to target)', newSL: trailSL75, label: 'Trail SL to ' + trailSL75 + ' (lock +50% of move)' },
-    ],
-
-    // Position sizing
-    positionSizing: {
-      method: 'Varsity M9: Risk = 2% of capital. Qty = Risk ÷ (Entry − SL)',
-      examples: [
-        { capital: '₹1L', qty: qtyPer1L, risk: '₹' + (qtyPer1L * slDist).toFixed(0) },
-        { capital: '₹5L', qty: qtyPer5L, risk: '₹' + (qtyPer5L * slDist).toFixed(0) },
-        { capital: '₹10L', qty: qtyPer10L, risk: '₹' + (qtyPer10L * slDist).toFixed(0) },
-      ],
-    },
-
-    // Exit rules
-    timeExit,
-    reEntryRule,
-
-    // Danger signals — when to exit immediately regardless of SL
-    dangerSignals: [
-      'Volume drops below average while price is near SL — no buying support',
-      best.type === 'BREAKOUT' ? 'Price closes back inside the Opening Range — breakout failed' : null,
-      best.type === 'GAP_AND_GO' ? 'Gap fills (price crosses prev close) — exit immediately, don\'t wait for SL' : null,
-      best.type === 'VWAP_RECLAIM' ? 'Price closes below VWAP on increasing volume — institutions selling, not defending' : null,
-      best.type === 'OVERSOLD_BOUNCE' ? 'RSI makes new low below previous dip — no reversal, deeper selloff likely' : null,
-      lastRSI > 75 ? 'RSI already near overbought — limited upside remaining' : null,
-      'Nifty/index drops sharply while your stock is flat — sector drag incoming',
-    ].filter(Boolean),
-  };
-
-  // Verdict
-  let verdict, verdictColor;
-  if (overall >= 75) { verdict = 'Strong Entry'; verdictColor = '#22c55e'; }
-  else if (overall >= 60) { verdict = 'Good Setup'; verdictColor = '#86efac'; }
-  else if (overall >= 45) { verdict = 'Developing'; verdictColor = '#f59e0b'; }
-  else { verdict = 'Weak'; verdictColor = '#94a3b8'; }
-
-  // Build whyPicked explanation
-  const whyPicked = best.type === 'VWAP_RECLAIM'
-    ? 'Price was below VWAP recently and is now reclaiming from below' + (volRatio > 1.5 ? ' with ' + volRatio.toFixed(1) + 'x volume surge' : '') + '. VWAP is the institutional benchmark (Varsity M2 Ch13).'
-    : best.type === 'GAP_AND_GO'
-    ? 'Stock gapped ' + (gapPct > 0 ? 'up' : 'down') + ' ' + Math.abs(gapPct).toFixed(1) + '% from previous close' + (gapUnfilled ? ' and gap remains unfilled' : '') + '. Gap theory per Varsity M2 Ch7.'
-    : best.type === 'BREAKOUT'
-    ? 'Price breaking ' + (abovePDH ? 'above previous day high' : aboveOR ? 'above opening range' : 'to new day high') + (volRatio > 1.5 ? ' with ' + volRatio.toFixed(1) + 'x volume confirmation' : '') + '. S/R breakout per Varsity M2 Ch7+16.'
-    : 'RSI at ' + lastRSI.toFixed(0) + ' (oversold) ' + (bbPct < 0.15 ? 'near lower Bollinger Band' : '') + (stochK < 20 ? ', Stochastic extreme at ' + stochK.toFixed(0) : '') + '. Mean reversion setup per Varsity M2 Ch14+15+18.';
-
-  // Filter _track for the winning setup + multi-timeframe
-  const bestBucket = best.type === 'VWAP_RECLAIM' ? 'VWAP' : best.type === 'GAP_AND_GO' ? 'GAP' : best.type === 'BREAKOUT' ? 'BRK' : 'BOUNCE';
-  const scoreGains = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'gain');
-  const scorePenalties = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'penalty');
-
-  return {
-    sym, name: f?.name || sym, grp: f?.grp || 'Unknown', sector: f?.sector || 'Other',
-    price: +px.toFixed(2),
-    // Overall
-    dayTradeScore: overall,
-    verdict, verdictColor,
-    bestSetup: best.type, bestSetupEmoji: best.emoji, bestSetupScore: best.score,
-    bestDetail: best.detail.join(' · '),
-    // All setup scores
-    vwapScore, gapScore, breakoutScore, bounceScore,
-    // Technicals
-    rsi5m: +lastRSI.toFixed(0), vwapDist: +pctVWAP.toFixed(2), volRatio: +volRatio.toFixed(1),
-    gapPct: +gapPct.toFixed(1), adx5m: +adxVal.toFixed(0),
-    ema9: +ema9[n - 1].toFixed(2), ema20: +ema20[n - 1].toFixed(2),
-    macdBull, stBull, stochK: +stochK.toFixed(0),
-    orHigh: +orHigh.toFixed(2), orLow: +orLow.toFixed(2), orRange: +orRange.toFixed(2),
-    dayHigh: +dayHigh.toFixed(2), dayLow: +dayLow.toFixed(2),
-    pdHigh: +pdHigh.toFixed(2), pdLow: +pdLow.toFixed(2),
-    bbPct: +bbPct.toFixed(2), gapUnfilled,
-    // Risk
-    sl, tgt, rrRatio,
-    // Risk management plan (Varsity M9)
-    riskPlan,
-    // Score explanation (WHY picked, WHY scored, WHY lost points)
-    whyPicked,
-    scoreGains,
-    scorePenalties,
-    // Metadata
-    scannedAt: Date.now(),
-  };
-}
-
-// Scan all UNIVERSE stocks on 5-min candles and populate _dayTradeCache
-async function scanDayTrades() {
-  if (_dayTradeScanning) return;
-  if (!isMarketOpen()) return;
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
-
-  _dayTradeScanning = true;
-  const t0 = Date.now();
-  let ok = 0, fail = 0;
-  const results = [];
-
-  try {
-    const today   = new Date().toISOString().split('T')[0];
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    for (const stock of UNIVERSE) {
-      try {
-        const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
-        if (!token) { await delay(200); continue; }
-
-        const candles = await Promise.race([
-          kite.getHistoricalData(token, '5minute', weekAgo, today),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
-        ]);
-        if (!candles || candles.length < 30) { fail++; await delay(250); continue; }
-
-        // Update livePrices
-        const last = candles[candles.length - 1];
-        livePrices[stock.sym] = { price: last.close, open: last.open, high: last.high, low: last.low, volume: last.volume };
-
-        const scored = scoreDayTrade(candles, stock.sym);
-        if (scored) {
-          scored.optionRec = getOptionRecommendation(stock.sym, scored.price, scored.bestSetup, scored.sl, scored.tgt, scored.rrRatio);
-          results.push(scored);
-        }
-        ok++;
-      } catch (e) { fail++; }
-      await delay(250); // Kite rate limit
-    }
-
-    // Sort by dayTradeScore descending — best setups first
-    results.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-    _dayTradeCache   = results;
-    _dayTradeCacheTs = Date.now();
-    console.log(`📊 DayTrade scan: ${ok} scanned, ${results.length} setups found, ${fail} failed (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-  } catch (e) {
-    console.error('DayTrade scan error:', e.message);
-  } finally {
-    _dayTradeScanning = false;
-  }
-}
-
-// API endpoint — admin only
-app.get('/api/stocks/picks/daytrade', (req, res) => {
-  const setupFilter = req.query.setup; // optional: VWAP_RECLAIM, GAP_AND_GO, BREAKOUT, OVERSOLD_BOUNCE
-  let picks = _dayTradeCache;
-  if (setupFilter && ['VWAP_RECLAIM', 'GAP_AND_GO', 'BREAKOUT', 'OVERSOLD_BOUNCE'].includes(setupFilter)) {
-    picks = picks.filter(p => p.bestSetup === setupFilter);
-  }
-  res.json({
-    stocks: picks,
-    total: picks.length,
-    lastScannedAt: _dayTradeCacheTs ? new Date(_dayTradeCacheTs).toISOString() : null,
-    marketOpen: isMarketOpen(),
-    scanInterval: '5 min',
-  });
-});
-
-// Option chain for a specific stock — used by UI for detailed view
-app.get('/api/stocks/options/:sym', (req, res) => {
-  const sym = req.params.sym.toUpperCase();
-  const options = _nfoInstruments[sym];
-  if (!options || !options.length) return res.json({ available: false, sym, message: 'No F&O data — stock may not be in F&O segment' });
-
-  // Group by expiry
-  const byExpiry = {};
-  options.forEach(o => {
-    const key = o.expiry;
-    if (!byExpiry[key]) byExpiry[key] = { expiry: key, ce: [], pe: [] };
-    if (o.type === 'CE') byExpiry[key].ce.push(o);
-    else byExpiry[key].pe.push(o);
-  });
-
-  const optData = _marketDataCache?.optionData?.[sym] || null;
-
-  res.json({
-    available: true,
-    sym,
-    expiries: Object.values(byExpiry).sort((a, b) => new Date(a.expiry) - new Date(b.expiry)),
-    spot: optData?.spot || livePrices[sym]?.price || null,
-    pcr: optData?.pcr || null,
-    maxPain: optData?.maxPain || null,
-    atmIV: optData?.atmIV || null,
-    ivRank: optData?.ivRank || null,
-    nfoLastRefresh: _nfoLastRefresh ? new Date(_nfoLastRefresh).toISOString() : null,
-  });
-});
-
-// Admin trigger for unified pipeline
-app.post('/api/admin/unified-pipeline', async (req, res) => {
-  if (_unifiedPipelineRunning) return res.json({ status: 'already_running' });
-  runUnifiedKitePipeline().catch(e => console.error('Manual pipeline error:', e.message));
-  res.json({ status: 'started', message: 'Unified Kite pipeline triggered — fetching + scoring in parallel' });
-});
-
-// ===============================================================================
-// UNIFIED KITE PIPELINE — fetch once, rescore + daytrade in parallel
-// ===============================================================================
-// Problem solved: previously intradayRescoreTA() and scanDayTrades() both hit Kite
-// independently, doubling API load and risking rate limits. Now we fetch both daily
-// AND 5-min candles in a single pass per stock, then feed both scoring engines
-// simultaneously. Also: TA rescore happens incrementally (score per batch, not wait
-// for all stocks) so picks update faster during market hours.
-
-let _unifiedPipelineRunning = false;
-
-async function runUnifiedKitePipeline() {
-  if (_unifiedPipelineRunning) { console.log('🔄 Unified pipeline already running, skipping'); return; }
-  if (!isMarketOpen()) return;
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
-
-  _unifiedPipelineRunning = true;
-  const t0 = Date.now();
-  let okTA = 0, okDT = 0, failTA = 0, failDT = 0;
-  const dayTradeResults = [];
-
-  try {
-    // Pre-fetch Nifty benchmark (non-blocking, best-effort)
-    try {
-      const niftyCandles = await fetchKiteDaily('NIFTY 50');
-      if (niftyCandles && niftyCandles.length > 0) {
-        const NC = niftyCandles.map(c => c.close);
-        const nn = NC.length;
-        niftyBenchmark['52w'] = nn >= 252 ? (NC[nn-1] - NC[nn-252]) / NC[nn-252] : 0;
-        niftyBenchmark['6m']  = nn >= 126 ? (NC[nn-1] - NC[nn-126]) / NC[nn-126] : 0;
-        niftyBenchmark['3m']  = nn >= 63  ? (NC[nn-1] - NC[nn-63])  / NC[nn-63]  : 0;
-        niftyBenchmark['1m']  = nn >= 21  ? (NC[nn-1] - NC[nn-21])  / NC[nn-21]  : 0;
-      }
-    } catch (e) { /* non-critical */ }
-
-    const syms = Object.keys(stockFundamentals);
-    const today   = new Date().toISOString().split('T')[0];
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    // Process in batches of 5 — fetch daily + 5-min candles for each stock,
-    // then immediately score both. No waiting for full universe to finish.
-    const BATCH = 5;
-    for (let i = 0; i < syms.length; i += BATCH) {
-      const batch = syms.slice(i, i + BATCH);
-
-      await Promise.all(batch.map(async (sym) => {
-        const token = validTokens[sym] || INSTRUMENTS[sym];
-        if (!token) return;
-
-        // Fetch DAILY + 5-MIN candles in parallel for this stock
-        const [dailyCandles, fiveMinCandles] = await Promise.all([
-          fetchKiteDaily(sym).catch(() => null),
-          kite.getHistoricalData(token, '5minute', weekAgo, today)
-            .catch(() => null),
-        ]);
-
-        // ── TA Rescore path (daily candles → TA fields → stockFundamentals) ──
-        if (dailyCandles) {
-          try {
-            const tech = computeTechnicals(dailyCandles);
-            const sf = stockFundamentals[sym];
-            if (sf) {
-              for (const key of TA_FIELDS) {
-                if (tech[key] !== undefined) sf[key] = tech[key];
-              }
-              sf.fetchedAt = Date.now();
-            }
-            okTA++;
-          } catch (e) { failTA++; }
-        } else { failTA++; }
-
-        // ── DayTrade scoring path (5-min candles → setup detectors) ──
-        if (fiveMinCandles && fiveMinCandles.length >= 30) {
-          try {
-            // Update livePrices while we're at it
-            const lastC = fiveMinCandles[fiveMinCandles.length - 1];
-            livePrices[sym] = { price: lastC.close, open: lastC.open, high: lastC.high, low: lastC.low, volume: lastC.volume };
-            const scored = scoreDayTrade(fiveMinCandles, sym);
-            if (scored) {
-              scored.optionRec = getOptionRecommendation(sym, scored.price, scored.bestSetup, scored.sl, scored.tgt, scored.rrRatio);
-              dayTradeResults.push(scored);
-            }
-            okDT++;
-          } catch (e) { failDT++; }
-        } else { failDT++; }
-      }));
-
-      // Respect Kite rate limits — 5 stocks × 2 requests each = 10 req per batch
-      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 350));
-    }
-
-    // ── Rebuild score caches (both in parallel) ──
-    const [,] = await Promise.all([
-      // Rebuild the daily score cache with fresh TA data
-      rebuildScoreCache().catch(e => console.error('Score cache rebuild error:', e.message)),
-      // Sort and update DayTrade cache immediately
-      Promise.resolve().then(() => {
-        dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-        _dayTradeCache   = dayTradeResults;
-        _dayTradeCacheTs = Date.now();
-      }),
-    ]);
-
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    console.log(`🔄 Unified pipeline: TA ${okTA}ok/${failTA}fail · DayTrade ${okDT}ok/${failDT}fail · ${dayTradeResults.length} setups · ${elapsed}s`);
-  } catch (e) {
-    console.error('🔄 Unified pipeline error:', e.message);
-  } finally {
-    _unifiedPipelineRunning = false;
-  }
 }
 
 // ===============================================================================
@@ -4889,22 +4136,84 @@ app.get('/api/auth/me', async (req, res) => {
   } catch (e) { res.status(401).json({ error: 'Invalid session' }); }
 });
 
-// Auth middleware — protects all /api/* routes (except auth routes themselves)
+// Auth middleware — protects all /api/* routes (except auth routes and public routes)
+// Public routes are read-only data endpoints that public users can access without login.
+// NOTE: Middleware is mounted via app.use('/api', ...) so req.path inside
+// the middleware has the '/api' prefix STRIPPED.  e.g. a request to
+// /api/stocks/score arrives with req.path === '/stocks/score'.
+const PUBLIC_ROUTE_PREFIXES = [
+  '/auth/',
+  '/stocks/score',        // Stock Picks + Stock Data (scored universe)
+  '/stocks/analyze/',     // Deep Analyzer (per-stock analysis)
+  '/stocks/bucket-stats', // Bucket stats
+  '/universe/',           // Universe list — stock dropdown for Analyzer, Picks
+  '/mf/',                 // MF Picks data (but not import/rebuild which are admin POST)
+  '/picks/ai-review',     // GET cached AI review results (public can VIEW but not trigger)
+  '/ai/reviews',          // GET cached AI reviews
+  '/ai/disagrees',        // GET cached AI disagreements
+  '/ai/status',           // AI status
+  '/ai/validation',       // GET cached AI validation results
+  '/health/',             // Health checks
+  '/portfolio/regime',    // Market regime data
+  '/portfolio/model',     // Portfolio model data (read-only)
+  '/portfolio/positions', // Portfolio positions (read-only)
+  '/portfolio/performance', // Portfolio performance (read-only)
+  '/portfolio/signals',   // Portfolio signals (read-only GET)
+  '/analytics/',          // Analytics data
+];
+// Admin-only routes that should NEVER be public even if prefix matches
+const ADMIN_ONLY_ROUTES = [
+  '/mf/import',
+  '/mf/rebuild-cache',
+  '/universe/refresh',
+  '/admin/',
+  '/mirofish/',
+  '/mirofish-lab/',
+  '/screener/',
+  '/fundamentals/',
+  '/test/',
+  '/stocks/rescore',
+];
 function authMiddleware(req, res, next) {
-  // Allow auth routes through
-  if (req.path.startsWith('/api/auth/')) return next();
-  // Check Bearer header, then cookie, then query param — so direct browser access works
+  // Check if this is an admin-only route first
+  const isAdminOnly = ADMIN_ONLY_ROUTES.some(p => req.path.startsWith(p));
+  // Check if this is a public-accessible route
+  const isPublic = !isAdminOnly && PUBLIC_ROUTE_PREFIXES.some(p => req.path.startsWith(p));
+  // Write operations on public routes still require auth (AI triggers, holdings add/delete, etc.)
+  const isWriteOp = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+  const isAITrigger = isWriteOp && (
+    req.path.includes('/ai') || req.path.includes('/ai-review')
+  );
+  // All non-GET on public routes require auth (prevents public POST/DELETE to holdings, etc.)
+  const isPublicWrite = isPublic && isWriteOp;
+
+  // Check Bearer header, then cookie, then query param
   const token = (req.headers.authorization || '').replace('Bearer ', '')
     || (req.headers.cookie || '').split(';').map(c=>c.trim()).find(c=>c.startsWith('session_token='))?.split('=')[1]
     || req.query.token || '';
-  if (!token) return res.status(401).json({ error: 'Authentication required' });
-  pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
-    .then(result => {
-      if (result.rows.length === 0) return res.status(401).json({ error: 'Session expired' });
-      req.user = result.rows[0];
-      next();
-    })
-    .catch(() => res.status(401).json({ error: 'Auth error' }));
+
+  if (token) {
+    // Authenticated request — validate token
+    return pool.query('SELECT username, role FROM sessions WHERE token=$1 AND expires_at > NOW()', [token])
+      .then(result => {
+        if (result.rows.length > 0) {
+          req.user = result.rows[0];
+        }
+        next();
+      })
+      .catch(() => {
+        if (isPublic && !isPublicWrite) { req.user = { username: 'public', role: 'public' }; return next(); }
+        res.status(401).json({ error: 'Auth error' });
+      });
+  }
+
+  // No token — allow public GET routes through with a synthetic public user
+  if (isPublic && !isPublicWrite) {
+    req.user = { username: 'public', role: 'public' };
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Authentication required' });
 }
 
 // Apply auth middleware to all API routes
@@ -5080,234 +4389,7 @@ async function refreshInstruments() {
   }
 }
 
-// ═══ NFO Options Instruments Cache ═══
-// Stores all option contracts per underlying, grouped by expiry
-let _nfoInstruments = {}; // sym -> [{token, strike, type:'CE'|'PE', expiry:Date, tradingsymbol}]
-let _nfoLastRefresh = 0;
-
-async function refreshNFOInstruments() {
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
-  try {
-    console.log('📋 Fetching NFO instrument list from Kite...');
-    const instruments = await kite.getInstruments('NFO');
-    const nfo = {};
-    const now = new Date();
-
-    instruments.forEach(inst => {
-      // Only stock options (not index, not futures)
-      if (inst.segment !== 'NFO-OPT') return;
-      if (inst.instrument_type !== 'CE' && inst.instrument_type !== 'PE') return;
-
-      // Only current + next week expiry (skip far-month options)
-      const expiry = new Date(inst.expiry);
-      const daysToExpiry = (expiry - now) / (1000 * 60 * 60 * 24);
-      if (daysToExpiry < 0 || daysToExpiry > 14) return;
-
-      const sym = inst.name; // underlying symbol e.g. "RELIANCE"
-      if (!nfo[sym]) nfo[sym] = [];
-      nfo[sym].push({
-        token: inst.instrument_token,
-        strike: inst.strike,
-        type: inst.instrument_type, // 'CE' or 'PE'
-        expiry: inst.expiry,
-        tradingsymbol: inst.tradingsymbol, // e.g. "RELIANCE24APR2900CE"
-        lotSize: inst.lot_size,
-      });
-    });
-
-    // Sort each symbol's options by expiry (nearest first), then by strike
-    Object.values(nfo).forEach(arr => {
-      arr.sort((a, b) => new Date(a.expiry) - new Date(b.expiry) || a.strike - b.strike);
-    });
-
-    _nfoInstruments = nfo;
-    _nfoLastRefresh = Date.now();
-    console.log(`✅ NFO instruments cached: ${Object.keys(nfo).length} underlyings, ${instruments.filter(i => i.segment === 'NFO-OPT').length} contracts`);
-  } catch (e) {
-    console.error('❌ NFO instruments fetch failed:', e.message);
-  }
-}
-
 app.get("/api/instruments", (req,res) => res.json(validTokens));
-
-// ═══ Option Recommendation Engine ═══
-// For each DayTrade pick, recommends the best option to trade
-
-function getOptionRecommendation(sym, price, setup, sl, tgt, rrRatio) {
-  const options = _nfoInstruments[sym];
-  if (!options || !options.length) return null;
-
-  // Determine direction from setup type
-  const isBullish = setup === 'VWAP_RECLAIM' || setup === 'GAP_AND_GO' || setup === 'BREAKOUT';
-  // OVERSOLD_BOUNCE is also bullish (mean reversion up)
-  const direction = isBullish || setup === 'OVERSOLD_BOUNCE' ? 'BULL' : 'BEAR';
-
-  // Find nearest expiry (current week)
-  const expiries = [...new Set(options.map(o => o.expiry))].sort((a, b) => new Date(a) - new Date(b));
-  const nearestExpiry = expiries[0];
-  if (!nearestExpiry) return null;
-
-  // Check if nearest expiry is today or tomorrow — if so, prefer next expiry (theta risk)
-  const now = new Date();
-  const expiryDate = new Date(nearestExpiry);
-  const hoursToExpiry = (expiryDate - now) / (1000 * 60 * 60);
-  const targetExpiry = (hoursToExpiry < 8 && expiries.length > 1) ? expiries[1] : nearestExpiry;
-
-  // Filter options for target expiry
-  const expiryOptions = options.filter(o => o.expiry === targetExpiry);
-  const ceOptions = expiryOptions.filter(o => o.type === 'CE').sort((a, b) => a.strike - b.strike);
-  const peOptions = expiryOptions.filter(o => o.type === 'PE').sort((a, b) => b.strike - a.strike);
-
-  // Find ATM strike (closest to current price)
-  const allStrikes = [...new Set(expiryOptions.map(o => o.strike))].sort((a, b) => a - b);
-  if (!allStrikes.length) return null;
-
-  const atmStrike = allStrikes.reduce((best, s) => Math.abs(s - price) < Math.abs(best - price) ? s : best);
-  const strikeGap = allStrikes.length > 1 ? Math.abs(allStrikes[1] - allStrikes[0]) : 50;
-
-  // Get option data from existing market cache if available
-  const optData = (_marketDataCache && _marketDataCache.optionData) ? _marketDataCache.optionData[sym] : null;
-  const pcr = optData ? optData.pcr : null;
-  const maxPain = optData ? optData.maxPain : null;
-  const atmIV = optData ? optData.atmIV : null;
-  const ivRank = optData ? optData.ivRank : null;
-
-  // ── Primary recommendation: simple CE or PE ──
-  let primary, primaryType, primaryStrike, primaryOption;
-
-  if (direction === 'BULL') {
-    // Buy CE — ATM or 1 strike OTM for better risk/reward
-    primaryType = 'CE';
-    // If score is high (confident), go ATM; if moderate, go 1 OTM for cheaper entry
-    primaryStrike = atmStrike; // ATM CE
-    const otm1Strike = allStrikes.find(s => s > atmStrike);
-
-    primaryOption = ceOptions.find(o => o.strike === primaryStrike);
-    const otm1Option = otm1Strike ? ceOptions.find(o => o.strike === otm1Strike) : null;
-
-    primary = {
-      action: 'BUY',
-      type: 'CE',
-      strike: primaryStrike,
-      expiry: targetExpiry,
-      tradingsymbol: primaryOption ? primaryOption.tradingsymbol : `${sym}${primaryStrike}CE`,
-      lotSize: primaryOption ? primaryOption.lotSize : 0,
-      token: primaryOption ? primaryOption.token : null,
-      rationale: `Bullish ${setup.replace(/_/g,' ')} → Buy ${primaryStrike} CE`,
-    };
-  } else {
-    // Buy PE — ATM
-    primaryType = 'PE';
-    primaryStrike = atmStrike;
-    primaryOption = peOptions.find(o => o.strike === primaryStrike);
-
-    primary = {
-      action: 'BUY',
-      type: 'PE',
-      strike: primaryStrike,
-      expiry: targetExpiry,
-      tradingsymbol: primaryOption ? primaryOption.tradingsymbol : `${sym}${primaryStrike}PE`,
-      lotSize: primaryOption ? primaryOption.lotSize : 0,
-      token: primaryOption ? primaryOption.token : null,
-      rationale: `Bearish setup → Buy ${primaryStrike} PE`,
-    };
-  }
-
-  // ── Strategy alternatives (shown in expanded row) ──
-  const strategies = [];
-
-  if (direction === 'BULL') {
-    // Strategy 1: Bull Call Spread (lower risk)
-    const otm1 = allStrikes.find(s => s > atmStrike);
-    const otm2 = allStrikes.find(s => s > (otm1 || atmStrike));
-    if (otm1) {
-      strategies.push({
-        name: 'Bull Call Spread',
-        legs: [
-          { action: 'BUY', type: 'CE', strike: atmStrike },
-          { action: 'SELL', type: 'CE', strike: otm1 },
-        ],
-        maxProfit: `₹${((otm1 - atmStrike) * (primaryOption?.lotSize || 1)).toLocaleString('en-IN')} per lot`,
-        maxLoss: 'Net premium paid',
-        when: 'Moderate bullish — capped profit but lower cost than naked CE',
-        ivNote: ivRank != null && ivRank > 60 ? '⚠️ IV is high — spread reduces vega risk' : null,
-      });
-    }
-
-    // Strategy 2: OTM CE (cheaper, needs bigger move)
-    const otm1CE = otm1 ? ceOptions.find(o => o.strike === otm1) : null;
-    if (otm1 && otm1CE) {
-      strategies.push({
-        name: `OTM Call (${otm1} CE)`,
-        legs: [{ action: 'BUY', type: 'CE', strike: otm1 }],
-        maxProfit: 'Unlimited',
-        maxLoss: 'Premium paid',
-        when: 'High conviction — needs price to cross ' + otm1 + ' for profit',
-        tradingsymbol: otm1CE.tradingsymbol,
-      });
-    }
-
-    // Strategy 3: Bull Put Spread (credit spread — if IV is high)
-    if (ivRank != null && ivRank > 50) {
-      const otmPut1 = allStrikes.filter(s => s < atmStrike).slice(-1)[0];
-      const otmPut2 = allStrikes.filter(s => s < (otmPut1 || atmStrike)).slice(-1)[0];
-      if (otmPut1 && otmPut2) {
-        strategies.push({
-          name: 'Bull Put Spread (credit)',
-          legs: [
-            { action: 'SELL', type: 'PE', strike: otmPut1 },
-            { action: 'BUY', type: 'PE', strike: otmPut2 },
-          ],
-          maxProfit: 'Net premium received',
-          maxLoss: `₹${((otmPut1 - otmPut2) * (primaryOption?.lotSize || 1)).toLocaleString('en-IN')} per lot`,
-          when: 'IV is elevated (rank ' + ivRank + ') — sell premium, collect theta',
-          ivNote: 'Works best when IV > 50th percentile',
-        });
-      }
-    }
-  } else {
-    // Bearish strategies
-    const otmPut = allStrikes.filter(s => s < atmStrike).slice(-1)[0];
-    if (otmPut) {
-      strategies.push({
-        name: 'Bear Put Spread',
-        legs: [
-          { action: 'BUY', type: 'PE', strike: atmStrike },
-          { action: 'SELL', type: 'PE', strike: otmPut },
-        ],
-        maxProfit: `₹${((atmStrike - otmPut) * (primaryOption?.lotSize || 1)).toLocaleString('en-IN')} per lot`,
-        maxLoss: 'Net premium paid',
-        when: 'Moderate bearish — capped profit but lower cost',
-      });
-    }
-  }
-
-  // ── Max Pain context ──
-  let maxPainNote = null;
-  if (maxPain && price) {
-    const distFromMaxPain = ((price - maxPain) / maxPain * 100).toFixed(1);
-    if (Math.abs(distFromMaxPain) < 2) maxPainNote = `Near max pain (${maxPain}) — expect pinning near expiry`;
-    else if (price > maxPain) maxPainNote = `${distFromMaxPain}% above max pain (${maxPain}) — may pull back toward it by expiry`;
-    else maxPainNote = `${Math.abs(distFromMaxPain)}% below max pain (${maxPain}) — may drift up toward it by expiry`;
-  }
-
-  return {
-    primary,
-    strategies,
-    expiry: targetExpiry,
-    expiryLabel: new Date(targetExpiry).toLocaleDateString('en-IN', { day:'numeric', month:'short' }),
-    strikeGap,
-    atmStrike,
-    // Context from existing cache
-    pcr: pcr ? +pcr : null,
-    maxPain,
-    maxPainNote,
-    atmIV: atmIV ? +atmIV : null,
-    ivRank: ivRank != null ? +ivRank : null,
-    ivLabel: ivRank != null ? (ivRank > 80 ? 'HIGH' : ivRank < 20 ? 'LOW' : 'MOD') : null,
-    lotSize: primaryOption ? primaryOption.lotSize : null,
-  };
-}
 
 // -- DEBUG: Check FUND_EXT contents for a stock --
 app.get("/api/debug/fund-ext/:sym", (req, res) => {
@@ -6158,9 +5240,13 @@ async function buildMFCache() {
     console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
 }
-// Build MF cache immediately on startup and every 6h
+// Build MF cache on startup + every 30 min Mon-Fri 8AM-5PM IST
 buildMFCache();
-cron.schedule('0 */6 * * *', buildMFCache);
+cron.schedule('*/30 8-16 * * 1-5', () => {
+  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  console.log(`🏦 ${hour}: Mutual fund rescore starting...`);
+  buildMFCache();
+}, { timezone: 'Asia/Kolkata' });
 
 
 
@@ -6622,6 +5708,13 @@ function patchScreenerIntoFUND(sym, d) {
     from52wHigh: d.from_52w_high, debtorDays: d.debtor_days,
     invTurnover: d.inv_turnover, assetTurnover: d.asset_turnover,
     cashEquiv: d.cash_equiv, roce3yAvg: d.roce_3y_avg, roce5yAvg: d.roce_5y_avg,
+    // NEW: computed margins, ratios, DuPont, CCC from screener
+    grossMgn: d.gross_margin, profMgn: d.profit_margin,
+    instHeld: d.inst_pct,  // instHeld is the field name used by the scoring pipeline
+    cashConversionCycle: d.cash_conversion_cycle, wcDays: d.wc_days,
+    workingCapitalHealth: d.wc_health,
+    dupontNetMargin: d.dupont_net_margin, dupontAssetTurnover: d.dupont_asset_turnover,
+    dupontEquityMultiplier: d.dupont_equity_multiplier, dupontROE: d.dupont_roe,
   };
   // Only overwrite with non-null values — keeps existing data from other CSVs
   for (const [k, v] of Object.entries(newFields)) {
@@ -6694,6 +5787,12 @@ async function loadScreenerFundamentals() {
       inv_turnover: row.inv_turnover, asset_turnover: row.asset_turnover,
       cash_equiv: row.cash_equiv, roce_3y_avg: row.roce_3y_avg,
       roce_5y_avg: row.roce_5y_avg,
+      // NEW: computed margins, DuPont, CCC
+      gross_margin: row.gross_margin, profit_margin: row.profit_margin,
+      inst_pct: row.inst_pct, cash_conversion_cycle: row.cash_conversion_cycle,
+      wc_days: row.wc_days, wc_health: row.wc_health,
+      dupont_net_margin: row.dupont_net_margin, dupont_asset_turnover: row.dupont_asset_turnover,
+      dupont_equity_multiplier: row.dupont_equity_multiplier, dupont_roe: row.dupont_roe,
     }));
     console.log(`📊 Loaded ${rows.length} stocks from screener_fundamentals table`);
     return rows.length;
@@ -9069,227 +8168,6 @@ function computeTechnicals(candles) {
   };
 }
 
-// =============================================================================
-// INTRADAY TA RESCORE — every 30 min during market hours
-// Re-fetches daily candles (includes today's developing bar), recomputes all
-// technicals, merges fresh TA into stockFundamentals (fundamentals untouched),
-// then rebuilds the scored cache so UI picks auto-update.
-// =============================================================================
-let _intradayRescoring = false;
-const TA_FIELDS = [
-  'price','dma20','dma50','dma100','dma200','wk52Hi','wk52Lo',
-  'change52w','change6m','change3m','change1m',
-  'rsi','macd','macdBull','macdHist',
-  'bbPct','bbUpper','bbLower','stochK',
-  'adx','adxPdi','adxNdi','supertrend','supertrendSig',
-  'volRatio','volTrend','obvRising','accumDist',
-  'beta','annualVol','dma200Trend','weeklyTrend',
-  'ema50','ema200','goldenCross',
-  'pctFromHigh','pctAbove200','pctAbove50',
-  'rsiTrend','bullishDiv','bearishDiv',
-  'fib382','fib500','fib618','nearestFib','nearFibDist',
-  'support','resistance',
-  'ichimokuSignal','ichimokuTenkan','ichimokuKijun',
-  'pivot','pivotR1','pivotS1','pivotR2','pivotS2',
-  'weeklyTrendConfirmed','dowTheoryTrend',
-];
-
-async function intradayRescoreTA() {
-  if (_intradayRescoring) { console.log('⟳ Intraday rescore already running, skipping'); return; }
-  if (!isMarketOpen()) { console.log('⟳ Market closed, skipping intraday rescore'); return; }
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) { console.log('⟳ Kite not ready, skipping rescore'); return; }
-
-  const syms = Object.keys(stockFundamentals);
-  if (!syms.length) { console.log('⟳ No stocks loaded, skipping rescore'); return; }
-
-  _intradayRescoring = true;
-  const t0 = Date.now();
-  let ok = 0, fail = 0;
-  console.log(`⟳ Intraday TA rescore: updating ${syms.length} stocks...`);
-
-  try {
-    // Step 1: Re-fetch Nifty benchmark for relative strength
-    try {
-      const niftyCandles = await fetchKiteDaily('NIFTY 50');
-      if (niftyCandles && niftyCandles.length > 0) {
-        const NC = niftyCandles.map(c => c.close);
-        const nn = NC.length;
-        niftyBenchmark['52w'] = nn >= 252 ? (NC[nn-1] - NC[nn-252]) / NC[nn-252] : 0;
-        niftyBenchmark['6m']  = nn >= 126 ? (NC[nn-1] - NC[nn-126]) / NC[nn-126] : 0;
-        niftyBenchmark['3m']  = nn >= 63  ? (NC[nn-1] - NC[nn-63])  / NC[nn-63]  : 0;
-        niftyBenchmark['1m']  = nn >= 21  ? (NC[nn-1] - NC[nn-21])  / NC[nn-21]  : 0;
-      }
-    } catch (e) { /* non-critical */ }
-
-    // Step 2: Re-fetch daily candles + recompute TA for each stock (batched)
-    const BATCH = 5;
-    for (let i = 0; i < syms.length; i += BATCH) {
-      const batch = syms.slice(i, i + BATCH);
-      await Promise.all(batch.map(async (sym) => {
-        try {
-          const candles = await fetchKiteDaily(sym);
-          if (!candles) { fail++; return; }
-          const tech = computeTechnicals(candles);
-          // Merge ONLY TA fields into stockFundamentals — fundamentals stay untouched
-          const sf = stockFundamentals[sym];
-          if (sf) {
-            for (const key of TA_FIELDS) {
-              if (tech[key] !== undefined) sf[key] = tech[key];
-            }
-            sf.fetchedAt = Date.now();
-          }
-          ok++;
-        } catch (e) { fail++; }
-      }));
-      // Respect Kite rate limits (~10 req/s, keep headroom)
-      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 300));
-    }
-
-    console.log(`⟳ TA refresh done: ${ok} ok, ${fail} failed (${((Date.now()-t0)/1000).toFixed(1)}s)`);
-
-    // Step 3: Rebuild the scored cache (_lastScoredV2) using fresh TA
-    await rebuildScoreCache();
-
-    console.log(`✓ Intraday rescore complete in ${((Date.now()-t0)/1000).toFixed(1)}s — top-10 picks updated`);
-  } catch (e) {
-    console.error('⟳ Intraday rescore error:', e.message);
-  } finally {
-    _intradayRescoring = false;
-  }
-}
-
-// Rebuild _lastScoredV2 from current stockFundamentals (same logic as /api/stocks/score?scoreVersion=2)
-async function rebuildScoreCache() {
-  const all = Object.values(stockFundamentals);
-  if (!all.length) return;
-
-  // Bucket stats for expected return (cached 5m internally)
-  let bucketStatsMap = null;
-  try { bucketStatsMap = await getLatestBucketStats(); } catch (e) { /* ok */ }
-
-  // Pre-compute derived fields
-  all.forEach(f => {
-    f._chg52 = f.change52w != null ? f.change52w * 100 : null;
-    f._chg6m = f.change6m  != null ? f.change6m  * 100 : null;
-  });
-
-  // Group by sector for peer ranking
-  const bySector = {};
-  all.forEach(f => { const s = f.sector || 'Other'; bySector[s] = bySector[s] || []; bySector[s].push(f); });
-
-  const scored = all.map(f => {
-    const peers = bySector[f.sector || 'Other'] || all;
-    const { score, hits } = scoreOneStock(f, peers);
-
-    let _v2 = null;
-    try { _v2 = scoreOneStockV2(f, peers); } catch (e) { _v2 = null; }
-
-    const px = f.price || livePrices[f.sym]?.price || null;
-    const ext = global.FUND_EXT?.[f.sym] || {};
-
-    // Fallen Angel filter (same as /api/stocks/score)
-    const isSmall = f.grp === 'SMALLCAP';
-    const isMid   = f.grp === 'MIDCAP';
-    const deThresh    = isSmall ? 1.0  : isMid ? 1.5  : 2.0;
-    const pledgeThresh= isSmall ? 20   : isMid ? 35   : 50;
-    const intCovThresh= isSmall ? 2.0  : isMid ? 1.5  : 1.0;
-    const fallThresh  = isSmall ? -25  : -20;
-    const epsThresh   = isSmall ? -15  : isMid ? -20  : -25;
-    const scoreThresh = isSmall ? 55   : isMid ? 52   : 50;
-    const isFa = score >= scoreThresh
-      && (f.pctFromHigh || 0) <= fallThresh
-      && (f.rsi || 50) <= 52
-      && (f.debtToEq == null || f.debtToEq <= deThresh)
-      && (f.earGrowth == null || f.earGrowth > epsThresh)
-      && (f.opMargin == null || f.opMargin > -10)
-      && (f.pledged  == null || f.pledged  <= pledgeThresh)
-      && (f.intCov   == null || f.intCov   >= intCovThresh);
-    const faData = isFa ? scoreFallenAngel(f) : {};
-    const stopData = px ? computeStopAndTarget({ ...f, price: px }) : null;
-
-    const _v = (sfVal, extVal) => sfVal ?? extVal ?? null;
-
-    const row = {
-      sym: f.sym, name: f.name, grp: f.grp, sector: f.sector,
-      score, hits,
-      ...faData, isFallenAngel: isFa,
-      stopLoss: stopData?.stopLoss, target: stopData?.target,
-      riskPct: stopData?.riskPct, rewardPct: stopData?.rewardPct,
-      rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
-      // Key fundamentals
-      roe: f.roe, debtToEq: f.debtToEq, pe: f.pe, peg: f.peg,
-      opMargin: f.opMargin, earGrowth: f.earGrowth, revGrowth: f.revGrowth,
-      promoter: _v(f.promoter, ext.promoter), pledged: _v(f.pledged, ext.pledged),
-      mktCap: _v(f.mktCap, ext.mktCap),
-      // Key technicals
-      price: px, rsi: f.rsi, macdBull: f.macdBull, goldenCross: f.goldenCross,
-      obvRising: f.obvRising, pctFromHigh: f.pctFromHigh, pctAbove200: f.pctAbove200,
-      dma200: f.dma200, dma50: f.dma50, beta: f.beta, annualVol: f.annualVol,
-      change1m: f.change1m, change3m: f.change3m, change6m: f.change6m,
-      volRatio: f.volRatio, adx: f.adx, adxPdi: f.adxPdi, adxNdi: f.adxNdi,
-      bullishDiv: f.bullishDiv, bearishDiv: f.bearishDiv,
-      earningsYield: _v(f.earningsYield, ext.earningsYield),
-      divYield: _v(f.divYield, ext.divYield),
-      // Score V2 fields
-      ...(_v2 ? (() => {
-        const bucket = scoreV2Bucket(_v2.scoreV2);
-        const er = computeExpectedReturn({
-          scoreBucket: bucket, sector: f.sector,
-          riskLevel: _v2.riskLevel, dataCompleteness: _v2.dataCompleteness,
-        }, bucketStatsMap, 'r_6m');
-        return {
-          scoreV2:          _v2.scoreV2 != null ? +_v2.scoreV2.toFixed(2) : null,
-          subScores:        _v2.subScores || null,
-          timingOverlay:    _v2.timingOverlay || null,
-          valuationLabel:   _v2.valuationLabel || null,
-          riskScore:        _v2.riskScore != null ? +_v2.riskScore.toFixed(2) : null,
-          riskLevel:        _v2.riskLevel || null,
-          dataCompleteness: _v2.dataCompleteness != null ? +_v2.dataCompleteness.toFixed(3) : null,
-          sectorTemplate:   _v2.sectorTemplate || null,
-          scoreBucket:      bucket,
-          expectedReturn:   er.expectedReturn,
-          confidence:       er.confidence,
-          whyStrengths:     _v2.whyStrengths || [],
-          whyRisks:         _v2.whyRisks || [],
-        };
-      })() : {}),
-    };
-    return row;
-  });
-
-  // Momentum composite (same as /api/stocks/score handler)
-  scored.forEach(row => {
-    const src = stockFundamentals[row.sym];
-    if (!src) { row.composite = null; return; }
-    try {
-      const pm = scoreStockForPortfolio(src);
-      if (pm && pm.composite != null) {
-        row.composite = +pm.composite;
-        row.momConviction = pm.conviction || null;
-        row.momConvColor  = pm.convColor  || null;
-      } else {
-        row.composite = null;
-      }
-    } catch (e) { row.composite = null; }
-  });
-
-  // Sort by expectedReturn DESC → confidence → scoreV2
-  scored.sort((a, b) => {
-    const er = (b.expectedReturn || 0) - (a.expectedReturn || 0);
-    if (Math.abs(er) > 1e-6) return er;
-    const cf = (b.confidence || 0) - (a.confidence || 0);
-    if (Math.abs(cf) > 1e-6) return cf;
-    return (b.scoreV2 || 0) - (a.scoreV2 || 0);
-  });
-  scored.forEach((s, i) => { s.rank = i + 1; });
-
-  // Update the cache — UI picks auto-refresh on next poll
-  _lastScoredV2   = scored;
-  _lastScoredV2Ts = Date.now();
-
-  console.log(`⟳ Score cache rebuilt: ${scored.length} stocks, top rebound=${_getTop10ForCategory('rebound').length}, momentum=${_getTop10ForCategory('momentum').length}, longterm=${_getTop10ForCategory('longterm').length}`);
-}
-
 // -- Main refresh --------------------------------------------------------------
 async function refreshAllFundamentals() {
   if (stockFundLoading) return;
@@ -9448,7 +8326,7 @@ async function refreshAllFundamentals() {
           salesAnnual:  ext?.salesAnnual  ?? null,
           patQtrYoy:    ext?.patQtrYoy    ?? null,
           salesQtrYoy:  ext?.salesQtrYoy  ?? null,
-          // Yahoo Finance exclusive fields
+          // Extended fields (Screener.in + Yahoo fallback)
           fwdPE:        ext?.fwdPE        ?? null,
           grossMgn:     ext?.grossMgn     ?? null,
           profMgn:      ext?.profMgn      ?? null,
@@ -9459,6 +8337,16 @@ async function refreshAllFundamentals() {
           fiiHolding:   ext?.fiiHolding   ?? null,
           diiHolding:   ext?.diiHolding   ?? null,
           numShareholders: ext?.numShareholders ?? null,
+          // Pre-computed DuPont, CCC, WC from screener data
+          dupontNetMargin:       ext?.dupontNetMargin       ?? null,
+          dupontAssetTurnover:   ext?.dupontAssetTurnover   ?? null,
+          dupontEquityMultiplier:ext?.dupontEquityMultiplier ?? null,
+          dupontROE:             ext?.dupontROE             ?? null,
+          cashConversionCycle:   ext?.cashConversionCycle   ?? null,
+          workingCapitalHealth:  ext?.workingCapitalHealth  ?? null,
+          debtorDays:            ext?.debtorDays            ?? null,
+          invTurnover:           ext?.invTurnover           ?? null,
+          assetTurnover:         ext?.assetTurnover         ?? null,
           dataSource:   ext?.source       ?? 'Hardcoded',
           fetchedAt:Date.now(),
         };
@@ -9507,49 +8395,53 @@ async function refreshAllFundamentals() {
         }
 
         // ═══ DuPont ROE Decomposition (Varsity M3: Net Margin × Asset Turnover × Equity Multiplier) ═══
-        // Compute Net Profit Margin: PAT / Sales × 100
-        let _npm = sf.profMgn ?? ext?.profMgn;
+        // Prefer pre-computed values from screener (uses actual Total Assets / Net Worth)
+        // Fall back to estimation if screener data not yet available
+        let _npm = sf.dupontNetMargin ?? sf.profMgn ?? ext?.profMgn;
         if (_npm == null && _pat > 0 && _sales > 0) {
           _npm = +(_pat / _sales * 100).toFixed(2);
-          sf.profMgn = _npm;
         }
-        // Compute Asset Turnover: Sales / Total Assets
-        // Total Assets ≈ Equity × (1 + D/E), where Equity ≈ BookValue × Shares, Shares ≈ MktCap / Price
-        let _assetTurn = sf.assetTurnover ?? ext?.assetTurnover;
+        if (_npm != null) sf.profMgn = +_npm;
+
+        let _assetTurn = sf.dupontAssetTurnover ?? sf.assetTurnover ?? ext?.assetTurnover;
         const _de2 = sf.debtToEq ?? ext?.de;
         if (_assetTurn == null && _sales > 0 && sf.bookValue > 0 && _px > 0 && sf.mktCap > 0) {
-          const sharesEst = sf.mktCap / _px;           // shares in Cr units (mktCap in Cr, price in Rs)
-          const equity = sf.bookValue * sharesEst;      // equity in Cr
-          const totalAssets = equity * (1 + (_de2 || 0)); // Total Assets = Equity × Equity Multiplier
-          if (totalAssets > 0) {
-            _assetTurn = +(_sales / totalAssets).toFixed(2);
-            sf.assetTurnover = _assetTurn;
-          }
+          const sharesEst = sf.mktCap / _px;
+          const equity = sf.bookValue * sharesEst;
+          const totalAssets = equity * (1 + (_de2 || 0));
+          if (totalAssets > 0) _assetTurn = +(_sales / totalAssets).toFixed(2);
         }
-        if (_npm != null && _assetTurn != null && _de2 != null) {
+        if (_assetTurn != null) sf.assetTurnover = +_assetTurn;
+
+        let _em = sf.dupontEquityMultiplier;
+        if (_em == null && _de2 != null) _em = +(1 + _de2).toFixed(2);
+
+        if (_npm != null && _assetTurn != null && _em != null) {
           sf.dupontNetMargin = +_npm;
           sf.dupontAssetTurnover = +_assetTurn;
-          sf.dupontEquityMultiplier = +(1 + (_de2 || 0)).toFixed(2);
-          sf.dupontROE = +(_npm/100 * _assetTurn * (1 + (_de2 || 0)) * 100).toFixed(1);
+          sf.dupontEquityMultiplier = +_em;
+          sf.dupontROE = +(_npm/100 * _assetTurn * _em * 100).toFixed(1);
+        }
+
+        // ═══ Gross Margin — compute if not already set from screener ═══
+        if (sf.grossMgn == null && _sales > 0 && sf.opMargin != null) {
+          sf.grossMgn = +sf.opMargin; // OPM% is the best proxy from screener P&L
+        }
+
+        // ═══ Institutional Holding — FII + DII if not set ═══
+        if (sf.instHeld == null && (sf.fiiHolding != null || sf.diiHolding != null)) {
+          sf.instHeld = +((sf.fiiHolding || 0) + (sf.diiHolding || 0)).toFixed(1);
         }
 
         // ═══ Cash Conversion Cycle (Varsity M13: Debtor Days + Inv Days - Payable Days) ═══
-        let _debtorDays = sf.debtorDays ?? ext?.debtorDays;
-        let _invTurnover = sf.invTurnover ?? ext?.invTurnover;
-        // Compute debtor days fallback: (Receivables/Sales) × 365 ≈ from receivables turnover
-        // Compute inventory days fallback: if we have invTurnover
-        if (_debtorDays == null && _sales > 0 && sf.currentRatio != null && sf.debt != null) {
-          // Rough estimate: debtorDays ≈ 365 / (sales / (mktCap × currentRatio / PE)) — too approximate
-          // Skip — debtorDays needs actual receivables data
-        }
-        if (_invTurnover == null && _sales > 0 && sf.mktCap > 0) {
-          // Rough inventory turnover from COGS/Inventory — not reliable without data
-          // Skip — invTurnover needs actual inventory data
-        }
-        if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
-          const invDays = +(365 / _invTurnover).toFixed(0);
-          sf.inventoryDays = invDays;
-          sf.cashConversionCycle = +(_debtorDays + invDays).toFixed(0);
+        // Prefer pre-computed CCC from screener ratios table
+        if (sf.cashConversionCycle == null) {
+          const _debtorDays = sf.debtorDays ?? ext?.debtorDays;
+          const _invTurnover = sf.invTurnover ?? ext?.invTurnover;
+          if (_debtorDays != null && _invTurnover != null && _invTurnover > 0) {
+            sf.inventoryDays = +(365 / _invTurnover).toFixed(0);
+            sf.cashConversionCycle = +(_debtorDays + sf.inventoryDays).toFixed(0);
+          }
         }
 
         // ═══ NEW: Sharpe Ratio (Varsity M10: (Return - RiskFree) / StdDev) ═══
@@ -9605,7 +8497,11 @@ async function refreshAllFundamentals() {
       'priceToFCF','priceToSales','earningsYield','roce','promoter','promoterChg','intCov',
       'mktCap','roa','pb','peg','evEbitda','industryPE','eps','debt',
       'salesGr1y','salesGr5y','epsGr1y','epsGr5y','roe3yAvg','roe5yAvg',
-      'ret1y','ret3y','ret5y','roe','debtToEq','pe','revGrowth','earGrowth','opMargin'];
+      'ret1y','ret3y','ret5y','roe','debtToEq','pe','revGrowth','earGrowth','opMargin',
+      // NEW: computed margins, DuPont, CCC from screener
+      'grossMgn','profMgn','instHeld','debtorDays','invTurnover','assetTurnover',
+      'cashConversionCycle','workingCapitalHealth',
+      'dupontNetMargin','dupontAssetTurnover','dupontEquityMultiplier','dupontROE'];
     // Map FUND_EXT field names that differ from stockFundamentals field names
     const extKeyMap = { debtToEq:'de', revGrowth:'revGr', earGrowth:'epsGr', opMargin:'opMgn' };
     let merged = 0;
@@ -13884,13 +12780,11 @@ cron.schedule('45 15 * * 1-5', async () => {
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
 
-// 11AM + 3PM IST — full rescore (TA + fundamentals) during market hours
-// 11AM catches mid-morning session shifts; 3PM ensures a clean universe before close.
-// (7AM cron removed — market hasn't opened yet so candles are stale from yesterday;
-//  the 30-min TA rescore kicks in at 9:32 and 11AM does the first full rescore.)
-cron.schedule('0 11,15 * * 1-5', async () => {
-  const h = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-  console.log(`📊 ${h}: Full rescore (TA + fundamentals) starting...`);
+// Stock scoring + TA pipeline: every 30 min, Mon-Fri, 8AM-5PM IST
+// Fetches Kite candles → computes ALL technicals (Ichimoku, RSI, MACD etc.) → scores → saves
+cron.schedule('*/30 8-16 * * 1-5', async () => {
+  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  console.log(`📊 ${hour}: Stock scoring + TA pipeline starting...`);
   await refreshMissingFundamentals();
   await refreshAllFundamentals();
 }, { timezone: 'Asia/Kolkata' });
@@ -13907,17 +12801,16 @@ cron.schedule('0 9 * * 1-5', async () => {
   await refreshInstruments();
 }, { timezone: 'Asia/Kolkata' });
 
-// 9:05 AM IST — refresh NFO options instruments (to pick up new weekly expiries)
-cron.schedule('5 9 * * 1-5', async () => {
-  console.log('📋 9:05 AM: Refreshing NFO option instruments...');
-  await refreshNFOInstruments().catch(e => console.error('NFO refresh error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
-
-// 8PM IST — fetch Screener.in fundamentals (after market close, data is fresh) → screener_fundamentals DB
-cron.schedule('0 20 * * *', () => {
-  console.log('📊 8PM: Daily Screener fundamentals refresh starting...');
-  fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
+// 7AM IST — fetch Screener.in fundamentals daily (pre-market, data is fresh from prev close)
+// After scrape completes, refreshAllFundamentals() rescores all stocks automatically.
+// Screener scrape 3x daily: 7AM (pre-market), 12PM (midday), 4PM (pre-close)
+['0 7 * * *', '0 12 * * *', '0 16 * * *'].forEach(cronExpr => {
+  cron.schedule(cronExpr, () => {
+    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+    console.log(`📊 ${hour}: Screener fundamentals refresh...`);
+    fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
+  }, { timezone: 'Asia/Kolkata' });
+});
 
 // =============================================================================
 // SCORE V2 DAILY SNAPSHOT WRITER
@@ -14992,7 +13885,12 @@ async function upsertScreenerData(data) {
        ret_6m,ret_3m,ev_ebitda,industry_pe,pat_qtr,sales_qtr,
        pat_annual,sales_annual,pat_qtr_yoy,sales_qtr_yoy,
        roce,earnings_yield,price_to_fcf,price_to_sales,
-       fii_holding,dii_holding,num_shareholders,imported_at)
+       fii_holding,dii_holding,num_shareholders,
+       gross_margin,profit_margin,inst_pct,quick_ratio,
+       debtor_days,inv_turnover,asset_turnover,
+       cash_conversion_cycle,wc_days,wc_health,
+       dupont_net_margin,dupont_asset_turnover,dupont_equity_multiplier,dupont_roe,
+       imported_at)
     VALUES
       ($1,$2,$3,$4,$5,$6,
        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
@@ -15002,7 +13900,12 @@ async function upsertScreenerData(data) {
        $35,$36,$37,$38,$39,$40,
        $41,$42,$43,$44,
        $45,$46,$47,$48,
-       $49,$50,$51,NOW())
+       $49,$50,$51,
+       $52,$53,$54,$55,
+       $56,$57,$58,
+       $59,$60,$61,
+       $62,$63,$64,$65,
+       NOW())
     ON CONFLICT (sym) DO UPDATE SET
       name=EXCLUDED.name, industry=EXCLUDED.industry,
       roe=EXCLUDED.roe, de=EXCLUDED.de, pe=EXCLUDED.pe,
@@ -15026,6 +13929,20 @@ async function upsertScreenerData(data) {
       fii_holding=COALESCE(EXCLUDED.fii_holding, screener_fundamentals.fii_holding),
       dii_holding=COALESCE(EXCLUDED.dii_holding, screener_fundamentals.dii_holding),
       num_shareholders=COALESCE(EXCLUDED.num_shareholders, screener_fundamentals.num_shareholders),
+      gross_margin=COALESCE(EXCLUDED.gross_margin, screener_fundamentals.gross_margin),
+      profit_margin=COALESCE(EXCLUDED.profit_margin, screener_fundamentals.profit_margin),
+      inst_pct=COALESCE(EXCLUDED.inst_pct, screener_fundamentals.inst_pct),
+      quick_ratio=COALESCE(EXCLUDED.quick_ratio, screener_fundamentals.quick_ratio),
+      debtor_days=COALESCE(EXCLUDED.debtor_days, screener_fundamentals.debtor_days),
+      inv_turnover=COALESCE(EXCLUDED.inv_turnover, screener_fundamentals.inv_turnover),
+      asset_turnover=COALESCE(EXCLUDED.asset_turnover, screener_fundamentals.asset_turnover),
+      cash_conversion_cycle=COALESCE(EXCLUDED.cash_conversion_cycle, screener_fundamentals.cash_conversion_cycle),
+      wc_days=COALESCE(EXCLUDED.wc_days, screener_fundamentals.wc_days),
+      wc_health=COALESCE(EXCLUDED.wc_health, screener_fundamentals.wc_health),
+      dupont_net_margin=COALESCE(EXCLUDED.dupont_net_margin, screener_fundamentals.dupont_net_margin),
+      dupont_asset_turnover=COALESCE(EXCLUDED.dupont_asset_turnover, screener_fundamentals.dupont_asset_turnover),
+      dupont_equity_multiplier=COALESCE(EXCLUDED.dupont_equity_multiplier, screener_fundamentals.dupont_equity_multiplier),
+      dupont_roe=COALESCE(EXCLUDED.dupont_roe, screener_fundamentals.dupont_roe),
       imported_at=NOW()
   `, [
     data.sym, data.name, data.nse_code, data.bse_code, data.industry, data.industry_group,
@@ -15039,6 +13956,10 @@ async function upsertScreenerData(data) {
     data.pat_annual, data.sales_annual, data.pat_qtr_yoy, data.sales_qtr_yoy,
     data.roce, data.earnings_yield, data.price_to_fcf, data.price_to_sales,
     data.fii_holding??null, data.dii_holding??null, data.num_shareholders??null,
+    data.gross_margin??null, data.profit_margin??null, data.inst_pct??null, data.quick_ratio??null,
+    data.debtor_days??null, data.inv_turnover??null, data.asset_turnover??null,
+    data.cash_conversion_cycle??null, data.wc_days??null, data.wc_health??null,
+    data.dupont_net_margin??null, data.dupont_asset_turnover??null, data.dupont_equity_multiplier??null, data.dupont_roe??null,
   ]);
   patchScreenerIntoFUND(data.sym, data);
 }
@@ -15243,10 +14164,12 @@ async function fetchAllScreenerBulk(token) {
 
 // ── getstockdetails mode: parse rich Screener.in page data into flat fundamentals ──
 function parseScreenerDetails(sym, raw) {
-  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'')); return isNaN(n)?null:n; };
+  const pn = v => { const n = parseFloat(String(v||'').replace(/,/g,'').replace(/%/g,'')); return isNaN(n)?null:n; };
+  // Helper: normalize metric name — screener adds " +" suffix to expandable rows
+  const normMetric = s => (s||'').replace(/\s*\+\s*$/, '').trim();
   // Helper: get latest annual value from P&L / Balance Sheet array
   const latestAnnual = (arr, metric) => {
-    const row = (arr||[]).find(r => r.Metric === metric);
+    const row = (arr||[]).find(r => normMetric(r.Metric) === metric || normMetric(r.Metric).startsWith(metric));
     if (!row) return null;
     // Keys are like "Mar 2025", "Mar 2024", "TTM" — get the last numeric year key
     const keys = Object.keys(row).filter(k => k !== 'Metric').sort();
@@ -15258,11 +14181,11 @@ function parseScreenerDetails(sym, raw) {
     const item = (arr||[]).find(o => Object.keys(o)[0]?.includes(label));
     return item ? pn(Object.values(item)[0]) : null;
   };
-  // Helper: get latest shareholding value
+  // Helper: get latest shareholding value — check both '' and 'Metric' keys
   const latestSH = (arr, label) => {
-    const row = (arr||[]).find(r => (r['']||'').includes(label));
+    const row = (arr||[]).find(r => (r['']||r['Metric']||'').includes(label));
     if (!row) return null;
-    const keys = Object.keys(row).filter(k => k !== '').sort();
+    const keys = Object.keys(row).filter(k => k !== '' && k !== 'Metric').sort();
     return keys.length ? pn(row[keys[keys.length-1]]) : null;
   };
 
@@ -15321,9 +14244,9 @@ function parseScreenerDetails(sym, raw) {
   const promoter = latestSH(sh, 'Promoters');
   // Promoter change: latest - previous quarter
   let promoterChg = null;
-  const promRow = (sh||[]).find(r => (r['']||'').includes('Promoters'));
+  const promRow = (sh||[]).find(r => (r['']||r['Metric']||'').includes('Promoters'));
   if (promRow) {
-    const pKeys = Object.keys(promRow).filter(k => k !== '').sort();
+    const pKeys = Object.keys(promRow).filter(k => k !== '' && k !== 'Metric').sort();
     if (pKeys.length >= 2) promoterChg = pn((pn(promRow[pKeys[pKeys.length-1]]) - pn(promRow[pKeys[pKeys.length-2]])).toFixed(2));
   }
 
@@ -15340,8 +14263,8 @@ function parseScreenerDetails(sym, raw) {
   // Quarterly YoY growth — compare latest quarter vs same quarter last year
   let patQtrYoy = null, salesQtrYoy = null;
   if (qtrs.length) {
-    const salesRow = (qtrs||[]).find(r => r.Metric === 'Sales');
-    const patRow = (qtrs||[]).find(r => r.Metric === 'Net Profit');
+    const salesRow = (qtrs||[]).find(r => normMetric(r.Metric) === 'Sales' || normMetric(r.Metric).startsWith('Sales'));
+    const patRow = (qtrs||[]).find(r => normMetric(r.Metric) === 'Net Profit' || normMetric(r.Metric).startsWith('Net Profit'));
     if (salesRow) {
       const qKeys = Object.keys(salesRow).filter(k => k !== 'Metric').sort();
       if (qKeys.length >= 5) { // need at least 5 quarters for YoY
@@ -15366,22 +14289,110 @@ function parseScreenerDetails(sym, raw) {
   const currentLiabilities = latestAnnual(bs, 'Other Liabilities'); // proxy for current liabilities
   if (currentAssets > 0 && currentLiabilities > 0) computedCurrentRatio = pn((currentAssets / currentLiabilities).toFixed(2));
 
-  // Pledged percentage from shareholding
-  const pledgedRow = (sh||[]).find(r => (r['']||'').toLowerCase().includes('pledg'));
+  // Pledged percentage — try multiple sources:
+  // 1. Shareholding table row containing "pledg"
+  // 2. Top-ratios box (raw.pledged_pct from scraper)
+  // 3. Ratios table row containing "pledg"
+  const pledgedRow = (sh||[]).find(r => (r['']||r['Metric']||'').toLowerCase().includes('pledg'));
   let pledgedPct = null;
   if (pledgedRow) {
-    const pKeys = Object.keys(pledgedRow).filter(k => k !== '').sort();
+    const pKeys = Object.keys(pledgedRow).filter(k => k !== '' && k !== 'Metric').sort();
     if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
   }
+  // Fallback: top-ratios box from scraper
+  if (pledgedPct == null && raw.pledged_pct != null) pledgedPct = pn(raw.pledged_pct);
+  // Fallback: ratios table
+  if (pledgedPct == null) {
+    const pledgeRatioRow = (ratios||[]).find(r => (r.Metric||'').toLowerCase().includes('pledg'));
+    if (pledgeRatioRow) {
+      const prKeys = Object.keys(pledgeRatioRow).filter(k => k !== 'Metric').sort();
+      if (prKeys.length) pledgedPct = pn(pledgeRatioRow[prKeys[prKeys.length-1]]);
+    }
+  }
+  // Default to 0 if we have promoter data but no pledge info (means nothing pledged)
+  if (pledgedPct == null && promoter != null) pledgedPct = 0;
 
-  // Cash flow data for FCF
+  // Cash flow data for FCF — use direct "Free Cash Flow" row if available, else compute
   const cf = raw.cash_flow || [];
-  const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity');
-  const capex = latestAnnual(cf, 'Fixed Assets Purchased');  // usually negative
-  const fcf = (cfFromOps != null && capex != null) ? cfFromOps + capex : null;
+  const directFcf = latestAnnual(cf, 'Free Cash Flow');
+  const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity')
+    ?? latestAnnual(cf, 'Cash from Operations');
+  const capex = latestAnnual(cf, 'Fixed Assets Purchased')
+    ?? latestAnnual(cf, 'Fixed Assets');  // usually negative
+  const fcf = directFcf ?? ((cfFromOps != null && capex != null) ? cfFromOps + capex : null);
 
   // Dividend from P&L for yield calc
   const dividendPayout = latestAnnual(annual, 'Dividend Payout %');
+
+  // ── Ratios table extraction (Debtor Days, Inventory Turnover, etc.) ──
+  // Helper: get latest value from ratios table by metric name (fuzzy match)
+  const latestRatio = (metric) => {
+    const row = (ratios||[]).find(r => {
+      const m = normMetric(r.Metric).toLowerCase();
+      return m === metric.toLowerCase() || m.startsWith(metric.toLowerCase());
+    });
+    if (!row) return null;
+    const keys = Object.keys(row).filter(k => k !== 'Metric').sort();
+    return keys.length ? pn(row[keys[keys.length-1]]) : null;
+  };
+
+  // ── Ratios table values (screener uses: Debtor Days, Inventory Days, Days Payable, CCC, WC Days, ROCE%) ──
+  const debtorDays    = latestRatio('Debtor Days');
+  const inventoryDays = latestRatio('Inventory Days');         // screener has "Inventory Days" not "Inventory Turnover"
+  const daysPay       = latestRatio('Days Payable');
+  const cashConvCycle = latestRatio('Cash Conversion Cycle');  // screener computes this directly
+  const wcDays        = latestRatio('Working Capital Days');
+  const invTurnover   = (inventoryDays != null && inventoryDays > 0) ? pn((365 / inventoryDays).toFixed(2)) : null;
+  const assetTurnover = latestRatio('Asset Turnover');         // some companies have this
+
+  // Quick Ratio from ratios table (not all companies have it)
+  const quickRatio    = latestRatio('Quick Ratio');
+
+  // ── Computed margins from P&L ──
+  // Gross Margin = (Sales - Expenses) / Sales × 100 = Operating Profit / Sales × 100
+  // Screener P&L: Sales → Expenses → Operating Profit → OPM%
+  // "Expenses" is total operating expenses, so Gross Margin ≈ OPM% (Operating Profit Margin)
+  const expenses = latestAnnual(annual, 'Expenses');
+  const operProfit = latestAnnual(annual, 'Operating Profit');
+  const grossMargin = (sales > 0 && operProfit != null)
+    ? pn((operProfit / sales * 100).toFixed(1))
+    : (opm != null) ? pn(opm) : null;
+
+  // Profit Margin (Net Margin) = Net Profit / Sales × 100
+  const profitMargin = (sales > 0 && netProfit != null)
+    ? pn((netProfit / sales * 100).toFixed(1))
+    : null;
+
+  // Institutional holding = FII + DII
+  const instPct = (fiiHolding != null || diiHolding != null)
+    ? pn(((fiiHolding || 0) + (diiHolding || 0)).toFixed(1))
+    : null;
+
+  // ── DuPont decomposition: ROE = Net Margin × Asset Turnover × Equity Multiplier ──
+  const dupontNetMargin = profitMargin;
+  // Asset Turnover = Sales / Total Assets (compute from BS since ratios table rarely has it)
+  const dupontAssetTurn = assetTurnover ?? (
+    (sales > 0 && totalAssets > 0) ? pn((sales / totalAssets).toFixed(2)) : null
+  );
+  // Equity Multiplier = Total Assets / Net Worth (or 1 + D/E)
+  const dupontEquityMult = (netWorth > 0 && totalAssets > 0)
+    ? pn((totalAssets / netWorth).toFixed(2))
+    : (de != null ? pn((1 + de).toFixed(2)) : null);
+  const dupontROE = (dupontNetMargin != null && dupontAssetTurn != null && dupontEquityMult != null)
+    ? pn((dupontNetMargin / 100 * dupontAssetTurn * dupontEquityMult * 100).toFixed(1))
+    : null;
+
+  // ── Cash Conversion Cycle (screener provides directly, else compute from components) ──
+  const computedCCC = cashConvCycle ?? (
+    (debtorDays != null && inventoryDays != null)
+      ? pn((debtorDays + inventoryDays - (daysPay || 0)).toFixed(0))
+      : null
+  );
+
+  // ── Working Capital Health ──
+  const wcHealth = computedCurrentRatio != null
+    ? (computedCurrentRatio >= 1.5 ? 'strong' : computedCurrentRatio >= 1.0 ? 'adequate' : 'weak')
+    : null;
 
   // Industry from raw metadata
   const industry = raw.industry || raw.sector || null;
@@ -15406,9 +14417,10 @@ function parseScreenerDetails(sym, raw) {
   const computedEvEbitda = (computedMktCap && operatingProfit > 0)
     ? pn(((computedMktCap + (borrowings||0)) / operatingProfit).toFixed(1)) : null;
 
-  // Dividend Yield: dividendPayout% * EPS / price * 100 (approximate)
-  const computedDivYield = (dividendPayout > 0 && eps > 0 && livePrice > 0)
-    ? pn((dividendPayout * eps / livePrice).toFixed(2)) : null;
+  // Dividend Yield — prefer screener's top-metric value, else compute from payout%
+  const computedDivYield = raw.div_yield != null ? pn(raw.div_yield)
+    : (dividendPayout > 0 && eps > 0 && livePrice > 0)
+      ? pn((dividendPayout * eps / livePrice).toFixed(2)) : null;
 
   // Industry PE from raw metadata if available
   const computedIndustryPE = raw.industry_pe || raw.industryPE || null;
@@ -15435,37 +14447,19 @@ function parseScreenerDetails(sym, raw) {
     pat_qtr_yoy: patQtrYoy, sales_qtr_yoy: salesQtrYoy,
     roce, earnings_yield: earningsYield, price_to_fcf: priceToFcf, price_to_sales: priceToSales,
     fii_holding: fiiHolding, dii_holding: diiHolding, num_shareholders: numShareholders,
+    // NEW: computed margins, ratios, DuPont, CCC
+    gross_margin: grossMargin, profit_margin: profitMargin, inst_pct: instPct,
+    quick_ratio: quickRatio,
+    debtor_days: debtorDays, inv_turnover: invTurnover, asset_turnover: assetTurnover,
+    cash_conversion_cycle: computedCCC, wc_days: wcDays, wc_health: wcHealth,
+    dupont_net_margin: dupontNetMargin, dupont_asset_turnover: dupontAssetTurn,
+    dupont_equity_multiplier: dupontEquityMult, dupont_roe: dupontROE,
   };
 }
 
-// ── Fetch single stock via getstockdetails mode ──
-async function fetchOneScreenerStock(sym, apifyToken) {
-  const BASE  = 'https://api.apify.com/v2';
-  const ACTOR = 'shashwattrivedi~screener-in';
-  const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${apifyToken}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'getstockdetails', url: `https://www.screener.in/company/${sym}/consolidated/` }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!startResp.ok) throw new Error(`Start failed: ${startResp.status}`);
-  const runInfo = await startResp.json();
-  const runId = runInfo.data?.id, datasetId = runInfo.data?.defaultDatasetId;
-  if (!runId) throw new Error('No run ID');
-
-  // Poll until done (max 3 min)
-  let status = 'RUNNING', attempts = 0;
-  while ((status === 'RUNNING' || status === 'READY') && attempts < 36) {
-    await new Promise(r => setTimeout(r, 5000));
-    attempts++;
-    const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${apifyToken}`, { signal: AbortSignal.timeout(10000) });
-    if (poll.ok) status = (await poll.json()).data?.status || 'RUNNING';
-  }
-  if (status !== 'SUCCEEDED') throw new Error(`Run ended: ${status}`);
-
-  const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${apifyToken}&limit=5`, { signal: AbortSignal.timeout(15000) });
-  const items = await dataResp.json();
-  if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
-  const raw = items[0];
+// ── Fetch single stock directly from screener.in (no Apify) ──
+async function fetchOneScreenerStock(sym) {
+  const raw = await screenerScraper.fetchCompany(sym);
   const parsed = parseScreenerDetails(sym, raw);
   // Store raw response for rich history fields (quarters, P&L, BS, CF, ratios, shareholding)
   try {
@@ -15483,22 +14477,39 @@ async function fetchOneScreenerStock(sym, apifyToken) {
   return parsed;
 }
 
-// ── Batch fetch all stocks via getstockdetails (parallel batches of 3) ──
-async function fetchAllScreenerByStock(apifyToken) {
+// ── Batch fetch all stocks directly from screener.in (no Apify) ──
+async function fetchAllScreenerByStock() {
   if (screenerRunning) return { error: 'Already running' };
   screenerRunning = true;
+
+  // Ensure logged in
+  const user = process.env.SCREENER_USERNAME;
+  const pass = process.env.SCREENER_PASSWORD;
+  if (!user || !pass) { screenerRunning = false; return { error: 'SCREENER_USERNAME/PASSWORD not set' }; }
+
+  try {
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) {
+      console.log('🔑 Logging into screener.in...');
+      await screenerScraper.login(user, pass);
+    }
+  } catch(e) {
+    screenerRunning = false;
+    return { error: `Screener login failed: ${e.message}` };
+  }
+
   const stocks = UNIVERSE.filter(s => !s.sym.includes('USDT')).map(s => s.sym);
   screenerProgress = { done: 0, total: stocks.length, errors: 0, startedAt: Date.now() };
-  console.log(`📊 Screener getstockdetails: fetching ${stocks.length} stocks in batches of 3...`);
+  console.log(`📊 Screener direct: fetching ${stocks.length} stocks in batches of 3...`);
 
   let imported = 0, errors = 0;
-  const BATCH = 3; // Apify concurrent run limit
+  const BATCH = 3;
 
   for (let i = 0; i < stocks.length; i += BATCH) {
     const batch = stocks.slice(i, i + BATCH);
     const results = await Promise.allSettled(batch.map(async sym => {
       try {
-        const data = await fetchOneScreenerStock(sym, apifyToken);
+        const data = await fetchOneScreenerStock(sym);
         await upsertScreenerData(data);
         patchScreenerIntoFUND(sym, data);
         return { sym, ok: true };
@@ -15517,24 +14528,137 @@ async function fetchAllScreenerByStock(apifyToken) {
     if ((i/BATCH) % 10 === 0) {
       console.log(`📊 Screener progress: ${imported}/${stocks.length} OK, ${errors} errors (batch ${Math.floor(i/BATCH)+1})`);
     }
-    // Small pause between batches
-    if (i + BATCH < stocks.length) await new Promise(r => setTimeout(r, 2000));
+    // Rate limit — be respectful to screener.in
+    if (i + BATCH < stocks.length) await new Promise(r => setTimeout(r, 2500));
   }
 
   screenerRunning = false;
-  console.log(`✅ Screener getstockdetails: ${imported} imported, ${errors} errors`);
+  console.log(`✅ Screener direct: ${imported} imported, ${errors} errors`);
   if (imported > 10) refreshAllFundamentals();
-  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: stocks.length, mode: 'getstockdetails' }));
+  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: stocks.length, mode: 'direct' }));
   return { imported, errors, total: stocks.length };
 }
 
 async function fetchAllScreenerData() {
   if (screenerRunning) return { error: 'Already running' };
-  const token = process.env.APIFY_TOKEN;
-  if (!token) return { error: 'APIFY_TOKEN not set' };
-  // Use getstockdetails mode (per-stock) — more reliable than runQuery
-  return fetchAllScreenerByStock(token);
+  // Direct scraper — no Apify needed
+  return fetchAllScreenerByStock();
 }
+
+// ── Screener CSV export (bulk download via screener.in Premium) ──
+async function fetchScreenerCSVBulk(query) {
+  const user = process.env.SCREENER_USERNAME;
+  const pass = process.env.SCREENER_PASSWORD;
+  if (!user || !pass) return { error: 'SCREENER_USERNAME/PASSWORD not set' };
+
+  try {
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) {
+      console.log('🔑 Logging into screener.in for CSV export...');
+      await screenerScraper.login(user, pass);
+    }
+  } catch(e) {
+    return { error: `Screener login failed: ${e.message}` };
+  }
+
+  console.log(`📊 Screener CSV export: query="${query || 'Market Capitalization > 0'}"...`);
+  const csv = await screenerScraper.exportScreenCSV(query);
+  if (!csv || csv.length < 100) return { error: 'Empty CSV response' };
+
+  // Use existing CSV import pipeline
+  const result = await importScreenerCSV(csv);
+  console.log(`✅ Screener CSV: ${result.imported} imported, ${result.skipped} skipped`);
+  if (result.imported > 10) refreshAllFundamentals();
+  return result;
+}
+
+// Admin endpoint: trigger CSV export
+app.post('/api/admin/screener-csv', async (req, res) => {
+  try {
+    const query = req.body?.query || 'Market Capitalization > 0';
+    const result = await fetchScreenerCSVBulk(query);
+    res.json(result);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin endpoint: trigger per-stock scrape
+// Admin endpoint: clear screener data
+app.post('/api/admin/screener-clear', async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM screener_fundamentals');
+    console.log(`🗑️ Cleared screener_fundamentals: ${result.rowCount} rows deleted`);
+    res.json({ success: true, deleted: result.rowCount });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/admin/screener-scrape', async (req, res) => {
+  try {
+    if (screenerRunning) return res.json({ error: 'Already running', progress: screenerProgress });
+    // Run in background
+    fetchAllScreenerData().catch(e => console.error('Screener scrape error:', e.message));
+    res.json({ started: true, message: 'Screener scrape started in background', total: UNIVERSE.length });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin endpoint: scrape single stock
+app.post('/api/admin/screener-stock/:sym', async (req, res) => {
+  try {
+    const sym = req.params.sym.toUpperCase();
+    const user = process.env.SCREENER_USERNAME;
+    const pass = process.env.SCREENER_PASSWORD;
+    if (!user || !pass) return res.status(400).json({ error: 'SCREENER_USERNAME/PASSWORD not set' });
+
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) await screenerScraper.login(user, pass);
+
+    // If ?debug=1, return raw scraper output alongside parsed data
+    if (req.query.debug === '1') {
+      const raw = await screenerScraper.fetchCompany(sym);
+      const parsed = parseScreenerDetails(sym, raw);
+      return res.json({ success: true, sym, parsed, raw: {
+        company_name: raw.company_name,
+        industry: raw.industry,
+        industry_pe: raw.industry_pe,
+        current_price: raw.current_price,
+        market_cap: raw.market_cap,
+        quarters_count: (raw.quarters||[]).length,
+        quarters_metrics: (raw.quarters||[]).map(r => r.Metric),
+        annual_count: (raw.profit_and_loss?.annual_data||[]).length,
+        annual_metrics: (raw.profit_and_loss?.annual_data||[]).map(r => r.Metric),
+        growth_sales: raw.profit_and_loss?.['Compounded Sales Growth'],
+        growth_profit: raw.profit_and_loss?.['Compounded Profit Growth'],
+        stock_cagr: raw.profit_and_loss?.['Stock Price CAGR'],
+        roe_growth: raw.profit_and_loss?.['Return on Equity'],
+        bs_count: (raw.balance_sheet||[]).length,
+        bs_metrics: (raw.balance_sheet||[]).map(r => r.Metric),
+        cf_count: (raw.cash_flow||[]).length,
+        cf_metrics: (raw.cash_flow||[]).map(r => r.Metric),
+        ratios_count: (raw.ratios||[]).length,
+        ratios_metrics: (raw.ratios||[]).map(r => r.Metric),
+        sh_count: (raw.shareholding?.quarterly||[]).length,
+        sh_metrics: (raw.shareholding?.quarterly||[]).map(r => r.Metric),
+        div_yield: raw.div_yield,
+        top_pe: raw.top_pe,
+        top_roce: raw.top_roce,
+        top_roe: raw.top_roe,
+        book_value: raw.book_value,
+      }});
+    }
+
+    const data = await fetchOneScreenerStock(sym);
+    await upsertScreenerData(data);
+    patchScreenerIntoFUND(sym, data);
+    res.json({ success: true, sym, data });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Unified pipeline status — one endpoint for the whole data stream
 app.get('/api/admin/pipeline', async (req, res) => {
@@ -15565,7 +14689,7 @@ app.get('/api/admin/pipeline', async (req, res) => {
 
     res.json({
       universe:     { count: parseInt(univResult.rows[0].total), lastSync: univLast, age: ageLabel(univLast), schedule: 'Daily 8AM IST' },
-      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: 'Daily 8PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length,
+      fundamentals: { count: parseInt(scrResult.rows[0].total), lastSync: scrLast, age: ageLabel(scrLast), schedule: '3x daily: 7AM, 12PM, 4PM IST', running: screenerRunning, progress: screenerProgress, inMemory: Object.keys(global.FUND_EXT || {}).length,
         // Diagnostic: how many FUND_EXT entries have key screener fields populated
         withFII: Object.values(global.FUND_EXT||{}).filter(e=>e.fiiHolding!=null).length,
         withDII: Object.values(global.FUND_EXT||{}).filter(e=>e.diiHolding!=null).length,
@@ -15903,13 +15027,13 @@ app.get('/api/screener/test/:sym', async (req, res) => {
 app.post('/api/screener/fetch', async (req, res) => {
   if (!process.env.APIFY_TOKEN) return res.status(400).json({ error: 'Set APIFY_TOKEN in Railway env vars' });
   if (screenerRunning) return res.json({ message: 'Already running', progress: screenerProgress });
-  const mode = req.query.mode || 'getstockdetails';
+  const mode = req.query.mode || 'direct';
   const total = UNIVERSE.filter(s=>!s.sym.includes('USDT')).length;
   res.json({ message: `Screener fetch started (${mode})`, total, mode });
-  if (mode === 'bulk') {
-    fetchAllScreenerBulk(process.env.APIFY_TOKEN).catch(e => console.error('Screener bulk error:', e.message));
+  if (mode === 'csv') {
+    fetchScreenerCSVBulk(req.query.query).catch(e => console.error('Screener CSV error:', e.message));
   } else {
-    fetchAllScreenerByStock(process.env.APIFY_TOKEN).catch(e => console.error('Screener fetch error:', e.message));
+    fetchAllScreenerByStock().catch(e => console.error('Screener fetch error:', e.message));
   }
 });
 
@@ -15925,7 +15049,7 @@ app.get('/api/screener/status', async (req, res) => {
       db_last_import: result.rows[0].last_import,
       in_memory:      Object.keys(global.FUND_EXT||{}).filter(s=>global.FUND_EXT[s]?.source==='Screener.in').length,
       last_fetch:     last ? JSON.parse(last) : null,
-      schedule:       'Daily 8PM IST',
+      schedule:       '3x daily: 7AM, 12PM, 4PM IST',
     });
   } catch(e) { res.json({ error: e.message }); }
 });
@@ -17967,7 +17091,6 @@ async function start() {
     console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") - starting smart engine...");
     startTicker(token);
     await refreshInstruments();  // fetch real tokens from Kite — must complete before scoring
-    await refreshNFOInstruments(); // fetch NFO options instruments for option recommendations
     // Now validTokens is populated — kick off background scoring immediately
     refreshAllFundamentals();                                                    // Kite candles → scores (background)
     refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message));  // Yahoo enrichment (background)
@@ -17978,24 +17101,6 @@ async function start() {
   // NSE: every 3 min during market hours Mon-Fri
   cron.schedule("*/3 9-15 * * 1-5", ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
   cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
-  // ── UNIFIED KITE PIPELINE ──────────────────────────────────────────────
-  // Runs every 5 min aligned with 5-min candle close (:01, :06, :11...).
-  // Single pass through the UNIVERSE: fetches daily + 5-min candles for each
-  // stock IN PARALLEL (2 requests per stock per batch), then feeds both:
-  //   1) TA Rescore — merges fresh TA into stockFundamentals + rebuilds _lastScoredV2
-  //   2) DayTrade Scanner — runs 4 setup detectors on 5-min candles
-  // Benefits:
-  //   - Kite API hit once per stock, not twice (halved rate limit pressure)
-  //   - Both caches update together — no stale gap
-  //   - TA rescore now runs every 5 min (was 30 min) since it piggybacks on
-  //     the DayTrade scan's Kite calls for free
-  //   - Score cache rebuild and DayTrade sort run in parallel at the end
-  cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
-    runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
-  }, { timezone: "Asia/Kolkata" });
-  // Standalone fallback: intradayRescoreTA() and scanDayTrades() still exist
-  // as individual functions for manual API triggers or edge cases (e.g. if
-  // the unified pipeline hasn't run yet but TA rescore is needed alone).
   // All other daily schedules (universe 8AM, instruments 9AM, screener 8PM, scoring 7AM)
   // are defined centrally above — no duplicates here
 
@@ -20262,43 +19367,6 @@ function _getTop10ForCategory(category) {
   }
   return filtered.slice(0, 10);
 }
-
-// ── INTRADAY TOP-10 POLLING ENDPOINT ──────────────────────────────────────────
-// UI can poll this every 30s-60s to show live-rescored picks without a full
-// page reload. Returns the top-10 for a category with the last rescore timestamp.
-app.get('/api/stocks/picks/live-top10', (req, res) => {
-  const category = req.query.category || 'longterm';
-  if (!['rebound', 'momentum', 'longterm'].includes(category)) {
-    return res.status(400).json({ error: 'Invalid category. Use: rebound, momentum, longterm' });
-  }
-  const top10 = _getTop10ForCategory(category);
-  res.json({
-    category,
-    count: top10.length,
-    lastRescoredAt: _lastScoredV2Ts ? new Date(_lastScoredV2Ts).toISOString() : null,
-    marketOpen: isMarketOpen(),
-    stocks: top10.map(s => ({
-      sym: s.sym, name: s.name, grp: s.grp, sector: s.sector,
-      price: s.price,
-      // Category-specific primary score
-      scoreV2:      s.scoreV2      ?? null,
-      fallenScore:  s.fallenScore  ?? null,
-      composite:    s.composite    ?? null,
-      // Timing & risk (V2)
-      timingOverlay: s.timingOverlay ?? null,
-      riskLevel:     s.riskLevel    ?? null,
-      riskScore:     s.riskScore    ?? null,
-      // Key technicals that drive intraday score changes
-      rsi: s.rsi, pctFromHigh: s.pctFromHigh, pctAbove200: s.pctAbove200,
-      goldenCross: s.goldenCross, macdBull: s.macdBull,
-      // Conviction (momentum)
-      momConviction: s.momConviction ?? null,
-      // Fallen Angel verdict
-      fallenVerdict: s.fallenVerdict ?? null,
-      fallenColor:   s.fallenColor   ?? null,
-    })),
-  });
-});
 
 async function runPicksAIReview(category) {
   const startTime = Date.now();
