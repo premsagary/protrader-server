@@ -825,11 +825,26 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-hero::before{content:'';position:absolute;top:10%;left:50%;transform:translateX(-50%);width:80vw;height:60vh;
   background:radial-gradient(ellipse at center,rgba(60,100,220,0.06),rgba(120,60,200,0.03),transparent 70%);
   pointer-events:none;filter:blur(60px);z-index:-1}
-.lp-hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(60,100,220,0.10);border:1px solid rgba(60,100,220,0.20);
-  border-radius:999px;padding:6px 18px;font-size:10px;color:#8aa2ff;letter-spacing:0.6px;font-weight:600;margin-bottom:28px;
-  backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(60,100,220,0.08)}
-.lp-hero-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:#8aa2ff;animation:pdot 3s ease-in-out infinite;
-  box-shadow:0 0 8px rgba(138,162,255,0.4)}
+.lp-hero-badge{display:inline-flex;align-items:center;gap:10px;
+  background:linear-gradient(135deg,rgba(60,100,220,0.14),rgba(80,60,200,0.08));
+  border:1px solid rgba(120,160,255,0.25);
+  border-radius:999px;padding:8px 22px;font-size:11px;color:#a0b8ff;letter-spacing:0.5px;font-weight:700;margin-bottom:28px;
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 4px 20px rgba(60,100,220,0.12),0 0 40px rgba(60,100,220,0.04),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  transform-style:preserve-3d;position:relative;overflow:hidden;
+  animation:lpBadgeBreathe 4s ease-in-out infinite}
+@keyframes lpBadgeBreathe{0%,100%{box-shadow:0 4px 20px rgba(60,100,220,0.12),0 0 40px rgba(60,100,220,0.04),inset 0 1px 0 rgba(255,255,255,0.06)}
+  50%{box-shadow:0 4px 28px rgba(60,100,220,0.20),0 0 60px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}}
+/* Glow sweep on badge */
+.lp-hero-badge::after{content:'';position:absolute;top:0;left:-130%;width:50%;height:100%;
+  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.06) 48%,rgba(255,255,255,0.10) 50%,rgba(255,255,255,0.06) 52%,transparent 70%);
+  pointer-events:none;animation:lpBadgeSweep 5s 2s ease-in-out infinite}
+@keyframes lpBadgeSweep{0%,80%{left:-130%}100%{left:170%}}
+.lp-hero-badge::before{content:'';width:7px;height:7px;border-radius:50%;
+  background:linear-gradient(135deg,#8aa2ff,#60d0ff);
+  animation:pdot 3s ease-in-out infinite;
+  box-shadow:0 0 10px rgba(138,162,255,0.5),0 0 20px rgba(138,162,255,0.15);flex-shrink:0}
 .lp-hero h1{font-weight:300;font-size:clamp(34px,5.5vw,60px);letter-spacing:0.5px;line-height:1.12;margin-bottom:20px;
   color:#f0f4ff;max-width:760px}
 .lp-hero h1 strong{font-weight:800;background:linear-gradient(135deg,#8aa2ff,#22d3ee);-webkit-background-clip:text;
@@ -1225,29 +1240,117 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   ONBOARDING OVERLAY — first-time user flow
+   ONBOARDING OVERLAY — Premium 3D cinematic first-time flow
    ═══════════════════════════════════════════════════════════════ */
-.ob-overlay{position:fixed;inset:0;z-index:9999;background:rgba(5,6,8,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+.ob-overlay{position:fixed;inset:0;z-index:9999;
+  background:radial-gradient(ellipse 70% 60% at 50% 40%,rgba(20,30,60,0.85),rgba(5,6,8,0.94));
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
   display:flex;align-items:center;justify-content:center}
-.ob-card{max-width:520px;width:90%;background:var(--glass);backdrop-filter:blur(20px);border:1px solid var(--glass-border);
-  border-radius:16px;padding:40px 36px;text-align:center;animation:cardReveal 0.8s var(--ease-out-expo) both}
+/* Ambient aura behind card */
+.ob-overlay::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:600px;height:500px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(ellipse,rgba(60,100,220,0.08),rgba(80,60,200,0.04),transparent 70%);
+  animation:obAuraBreathe 6s ease-in-out infinite}
+@keyframes obAuraBreathe{0%,100%{opacity:0.6;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.08)}}
+
+.ob-card{max-width:560px;width:92%;position:relative;
+  background:linear-gradient(145deg,rgba(18,24,44,0.95),rgba(12,16,30,0.97));
+  backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+  border:1px solid rgba(120,160,255,0.18);
+  border-radius:20px;padding:40px 36px;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5),0 0 80px rgba(60,100,220,0.08),
+    0 0 0 1px rgba(120,160,255,0.06),inset 0 1px 0 rgba(255,255,255,0.06);
+  transform-style:preserve-3d;
+  animation:obCardEntry 0.8s var(--ease-out-expo) both}
+@keyframes obCardEntry{0%{opacity:0;transform:perspective(1000px) translateY(40px) rotateX(6deg) scale(0.94);filter:blur(4px)}
+  100%{opacity:1;transform:perspective(1000px) translateY(0) rotateX(0) scale(1);filter:blur(0)}}
+/* Sheen sweep on card */
+.ob-card::before{content:'';position:absolute;top:0;left:-130%;width:60%;height:100%;
+  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.03) 48%,rgba(255,255,255,0.05) 50%,rgba(255,255,255,0.03) 52%,transparent 70%);
+  pointer-events:none;z-index:2;border-radius:20px;
+  animation:obSheenSweep 4s 1.2s ease-in-out both}
+@keyframes obSheenSweep{0%{left:-130%}100%{left:170%}}
+/* Breathing border glow */
+.ob-card::after{content:'';position:absolute;inset:-1px;border-radius:21px;pointer-events:none;z-index:-1;
+  background:linear-gradient(135deg,rgba(60,100,220,0.12),transparent 40%,transparent 60%,rgba(80,60,200,0.08));
+  animation:obBorderGlow 4s ease-in-out infinite}
+@keyframes obBorderGlow{0%,100%{opacity:0.5}50%{opacity:1}}
+
 .ob-step{display:none}
-.ob-step.active{display:block}
-.ob-icon{font-size:32px;margin-bottom:16px}
-.ob-title{font-weight:300;font-size:20px;color:var(--text);letter-spacing:0.5px;margin-bottom:8px}
-.ob-desc{font-size:12px;color:var(--text3);line-height:1.65;margin-bottom:24px;max-width:380px;margin-left:auto;margin-right:auto}
+.ob-step.active{display:block;animation:obStepFade 0.5s var(--ease-out-expo) both}
+@keyframes obStepFade{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
+
+.ob-icon{font-size:36px;margin-bottom:18px;
+  width:64px;height:64px;display:flex;align-items:center;justify-content:center;margin-left:auto;margin-right:auto;
+  background:rgba(60,100,220,0.10);border:1px solid rgba(60,100,220,0.18);border-radius:16px;
+  box-shadow:0 4px 16px rgba(60,100,220,0.10),0 0 24px rgba(60,100,220,0.04);
+  transform-style:preserve-3d;transition:transform 0.4s cubic-bezier(.03,.98,.52,.99);
+  animation:obIconFloat 4s 1s ease-in-out infinite}
+@keyframes obIconFloat{0%,100%{transform:translateY(0) translateZ(0)}50%{transform:translateY(-4px) translateZ(8px)}}
+
+.ob-title{font-weight:700;font-size:22px;color:#f0f4ff;letter-spacing:0.3px;margin-bottom:10px;
+  text-shadow:0 2px 12px rgba(60,100,220,0.15)}
+.ob-desc{font-size:13px;color:#b8c2d3;line-height:1.7;margin-bottom:26px;max-width:400px;margin-left:auto;margin-right:auto;font-weight:400}
+
 .ob-features{display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:left;margin-bottom:24px}
-.ob-feat{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);border-radius:10px;padding:12px 14px}
-.ob-feat-title{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px}
-.ob-feat-desc{font-size:10px;color:var(--text3);line-height:1.4}
-.ob-dots{display:flex;gap:6px;justify-content:center;margin-bottom:20px}
-.ob-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.1);transition:all 0.3s}
-.ob-dot.active{background:var(--shiva-blue);box-shadow:0 0 8px rgba(64,112,168,0.3)}
-.ob-next{background:rgba(64,112,168,0.15);color:var(--shiva-blue);border:1px solid rgba(64,112,168,0.2);border-radius:10px;
-  padding:12px 32px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.3px;transition:all 0.3s;font-family:inherit}
-.ob-next:hover{background:rgba(64,112,168,0.25)}
-.ob-skip{background:none;border:none;color:var(--text4);font-size:11px;cursor:pointer;margin-top:12px;font-family:inherit;letter-spacing:0.2px}
-.ob-skip:hover{color:var(--text3)}
+.ob-feat{background:linear-gradient(145deg,rgba(22,28,48,0.90),rgba(14,18,34,0.90));
+  border:1px solid rgba(120,160,255,0.10);border-radius:12px;padding:14px 16px;
+  box-shadow:0 2px 10px rgba(0,0,0,0.2);
+  transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),
+    box-shadow 0.35s ease,border-color 0.3s}
+.ob-feat:hover{border-color:rgba(120,160,255,0.25);
+  transform:perspective(800px) rotateX(-2deg) rotateY(2deg) translateZ(6px) translateY(-2px);
+  box-shadow:0 10px 30px rgba(0,0,0,0.3),0 0 30px rgba(60,100,220,0.06)}
+.ob-feat-title{font-size:12px;font-weight:700;color:#E6EAF2;margin-bottom:4px}
+.ob-feat-desc{font-size:10px;color:#9aa3b2;line-height:1.5}
+
+.ob-dots{display:flex;gap:8px;justify-content:center;margin-bottom:22px}
+.ob-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.06);transition:all 0.4s var(--ease-out-expo)}
+.ob-dot.active{background:linear-gradient(135deg,#6090e0,#8060d0);
+  border-color:rgba(120,160,255,0.3);
+  box-shadow:0 0 12px rgba(60,100,220,0.35),0 0 24px rgba(60,100,220,0.10);
+  transform:scale(1.2)}
+
+.ob-next{background:linear-gradient(135deg,rgba(60,100,220,0.30),rgba(80,60,200,0.20));
+  color:#e0e8ff;border:1px solid rgba(120,160,255,0.30);border-radius:14px;
+  padding:14px 36px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:0.4px;
+  font-family:inherit;transform-style:preserve-3d;position:relative;overflow:hidden;
+  box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06);
+  transition:transform 0.3s var(--ease-out-expo),box-shadow 0.3s ease,background 0.3s;
+  animation:obCtaBreathe 3s ease-in-out infinite}
+@keyframes obCtaBreathe{0%,100%{box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06)}
+  50%{box-shadow:0 4px 28px rgba(60,100,220,0.25),0 0 40px rgba(60,100,220,0.06),inset 0 1px 0 rgba(255,255,255,0.08)}}
+.ob-next:hover{background:linear-gradient(135deg,rgba(60,100,220,0.40),rgba(80,60,200,0.28));
+  transform:perspective(800px) translateZ(5px) translateY(-2px) scale(1.03);
+  box-shadow:0 10px 35px rgba(60,100,220,0.25),0 0 50px rgba(60,100,220,0.08)}
+.ob-next:active{transform:perspective(800px) translateZ(-4px) scale(0.97)!important;
+  box-shadow:0 2px 8px rgba(0,0,0,0.3)!important;transition-duration:0.1s}
+/* Glow sweep on button */
+.ob-next::before{content:'';position:absolute;top:0;left:-100%;width:60%;height:100%;
+  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.06) 48%,rgba(255,255,255,0.10) 50%,rgba(255,255,255,0.06) 52%,transparent 70%);
+  transition:left 0.5s ease;pointer-events:none;z-index:1}
+.ob-next:hover::before{left:180%}
+
+.ob-skip{background:none;border:1px solid transparent;color:#8b93a5;font-size:12px;cursor:pointer;
+  margin-top:14px;font-family:inherit;letter-spacing:0.3px;padding:8px 20px;border-radius:10px;
+  transition:all 0.3s ease}
+.ob-skip:hover{color:#d0d5e0;border-color:rgba(255,255,255,0.08);background:rgba(255,255,255,0.03)}
+
+/* ── Stock tiles in onboarding — match mode-tab premium style ── */
+.ob-overlay .qs-stock{background:linear-gradient(145deg,rgba(22,28,48,0.90),rgba(14,18,34,0.90));
+  border:1px solid rgba(120,160,255,0.12);border-radius:12px;padding:12px 20px;
+  box-shadow:0 2px 10px rgba(0,0,0,0.2),0 0 0 1px rgba(120,160,255,0.04);
+  transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),
+    box-shadow 0.35s ease,border-color 0.3s}
+.ob-overlay .qs-stock:hover{border-color:rgba(120,160,255,0.30);
+  transform:perspective(800px) rotateX(-3deg) rotateY(3deg) translateZ(8px) translateY(-3px);
+  box-shadow:0 12px 30px rgba(0,0,0,0.35),0 0 40px rgba(60,100,220,0.08),0 0 0 1px rgba(120,160,255,0.15)}
+.ob-overlay .qs-stock:active{transform:perspective(800px) translateZ(-3px) scale(0.96)!important;transition-duration:0.1s}
+.ob-overlay .qs-stock::before{background:linear-gradient(90deg,rgba(60,100,220,0.4),rgba(80,60,200,0.3));height:2px;opacity:0.6}
+.ob-overlay .qs-stock:hover::before{opacity:1}
+.ob-overlay .qs-stock-sym{font-size:13px;font-weight:700;color:#E6EAF2;letter-spacing:0.4px}
+.ob-overlay .qs-stock-score{font-size:10px;color:#8aa2ff;margin-top:3px}
 
 /* ═══════════════════════════════════════════════════════════════
    DEEP ANALYZER PREMIUM HIERARCHY
