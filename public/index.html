@@ -2586,14 +2586,69 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <div style="font-size:11px;color:#94a3b8;margin-bottom:16px;line-height:1.5;font-weight:500">
       <span style="color:#f59e0b;font-weight:700">⚠</span> Not SEBI-registered advice. All analysis is Varsity-grounded and educational. Trade responsibly.
     </div>
-    <div class="ob-dots"><span class="ob-dot active"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
       <button class="ob-next" onclick="obNext()">Show me around first</button>
       <button class="ob-next ob-skip-btn" onclick="obDismiss()">I'll explore on my own</button>
     </div>
   </div>
-  <!-- Step 2: Quick orientation -->
+
+  <!-- Step 2: Deep Analyzer -->
   <div class="ob-step" data-step="1">
+    <div class="ob-icon">🔬</div>
+    <div class="ob-title">Deep Analyzer</div>
+    <div class="ob-desc" style="max-width:440px">Type any NSE stock and get a full Varsity-grounded breakdown in under 10 seconds.</div>
+    <div class="ob-features" style="margin-bottom:20px">
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#22c55e">14-Point Checklist</div><div class="ob-feat-desc">ROE, D/E, margins, EPS growth, ROCE, Piotroski — all scored and color-coded</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#3b82f6">30+ Technical Indicators</div><div class="ob-feat-desc">RSI, MACD, Bollinger, Ichimoku, Supertrend, golden cross — computed live from Kite candles</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#a78bfa">AI Council</div><div class="ob-feat-desc">5 LLMs (GPT-4, Claude, DeepSeek, Llama, Mistral) vote independently — see the consensus + dissents</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#f59e0b">Buy Zone + SL</div><div class="ob-feat-desc">Exact entry range, stop-loss, and Fibonacci targets based on current price action</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obNext()">Next</button>
+      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
+    </div>
+  </div>
+
+  <!-- Step 3: Stock Picks -->
+  <div class="ob-step" data-step="2">
+    <div class="ob-icon">📈</div>
+    <div class="ob-title">Stock Picks — 3 Strategies</div>
+    <div class="ob-desc" style="max-width:440px">Curated daily from 500+ NSE stocks. Each pick is scored, ranked, and AI-reviewed.</div>
+    <div class="ob-features" style="margin-bottom:20px">
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#ef4444">Rebound Picks</div><div class="ob-feat-desc">Quality stocks that dropped hard — oversold RSI + strong fundamentals = buy-the-dip opportunities</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#22c55e">Momentum Picks</div><div class="ob-feat-desc">5-factor composite: FA 35% + Valuation 15% + TA 20% + Momentum 15% + Risk 15%</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">Long-Term Picks</div><div class="ob-feat-desc">Pure fundamentals — Quality 40 + Growth 25 + Valuation 20 + Business 15. No TA noise.</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#64748b">AI Second Opinion</div><div class="ob-feat-desc">Each pick gets reviewed by 5 AI models — see who agrees, who disagrees, and why</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obNext()">Next</button>
+      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
+    </div>
+  </div>
+
+  <!-- Step 4: Mutual Fund Picks -->
+  <div class="ob-step" data-step="3">
+    <div class="ob-icon">🏦</div>
+    <div class="ob-title">Mutual Fund Scoring</div>
+    <div class="ob-desc" style="max-width:440px">Varsity Module 11-based scoring across 4 categories. Not star ratings — real data.</div>
+    <div class="ob-features" style="margin-bottom:20px">
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#22c55e">120-Point Scoring</div><div class="ob-feat-desc">Rolling 3Y consistency, Sortino ratio, AUM sweet spot, expense ratio, alpha generation — all weighted</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#3b82f6">4 Categories</div><div class="ob-feat-desc">Large Cap, Mid Cap, Small Cap, Flexi Cap — each with category-specific benchmarks</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#a78bfa">AI Deep Review</div><div class="ob-feat-desc">Council of 5 models debates top funds — with a judge LLM that picks the final top 3 with reasoning</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#f59e0b">Tickertape Data</div><div class="ob-feat-desc">Sourced from Tickertape CSVs — Sharpe, drawdown, concentration, style drift, UCR/DCR all included</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obNext()">Next</button>
+      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
+    </div>
+  </div>
+
+  <!-- Step 5: Your toolkit overview -->
+  <div class="ob-step" data-step="4">
     <div class="ob-icon">🎯</div>
     <div class="ob-title">Your toolkit</div>
     <div class="ob-desc" style="max-width:420px">Here's what each tab in the top bar does:</div>
@@ -2603,7 +2658,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
       <div class="ob-feat"><div class="ob-feat-title" style="color:var(--green)">🏦 MF Picks</div><div class="ob-feat-desc">120-point scoring for mutual funds across 4 categories</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">📊 Stock Data</div><div class="ob-feat-desc">Browse 500+ NSE stocks with scores, fundamentals &amp; sector filters</div></div>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span></div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span></div>
     <button class="ob-next" onclick="obDismiss()" style="background:rgba(94,204,138,0.15);color:var(--green);border-color:rgba(94,204,138,0.2)">Got it — let's go</button>
   </div>
 </div>
