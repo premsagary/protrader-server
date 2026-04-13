@@ -6596,11 +6596,11 @@ function buildUI(d){
   html+='</div>';
 
   // -- AI SECOND OPINION (on-demand) — top of analyzer -------------------------
-  html+='<div class="analyzer-section reveal spatial-card" style="background:linear-gradient(135deg,var(--shiva-blue-glow),rgba(64,112,168,0.06));border-color:rgba(64,112,168,0.15)">';
+  html+='<div class="analyzer-section reveal spatial-card">';
   html+='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">';
   html+='<div>';
-  html+='<div class="analyzer-section-title" style="color:var(--shiva-blue);margin-bottom:4px">AI Second Opinion</div>';
-  html+='<div style="font-size:10px;color:var(--text3);margin-top:2px">5-model AI council (Varsity + Pure lenses) → Claude Sonnet 4.6 judge → final verdict with score</div>';
+  html+='<div class="analyzer-section-title" style="margin-bottom:4px">AI Second Opinion</div>';
+  html+='<div style="font-size:13px;color:#c0c8d8;margin-top:4px;font-weight:700;letter-spacing:0.3px">5-model AI council (Varsity + Pure lenses) → Claude Sonnet 4.6 judge → final verdict with score</div>';
   html+='</div>';
   if(_isPublicUser()){
     html+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 18px;font-size:12px;font-weight:600;cursor:not-allowed;display:flex;align-items:center;gap:6px;font-family:inherit">';
