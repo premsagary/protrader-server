@@ -1,14 +1,7 @@
 import React, { useCallback } from 'react';
 
 /**
- * A row of togglable filter buttons.
- *
- * Props:
- *   options     - array of filter values (strings) or { value, label } objects
- *   active      - currently active value (string or array for multi-select)
- *   onChange    - (value) => void for single-select, (values[]) for multi-select
- *   multiSelect - boolean, enables multi-select mode (default false)
- *   className   - optional extra class names
+ * A row of togglable filter buttons — Apple-style rounded pills.
  */
 export default function FilterPills({
   options = [],
@@ -41,7 +34,7 @@ export default function FilterPills({
   };
 
   return (
-    <div className={`flex gap-1.5 flex-wrap items-center mb-3 ${className}`}>
+    <div className={`flex gap-2 flex-wrap items-center mb-4 ${className}`}>
       {options.map((opt) => {
         const value = typeof opt === 'object' ? opt.value : opt;
         const label = typeof opt === 'object' ? opt.label : opt;
@@ -53,15 +46,16 @@ export default function FilterPills({
             onClick={() => handleClick(value)}
             style={{
               borderRadius: 'var(--radius-full)',
-              padding: '3px 11px',
-              fontSize: '11px',
+              padding: '5px 14px',
+              fontSize: '13px',
               fontWeight: 500,
-              border: `1px solid ${selected ? 'var(--accent)' : 'var(--border2)'}`,
-              background: selected ? 'var(--accent)' : 'transparent',
+              border: 'none',
+              background: selected ? 'var(--accent)' : 'var(--bg3)',
               cursor: 'pointer',
               color: selected ? '#fff' : 'var(--text2)',
               fontFamily: 'inherit',
-              transition: 'all 0.15s',
+              transition: 'all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+              letterSpacing: '-0.1px',
             }}
           >
             {label}

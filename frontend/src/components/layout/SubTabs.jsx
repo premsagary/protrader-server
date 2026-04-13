@@ -9,9 +9,7 @@ export default function SubTabs() {
   const tabs = mode === 'stocks' ? STOCK_TABS : CRYPTO_TABS;
   const activeTab = mode === 'stocks' ? stocksTab : cryptoTab;
   const setTab = mode === 'stocks' ? setStocksTab : setCryptoTab;
-  const activeColor = mode === 'stocks' ? 'var(--blue)' : 'var(--purple)';
 
-  // Scroll active tab into view when it changes
   useEffect(() => {
     if (!containerRef.current) return;
     const activeEl = containerRef.current.querySelector('[data-active="true"]');
@@ -23,14 +21,13 @@ export default function SubTabs() {
   return (
     <div
       ref={containerRef}
-      className="flex overflow-x-auto flex-shrink-0"
+      className="flex overflow-x-auto flex-shrink-0 hide-scrollbar"
       style={{
-        background: 'var(--nav-bg)',
-        borderBottom: '1px solid var(--nav-border)',
-        padding: '0 16px',
+        background: 'var(--bg2)',
+        borderBottom: '1px solid var(--border)',
+        padding: '0 20px',
         zIndex: 199,
-        scrollbarWidth: 'none',
-        msOverflowStyle: 'none',
+        gap: '2px',
       }}
     >
       {tabs.map((tab) => {
@@ -40,17 +37,20 @@ export default function SubTabs() {
             key={tab.id}
             data-active={isActive ? 'true' : undefined}
             onClick={() => setTab(tab.id)}
-            className="border-none cursor-pointer font-medium whitespace-nowrap"
             style={{
-              padding: '0 14px',
-              height: '38px',
+              padding: '0 16px',
+              height: '42px',
               background: 'transparent',
-              fontSize: '12px',
-              color: isActive ? activeColor : 'var(--text2)',
-              borderBottom: `2px solid ${isActive ? activeColor : 'transparent'}`,
+              border: 'none',
+              borderBottom: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: isActive ? 600 : 500,
+              color: isActive ? 'var(--text)' : 'var(--text3)',
               fontFamily: 'inherit',
-              transition: 'all 0.15s',
+              transition: 'all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
               letterSpacing: '-0.1px',
+              whiteSpace: 'nowrap',
             }}
           >
             {tab.label}

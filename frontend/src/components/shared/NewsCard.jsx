@@ -2,16 +2,7 @@ import React from 'react';
 import { timeAgo } from '../../utils/formatters';
 
 /**
- * News article card with sentiment indicator.
- *
- * Props:
- *   title       - article headline
- *   source      - news source name
- *   url         - link to full article
- *   publishedAt - date/time string or timestamp
- *   sentiment   - 'bullish'|'bull'|'bearish'|'bear'|'neutral' (optional)
- *   summary     - optional article summary text
- *   className   - optional extra class names
+ * News article card — Apple-style with soft sentiment indicator.
  */
 export default function NewsCard({
   title,
@@ -30,7 +21,7 @@ export default function NewsCard({
     ? 'var(--green)'
     : isBearish
       ? 'var(--red)'
-      : 'var(--border)';
+      : 'var(--border2)';
 
   const sentimentColor = isBullish
     ? 'var(--green-text)'
@@ -46,28 +37,37 @@ export default function NewsCard({
         ? 'Neutral'
         : null;
 
+  const cardStyle = {
+    background: 'var(--bg2)',
+    borderRadius: 'var(--radius-lg)',
+    padding: '16px 18px',
+    marginBottom: '8px',
+    borderLeft: `3px solid ${borderLeftColor}`,
+    boxShadow: 'var(--shadow-sm)',
+    transition: 'all 0.2s',
+  };
+
   const content = (
     <>
-      {/* Title */}
       <div
-        className="font-medium text-sm"
         style={{
+          fontSize: '14px',
+          fontWeight: 500,
           color: 'var(--text)',
-          lineHeight: 1.4,
-          marginBottom: summary ? '4px' : '6px',
+          lineHeight: 1.45,
+          marginBottom: summary ? '6px' : '8px',
         }}
       >
         {title}
       </div>
 
-      {/* Summary / Impact */}
       {(summary || impact) && (
         <div
-          className="text-2xs"
           style={{
+            fontSize: '13px',
             color: 'var(--text3)',
-            marginBottom: '6px',
-            lineHeight: 1.4,
+            marginBottom: '8px',
+            lineHeight: 1.45,
             display: '-webkit-box',
             WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
@@ -78,20 +78,18 @@ export default function NewsCard({
         </div>
       )}
 
-      {/* Meta row */}
       <div
-        className="flex items-center gap-3 text-2xs"
-        style={{ color: 'var(--text3)' }}
+        className="flex items-center gap-3"
+        style={{ fontSize: '12px', color: 'var(--text3)' }}
       >
-        {source && <span>{source}</span>}
+        {source && <span style={{ fontWeight: 500 }}>{source}</span>}
         {publishedAt && <span>{timeAgo(publishedAt)}</span>}
         {sentimentLabel && (
           <span
             style={{
               color: sentimentColor,
               fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
+              letterSpacing: '0.2px',
             }}
           >
             {sentimentLabel}
@@ -107,16 +105,8 @@ export default function NewsCard({
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className={`block no-underline transition-colors ${className}`}
-        style={{
-          background: 'var(--bg2)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '14px',
-          marginBottom: '8px',
-          borderLeft: `3px solid ${borderLeftColor}`,
-          textDecoration: 'none',
-        }}
+        className={`block ${className}`}
+        style={{ ...cardStyle, textDecoration: 'none' }}
       >
         {content}
       </a>
@@ -124,17 +114,7 @@ export default function NewsCard({
   }
 
   return (
-    <div
-      className={`transition-colors ${className}`}
-      style={{
-        background: 'var(--bg2)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '14px',
-        marginBottom: '8px',
-        borderLeft: `3px solid ${borderLeftColor}`,
-      }}
-    >
+    <div className={className} style={cardStyle}>
       {content}
     </div>
   );

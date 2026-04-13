@@ -36,65 +36,65 @@ const TAB_DEFS = [
 
 const TAB_COLS = {
   overview: [
-    { k: 'roe', l: 'ROE%', hc: '#f59e0b', r: (s) => _roe(s.roe) }, { k: 'debtToEq', l: 'D/E', hc: '#f59e0b', r: (s) => _de(s.debtToEq) },
-    { k: 'opMargin', l: 'OpMgn%', hc: '#f59e0b', r: (s) => _pct(s.opMargin), br: true },
+    { k: 'roe', l: 'ROE%', hc: 'var(--amber)', r: (s) => _roe(s.roe) }, { k: 'debtToEq', l: 'D/E', hc: 'var(--amber)', r: (s) => _de(s.debtToEq) },
+    { k: 'opMargin', l: 'OpMgn%', hc: 'var(--amber)', r: (s) => _pct(s.opMargin), br: true },
     { k: 'pe', l: 'P/E', hc: 'var(--green)', r: (s) => _pe(s.pe) },
     { k: 'peg', l: 'PEG', hc: 'var(--green)', r: (s) => s.pe != null && s.earGrowth > 0 ? _rv(+(s.pe / s.earGrowth).toFixed(2), 2, '', s.pe / s.earGrowth < 1 ? 'var(--green)' : s.pe / s.earGrowth < 2 ? 'var(--text)' : 'var(--red)') : na },
     { k: 'pctFromHigh', l: 'FrHi%', hc: 'var(--green)', r: (s) => _fromHi(s.pctFromHigh), br: true },
     { k: 'wk52Change', l: '52W%', hc: 'var(--blue)', r: (s) => _pct(s.wk52Change) }, { k: 'rsi', l: 'RSI', hc: 'var(--blue)', r: (s) => _rsi(s.rsi) },
     { k: 'beta', l: 'Beta', hc: 'var(--blue)', r: (s) => _ratio(s.beta), br: true },
-    { k: 'revGrowth', l: 'RevGr%', hc: '#8b5cf6', r: (s) => _pct(s.revGrowth) }, { k: 'earGrowth', l: 'EpsGr%', hc: '#8b5cf6', r: (s) => _pct(s.earGrowth), br: true },
+    { k: 'revGrowth', l: 'RevGr%', hc: 'var(--purple)', r: (s) => _pct(s.revGrowth) }, { k: 'earGrowth', l: 'EpsGr%', hc: 'var(--purple)', r: (s) => _pct(s.earGrowth), br: true },
     { k: 'dma50', l: '50DMA', hc: 'var(--red)', r: (s) => _dma(s.dma50, s.price) }, { k: 'dma200', l: '200DMA', hc: 'var(--red)', r: (s) => _dma(s.dma200, s.price) },
     { k: 'goldenCross', l: 'GldCrs', hc: 'var(--red)', r: (s) => _gc(s.goldenCross), br: true },
     { k: 'target', l: 'Target', hc: 'var(--text3)', r: (s) => _price(s.target) }, { k: 'rewardPct', l: 'Upside', hc: 'var(--text3)', r: (s) => _pct(s.rewardPct) },
   ],
   quality: [
-    { k: 'roe', l: 'ROE%', hc: '#f59e0b', r: (s) => _roe(s.roe) }, { k: 'roa', l: 'ROA%', hc: '#f59e0b', r: (s) => _roe(s.roa) },
-    { k: 'roce', l: 'ROCE%', hc: '#f59e0b', r: (s) => _roe(s.roce) }, { k: 'debtToEq', l: 'D/E', hc: '#e67e22', r: (s) => _de(s.debtToEq) },
-    { k: 'opMargin', l: 'OpMgn%', hc: '#e67e22', r: (s) => _pct(s.opMargin) }, { k: 'intCov', l: 'IntCov', hc: 'var(--text)', r: (s) => _ratio(s.intCov) },
+    { k: 'roe', l: 'ROE%', hc: 'var(--amber)', r: (s) => _roe(s.roe) }, { k: 'roa', l: 'ROA%', hc: 'var(--amber)', r: (s) => _roe(s.roa) },
+    { k: 'roce', l: 'ROCE%', hc: 'var(--amber)', r: (s) => _roe(s.roce) }, { k: 'debtToEq', l: 'D/E', hc: 'var(--amber)', r: (s) => _de(s.debtToEq) },
+    { k: 'opMargin', l: 'OpMgn%', hc: 'var(--amber)', r: (s) => _pct(s.opMargin) }, { k: 'intCov', l: 'IntCov', hc: 'var(--text)', r: (s) => _ratio(s.intCov) },
     { k: 'currentRatio', l: 'CurRat', hc: 'var(--text)', r: (s) => _ratio(s.currentRatio) },
   ],
   value: [
     { k: 'pe', l: 'P/E', hc: 'var(--green)', r: (s) => _pe(s.pe) }, { k: 'pb', l: 'P/B', hc: 'var(--green)', r: (s) => _rv(s.pb, 2, '', s.pb != null && s.pb < 3 ? 'var(--green)' : 'var(--red)') },
     { k: 'peg', l: 'PEG', hc: 'var(--green)', r: (s) => s.pe != null && s.earGrowth > 0 ? _rv(+(s.pe / s.earGrowth).toFixed(2), 2) : na, br: true },
-    { k: 'evEbitda', l: 'EV/EBITDA', hc: '#10b981', r: (s) => _pe(s.evEbitda) }, { k: 'divYield', l: 'DivYld%', hc: 'var(--text)', r: (s) => _pct(s.divYield) },
+    { k: 'evEbitda', l: 'EV/EBITDA', hc: 'var(--emerald)', r: (s) => _pe(s.evEbitda) }, { k: 'divYield', l: 'DivYld%', hc: 'var(--text)', r: (s) => _pct(s.divYield) },
     { k: 'pctFromHigh', l: 'FrHi%', hc: 'var(--text)', r: (s) => _fromHi(s.pctFromHigh) },
   ],
   momentum: [
     { k: 'wk52Change', l: '52W%', hc: 'var(--blue)', r: (s) => _pct(s.wk52Change) }, { k: 'change6m', l: '6M%', hc: 'var(--blue)', r: (s) => _pct(s.change6m) },
     { k: 'change3m', l: '3M%', hc: 'var(--blue)', r: (s) => _pct(s.change3m) }, { k: 'change1m', l: '1M%', hc: 'var(--blue)', r: (s) => _pct(s.change1m), br: true },
-    { k: 'rsi', l: 'RSI', hc: '#e67e22', r: (s) => _rsi(s.rsi) }, { k: 'beta', l: 'Beta', hc: '#e67e22', r: (s) => _ratio(s.beta) },
+    { k: 'rsi', l: 'RSI', hc: 'var(--amber)', r: (s) => _rsi(s.rsi) }, { k: 'beta', l: 'Beta', hc: 'var(--amber)', r: (s) => _ratio(s.beta) },
     { k: 'wk52Hi', l: '52W Hi', hc: 'var(--text)', r: (s) => _price(s.wk52Hi) }, { k: 'wk52Lo', l: '52W Lo', hc: 'var(--text)', r: (s) => _price(s.wk52Lo) },
   ],
   growth: [
-    { k: 'revGrowth', l: 'RevGr%', hc: '#8b5cf6', r: (s) => _pct(s.revGrowth) }, { k: 'earGrowth', l: 'EpsGr%', hc: '#8b5cf6', r: (s) => _pct(s.earGrowth) },
-    { k: 'salesGr1y', l: 'Sales1Y%', hc: '#8b5cf6', r: (s) => _pct(s.salesGr1y) }, { k: 'salesGr5y', l: 'Sales5Y%', hc: '#8b5cf6', r: (s) => _pct(s.salesGr5y), br: true },
+    { k: 'revGrowth', l: 'RevGr%', hc: 'var(--purple)', r: (s) => _pct(s.revGrowth) }, { k: 'earGrowth', l: 'EpsGr%', hc: 'var(--purple)', r: (s) => _pct(s.earGrowth) },
+    { k: 'salesGr1y', l: 'Sales1Y%', hc: 'var(--purple)', r: (s) => _pct(s.salesGr1y) }, { k: 'salesGr5y', l: 'Sales5Y%', hc: 'var(--purple)', r: (s) => _pct(s.salesGr5y), br: true },
     { k: 'ret1y', l: 'Ret1Y%', hc: 'var(--blue)', r: (s) => _pct(s.ret1y) }, { k: 'ret3y', l: 'Ret3Y%', hc: 'var(--blue)', r: (s) => _pct(s.ret3y) },
   ],
   technical: [
     { k: 'dma20', l: '20DMA', hc: 'var(--red)', r: (s) => _dma(s.dma20, s.price) }, { k: 'dma50', l: '50DMA', hc: 'var(--red)', r: (s) => _dma(s.dma50, s.price) },
     { k: 'dma200', l: '200DMA', hc: 'var(--red)', r: (s) => _dma(s.dma200, s.price), br: true },
-    { k: 'goldenCross', l: 'GldCrs', hc: '#f59e0b', r: (s) => _gc(s.goldenCross) }, { k: 'bbPct', l: 'BB%', hc: '#f59e0b', r: (s) => _ratio(s.bbPct) },
+    { k: 'goldenCross', l: 'GldCrs', hc: 'var(--amber)', r: (s) => _gc(s.goldenCross) }, { k: 'bbPct', l: 'BB%', hc: 'var(--amber)', r: (s) => _ratio(s.bbPct) },
     { k: 'macd', l: 'MACD', hc: 'var(--blue)', r: (s) => _rv(s.macd, 2) }, { k: 'adx', l: 'ADX', hc: 'var(--blue)', r: (s) => _num(s.adx, 1), br: true },
     { k: 'volRatio', l: 'VolRat', hc: 'var(--text)', r: (s) => _vol(s.volRatio) }, { k: 'dma200Trend', l: '200Trend', hc: 'var(--text)', r: (s) => _trend(s.dma200Trend) },
   ],
   financials: [
     { k: 'mktCap', l: 'MktCap Cr', hc: 'var(--text)', r: (s) => _crore(s.mktCap) }, { k: 'eps', l: 'EPS', hc: 'var(--text)', r: (s) => _num(s.eps, 2) },
     { k: 'bookValue', l: 'BookVal', hc: 'var(--text)', r: (s) => _num(s.bookValue, 2) }, { k: 'debt', l: 'Debt Cr', hc: 'var(--text)', r: (s) => _crore(s.debt), br: true },
-    { k: 'fcf', l: 'FCF Cr', hc: '#10b981', r: (s) => _crore(s.fcf) }, { k: 'patQtr', l: 'PAT Qtr', hc: '#10b981', r: (s) => _crore(s.patQtr) },
+    { k: 'fcf', l: 'FCF Cr', hc: 'var(--emerald)', r: (s) => _crore(s.fcf) }, { k: 'patQtr', l: 'PAT Qtr', hc: 'var(--emerald)', r: (s) => _crore(s.patQtr) },
     { k: 'grossMgn', l: 'GrsMgn%', hc: 'var(--text3)', r: (s) => _pct(s.grossMgn) }, { k: 'profMgn', l: 'PrfMgn%', hc: 'var(--text3)', r: (s) => _pct(s.profMgn) },
   ],
   ownership: [
-    { k: 'promoter', l: 'Promoter%', hc: '#f59e0b', r: (s) => _pct(s.promoter) },
-    { k: 'promoterChg', l: 'PromChg%', hc: '#f59e0b', r: (s) => _rv(s.promoterChg, 1, '%', s.promoterChg > 0 ? 'var(--green)' : s.promoterChg < 0 ? 'var(--red)' : 'var(--text)') },
-    { k: 'pledged', l: 'Pledged%', hc: '#f59e0b', r: (s) => _rv(s.pledged, 1, '%', s.pledged != null && s.pledged < 10 ? 'var(--green)' : s.pledged < 30 ? 'var(--amber)' : 'var(--red)'), br: true },
+    { k: 'promoter', l: 'Promoter%', hc: 'var(--amber)', r: (s) => _pct(s.promoter) },
+    { k: 'promoterChg', l: 'PromChg%', hc: 'var(--amber)', r: (s) => _rv(s.promoterChg, 1, '%', s.promoterChg > 0 ? 'var(--green)' : s.promoterChg < 0 ? 'var(--red)' : 'var(--text)') },
+    { k: 'pledged', l: 'Pledged%', hc: 'var(--amber)', r: (s) => _rv(s.pledged, 1, '%', s.pledged != null && s.pledged < 10 ? 'var(--green)' : s.pledged < 30 ? 'var(--amber)' : 'var(--red)'), br: true },
     { k: 'fiiHolding', l: 'FII%', hc: 'var(--blue)', r: (s) => _pct(s.fiiHolding) }, { k: 'diiHolding', l: 'DII%', hc: 'var(--blue)', r: (s) => _pct(s.diiHolding) },
   ],
   signals: [
     { k: 'target', l: 'Target', hc: 'var(--green)', r: (s) => _price(s.target) }, { k: 'stopLoss', l: 'StopLoss', hc: 'var(--red)', r: (s) => _price(s.stopLoss) },
     { k: 'rewardPct', l: 'Upside%', hc: 'var(--green)', r: (s) => _pct(s.rewardPct) }, { k: 'riskPct', l: 'Risk%', hc: 'var(--red)', r: (s) => _rv(s.riskPct, 1, '%', 'var(--red)') },
     { k: 'rrRatio', l: 'R:R', hc: 'var(--text)', r: (s) => _ratio(s.rrRatio), br: true },
-    { k: 'isFallenAngel', l: 'Fallen', hc: '#f59e0b', r: (s) => _fa(s.isFallenAngel) }, { k: 'fallenScore', l: 'FA Score', hc: '#f59e0b', r: (s) => s.fallenScore != null ? _num(s.fallenScore, 0) : na },
+    { k: 'isFallenAngel', l: 'Fallen', hc: 'var(--amber)', r: (s) => _fa(s.isFallenAngel) }, { k: 'fallenScore', l: 'FA Score', hc: 'var(--amber)', r: (s) => s.fallenScore != null ? _num(s.fallenScore, 0) : na },
   ],
 };
 
@@ -248,10 +248,10 @@ function AnalyzerResult({ data, onRunAI, aiData, aiLoading }) {
       <div style={{ background: 'linear-gradient(135deg,rgba(139,92,246,.08),rgba(59,130,246,.08))', border: '1px solid rgba(139,92,246,.3)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <div className="flex justify-between items-center flex-wrap gap-2 mb-2">
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: '#8b5cf6' }}>AI Second Opinion</div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--purple)' }}>AI Second Opinion</div>
             <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>4 free AI analysts + 1 judge model analyze using Varsity principles</div>
           </div>
-          <button onClick={onRunAI} disabled={aiLoading} style={{ background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 12, fontWeight: 700, cursor: aiLoading ? 'wait' : 'pointer' }}>
+          <button onClick={onRunAI} disabled={aiLoading} style={{ background: 'var(--purple)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 12, fontWeight: 700, cursor: aiLoading ? 'wait' : 'pointer' }}>
             {aiLoading ? 'Running...' : aiData ? 'Re-run AI Review' : 'Run AI Review'}
           </button>
         </div>
@@ -259,7 +259,7 @@ function AnalyzerResult({ data, onRunAI, aiData, aiLoading }) {
           <div style={{ padding: 20, textAlign: 'center' }}>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>Querying 5 AI models in parallel...</div>
             <div style={{ height: 3, background: 'var(--bg4)', borderRadius: 2, overflow: 'hidden', maxWidth: 220, margin: '0 auto' }}>
-              <div className="animate-shimmer" style={{ height: '100%', background: '#8b5cf6', width: '60%', borderRadius: 2 }} />
+              <div className="animate-shimmer" style={{ height: '100%', background: 'var(--purple)', width: '60%', borderRadius: 2 }} />
             </div>
           </div>
         )}
@@ -336,7 +336,7 @@ function AnalyzerResult({ data, onRunAI, aiData, aiLoading }) {
 function AIReviewPanel({ data }) {
   const d = data;
   if (d.error) return <div style={{ color: 'var(--red)', fontSize: 12, padding: 8 }}>Error: {d.error}</div>;
-  const cc = { BUY: '#22c55e', AVOID: '#ef4444', HOLD: '#f59e0b', MIXED: '#6b7280' };
+  const cc = { BUY: '#22c55e', AVOID: '#ef4444', HOLD: 'var(--amber)', MIXED: '#6b7280' };
   const consColor = cc[d.consensus] || '#6b7280';
   const counts = d.counts || {};
   const mn = { 'groq-llama': 'Groq', 'gpt-nano': 'GPT-nano', 'deepseek': 'DeepSeek', 'claude-haiku': 'Haiku', 'mistral': 'Mistral' };
@@ -357,7 +357,7 @@ function AIReviewPanel({ data }) {
             </div>
           );
           const vcu = (m.verdict || '').toUpperCase();
-          const mc = vcu.includes('BUY') && !vcu.includes('AVOID') ? '#22c55e' : vcu.includes('HOLD') ? '#f59e0b' : vcu.includes('SELL') ? '#ef4444' : vcu.includes('AVOID') ? '#f97316' : 'var(--text3)';
+          const mc = vcu.includes('BUY') && !vcu.includes('AVOID') ? '#22c55e' : vcu.includes('HOLD') ? 'var(--amber)' : vcu.includes('SELL') ? '#ef4444' : vcu.includes('AVOID') ? '#f97316' : 'var(--text3)';
           return (
             <div key={m.id} style={{ background: 'var(--bg2)', borderRadius: 8, padding: 10, borderLeft: `3px solid ${mc}` }}>
               <div className="flex justify-between items-center mb-1.5">
@@ -381,7 +381,7 @@ function AIReviewPanel({ data }) {
 
 /* ── Stock Card (top picks sidebar) ── */
 function StockCard({ s, rank }) {
-  const gc = { NIFTY50: 'var(--blue)', NEXT50: '#8b5cf6', MIDCAP: '#f59e0b', SMALLCAP: '#10b981' }[s.grp] || 'var(--text3)';
+  const gc = { NIFTY50: 'var(--blue)', NEXT50: 'var(--purple)', MIDCAP: 'var(--amber)', SMALLCAP: 'var(--emerald)' }[s.grp] || 'var(--text3)';
   const sc = s.score >= 75 ? 'var(--green)' : s.score >= 55 ? 'var(--amber)' : 'var(--red)';
   const convClass = (s.conviction || 'watch').toLowerCase().replace(/\s+/g, '-');
   const fa = s.fa_score || 0, ta = s.ta_score || 0, mom = s.momentum_score || 0, risk = s.risk_score || 0;
@@ -501,7 +501,7 @@ export default function StockRecPage() {
   const activeCols = TAB_COLS[tab] || TAB_COLS.overview;
   const SHOW_INITIAL = 20;
   const showCount = showAll ? filtered.length : Math.min(SHOW_INITIAL, filtered.length);
-  const grpCol = { NIFTY50: 'var(--blue)', NEXT50: '#8b5cf6', MIDCAP: '#f59e0b', SMALLCAP: '#10b981' };
+  const grpCol = { NIFTY50: 'var(--blue)', NEXT50: 'var(--purple)', MIDCAP: 'var(--amber)', SMALLCAP: 'var(--emerald)' };
 
   // Conviction counts
   const convCounts = { sb: 0, b: 0, acc: 0, w: 0, av: 0 };
@@ -663,10 +663,10 @@ export default function StockRecPage() {
         <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 10 }}>Scoring Methodology - 100 Points</div>
         <div className="flex flex-wrap gap-2">
           {[
-            { name: 'Quality', pts: 25, c: '#f59e0b', factors: 'ROE -- ROA/ROCE -- Debt/Equity -- Operating Margin' },
+            { name: 'Quality', pts: 25, c: 'var(--amber)', factors: 'ROE -- ROA/ROCE -- Debt/Equity -- Operating Margin' },
             { name: 'Value', pts: 20, c: 'var(--green)', factors: 'P/E -- P/B -- PEG -- Dividend Yield' },
             { name: 'Momentum', pts: 20, c: 'var(--blue)', factors: '52-week return -- % from high -- Beta' },
-            { name: 'Growth', pts: 20, c: '#8b5cf6', factors: 'Revenue growth -- EPS growth' },
+            { name: 'Growth', pts: 20, c: 'var(--purple)', factors: 'Revenue growth -- EPS growth' },
             { name: 'Technical', pts: 15, c: 'var(--red)', factors: 'Price vs 50/200 DMA -- Golden Cross -- Volume' },
           ].map((p) => (
             <div key={p.name} style={{ background: 'var(--bg3)', borderRadius: 8, padding: '8px 12px', flex: 1, minWidth: 150 }}>

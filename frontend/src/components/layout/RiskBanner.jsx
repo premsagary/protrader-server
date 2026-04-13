@@ -37,22 +37,27 @@ export default function RiskBanner() {
       <button
         onClick={handleDismiss}
         style={{
+          width: '24px',
+          height: '24px',
           background: 'transparent',
           border: 'none',
           cursor: 'pointer',
           color: isDanger ? 'var(--red-text)' : 'var(--amber-text)',
-          fontWeight: 600,
-          fontSize: '14px',
-          lineHeight: 1,
-          padding: '2px 6px',
+          padding: 0,
           borderRadius: 'var(--radius)',
           fontFamily: 'inherit',
-          opacity: 0.7,
-          transition: 'opacity 0.15s',
+          opacity: 0.6,
+          transition: 'opacity 0.2s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
         }}
         title="Dismiss"
       >
-        x
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </button>
     </div>
   );

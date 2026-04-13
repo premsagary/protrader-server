@@ -1,18 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 
 /**
- * Sortable data table with sticky headers and zebra striping.
- *
- * Props:
- *   columns      - [{ key, label, align?, render?, sortable?, width? }]
- *   data         - array of row objects
- *   onRowClick   - optional (row, index) => void
- *   maxHeight    - optional max height for scrollable container (e.g. "400px")
- *   emptyMessage - message when no data
- *   defaultSort  - optional { key, dir: 'asc'|'desc' }
- *   className    - optional extra class names
- *   compact      - optional boolean for denser rows
- *   rowKey       - optional function (row, index) => string for unique key
+ * Sortable data table — Apple-style with clean lines and generous spacing.
  */
 export default function DataTable({
   columns,
@@ -62,14 +51,19 @@ export default function DataTable({
   if (!data || data.length === 0) {
     return (
       <div
-        className="text-center text-sm"
-        style={{ padding: '48px 0', color: 'var(--text3)' }}
+        style={{
+          padding: '64px 0',
+          textAlign: 'center',
+          color: 'var(--text3)',
+          fontSize: '14px',
+        }}
       >
         <div
           style={{
-            fontSize: '32px',
+            fontSize: '28px',
             marginBottom: '8px',
-            color: 'var(--border2)',
+            color: 'var(--text4)',
+            fontWeight: 300,
           }}
         >
           --
@@ -79,8 +73,8 @@ export default function DataTable({
     );
   }
 
-  const cellPadY = compact ? '6px' : '9px';
-  const cellPadX = compact ? '10px' : '12px';
+  const cellPadY = compact ? '8px' : '12px';
+  const cellPadX = compact ? '12px' : '16px';
 
   return (
     <div
@@ -88,6 +82,7 @@ export default function DataTable({
       style={{
         overflowX: 'auto',
         borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow)',
         border: '1px solid var(--border)',
         maxHeight: maxHeight || undefined,
         overflowY: maxHeight ? 'auto' : undefined,
@@ -107,28 +102,29 @@ export default function DataTable({
                 key={col.key}
                 onClick={() => handleSort(col.key, col.sortable)}
                 style={{
-                  padding: `8px ${cellPadX}`,
+                  padding: `10px ${cellPadX}`,
                   textAlign: col.align || 'left',
                   fontSize: '11px',
                   fontWeight: 600,
-                  color:
-                    sortKey === col.key ? 'var(--text)' : 'var(--text3)',
+                  color: sortKey === col.key ? 'var(--text)' : 'var(--text3)',
                   borderBottom: '1px solid var(--border)',
                   whiteSpace: 'nowrap',
                   cursor: col.sortable !== false ? 'pointer' : 'default',
                   userSelect: 'none',
-                  letterSpacing: '0.4px',
+                  letterSpacing: '0.3px',
                   textTransform: 'uppercase',
                   position: 'sticky',
                   top: 0,
                   zIndex: 10,
-                  background: 'var(--bg3)',
+                  background: 'var(--bg2)',
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
                   width: col.width || undefined,
                 }}
               >
                 {col.label}
                 {sortKey === col.key && (
-                  <span style={{ marginLeft: '4px', fontSize: '10px' }}>
+                  <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.6 }}>
                     {sortDir === 'asc' ? '\u2191' : '\u2193'}
                   </span>
                 )}
@@ -147,15 +143,13 @@ export default function DataTable({
                 onClick={() => onRowClick?.(row, i)}
                 style={{
                   cursor: onRowClick ? 'pointer' : 'default',
-                  background: i % 2 === 1 ? 'var(--bg3)' : 'transparent',
-                  transition: 'background 0.1s',
+                  transition: 'background 0.15s',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--bg3)';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background =
-                    i % 2 === 1 ? 'var(--bg3)' : 'transparent';
+                  e.currentTarget.style.background = 'transparent';
                 }}
               >
                 {columns.map((col) => (
@@ -163,7 +157,7 @@ export default function DataTable({
                     key={col.key}
                     style={{
                       padding: `${cellPadY} ${cellPadX}`,
-                      fontSize: '12px',
+                      fontSize: '13px',
                       borderBottom: '1px solid var(--border)',
                       verticalAlign: 'middle',
                       color: 'var(--text)',

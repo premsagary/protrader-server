@@ -1,12 +1,7 @@
 import React from 'react';
 
 /**
- * Empty content placeholder.
- *
- * Props:
- *   message    - display message (default "No data available")
- *   action     - optional action button config { label, onClick }
- *   className  - optional extra class names
+ * Empty content placeholder — Apple-style with subtle icon.
  */
 export default function EmptyState({
   message = 'No data available',
@@ -15,40 +10,46 @@ export default function EmptyState({
 }) {
   return (
     <div
-      className={`text-center ${className}`}
+      className={`text-center animate-fadeIn ${className}`}
       style={{
-        padding: '48px 0',
+        padding: '64px 0',
         color: 'var(--text3)',
-        fontSize: '13px',
+        fontSize: '14px',
       }}
     >
-      {/* Dash icon */}
       <div
         style={{
-          fontSize: '32px',
-          marginBottom: '8px',
-          color: 'var(--border2)',
-          lineHeight: 1,
+          width: '44px',
+          height: '44px',
+          borderRadius: '50%',
+          background: 'var(--bg3)',
+          margin: '0 auto 14px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        --
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="7" stroke="var(--text4)" strokeWidth="1.5" />
+          <line x1="5.5" y1="9" x2="12.5" y2="9" stroke="var(--text4)" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </div>
-      <div>{message}</div>
+      <div style={{ fontWeight: 500 }}>{message}</div>
       {action && (
         <button
           onClick={action.onClick}
           style={{
-            marginTop: '12px',
-            padding: '6px 16px',
+            marginTop: '16px',
+            padding: '8px 20px',
             background: 'var(--accent)',
             color: '#fff',
             border: 'none',
             borderRadius: 'var(--radius)',
-            fontSize: '12px',
-            fontWeight: 500,
+            fontSize: '13px',
+            fontWeight: 600,
             cursor: 'pointer',
             fontFamily: 'inherit',
-            transition: 'opacity 0.15s',
+            transition: 'all 0.2s',
           }}
         >
           {action.label}

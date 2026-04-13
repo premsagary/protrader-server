@@ -2,16 +2,16 @@ import React from 'react';
 
 const HORIZON_STYLES = {
   intraday: {
-    color: 'var(--purple)',
-    borderColor: 'var(--purple-bg)',
+    bg: 'var(--purple-bg)',
+    color: 'var(--purple-text)',
   },
   swing: {
-    color: 'var(--blue)',
-    borderColor: 'var(--blue-bg)',
+    bg: 'var(--blue-bg)',
+    color: 'var(--blue-text)',
   },
   positional: {
-    color: 'var(--green)',
-    borderColor: 'var(--green-bg)',
+    bg: 'var(--green-bg)',
+    color: 'var(--green-text)',
   },
 };
 
@@ -22,11 +22,7 @@ const HORIZON_LABELS = {
 };
 
 /**
- * Investment horizon badge.
- *
- * Props:
- *   horizon   - one of "Intraday", "Swing", "Positional" (case-insensitive)
- *   className - optional extra class names
+ * Investment horizon badge — Apple-style, soft background.
  */
 export default function HorizonPill({ horizon, className = '' }) {
   const h = (horizon || 'swing').toLowerCase();
@@ -39,14 +35,13 @@ export default function HorizonPill({ horizon, className = '' }) {
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        borderRadius: '3px',
-        padding: '1px 6px',
-        fontSize: '10px',
+        borderRadius: '6px',
+        padding: '2px 8px',
+        fontSize: '11px',
         fontWeight: 600,
         whiteSpace: 'nowrap',
-        background: 'var(--bg4)',
+        background: style.bg,
         color: style.color,
-        border: `1px solid ${style.borderColor}`,
       }}
     >
       {label}

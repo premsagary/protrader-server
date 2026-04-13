@@ -82,7 +82,7 @@ export default function App() {
       {showSubTabs && <SubTabs />}
       <main
         className="flex-1 overflow-y-auto overflow-x-hidden"
-        style={{ padding: '16px 20px' }}
+        style={{ padding: '24px 28px' }}
       >
         {renderContent()}
       </main>

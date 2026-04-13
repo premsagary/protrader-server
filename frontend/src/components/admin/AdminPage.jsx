@@ -6,10 +6,10 @@ import { formatDate, formatTime, timeAgo } from '../../utils/formatters';
 
 /* ── Pipeline Cards ── */
 const PIPELINE_ITEMS = [
-  { key: 'universe', label: 'Stock Universe', refresh: 'universe', color: '#3b82f6', desc: 'NSE Nifty50 + Next50 + Midcap + Smallcap', schedule: 'Auto-syncs daily at 8AM IST + on startup' },
-  { key: 'fundamentals', label: 'Fundamentals', refresh: 'fundamentals', color: '#f59e0b', desc: 'ROE -- D/E -- PE -- margins -- promoter% via Screener.in', schedule: 'Auto-syncs daily at 8PM IST + if stale on startup' },
-  { key: 'scored', label: 'Scoring Engine', refresh: 'scoring', color: '#10b981', desc: 'Kite candles -> technicals -> Varsity composite score', schedule: 'Auto-scores daily at 7AM IST + on startup' },
-  { key: 'kite', label: 'MF Recommendations', refresh: 'mf', color: '#8b5cf6', desc: 'Tickertape -> Varsity Module 11 scoring', schedule: 'Auto-refreshes every 6 hours' },
+  { key: 'universe', label: 'Stock Universe', refresh: 'universe', color: 'var(--blue)', desc: 'NSE Nifty50 + Next50 + Midcap + Smallcap', schedule: 'Auto-syncs daily at 8AM IST + on startup' },
+  { key: 'fundamentals', label: 'Fundamentals', refresh: 'fundamentals', color: 'var(--amber)', desc: 'ROE -- D/E -- PE -- margins -- promoter% via Screener.in', schedule: 'Auto-syncs daily at 8PM IST + if stale on startup' },
+  { key: 'scored', label: 'Scoring Engine', refresh: 'scoring', color: 'var(--emerald)', desc: 'Kite candles -> technicals -> Varsity composite score', schedule: 'Auto-scores daily at 7AM IST + on startup' },
+  { key: 'kite', label: 'MF Recommendations', refresh: 'mf', color: 'var(--purple)', desc: 'Tickertape -> Varsity Module 11 scoring', schedule: 'Auto-refreshes every 6 hours' },
 ];
 
 export default function AdminPage() {

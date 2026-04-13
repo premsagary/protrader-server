@@ -85,7 +85,7 @@ function MiroFishProjection({ fund, rank, cfg }) {
   return (
     <div style={{ marginTop: 12, borderTop: `1px solid ${cfg.color}30`, paddingTop: 12 }}>
       <div className="flex items-center justify-between mb-2">
-        <span style={{ fontSize: 10, fontWeight: 700, color: '#bc8cff' }}>MiroFish -- Rs1 Lakh invested</span>
+        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--purple-text)' }}>MiroFish -- Rs1 Lakh invested</span>
         <span style={{ fontSize: 10, color: 'var(--text4)' }}>
           {loading ? 'Analyzing...' : prediction ? `55 data points -- ${prediction.confidence || ''} confidence` : 'Failed'}
         </span>
@@ -96,15 +96,15 @@ function MiroFishProjection({ fund, rank, cfg }) {
           const projected = h ? Math.round(100000 * Math.pow(1 + (h.cagr || 12) / 100, parseInt(yr))) : null;
           return (
             <div key={yr} style={{
-              background: prediction ? 'rgba(124,58,237,.12)' : 'rgba(124,58,237,.06)',
-              border: '1px solid ' + (prediction ? 'rgba(124,58,237,.3)' : 'rgba(124,58,237,.12)'),
+              background: prediction ? 'var(--purple-bg)' : 'var(--purple-bg)',
+              border: '1px solid ' + (prediction ? 'var(--tier-accumulate-border)' : 'var(--purple-bg)'),
               borderRadius: 6, padding: '6px 4px', textAlign: 'center',
             }}>
               <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 2 }}>{yr}</div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: prediction ? '#bc8cff' : 'var(--text4)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: prediction ? 'var(--purple-text)' : 'var(--text4)' }}>
                 {projected ? fmtWealth(projected) : '...'}
               </div>
-              {h && <div style={{ fontSize: 10, color: '#bc8cff80' }}>{(h.cagr || 0).toFixed(1)}%/yr</div>}
+              {h && <div style={{ fontSize: 10, color: 'var(--text3)' }}>{(h.cagr || 0).toFixed(1)}%/yr</div>}
             </div>
           );
         })}
@@ -114,7 +114,7 @@ function MiroFishProjection({ fund, rank, cfg }) {
           error.includes('ANTHROPIC') ? 'Set ANTHROPIC_API_KEY in Railway env vars' : `Error: ${error}`
         ) : prediction ? (
           <>
-            <span style={{ color: '#bc8cff', fontWeight: 700 }}>MiroFish </span>
+            <span style={{ color: 'var(--purple-text)', fontWeight: 700 }}>MiroFish </span>
             {prediction.prediction}
             {prediction.key_driver && <><br /><span style={{ color: 'var(--green)', fontSize: 10 }}>Up: {prediction.key_driver}</span></>}
             {prediction.main_risk && <><br /><span style={{ color: 'var(--red)', fontSize: 10 }}>Down: {prediction.main_risk}</span></>}
@@ -160,27 +160,27 @@ function FundCard({ fund, rank, cfg, maxScore }) {
       {/* DNI banner */}
       {f.dni && (
         <div style={{
-          background: f.dni.level === 'red' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
+          background: f.dni.level === 'red' ? 'var(--red-bg)' : 'var(--amber-bg)',
           border: `1.5px solid ${f.dni.level === 'red' ? 'var(--red)' : 'var(--amber)'}`,
           borderRadius: 6, padding: '7px 10px', marginBottom: 8,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: f.dni.level === 'red' ? 'var(--red)' : '#b45309', marginBottom: 3 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: f.dni.level === 'red' ? 'var(--red)' : 'var(--amber-text)', marginBottom: 3 }}>
             {f.dni.level === 'red' ? 'X' : '!'} {f.dni.short}
           </div>
-          <div style={{ fontSize: 10, color: f.dni.level === 'red' ? 'var(--red)' : '#b45309', lineHeight: 1.5, opacity: 0.9 }}>{f.dni.reason}</div>
+          <div style={{ fontSize: 10, color: f.dni.level === 'red' ? 'var(--red)' : 'var(--amber-text)', lineHeight: 1.5, opacity: 0.9 }}>{f.dni.reason}</div>
         </div>
       )}
 
       {/* Watchlist badge */}
       {f.watchlist && !f.dni && (
-        <div style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: 6, padding: '5px 10px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ background: 'var(--blue-bg)', border: '1px solid var(--tier-buy-border)', borderRadius: 6, padding: '5px 10px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 12 }}>Pin</span>
-          <div style={{ fontSize: 10, color: '#818cf8', lineHeight: 1.4 }}>Watchlist - Fund AUM &lt; Rs5,000 Cr. Strong numbers but unproven at scale.</div>
+          <div style={{ fontSize: 10, color: 'var(--blue-text)', lineHeight: 1.4 }}>Watchlist - Fund AUM &lt; Rs5,000 Cr. Strong numbers but unproven at scale.</div>
         </div>
       )}
 
       {f.amc_warning && (
-        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid var(--red)', borderRadius: 5, padding: '5px 8px', fontSize: 10, color: 'var(--red)', marginBottom: 8, lineHeight: 1.5 }}>{f.amc_warning}</div>
+        <div style={{ background: 'var(--red-bg)', border: '1px solid var(--red)', borderRadius: 5, padding: '5px 8px', fontSize: 10, color: 'var(--red)', marginBottom: 8, lineHeight: 1.5 }}>{f.amc_warning}</div>
       )}
 
       {/* Header */}
@@ -281,7 +281,7 @@ function FundCard({ fund, rank, cfg, maxScore }) {
 const COL_GROUPS = [
   { label: 'IDENTITY', color: 'var(--text3)', cols: ['#', 'Fund', 'AMC', 'NAV', 'AUM Cr', 'Exp%', 'Min Rs', 'Min SIP', 'Exit Load', 'Inception', 'Fund Manager'] },
   { label: 'RETURNS', color: 'var(--green)', cols: ['1Y%', '3M%', '6M%', '3Y CAGR', '5Y CAGR', '10Y CAGR', 'Roll 3Y'] },
-  { label: 'vs CATEGORY', color: '#2dd4bf', cols: ['vs Cat 1Y%', 'vs Cat 3Y', 'vs Cat 5Y', 'vs Cat 10Y'] },
+  { label: 'vs CATEGORY', color: 'var(--teal)', cols: ['vs Cat 1Y%', 'vs Cat 3Y', 'vs Cat 5Y', 'vs Cat 10Y'] },
   { label: 'RISK', color: 'var(--red)', cols: ['Sharpe', 'Sortino', 'Volatility', 'Cat StdDev', 'Max DD', 'From ATH'] },
   { label: 'PORTFOLIO', color: 'var(--text3)', cols: ['PE', 'Cat PE', 'Equity%', 'LgCap%', 'MidCap%', 'SmCap%', 'Cash%', 'Debt%'] },
   { label: 'CONCENTRATION', color: 'var(--text3)', cols: ['Top3%', 'Top5%', 'Top10%'] },
@@ -465,8 +465,8 @@ function DNISection({ funds }) {
   const visible = expanded ? sorted : sorted.slice(0, DNI_INITIAL);
 
   return (
-    <div style={{ marginBottom: 24, border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg2)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(239,68,68,0.2)' }}>
+    <div style={{ marginBottom: 24, border: '1px solid var(--tier-avoid-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--red-bg)', borderBottom: '1px solid var(--tier-avoid-border)' }}>
         <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--red)' }}>Do Not Invest</span>
         <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>({sorted.length} funds flagged)</span>
       </div>
@@ -495,7 +495,7 @@ function DNISection({ funds }) {
       </table>
       {sorted.length > DNI_INITIAL && (
         <div style={{ textAlign: 'center', padding: 10, background: 'var(--bg2)', borderTop: '1px solid var(--border2)', cursor: 'pointer' }}>
-          <span onClick={() => setExpanded(!expanded)} style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600, cursor: 'pointer', padding: '4px 14px', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 20 }}>
+          <span onClick={() => setExpanded(!expanded)} style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600, cursor: 'pointer', padding: '4px 14px', border: '1px solid var(--tier-avoid-border)', borderRadius: 20 }}>
             {expanded ? 'Show less' : `Show all ${sorted.length - DNI_INITIAL} more flagged funds`} {expanded ? '\u25B4' : '\u25BE'}
           </span>
         </div>

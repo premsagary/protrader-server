@@ -9,25 +9,22 @@ import { formatCurrency, formatPercent } from '../../utils/formatters';
  * Market hours: Mon-Fri 9:15 AM - 3:30 PM IST.
  */
 function isMarketOpenNow(health) {
-  // If the server tells us, use that
   if (health?.marketOpen != null) return health.marketOpen;
 
   const now = new Date();
-  // Convert to IST (UTC+5:30)
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const ist = new Date(utc + 5.5 * 3600000);
 
-  const day = ist.getDay(); // 0=Sun, 6=Sat
+  const day = ist.getDay();
   if (day === 0 || day === 6) return false;
 
   const mins = ist.getHours() * 60 + ist.getMinutes();
-  return mins >= 555 && mins <= 930; // 9:15 to 15:30
+  return mins >= 555 && mins <= 930;
 }
 
-/** Sun icon for light mode toggle */
 function SunIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="5" />
       <line x1="12" y1="1" x2="12" y2="3" />
       <line x1="12" y1="21" x2="12" y2="23" />
@@ -41,10 +38,9 @@ function SunIcon() {
   );
 }
 
-/** Moon icon for dark mode toggle */
 function MoonIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
     </svg>
   );
@@ -59,78 +55,80 @@ export default function TopBar({ theme, toggleTheme }) {
   const marketOpen = useMemo(() => isMarketOpenNow(health), [health]);
 
   return (
-    <div
-      className="flex items-center gap-3 flex-shrink-0"
+    <header
+      className="glass flex items-center flex-shrink-0"
       style={{
-        background: 'var(--nav-bg)',
         borderBottom: '1px solid var(--nav-border)',
-        padding: '0 16px',
-        height: '44px',
+        padding: '0 20px',
+        height: '52px',
         zIndex: 200,
-        backdropFilter: 'blur(16px)',
-        WebkitBackdropFilter: 'blur(16px)',
+        gap: '16px',
       }}
     >
       {/* Logo */}
       <div
-        className="flex items-center gap-2 font-bold"
-        style={{
-          fontSize: '15px',
-          color: 'var(--text)',
-          letterSpacing: '-0.3px',
-          flexShrink: 0,
-        }}
+        className="flex items-center gap-2.5 flex-shrink-0"
+        style={{ marginRight: '4px' }}
       >
         <span
           className="animate-logoDot"
           style={{
-            width: 7,
-            height: 7,
+            width: 8,
+            height: 8,
             borderRadius: '50%',
             background: 'var(--green)',
             display: 'inline-block',
             flexShrink: 0,
           }}
         />
-        ProTrader
+        <span
+          style={{
+            fontSize: '17px',
+            fontWeight: 700,
+            color: 'var(--text)',
+            letterSpacing: '-0.4px',
+          }}
+        >
+          ProTrader
+        </span>
       </div>
 
-      {/* Market badge */}
+      {/* Market status */}
       <span
-        className="inline-flex items-center gap-1.5 text-xs font-semibold flex-shrink-0"
+        className="flex items-center gap-1.5 flex-shrink-0"
         style={{
+          fontSize: '12px',
+          fontWeight: 500,
+          color: marketOpen ? 'var(--green-text)' : 'var(--text3)',
           background: marketOpen ? 'var(--green-bg)' : 'var(--bg3)',
-          color: marketOpen ? 'var(--green)' : 'var(--text3)',
-          border: `1px solid ${marketOpen ? 'var(--tier-strong-buy-border)' : 'var(--border)'}`,
+          padding: '4px 12px',
           borderRadius: 'var(--radius-full)',
-          padding: '2px 10px',
-          letterSpacing: '0.2px',
         }}
       >
         {marketOpen && (
           <span
-            className="animate-logoDot"
             style={{
-              width: 5,
-              height: 5,
+              width: 6,
+              height: 6,
               background: 'var(--green)',
               borderRadius: '50%',
               display: 'inline-block',
               flexShrink: 0,
+              animation: 'pulse 2s ease-in-out infinite',
             }}
           />
         )}
         {marketOpen ? 'NSE Open' : 'NSE Closed'}
       </span>
 
-      {/* Mode tabs */}
-      <div
-        className="flex gap-px"
+      {/* Mode tabs — Apple segmented control */}
+      <nav
         style={{
+          display: 'flex',
+          gap: '2px',
           background: 'var(--bg3)',
-          borderRadius: 'var(--radius)',
-          padding: '2px',
-          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '3px',
         }}
       >
         {MODE_LIST.map((m) => {
@@ -140,45 +138,50 @@ export default function TopBar({ theme, toggleTheme }) {
             <button
               key={m.id}
               onClick={() => setMode(m.id)}
-              className="border-none cursor-pointer font-medium"
               style={{
-                padding: '4px 12px',
+                padding: '6px 16px',
                 background: isActive ? 'var(--bg2)' : 'transparent',
-                color: isActive ? m.color : 'var(--text2)',
-                borderRadius: '4px',
-                fontSize: '12px',
+                color: isActive ? 'var(--text)' : 'var(--text3)',
+                borderRadius: 'var(--radius)',
+                fontSize: '13px',
+                fontWeight: isActive ? 600 : 500,
                 fontFamily: 'inherit',
-                transition: 'all 0.15s',
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
                 letterSpacing: '-0.1px',
-                boxShadow: isActive ? 'var(--shadow-sm)' : 'none',
+                boxShadow: isActive ? 'var(--shadow)' : 'none',
+                whiteSpace: 'nowrap',
               }}
             >
               {m.label}
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {/* Spacer + Header stats */}
-      <div className="ml-auto flex gap-5 flex-wrap items-center">
-        {/* Total P&L */}
+      <div className="ml-auto flex gap-6 items-center">
         {stats?.totalPnl != null && (
           <div className="text-right hidden md:block">
             <div
-              className="text-2xs font-medium uppercase"
               style={{
+                fontSize: '11px',
+                fontWeight: 500,
                 color: 'var(--text3)',
-                letterSpacing: '0.8px',
+                letterSpacing: '0.3px',
+                textTransform: 'uppercase',
               }}
             >
               Total P&L
             </div>
             <div
-              className="font-semibold tabular-nums"
+              className="tabular-nums"
               style={{
-                fontSize: '13px',
+                fontSize: '14px',
+                fontWeight: 600,
                 color: stats.totalPnl >= 0 ? 'var(--green)' : 'var(--red)',
-                letterSpacing: '-0.2px',
+                letterSpacing: '-0.3px',
                 marginTop: '1px',
               }}
             >
@@ -187,24 +190,26 @@ export default function TopBar({ theme, toggleTheme }) {
           </div>
         )}
 
-        {/* Win Rate */}
         {stats?.winRate != null && (
           <div className="text-right hidden md:block">
             <div
-              className="text-2xs font-medium uppercase"
               style={{
+                fontSize: '11px',
+                fontWeight: 500,
                 color: 'var(--text3)',
-                letterSpacing: '0.8px',
+                letterSpacing: '0.3px',
+                textTransform: 'uppercase',
               }}
             >
               Win Rate
             </div>
             <div
-              className="font-semibold tabular-nums"
+              className="tabular-nums"
               style={{
-                fontSize: '13px',
+                fontSize: '14px',
+                fontWeight: 600,
                 color: 'var(--text)',
-                letterSpacing: '-0.2px',
+                letterSpacing: '-0.3px',
                 marginTop: '1px',
               }}
             >
@@ -213,24 +218,26 @@ export default function TopBar({ theme, toggleTheme }) {
           </div>
         )}
 
-        {/* Day P&L */}
         {stats?.dayPnl != null && stats.dayPnl !== 0 && (
           <div className="text-right hidden md:block">
             <div
-              className="text-2xs font-medium uppercase"
               style={{
+                fontSize: '11px',
+                fontWeight: 500,
                 color: 'var(--text3)',
-                letterSpacing: '0.8px',
+                letterSpacing: '0.3px',
+                textTransform: 'uppercase',
               }}
             >
               Day P&L
             </div>
             <div
-              className="font-semibold tabular-nums"
+              className="tabular-nums"
               style={{
-                fontSize: '13px',
+                fontSize: '14px',
+                fontWeight: 600,
                 color: stats.dayPnl >= 0 ? 'var(--green)' : 'var(--red)',
-                letterSpacing: '-0.2px',
+                letterSpacing: '-0.3px',
                 marginTop: '1px',
               }}
             >
@@ -241,64 +248,63 @@ export default function TopBar({ theme, toggleTheme }) {
       </div>
 
       {/* Theme toggle + user + logout */}
-      <div className="flex gap-2 items-center ml-3 flex-shrink-0">
-        {/* Theme toggle */}
+      <div className="flex gap-2 items-center ml-2 flex-shrink-0">
         <button
           onClick={toggleTheme}
           className="cursor-pointer flex items-center justify-center"
           style={{
-            width: '28px',
-            height: '28px',
-            background: 'transparent',
-            border: '1px solid var(--border)',
+            width: '32px',
+            height: '32px',
+            background: 'var(--bg3)',
+            border: 'none',
             borderRadius: 'var(--radius)',
             color: 'var(--text2)',
             fontFamily: 'inherit',
-            transition: 'all 0.15s',
+            transition: 'all 0.2s',
           }}
           title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
         >
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
         </button>
 
-        {/* User badge */}
         {user && (
           <span
-            className="text-xs font-medium"
             style={{
-              color: 'var(--text3)',
-              padding: '2px 8px',
+              fontSize: '13px',
+              fontWeight: 500,
+              color: 'var(--text2)',
+              padding: '4px 10px',
               background: 'var(--bg3)',
               borderRadius: 'var(--radius)',
-              border: '1px solid var(--border)',
             }}
           >
             {user.username}
             {user.role === 'admin' && (
-              <span style={{ color: 'var(--amber)', marginLeft: '4px', fontSize: '10px' }}>
-                admin
+              <span style={{ color: 'var(--amber)', marginLeft: '6px', fontSize: '11px', fontWeight: 600 }}>
+                Admin
               </span>
             )}
           </span>
         )}
 
-        {/* Logout button */}
         <button
           onClick={logout}
-          className="cursor-pointer font-semibold text-xs"
+          className="cursor-pointer"
           style={{
-            padding: '4px 12px',
+            padding: '6px 14px',
             background: 'transparent',
-            border: '1px solid var(--border)',
+            border: '1px solid var(--border2)',
             borderRadius: 'var(--radius)',
-            color: 'var(--red)',
+            color: 'var(--text2)',
+            fontSize: '13px',
+            fontWeight: 500,
             fontFamily: 'inherit',
-            transition: 'all 0.15s',
+            transition: 'all 0.2s',
           }}
         >
-          Logout
+          Sign Out
         </button>
       </div>
-    </div>
+    </header>
   );
 }
