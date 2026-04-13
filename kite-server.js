@@ -8177,28 +8177,28 @@ function scoreDayTrade(candles, sym) {
   function _penalty(bucket, pts, reason) { _track.push({bucket, pts: -Math.abs(pts), reason, type:'penalty'}); return -Math.abs(pts); }
 
   // ── Isolate today's candles vs previous day (Varsity M2: intraday = session-only) ──
-  // When market is closed (force mode / off-hours), use the LAST trading day's candles
-  // so DayTrade picks still show something meaningful (last session's setups).
+  // Kite returns Date objects — use toISOString() for reliable date comparison.
+  const _candleDateStr = (d) => d instanceof Date ? d.toISOString().split('T')[0] : String(d).slice(0, 10);
   let todayStart = new Date().toISOString().split('T')[0];
   let todayCandles = candles.filter(c => {
     const d = c.date || c.timestamp;
-    return d && String(d).startsWith(todayStart);
+    return d && _candleDateStr(d) === todayStart;
   });
   // Fallback: if no candles for today (weekend/holiday/after-hours), use the last trading day
   if (todayCandles.length < 3) {
     const lastCandle = candles[candles.length - 1];
     const lastDate = lastCandle.date || lastCandle.timestamp;
     if (lastDate) {
-      todayStart = String(lastDate).split('T')[0];
+      todayStart = _candleDateStr(lastDate);
       todayCandles = candles.filter(c => {
         const d = c.date || c.timestamp;
-        return d && String(d).startsWith(todayStart);
+        return d && _candleDateStr(d) === todayStart;
       });
     }
   }
   const prevDayCandles = candles.filter(c => {
     const d = c.date || c.timestamp;
-    return d && !String(d).startsWith(todayStart);
+    return d && _candleDateStr(d) !== todayStart;
   });
   if (todayCandles.length < 3) return null; // need at least 15 min of session data
 
