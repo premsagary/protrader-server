@@ -14217,10 +14217,12 @@ function parseScreenerDetails(sym, raw) {
     if (pKeys.length) pledgedPct = pn(pledgedRow[pKeys[pKeys.length-1]]);
   }
 
-  // Cash flow data for FCF
+  // Cash flow data for FCF — try multiple possible metric names
   const cf = raw.cash_flow || [];
-  const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity');
-  const capex = latestAnnual(cf, 'Fixed Assets Purchased');  // usually negative
+  const cfFromOps = latestAnnual(cf, 'Cash from Operating Activity')
+    ?? latestAnnual(cf, 'Cash from Operations');
+  const capex = latestAnnual(cf, 'Fixed Assets Purchased')
+    ?? latestAnnual(cf, 'Fixed Assets');  // usually negative
   const fcf = (cfFromOps != null && capex != null) ? cfFromOps + capex : null;
 
   // Dividend from P&L for yield calc
@@ -14429,6 +14431,35 @@ app.post('/api/admin/screener-stock/:sym', async (req, res) => {
 
     const loggedIn = await screenerScraper.isLoggedIn();
     if (!loggedIn) await screenerScraper.login(user, pass);
+
+    // If ?debug=1, return raw scraper output alongside parsed data
+    if (req.query.debug === '1') {
+      const raw = await screenerScraper.fetchCompany(sym);
+      const parsed = parseScreenerDetails(sym, raw);
+      return res.json({ success: true, sym, parsed, raw: {
+        company_name: raw.company_name,
+        industry: raw.industry,
+        industry_pe: raw.industry_pe,
+        current_price: raw.current_price,
+        market_cap: raw.market_cap,
+        quarters_count: (raw.quarters||[]).length,
+        quarters_metrics: (raw.quarters||[]).map(r => r.Metric),
+        annual_count: (raw.profit_and_loss?.annual_data||[]).length,
+        annual_metrics: (raw.profit_and_loss?.annual_data||[]).map(r => r.Metric),
+        growth_sales: raw.profit_and_loss?.['Compounded Sales Growth'],
+        growth_profit: raw.profit_and_loss?.['Compounded Profit Growth'],
+        stock_cagr: raw.profit_and_loss?.['Stock Price CAGR'],
+        roe_growth: raw.profit_and_loss?.['Return on Equity'],
+        bs_count: (raw.balance_sheet||[]).length,
+        bs_metrics: (raw.balance_sheet||[]).map(r => r.Metric),
+        cf_count: (raw.cash_flow||[]).length,
+        cf_metrics: (raw.cash_flow||[]).map(r => r.Metric),
+        ratios_count: (raw.ratios||[]).length,
+        ratios_metrics: (raw.ratios||[]).map(r => r.Metric),
+        sh_count: (raw.shareholding?.quarterly||[]).length,
+        sh_metrics: (raw.shareholding?.quarterly||[]).map(r => r.Metric),
+      }});
+    }
 
     const data = await fetchOneScreenerStock(sym);
     await upsertScreenerData(data);

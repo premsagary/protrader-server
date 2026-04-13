@@ -163,32 +163,35 @@ function stripHtml(html) {
 }
 
 // ── Parse compounded growth section ─────────────────────────────────────────
-// These appear as small inline tables like:
-// "Compounded Sales Growth"  10 Years: X%  5 Years: Y%  3 Years: Z%  TTM: W%
+// Screener.in shows these as small <table class="ranges-table"> blocks
+// with the title in a <th> and data rows with <td>label:</td><td>value%</td>
 function parseGrowthSection(html, sectionTitle) {
   const results = [];
-  // Find the ranges-table containing this title (title is inside <th>)
-  const sectionRegex = new RegExp(`<table[^>]*class="[^"]*ranges-table[^"]*"[^>]*>[\\s\\S]*?${sectionTitle}[\\s\\S]*?<\\/table>`, 'i');
-  let match = html.match(sectionRegex);
-  // Fallback: find title anywhere then grab the next table
-  if (!match) {
-    const fallback = new RegExp(sectionTitle + '[\\s\\S]*?(<table[^>]*>[\\s\\S]*?<\\/table>)', 'i');
-    match = html.match(fallback);
-    if (!match) {
-      // Try: title is in a th, followed by tr rows in same table
-      const altRegex = new RegExp(sectionTitle + '<\\/th>[\\s\\S]*?(<\\/table>)', 'i');
-      const altMatch = html.match(new RegExp(`<table[^>]*>[\\s\\S]*?${sectionTitle}[\\s\\S]*?<\\/table>`, 'i'));
-      if (altMatch) match = [altMatch[0], altMatch[0]];
-    }
-  }
-  if (!match) return results;
 
-  const tableHtml = match[0] || match[1];
+  // Strategy: find the title text, then extract the enclosing <table>
+  const titleIdx = html.indexOf(sectionTitle);
+  if (titleIdx < 0) return results;
+
+  // Walk backwards from title to find the opening <table
+  const before = html.slice(Math.max(0, titleIdx - 1000), titleIdx);
+  const tableStartRel = before.lastIndexOf('<table');
+  if (tableStartRel < 0) return results;
+  const absStart = Math.max(0, titleIdx - 1000) + tableStartRel;
+
+  // Walk forward from title to find </table>
+  const after = html.slice(absStart);
+  const endMatch = after.indexOf('</table>');
+  if (endMatch < 0) return results;
+  const targetTable = after.slice(0, endMatch + 8);
+
+  if (!targetTable) return results;
+
+  // Parse rows
   const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let trMatch;
-  while ((trMatch = trRegex.exec(tableHtml)) !== null) {
-    // Skip header rows (contain <th>)
-    if (trMatch[1].includes('<th')) continue;
+  while ((trMatch = trRegex.exec(targetTable)) !== null) {
+    // Skip header rows
+    if (/<th[\s>]/i.test(trMatch[1])) continue;
     const cells = [];
     const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     let tdMatch;
@@ -197,7 +200,7 @@ function parseGrowthSection(html, sectionTitle) {
     }
     if (cells.length >= 2) {
       const label = cells[0].replace(/:$/, '').trim();
-      const value = cells[1].replace('%', '').trim();
+      const value = cells[1].replace(/%/g, '').trim();
       results.push({ [label]: value });
     }
   }
@@ -223,17 +226,39 @@ async function fetchCompany(sym) {
     || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   raw.company_name = nameMatch ? stripHtml(nameMatch[1]).trim() : sym;
 
-  // Industry / Sector — screener uses links within company-info section
-  const industryMatch = html.match(/company-info[\s\S]{0,2000}?(?:Industry|Sector)\s*[:\s]*<a[^>]*>([^<]+)/i)
-    || html.match(/Industry[:\s]*<a[^>]*>([^<]+)/i)
-    || html.match(/Sector[:\s]*<a[^>]*>([^<]+)/i);
-  raw.industry = industryMatch ? stripHtml(industryMatch[1]).trim() : null;
+  // Industry / Sector — screener.in shows these as links in the company-ratios section
+  // Pattern: <a href="/company/compare/...">Industry Name</a> or near "Sector:" text
+  const industryPatterns = [
+    /company-ratios[\s\S]{0,3000}?Sector\s*:\s*<[^>]*>([^<]+)/i,
+    /company-info[\s\S]{0,3000}?(?:Industry|Sector)\s*[:\s]*<a[^>]*>([^<]+)/i,
+    /(?:Industry|Sector)\s*:\s*<a[^>]*>([^<]+)/i,
+    /<a[^>]*href="\/company\/compare\/[^"]*"[^>]*>([^<]+)<\/a>/i,
+    /Sector\s*:[\s\S]{0,100}?<a[^>]*>([^<]+)/i,
+  ];
+  raw.industry = null;
+  for (const pat of industryPatterns) {
+    const m = html.match(pat);
+    if (m && m[1]) {
+      const val = stripHtml(m[1]).trim();
+      if (val && val.length > 1 && val.length < 100 && !val.includes('http')) {
+        raw.industry = val;
+        break;
+      }
+    }
+  }
 
-  // Industry PE — sometimes shown as "Industry PE" in the ratios section
-  const indPeMatch = html.match(/Industry\s*PE[\s\S]{0,100}?<span[^>]*class="[^"]*number[^"]*"[^>]*>([0-9.]+)/i)
-    || html.match(/Industry\s*PE[:\s]*<[^>]*>([0-9.]+)/i)
-    || html.match(/Industry\s*PE[:\s]*([0-9.]+)/i);
-  raw.industry_pe = indPeMatch ? parseFloat(indPeMatch[1]) : null;
+  // Industry PE — shown in the peer comparison or ratios section
+  const indPePatterns = [
+    /Industry\s*PE[\s\S]{0,200}?<span[^>]*class="[^"]*number[^"]*"[^>]*>([\d.]+)/i,
+    /Industry\s*PE[\s\S]{0,100}?>([\d.]+)/i,
+    /Industry\s*PE\s*[:\s]*([\d.]+)/i,
+    /Sector\s*PE[\s\S]{0,100}?>([\d.]+)/i,
+  ];
+  raw.industry_pe = null;
+  for (const pat of indPePatterns) {
+    const m = html.match(pat);
+    if (m && m[1]) { raw.industry_pe = parseFloat(m[1]) || null; break; }
+  }
 
   // ── Find all data sections by their IDs or headings ──
 
@@ -249,14 +274,12 @@ async function fetchCompany(sym) {
     annual_data: plData,
   };
 
-  // Parse compounded growth tables from P&L section
-  const plFullSection = extractFullSection(html, 'profit-loss');
-  if (plFullSection) {
-    raw.profit_and_loss['Compounded Sales Growth'] = parseGrowthSection(plFullSection, 'Compounded Sales Growth');
-    raw.profit_and_loss['Compounded Profit Growth'] = parseGrowthSection(plFullSection, 'Compounded Profit Growth');
-    raw.profit_and_loss['Stock Price CAGR'] = parseGrowthSection(plFullSection, 'Stock Price CAGR');
-    raw.profit_and_loss['Return on Equity'] = parseGrowthSection(plFullSection, 'Return on Equity');
-  }
+  // Parse compounded growth tables — search full HTML since they might be
+  // outside the profit-loss section on some screener.in layouts
+  raw.profit_and_loss['Compounded Sales Growth'] = parseGrowthSection(html, 'Compounded Sales Growth');
+  raw.profit_and_loss['Compounded Profit Growth'] = parseGrowthSection(html, 'Compounded Profit Growth');
+  raw.profit_and_loss['Stock Price CAGR'] = parseGrowthSection(html, 'Stock Price CAGR');
+  raw.profit_and_loss['Return on Equity'] = parseGrowthSection(html, 'Return on Equity');
 
   // Balance Sheet
   const bsSection = extractSection(html, 'balance-sheet');
@@ -301,14 +324,16 @@ function extractSection(html, sectionId) {
 
 // Extract full section HTML (not just table) for growth subsections
 function extractFullSection(html, sectionId) {
-  const regex = new RegExp(`id="${sectionId}"[\\s\\S]*?(?=<section|$)`, 'i');
-  const match = html.match(regex);
-  // Limit to next section boundary
-  if (match) {
-    const nextSection = match[0].indexOf('<section', 100);
-    return nextSection > 0 ? match[0].slice(0, nextSection) : match[0].slice(0, 15000);
-  }
-  return null;
+  // Find the section by id, then grab a generous chunk (up to next section id=)
+  const startIdx = html.indexOf(`id="${sectionId}"`);
+  if (startIdx < 0) return null;
+
+  // Look for the next section start (id="something-else") at least 500 chars ahead
+  const searchFrom = startIdx + 500;
+  const nextSectionMatch = html.slice(searchFrom).match(/\bid="[a-z]/i);
+  const endIdx = nextSectionMatch ? searchFrom + nextSectionMatch.index : Math.min(startIdx + 30000, html.length);
+
+  return html.slice(startIdx, endIdx);
 }
 
 // ── Parse financial table with Metric column ────────────────────────────────
