@@ -13717,7 +13717,7 @@ function _init() {
   _inited = true;
   // Restore tab from URL hash, or default to MF Recommendation
   var saved = _readHash();
-  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','architecture'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','daytrade','architecture'];
   var validStockTabs = ['overview','positions','signals','trades','market','chart','news'];
   var validCryptoTabs = ['overview','positions','signals','trades','market','chart','news'];
 
@@ -13740,7 +13740,7 @@ window.addEventListener('hashchange', function(){
   if(_hashUpdating) return;
   var h = _readHash();
   if(!h) return;
-  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','architecture'];
+  var validModes = ['mf','stockrec','stockanalyzer','stocks','crypto','holdings','stockdata','admin','mirofish','daytrade','architecture'];
   if(validModes.indexOf(h.mode) < 0) return;
   if(h.mode === S.mode && !h.tab) return;
   if(h.mode === 'stocks' && h.tab) S.stocksTab = h.tab;
@@ -13801,6 +13801,8 @@ function showLanding() {
 function enterFreeMode(){
   _authToken = null;
   _authUser = null;
+  // Always land on stock analyzer (the "explore" screen) regardless of URL hash
+  window.location.hash = '#stockanalyzer';
   showApp();
   _init();
 }
