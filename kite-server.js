@@ -19,6 +19,7 @@
 
 require("dotenv").config();
 const express   = require("express");
+const screenerScraper = require("./screener-scraper");
 
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
@@ -12752,9 +12753,10 @@ cron.schedule('0 9 * * 1-5', async () => {
   await refreshInstruments();
 }, { timezone: 'Asia/Kolkata' });
 
-// 8PM IST — fetch Screener.in fundamentals (after market close, data is fresh) → screener_fundamentals DB
-cron.schedule('0 20 * * *', () => {
-  console.log('📊 8PM: Daily Screener fundamentals refresh starting...');
+// 7AM IST — fetch Screener.in fundamentals daily (pre-market, data is fresh from prev close)
+// After scrape completes, refreshAllFundamentals() rescores all stocks automatically.
+cron.schedule('0 7 * * *', () => {
+  console.log('📊 7AM: Screener fundamentals refresh (pre-market)...');
   fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
 }, { timezone: 'Asia/Kolkata' });
 
@@ -14277,34 +14279,9 @@ function parseScreenerDetails(sym, raw) {
   };
 }
 
-// ── Fetch single stock via getstockdetails mode ──
-async function fetchOneScreenerStock(sym, apifyToken) {
-  const BASE  = 'https://api.apify.com/v2';
-  const ACTOR = 'shashwattrivedi~screener-in';
-  const startResp = await fetch(`${BASE}/acts/${ACTOR}/runs?token=${apifyToken}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'getstockdetails', url: `https://www.screener.in/company/${sym}/consolidated/` }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!startResp.ok) throw new Error(`Start failed: ${startResp.status}`);
-  const runInfo = await startResp.json();
-  const runId = runInfo.data?.id, datasetId = runInfo.data?.defaultDatasetId;
-  if (!runId) throw new Error('No run ID');
-
-  // Poll until done (max 3 min)
-  let status = 'RUNNING', attempts = 0;
-  while ((status === 'RUNNING' || status === 'READY') && attempts < 36) {
-    await new Promise(r => setTimeout(r, 5000));
-    attempts++;
-    const poll = await fetch(`${BASE}/acts/${ACTOR}/runs/${runId}?token=${apifyToken}`, { signal: AbortSignal.timeout(10000) });
-    if (poll.ok) status = (await poll.json()).data?.status || 'RUNNING';
-  }
-  if (status !== 'SUCCEEDED') throw new Error(`Run ended: ${status}`);
-
-  const dataResp = await fetch(`${BASE}/datasets/${datasetId}/items?token=${apifyToken}&limit=5`, { signal: AbortSignal.timeout(15000) });
-  const items = await dataResp.json();
-  if (!Array.isArray(items) || !items.length) throw new Error('Empty dataset');
-  const raw = items[0];
+// ── Fetch single stock directly from screener.in (no Apify) ──
+async function fetchOneScreenerStock(sym) {
+  const raw = await screenerScraper.fetchCompany(sym);
   const parsed = parseScreenerDetails(sym, raw);
   // Store raw response for rich history fields (quarters, P&L, BS, CF, ratios, shareholding)
   try {
@@ -14322,22 +14299,39 @@ async function fetchOneScreenerStock(sym, apifyToken) {
   return parsed;
 }
 
-// ── Batch fetch all stocks via getstockdetails (parallel batches of 3) ──
-async function fetchAllScreenerByStock(apifyToken) {
+// ── Batch fetch all stocks directly from screener.in (no Apify) ──
+async function fetchAllScreenerByStock() {
   if (screenerRunning) return { error: 'Already running' };
   screenerRunning = true;
+
+  // Ensure logged in
+  const user = process.env.SCREENER_USERNAME;
+  const pass = process.env.SCREENER_PASSWORD;
+  if (!user || !pass) { screenerRunning = false; return { error: 'SCREENER_USERNAME/PASSWORD not set' }; }
+
+  try {
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) {
+      console.log('🔑 Logging into screener.in...');
+      await screenerScraper.login(user, pass);
+    }
+  } catch(e) {
+    screenerRunning = false;
+    return { error: `Screener login failed: ${e.message}` };
+  }
+
   const stocks = UNIVERSE.filter(s => !s.sym.includes('USDT')).map(s => s.sym);
   screenerProgress = { done: 0, total: stocks.length, errors: 0, startedAt: Date.now() };
-  console.log(`📊 Screener getstockdetails: fetching ${stocks.length} stocks in batches of 3...`);
+  console.log(`📊 Screener direct: fetching ${stocks.length} stocks in batches of 3...`);
 
   let imported = 0, errors = 0;
-  const BATCH = 3; // Apify concurrent run limit
+  const BATCH = 3;
 
   for (let i = 0; i < stocks.length; i += BATCH) {
     const batch = stocks.slice(i, i + BATCH);
     const results = await Promise.allSettled(batch.map(async sym => {
       try {
-        const data = await fetchOneScreenerStock(sym, apifyToken);
+        const data = await fetchOneScreenerStock(sym);
         await upsertScreenerData(data);
         patchScreenerIntoFUND(sym, data);
         return { sym, ok: true };
@@ -14356,24 +14350,92 @@ async function fetchAllScreenerByStock(apifyToken) {
     if ((i/BATCH) % 10 === 0) {
       console.log(`📊 Screener progress: ${imported}/${stocks.length} OK, ${errors} errors (batch ${Math.floor(i/BATCH)+1})`);
     }
-    // Small pause between batches
-    if (i + BATCH < stocks.length) await new Promise(r => setTimeout(r, 2000));
+    // Rate limit — be respectful to screener.in
+    if (i + BATCH < stocks.length) await new Promise(r => setTimeout(r, 2500));
   }
 
   screenerRunning = false;
-  console.log(`✅ Screener getstockdetails: ${imported} imported, ${errors} errors`);
+  console.log(`✅ Screener direct: ${imported} imported, ${errors} errors`);
   if (imported > 10) refreshAllFundamentals();
-  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: stocks.length, mode: 'getstockdetails' }));
+  await dbSet('screener_last_fetch', JSON.stringify({ at: Date.now(), imported, errors, total: stocks.length, mode: 'direct' }));
   return { imported, errors, total: stocks.length };
 }
 
 async function fetchAllScreenerData() {
   if (screenerRunning) return { error: 'Already running' };
-  const token = process.env.APIFY_TOKEN;
-  if (!token) return { error: 'APIFY_TOKEN not set' };
-  // Use getstockdetails mode (per-stock) — more reliable than runQuery
-  return fetchAllScreenerByStock(token);
+  // Direct scraper — no Apify needed
+  return fetchAllScreenerByStock();
 }
+
+// ── Screener CSV export (bulk download via screener.in Premium) ──
+async function fetchScreenerCSVBulk(query) {
+  const user = process.env.SCREENER_USERNAME;
+  const pass = process.env.SCREENER_PASSWORD;
+  if (!user || !pass) return { error: 'SCREENER_USERNAME/PASSWORD not set' };
+
+  try {
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) {
+      console.log('🔑 Logging into screener.in for CSV export...');
+      await screenerScraper.login(user, pass);
+    }
+  } catch(e) {
+    return { error: `Screener login failed: ${e.message}` };
+  }
+
+  console.log(`📊 Screener CSV export: query="${query || 'Market Capitalization > 0'}"...`);
+  const csv = await screenerScraper.exportScreenCSV(query);
+  if (!csv || csv.length < 100) return { error: 'Empty CSV response' };
+
+  // Use existing CSV import pipeline
+  const result = await importScreenerCSV(csv);
+  console.log(`✅ Screener CSV: ${result.imported} imported, ${result.skipped} skipped`);
+  if (result.imported > 10) refreshAllFundamentals();
+  return result;
+}
+
+// Admin endpoint: trigger CSV export
+app.post('/api/admin/screener-csv', async (req, res) => {
+  try {
+    const query = req.body?.query || 'Market Capitalization > 0';
+    const result = await fetchScreenerCSVBulk(query);
+    res.json(result);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin endpoint: trigger per-stock scrape
+app.post('/api/admin/screener-scrape', async (req, res) => {
+  try {
+    if (screenerRunning) return res.json({ error: 'Already running', progress: screenerProgress });
+    // Run in background
+    fetchAllScreenerData().catch(e => console.error('Screener scrape error:', e.message));
+    res.json({ started: true, message: 'Screener scrape started in background', total: UNIVERSE.length });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin endpoint: scrape single stock
+app.post('/api/admin/screener-stock/:sym', async (req, res) => {
+  try {
+    const sym = req.params.sym.toUpperCase();
+    const user = process.env.SCREENER_USERNAME;
+    const pass = process.env.SCREENER_PASSWORD;
+    if (!user || !pass) return res.status(400).json({ error: 'SCREENER_USERNAME/PASSWORD not set' });
+
+    const loggedIn = await screenerScraper.isLoggedIn();
+    if (!loggedIn) await screenerScraper.login(user, pass);
+
+    const data = await fetchOneScreenerStock(sym);
+    await upsertScreenerData(data);
+    patchScreenerIntoFUND(sym, data);
+    res.json({ success: true, sym, data });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Unified pipeline status — one endpoint for the whole data stream
 app.get('/api/admin/pipeline', async (req, res) => {
@@ -14742,13 +14804,13 @@ app.get('/api/screener/test/:sym', async (req, res) => {
 app.post('/api/screener/fetch', async (req, res) => {
   if (!process.env.APIFY_TOKEN) return res.status(400).json({ error: 'Set APIFY_TOKEN in Railway env vars' });
   if (screenerRunning) return res.json({ message: 'Already running', progress: screenerProgress });
-  const mode = req.query.mode || 'getstockdetails';
+  const mode = req.query.mode || 'direct';
   const total = UNIVERSE.filter(s=>!s.sym.includes('USDT')).length;
   res.json({ message: `Screener fetch started (${mode})`, total, mode });
-  if (mode === 'bulk') {
-    fetchAllScreenerBulk(process.env.APIFY_TOKEN).catch(e => console.error('Screener bulk error:', e.message));
+  if (mode === 'csv') {
+    fetchScreenerCSVBulk(req.query.query).catch(e => console.error('Screener CSV error:', e.message));
   } else {
-    fetchAllScreenerByStock(process.env.APIFY_TOKEN).catch(e => console.error('Screener fetch error:', e.message));
+    fetchAllScreenerByStock().catch(e => console.error('Screener fetch error:', e.message));
   }
 });
 
