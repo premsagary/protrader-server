@@ -14109,8 +14109,10 @@ function showLanding() {
 function enterFreeMode(){
   _authToken = null;
   _authUser = null;
-  // Always land on stock analyzer (the "explore" screen) regardless of URL hash
+  // Always show onboarding first — let user choose "show me around" or "I'll explore"
+  try { localStorage.removeItem('pt_onboarded'); } catch(e){}
   window.location.hash = '#stockanalyzer';
+  _inited = false; // allow _init() to re-run and show onboarding
   showApp();
   _init();
 }
