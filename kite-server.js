@@ -8766,6 +8766,51 @@ app.get('/api/admin/pipeline-status', (req, res) => {
   });
 });
 
+// Test endpoint — fetch 3 stocks and return detailed results for debugging
+app.get('/api/admin/pipeline-test', async (req, res) => {
+  const results = { steps: [], errors: [] };
+  try {
+    results.steps.push('Starting test pipeline');
+    const syms = Object.keys(stockFundamentals).slice(0, 3);
+    results.steps.push(`Testing ${syms.length} symbols: ${syms.join(', ')}`);
+
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    results.steps.push(`Date range: ${weekAgo} to ${today}`);
+
+    for (const sym of syms) {
+      const token = validTokens[sym] || INSTRUMENTS[sym];
+      results.steps.push(`${sym}: token=${token || 'MISSING'}`);
+      if (!token) { results.errors.push(`${sym}: no instrument token`); continue; }
+
+      // Test daily candles
+      try {
+        const daily = await fetchKiteDaily(sym);
+        results.steps.push(`${sym}: daily candles = ${daily ? daily.length : 'null'}`);
+      } catch (e) {
+        results.errors.push(`${sym} daily error: ${e.message}`);
+      }
+
+      // Test 5-min candles
+      try {
+        const fiveMin = await kite.getHistoricalData(token, '5minute', weekAgo, today);
+        results.steps.push(`${sym}: 5min candles = ${fiveMin ? fiveMin.length : 'null'}`);
+        if (fiveMin && fiveMin.length >= 30) {
+          const scored = scoreDayTrade(fiveMin, sym);
+          results.steps.push(`${sym}: dayTrade score = ${scored ? scored.dayTradeScore : 'null'}`);
+        } else {
+          results.steps.push(`${sym}: not enough 5min candles for DayTrade (need 30+)`);
+        }
+      } catch (e) {
+        results.errors.push(`${sym} 5min error: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    results.errors.push(`Fatal: ${e.message}`);
+  }
+  res.json(results);
+});
+
 // ===============================================================================
 // UNIFIED KITE PIPELINE — fetch once, rescore + daytrade in parallel
 // ===============================================================================
