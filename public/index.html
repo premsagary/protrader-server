@@ -1330,7 +1330,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .ob-feat-desc{font-size:10px;color:#9aa3b2;line-height:1.5}
 
 .ob-dots{display:flex;gap:8px;justify-content:center;margin-bottom:22px}
-.ob-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.08);
+.ob-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.08);cursor:pointer;
   border:1px solid rgba(255,255,255,0.06);transition:all 0.4s var(--ease-out-expo)}
 .ob-dot.active{background:linear-gradient(135deg,#6090e0,#8060d0);
   border-color:rgba(120,160,255,0.3);
@@ -2586,7 +2586,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <div style="font-size:11px;color:#94a3b8;margin-bottom:16px;line-height:1.5;font-weight:500">
       <span style="color:#f59e0b;font-weight:700">⚠</span> Not SEBI-registered advice. All analysis is Varsity-grounded and educational. Trade responsibly.
     </div>
-    <div class="ob-dots"><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot active" onclick="obGoTo(0)"></span><span class="ob-dot" onclick="obGoTo(1)"></span><span class="ob-dot" onclick="obGoTo(2)"></span><span class="ob-dot" onclick="obGoTo(3)"></span><span class="ob-dot" onclick="obGoTo(4)"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
       <button class="ob-next" onclick="obNext()">Show me around first</button>
       <button class="ob-next ob-skip-btn" onclick="obDismiss()">I'll explore on my own</button>
@@ -2604,10 +2604,10 @@ img,video,canvas,svg{max-width:100%;height:auto}
       <div class="ob-feat"><div class="ob-feat-title" style="color:#a78bfa">AI Council</div><div class="ob-feat-desc">5 LLMs (GPT-4, Claude, DeepSeek, Llama, Mistral) vote independently — see the consensus + dissents</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:#f59e0b">Buy Zone + SL</div><div class="ob-feat-desc">Exact entry range, stop-loss, and Fibonacci targets based on current price action</div></div>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot" onclick="obGoTo(0)"></span><span class="ob-dot active" onclick="obGoTo(1)"></span><span class="ob-dot" onclick="obGoTo(2)"></span><span class="ob-dot" onclick="obGoTo(3)"></span><span class="ob-dot" onclick="obGoTo(4)"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obGoToTab('stockanalyzer')" style="background:rgba(34,197,94,0.15);color:#22c55e;border-color:rgba(34,197,94,0.2)">🔍 Try Deep Analyzer</button>
       <button class="ob-next" onclick="obNext()">Next</button>
-      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
     </div>
   </div>
 
@@ -2622,10 +2622,10 @@ img,video,canvas,svg{max-width:100%;height:auto}
       <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">Long-Term Picks</div><div class="ob-feat-desc">Pure fundamentals — Quality 40 + Growth 25 + Valuation 20 + Business 15. No TA noise.</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:#64748b">AI Second Opinion</div><div class="ob-feat-desc">Each pick gets reviewed by 5 AI models — see who agrees, who disagrees, and why</div></div>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot" onclick="obGoTo(0)"></span><span class="ob-dot" onclick="obGoTo(1)"></span><span class="ob-dot active" onclick="obGoTo(2)"></span><span class="ob-dot" onclick="obGoTo(3)"></span><span class="ob-dot" onclick="obGoTo(4)"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obGoToTab('stockrec')" style="background:rgba(245,158,11,0.15);color:#f59e0b;border-color:rgba(245,158,11,0.2)">📈 See Stock Picks</button>
       <button class="ob-next" onclick="obNext()">Next</button>
-      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
     </div>
   </div>
 
@@ -2640,26 +2640,33 @@ img,video,canvas,svg{max-width:100%;height:auto}
       <div class="ob-feat"><div class="ob-feat-title" style="color:#a78bfa">AI Deep Review</div><div class="ob-feat-desc">Council of 5 models debates top funds — with a judge LLM that picks the final top 3 with reasoning</div></div>
       <div class="ob-feat"><div class="ob-feat-title" style="color:#f59e0b">Tickertape Data</div><div class="ob-feat-desc">Sourced from Tickertape CSVs — Sharpe, drawdown, concentration, style drift, UCR/DCR all included</div></div>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot" onclick="obGoTo(0)"></span><span class="ob-dot" onclick="obGoTo(1)"></span><span class="ob-dot" onclick="obGoTo(2)"></span><span class="ob-dot active" onclick="obGoTo(3)"></span><span class="ob-dot" onclick="obGoTo(4)"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next" onclick="obGoToTab('mf')" style="background:rgba(59,130,246,0.15);color:#3b82f6;border-color:rgba(59,130,246,0.2)">🏦 See MF Picks</button>
       <button class="ob-next" onclick="obNext()">Next</button>
-      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip — let me explore</button>
     </div>
   </div>
 
-  <!-- Step 5: Your toolkit overview -->
+  <!-- Step 5: Jump to any section -->
   <div class="ob-step" data-step="4">
-    <div class="ob-icon">🎯</div>
-    <div class="ob-title">Your toolkit</div>
-    <div class="ob-desc" style="max-width:420px">Here's what each tab in the top bar does:</div>
-    <div class="ob-features" style="margin-bottom:20px">
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--shiva-gold)">🔍 Deep Analyzer</div><div class="ob-feat-desc">Full Varsity analysis + AI second opinion for any stock</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--amber)">📈 Stock Picks</div><div class="ob-feat-desc">3 curated lists updated daily: Rebound, Momentum, Long-Term</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--green)">🏦 MF Picks</div><div class="ob-feat-desc">120-point scoring for mutual funds across 4 categories</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">📊 Stock Data</div><div class="ob-feat-desc">Browse 500+ NSE stocks with scores, fundamentals &amp; sector filters</div></div>
+    <div class="ob-icon">🚀</div>
+    <div class="ob-title">Jump right in</div>
+    <div class="ob-desc" style="max-width:420px">Pick where you'd like to start — you can switch tabs anytime from the top bar.</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;max-width:380px;margin-left:auto;margin-right:auto">
+      <button class="ob-next" onclick="obGoToTab('stockanalyzer')" style="width:100%;background:rgba(34,197,94,0.12);color:#22c55e;border-color:rgba(34,197,94,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
+        <span style="font-size:18px">🔍</span><span><b>Deep Analyzer</b><br><span style="font-size:10px;color:var(--text3)">Analyze any stock with 14-point checklist + AI</span></span>
+      </button>
+      <button class="ob-next" onclick="obGoToTab('stockrec')" style="width:100%;background:rgba(245,158,11,0.12);color:#f59e0b;border-color:rgba(245,158,11,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
+        <span style="font-size:18px">📈</span><span><b>Stock Picks</b><br><span style="font-size:10px;color:var(--text3)">Rebound, Momentum &amp; Long-Term — updated daily</span></span>
+      </button>
+      <button class="ob-next" onclick="obGoToTab('mf')" style="width:100%;background:rgba(59,130,246,0.12);color:#3b82f6;border-color:rgba(59,130,246,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
+        <span style="font-size:18px">🏦</span><span><b>MF Picks</b><br><span style="font-size:10px;color:var(--text3)">120-point mutual fund scoring across 4 categories</span></span>
+      </button>
+      <button class="ob-next" onclick="obGoToTab('stockdata')" style="width:100%;background:rgba(34,211,238,0.12);color:#22d3ee;border-color:rgba(34,211,238,0.2);display:flex;align-items:center;gap:10px;justify-content:flex-start;padding:12px 20px">
+        <span style="font-size:18px">📊</span><span><b>Stock Data</b><br><span style="font-size:10px;color:var(--text3)">Browse 500+ NSE stocks with scores &amp; sector filters</span></span>
+      </button>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span></div>
-    <button class="ob-next" onclick="obDismiss()" style="background:rgba(94,204,138,0.15);color:var(--green);border-color:rgba(94,204,138,0.2)">Got it — let's go</button>
+    <div class="ob-dots"><span class="ob-dot" onclick="obGoTo(0)"></span><span class="ob-dot" onclick="obGoTo(1)"></span><span class="ob-dot" onclick="obGoTo(2)"></span><span class="ob-dot" onclick="obGoTo(3)"></span><span class="ob-dot active" onclick="obGoTo(4)"></span></div>
   </div>
 </div>
 </div>
@@ -14160,19 +14167,50 @@ function showApp() {
   try {
     if(!localStorage.getItem('pt_onboarded')){
       var ob=document.getElementById('onboarding-overlay');
-      if(ob) ob.style.display='flex';
+      if(ob){ ob.style.display='flex'; _obStep=0; _obStartAutoSlide(); }
     }
   } catch(e){}
 }
 
-/* ── Onboarding flow ── */
+/* ── Onboarding flow — autoslide + navigation ── */
 var _obStep = 0;
-function obNext(){
-  _obStep++;
+var _obTimer = null;
+var _obTotalSteps = 5;
+
+function _obStartAutoSlide(){
+  _obStopAutoSlide();
+  _obTimer = setInterval(function(){
+    if(_obStep < _obTotalSteps - 1) { obNext(true); }
+    else { _obStopAutoSlide(); } // stop on last slide
+  }, 6000); // 6 seconds per slide
+}
+function _obStopAutoSlide(){ if(_obTimer){ clearInterval(_obTimer); _obTimer=null; } }
+
+function obGoTo(step){
+  _obStopAutoSlide();
+  _obStep = step;
   var steps = document.querySelectorAll('.ob-step');
   steps.forEach(function(s,i){ s.classList.toggle('active', i===_obStep); });
+  _obUpdateDots();
+  _obStartAutoSlide();
+}
+function obNext(fromAuto){
+  if(!fromAuto) _obStopAutoSlide();
+  _obStep++;
+  if(_obStep >= _obTotalSteps) _obStep = _obTotalSteps - 1;
+  var steps = document.querySelectorAll('.ob-step');
+  steps.forEach(function(s,i){ s.classList.toggle('active', i===_obStep); });
+  _obUpdateDots();
+  if(!fromAuto) _obStartAutoSlide();
+}
+function _obUpdateDots(){
+  document.querySelectorAll('.ob-dots').forEach(function(dotRow){
+    var dots = dotRow.querySelectorAll('.ob-dot');
+    dots.forEach(function(d,i){ d.classList.toggle('active', i===_obStep); });
+  });
 }
 function obDismiss(){
+  _obStopAutoSlide();
   var ob = document.getElementById('onboarding-overlay');
   if(ob) ob.style.display='none';
   try { localStorage.setItem('pt_onboarded','1'); } catch(e){}
@@ -14187,6 +14225,10 @@ function obGoAnalyze(sym){
     if(hid) hid.value = sym;
     try { analyzeStock(); } catch(e){}
   }, 200);
+}
+function obGoToTab(mode){
+  obDismiss();
+  try { setMode(mode); } catch(e){}
 }
 
 /* ── AI button state management for public vs admin ── */
