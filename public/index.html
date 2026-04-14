@@ -1169,6 +1169,9 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .ob-feat{background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px 16px;
   box-shadow:none;transition:border-color 0.2s ease}
 .ob-feat:hover{border-color:rgba(255,255,255,0.12);transform:none;box-shadow:none}
+.ob-feat-go{transition:border-color 0.2s ease,background 0.2s ease}
+.ob-feat-go:hover{border-color:rgba(10,132,255,0.35);background:#1F1F22}
+.ob-feat-go:active{transform:scale(0.98)!important;transition-duration:0.1s}
 .ob-feat-title{font-size:12px;font-weight:700;color:#F5F5F7;margin-bottom:4px}
 .ob-feat-desc{font-size:10px;color:#71717A;line-height:1.5}
 
@@ -2376,12 +2379,12 @@ img,video,canvas,svg{max-width:100%;height:auto}
      ONBOARDING OVERLAY — shown once on first login
      ═══════════════════════════════════════════════════════════════ -->
 <div id="onboarding-overlay" class="ob-overlay" style="display:none">
-<div class="ob-card" style="max-width:560px">
+<div class="ob-card" style="max-width:620px">
   <!-- Step 1: Welcome + Quick start stocks -->
   <div class="ob-step active" data-step="0">
     <div class="ob-icon">🔍</div>
     <div class="ob-title">Welcome to ProTrader — It's Free</div>
-    <div class="ob-desc">No signup needed. Pick a stock to see a full Varsity-grounded analysis in seconds, or skip to explore on your own.</div>
+    <div class="ob-desc">No signup needed. Pick a stock for a full Varsity-grounded analysis in seconds, or click Next to tour the platform.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:20px">
       <div class="qs-stock" onclick="obGoAnalyze('RELIANCE')"><div class="qs-stock-sym">RELIANCE</div><div class="qs-stock-score" style="color:var(--text3)">Nifty 50</div></div>
       <div class="qs-stock" onclick="obGoAnalyze('TCS')"><div class="qs-stock-sym">TCS</div><div class="qs-stock-score" style="color:var(--text3)">Nifty 50</div></div>
@@ -2392,25 +2395,99 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <div style="font-size:11px;color:#94a3b8;margin-bottom:16px;line-height:1.5;font-weight:500">
       <span style="color:#f59e0b;font-weight:700">⚠</span> Not SEBI-registered advice. All analysis is Varsity-grounded and educational. Trade responsibly.
     </div>
-    <div class="ob-dots"><span class="ob-dot active"></span><span class="ob-dot"></span></div>
+    <div class="ob-dots"><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-      <button class="ob-next" onclick="obNext()">Show me around first</button>
-      <button class="ob-next ob-skip-btn" onclick="obDismiss()">I'll explore on my own</button>
+      <button class="ob-next" onclick="obNext()">Take the tour →</button>
+      <button class="ob-next ob-skip-btn" onclick="obDismiss()">Skip tour</button>
     </div>
   </div>
-  <!-- Step 2: Quick orientation -->
+
+  <!-- Step 2: Jump straight in — direct links to each tool -->
   <div class="ob-step" data-step="1">
-    <div class="ob-icon">🎯</div>
-    <div class="ob-title">Your toolkit</div>
-    <div class="ob-desc" style="max-width:420px">Here's what each tab in the top bar does:</div>
-    <div class="ob-features" style="margin-bottom:20px">
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--shiva-gold)">🔍 Deep Analyzer</div><div class="ob-feat-desc">Full Varsity analysis + AI second opinion for any stock</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--amber)">📈 Stock Picks</div><div class="ob-feat-desc">3 curated lists updated daily: Rebound, Momentum, Long-Term</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:var(--green)">🏦 MF Picks</div><div class="ob-feat-desc">120-point scoring for mutual funds across 4 categories</div></div>
-      <div class="ob-feat"><div class="ob-feat-title" style="color:#22d3ee">📊 Stock Data</div><div class="ob-feat-desc">Browse 500+ NSE stocks with scores, fundamentals &amp; sector filters</div></div>
+    <div class="ob-icon">⚡</div>
+    <div class="ob-title">Jump straight to a tool</div>
+    <div class="ob-desc" style="max-width:460px">Pick any tool below to land directly on it. You can switch any time from the top nav.</div>
+    <div class="ob-features" style="margin-bottom:20px;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockanalyzer')" style="cursor:pointer">
+        <div class="ob-feat-title" style="color:#F5F5F7">🔍 Deep Analyzer</div>
+        <div class="ob-feat-desc">14-point Varsity checklist + AI second opinion for any NSE stock</div>
+        <div style="margin-top:8px;font-size:10px;color:#0A84FF;font-weight:700;letter-spacing:0.3px">OPEN →</div>
+      </div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockrec')" style="cursor:pointer">
+        <div class="ob-feat-title" style="color:#F5F5F7">📈 Stock Picks</div>
+        <div class="ob-feat-desc">Curated Rebound, Momentum &amp; Long-Term lists updated daily</div>
+        <div style="margin-top:8px;font-size:10px;color:#0A84FF;font-weight:700;letter-spacing:0.3px">OPEN →</div>
+      </div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('mf')" style="cursor:pointer">
+        <div class="ob-feat-title" style="color:#F5F5F7">🏦 MF Picks</div>
+        <div class="ob-feat-desc">100-point scoring for mutual funds across 4 categories</div>
+        <div style="margin-top:8px;font-size:10px;color:#0A84FF;font-weight:700;letter-spacing:0.3px">OPEN →</div>
+      </div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockdata')" style="cursor:pointer">
+        <div class="ob-feat-title" style="color:#F5F5F7">📊 Stock Data</div>
+        <div class="ob-feat-desc">Browse 500+ NSE stocks with scores, fundamentals &amp; filters</div>
+        <div style="margin-top:8px;font-size:10px;color:#0A84FF;font-weight:700;letter-spacing:0.3px">OPEN →</div>
+      </div>
     </div>
-    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span></div>
-    <button class="ob-next" onclick="obDismiss()" style="background:rgba(94,204,138,0.15);color:var(--green);border-color:rgba(94,204,138,0.2)">Got it — let's go</button>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next ob-skip-btn" onclick="obPrev()">← Back</button>
+      <button class="ob-next" onclick="obNext()">Next →</button>
+    </div>
+  </div>
+
+  <!-- Step 3: How we score — 14-point Varsity checklist -->
+  <div class="ob-step" data-step="2">
+    <div class="ob-icon">📐</div>
+    <div class="ob-title">How we score stocks</div>
+    <div class="ob-desc" style="max-width:480px">Every pick runs through Zerodha Varsity's 14-point institutional checklist — fundamentals, valuation, management quality &amp; technical setup.</div>
+    <div class="ob-features" style="margin-bottom:20px;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">📊 Fundamentals</div><div class="ob-feat-desc">ROE, debt/equity, profit growth, promoter holding</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">💰 Valuation</div><div class="ob-feat-desc">PE, PB, EV/EBITDA vs sector + historical band</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">🛡 Moat &amp; Management</div><div class="ob-feat-desc">Competitive position, capital allocation, governance</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">📈 Technical Setup</div><div class="ob-feat-desc">30+ indicators: RSI, MACD, Ichimoku, VWAP, pivots</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next ob-skip-btn" onclick="obPrev()">← Back</button>
+      <button class="ob-next" onclick="obNext()">Next →</button>
+    </div>
+  </div>
+
+  <!-- Step 4: AI Council of 5 -->
+  <div class="ob-step" data-step="3">
+    <div class="ob-icon">🧠</div>
+    <div class="ob-title">AI Council of 5</div>
+    <div class="ob-desc" style="max-width:480px">Five top LLMs deliberate independently and a judge model aggregates — so no single model's bias drives your verdict.</div>
+    <div class="ob-features" style="margin-bottom:20px;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">Claude Haiku</div><div class="ob-feat-desc">Anthropic — risk &amp; nuance</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">GPT-4.1 nano</div><div class="ob-feat-desc">OpenAI — general reasoning</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">DeepSeek V3</div><div class="ob-feat-desc">Strong quant &amp; valuation</div></div>
+      <div class="ob-feat"><div class="ob-feat-title" style="color:#F5F5F7">Llama + Mistral</div><div class="ob-feat-desc">Open-source sanity check</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span><span class="ob-dot"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next ob-skip-btn" onclick="obPrev()">← Back</button>
+      <button class="ob-next" onclick="obNext()">Next →</button>
+    </div>
+  </div>
+
+  <!-- Step 5: Live pipeline + you're set -->
+  <div class="ob-step" data-step="4">
+    <div class="ob-icon">✅</div>
+    <div class="ob-title">You're all set</div>
+    <div class="ob-desc" style="max-width:480px">Data refreshes every 5 min during market hours. Screener fundamentals reload 4× daily, MF rescore every 30 min, nightly AI council at 10:30 PM. Everything free forever.</div>
+    <div class="ob-features" style="margin-bottom:20px;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockanalyzer')" style="cursor:pointer"><div class="ob-feat-title" style="color:#F5F5F7">🔍 Analyzer</div><div class="ob-feat-desc">Open Deep Analyzer</div></div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockrec')" style="cursor:pointer"><div class="ob-feat-title" style="color:#F5F5F7">📈 Picks</div><div class="ob-feat-desc">Open Stock Picks</div></div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('mf')" style="cursor:pointer"><div class="ob-feat-title" style="color:#F5F5F7">🏦 MF</div><div class="ob-feat-desc">Open MF Picks</div></div>
+      <div class="ob-feat ob-feat-go" onclick="obGoTab('stockdata')" style="cursor:pointer"><div class="ob-feat-title" style="color:#F5F5F7">📊 Data</div><div class="ob-feat-desc">Open Stock Data</div></div>
+    </div>
+    <div class="ob-dots"><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot active"></span></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button class="ob-next ob-skip-btn" onclick="obPrev()">← Back</button>
+      <button class="ob-next" onclick="obDismiss()">Let's go</button>
+    </div>
   </div>
 </div>
 </div>
@@ -13867,8 +13944,13 @@ function showApp() {
 /* ── Onboarding flow ── */
 var _obStep = 0;
 function obNext(){
-  _obStep++;
   var steps = document.querySelectorAll('.ob-step');
+  if(_obStep < steps.length - 1) _obStep++;
+  steps.forEach(function(s,i){ s.classList.toggle('active', i===_obStep); });
+}
+function obPrev(){
+  var steps = document.querySelectorAll('.ob-step');
+  if(_obStep > 0) _obStep--;
   steps.forEach(function(s,i){ s.classList.toggle('active', i===_obStep); });
 }
 function obDismiss(){
@@ -13886,6 +13968,10 @@ function obGoAnalyze(sym){
     if(hid) hid.value = sym;
     try { analyzeStock(); } catch(e){}
   }, 200);
+}
+function obGoTab(mode){
+  obDismiss();
+  try { setMode(mode); } catch(e){ console.error('obGoTab setMode error:', e); }
 }
 
 /* ── AI button state management for public vs admin ── */
