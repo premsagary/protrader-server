@@ -13844,13 +13844,9 @@ cron.schedule('*/30 9-15 * * 1-5', async () => {
   } catch(e) { console.error('Signal refresh error:', e.message); }
 }, { timezone: 'Asia/Kolkata' });
 
-// 3:00PM IST — Multi-model AI consensus review (once daily, Mon-Fri)
-// Calls 5 LLMs in parallel: Groq Llama, GPT-4.1-nano, DeepSeek V3, Claude Haiku, Mistral Small
-cron.schedule('0 15 * * 1-5', async () => {
-  console.log('🤖 3:00PM: Daily multi-model AI consensus review...');
-  await generatePortfolioSignals();
-  validateSignalsWithAI('deep').catch(e => console.error('AI daily validation error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
+// 3:00PM IST daily AI consensus review — REMOVED per user request
+// (was calling 5 LLMs in parallel; manual /api/ai/validate endpoint
+// still available for on-demand runs if needed.)
 
 // 3:45PM IST — end of day snapshot (after market close)
 cron.schedule('45 15 * * 1-5', async () => {
