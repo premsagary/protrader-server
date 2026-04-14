@@ -20,6 +20,9 @@
 require("dotenv").config();
 const express   = require("express");
 const screenerScraper = require("./screener-scraper");
+// Data logging layer for future ML training. All calls are non-blocking
+// internally — a DB outage never propagates to the scoring path.
+const mlLogger  = require("./ml-logger");
 
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
@@ -8114,6 +8117,62 @@ async function fetchKiteDaily(sym) {
   }
 }
 
+// -- NIFTY50 1-min candle ingest (for ML outcome calculation) -----------------
+// Called at the end of every unified-pipeline cycle. Fetches the last ~10 min
+// of 1-min candles for every NIFTY50 stock and batch-inserts them into
+// candles_1m (ON CONFLICT DO NOTHING). Small Kite footprint: 50 req per run
+// every 5 min = ~0.17 req/sec, well under the 3 req/sec ceiling.
+//
+// The outcome engine (commit 4) consumes this table strictly via ts > T so
+// there is no lookahead risk — we're always filling the past, not the future.
+let _nifty1mRunning = false;
+async function ingestNifty50OneMinCandles() {
+  if (_nifty1mRunning) return { skipped: true };
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return { skipped: true, reason: 'no_kite' };
+  _nifty1mRunning = true;
+
+  const n50 = (UNIVERSE || []).filter(s => (s.grp || '').toUpperCase() === 'NIFTY50');
+  if (n50.length === 0) { _nifty1mRunning = false; return { symbols: 0 }; }
+
+  const now = new Date();
+  // Pull last 15 minutes — generous overlap so replays are handled by ON CONFLICT.
+  const from = new Date(now.getTime() - 15 * 60 * 1000);
+  const fromStr = from.toISOString().slice(0, 19).replace('T', ' ');
+  const toStr   = now.toISOString().slice(0, 19).replace('T', ' ');
+
+  let symsOk = 0, symsFail = 0, barsWritten = 0;
+  const BATCH = 5;
+  for (let i = 0; i < n50.length; i += BATCH) {
+    const batch = n50.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (stock) => {
+      const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
+      if (!token) { symsFail++; return; }
+      try {
+        const candles = await Promise.race([
+          kite.getHistoricalData(token, 'minute', fromStr, toStr),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+        ]).catch(() => null);
+        if (!candles || candles.length === 0) { symsFail++; return; }
+        const bars = candles.map(c => ({
+          sym: stock.sym,
+          ts: c.date instanceof Date ? c.date : new Date(c.date),
+          open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0,
+        }));
+        const n = await mlLogger.logCandlesBatch('candles_1m', bars);
+        barsWritten += n;
+        symsOk++;
+      } catch (e) {
+        symsFail++;
+      }
+    }));
+    // Light throttle between batches to respect Kite's 3 req/sec cap
+    if (i + BATCH < n50.length) await new Promise(r => setTimeout(r, 400));
+  }
+
+  _nifty1mRunning = false;
+  return { symbols: n50.length, ok: symsOk, fail: symsFail, barsWritten };
+}
+
 // -- Compute technicals from daily candles ------------------------------------
 function computeRSIDivergence(C, period=20) {
   const n = C.length;
@@ -9637,6 +9696,20 @@ async function scanDayTrades(force = false) {
         const scored = scoreDayTrade(candles, stock.sym);
         if (scored) {
           scored.optionRec = getOptionRecommendation(stock.sym, scored.price, scored.bestSetup, scored.sl, scored.tgt, scored.rrRatio);
+          // Align snapshot ts to the last 5-min bar scanned.
+          const lastC = candles[candles.length - 1];
+          scored.tsMs = lastC.date ? (lastC.date instanceof Date ? lastC.date.getTime() : Date.parse(lastC.date)) : Date.now();
+          scored.sector = stockFundamentals[stock.sym]?.sector;
+          scored.grp    = stockFundamentals[stock.sym]?.grp || stock.grp;
+          // Log snapshot + last 5-min candle. Both non-blocking, isolated DLQ.
+          mlLogger.logFeatureSnapshot(scored, force ? 'force_scan' : 'scan_day_trades')
+            .then(snapshotId => { scored._snapshotId = snapshotId; })
+            .catch(e => console.warn('[ml-logger] snapshot failed:', e.message));
+          mlLogger.logCandlesBatch('candles_5m', [{
+            sym: stock.sym, ts: new Date(scored.tsMs),
+            open: lastC.open, high: lastC.high, low: lastC.low,
+            close: lastC.close, volume: lastC.volume, vwap: scored.vwap,
+          }]).catch(e => console.warn('[ml-logger] candle_5m failed:', e.message));
           results.push(scored);
           ok++;
         }
@@ -9713,6 +9786,20 @@ app.get('/api/admin/pipeline-status', (req, res) => {
     stockFundReady: typeof stockFundReady !== 'undefined' ? stockFundReady : 'unknown',
     lastRun: _pipelineLastRun,
   });
+});
+
+// ── ML-logger diagnostics ────────────────────────────────────────────────────
+// Admin-only view of the data-logging layer — ring-buffer size, DB health,
+// and per-target DLQ counts. Safe to hit at any time (all reads are O(1) or
+// a single cheap aggregate query against writer_dead_letter).
+app.get('/api/admin/ml-logger-status', async (req, res) => {
+  try {
+    const diag    = mlLogger.getDiagnostics();
+    const dlq     = await mlLogger.getDlqSummary();
+    res.json({ diag, dlq });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Test endpoint — fetch 3 stocks and return detailed results for debugging
@@ -9882,6 +9969,25 @@ async function runUnifiedKitePipeline(force = false) {
             const scored = scoreDayTrade(fiveMinCandles, sym);
             if (scored) {
               scored.optionRec = getOptionRecommendation(sym, scored.price, scored.bestSetup, scored.sl, scored.tgt, scored.rrRatio);
+              // Align snapshot timestamp to the bar we scored (the last 5-min bar).
+              // Fallback to now() if the candle lacks a timestamp.
+              const barTs = lastC.date ? (lastC.date instanceof Date ? lastC.date.getTime() : Date.parse(lastC.date)) : Date.now();
+              scored.tsMs = barTs;
+              scored.sector = stockFundamentals[sym]?.sector;
+              scored.grp    = stockFundamentals[sym]?.grp;
+              // Non-blocking: persist snapshot. Fire-and-forget pattern with
+              // try/catch inside the call keeps the pipeline loop tight.
+              mlLogger.logFeatureSnapshot(scored, 'unified_pipeline')
+                .then(snapshotId => { scored._snapshotId = snapshotId; })
+                .catch(e => console.warn('[ml-logger] snapshot failed:', e.message));
+              // Also persist the last 5-min candle (most recent bar only — older
+              // bars are already in the DB from prior cycles). ON CONFLICT DO
+              // NOTHING means replays are safe.
+              mlLogger.logCandlesBatch('candles_5m', [{
+                sym, ts: new Date(barTs),
+                open: lastC.open, high: lastC.high, low: lastC.low,
+                close: lastC.close, volume: lastC.volume, vwap: scored.vwap,
+              }]).catch(e => console.warn('[ml-logger] candle_5m failed:', e.message));
               dayTradeResults.push(scored);
             }
             okDT++;
@@ -9916,6 +10022,12 @@ async function runUnifiedKitePipeline(force = false) {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length };
     console.log(`🔄 Unified pipeline: TA ${okTA}ok/${failTA}fail · DayTrade ${okDT}ok/${failDT}fail · ${dayTradeResults.length} setups · ${elapsed}s`);
+    // Fire NIFTY50 1-min candle ingest — non-blocking. Runs alongside the
+    // next scoring cycle; if it takes longer than 5 min the _nifty1mRunning
+    // guard prevents overlap. Errors are logged, never propagated.
+    ingestNifty50OneMinCandles()
+      .then(r => r && !r.skipped && console.log(`📊 NIFTY50 1-min: ${r.ok}/${r.symbols} syms, ${r.barsWritten} bars`))
+      .catch(e => console.warn('NIFTY50 1-min ingest error:', e.message));
   } catch (e) {
     _pipelineLastRun = { ..._pipelineLastRun, status: 'error', error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') };
     console.error('🔄 Unified pipeline error:', e.message);
