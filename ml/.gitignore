@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+model_store/*.pkl
+model_store/*.csv
+model_store/*.json
