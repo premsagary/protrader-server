@@ -188,32 +188,16 @@ body:not(.in-app) #ui-contrast-layer{opacity:0}
   box-shadow:0 2px 12px rgba(100,116,139,0.18),0 0 20px rgba(100,116,139,0.06),inset 0 1px 0 rgba(255,255,255,0.08)}
 
 /* ══════════════════════════════════════════════════════════════
-   UNIFIED 3D PRESS — consistent click feel across entire app
-   Applies to: tabs, buttons, pills, filter chips, stock tiles
+   BUTTON PRESS — flat, no 3D
    ══════════════════════════════════════════════════════════════ */
 .mode-tab,.btn,.btn-sm,.btn-primary,.stab,.qs-stock,.login-btn-3d,.lp-cta-sm,.lp-btn-primary,.lp-btn-ghost,.lp-price-btn,
 button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
-  transform:perspective(600px) translateZ(0);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),
-             color var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);
+  transition:color var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);
 }
 .mode-tab:active,.btn:active,.btn-sm:active,.btn-primary:active,.stab:active,
 .qs-stock:active,.login-btn-3d:active,.lp-cta-sm:active,.lp-btn-primary:active,.lp-btn-ghost:active,.lp-price-btn:active,button:active{
-  transform:perspective(600px) translateZ(-4px) scale(0.96) !important;
-  box-shadow:0 1px 4px rgba(0,0,0,0.4),inset 0 1px 2px rgba(0,0,0,0.2) !important;
+  transform:scale(0.97) !important;
   transition-duration:0.08s !important;
-}
-/* Hover lift for all clickable elements */
-.mode-tab:hover,.stab:hover{
-  transform:perspective(600px) translateZ(4px) translateY(-2px);
-}
-.btn:hover,.btn-primary:hover{
-  transform:perspective(600px) translateZ(3px) translateY(-1px);
-}
-@keyframes tabPress3d{
-  0%{transform:perspective(600px) translateZ(0)}
-  30%{transform:perspective(600px) translateZ(-4px) scale(0.97)}
-  100%{transform:perspective(600px) translateZ(2px) scale(1)}
 }
 
 /* -- HEADER STATS -- */
@@ -254,21 +238,15 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 /* -- STAT CARDS -- */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:18px}
 .sc{
-  background:rgba(20,25,35,0.85);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:var(--bg3);
   border:1px solid rgba(255,255,255,0.06);
   border-radius:var(--radius-lg);padding:14px 16px;
   position:relative;overflow:hidden;
   box-shadow:0 2px 12px rgba(0,0,0,0.2);
-  transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
-  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color var(--transition-med);
-  will-change:transform;
+  transition:border-color 0.2s ease;
 }
-.sc::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);pointer-events:none;
-  background:linear-gradient(135deg,rgba(255,255,255,0.02),transparent 60%);opacity:0;transition:opacity var(--transition-med)}
-.sc:hover{border-color:rgba(128,144,168,0.14);
-  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(4px) translateY(-2px);
-  box-shadow:0 10px 25px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.05)}
-.sc:hover::before{opacity:1}
+.sc::before{display:none}
+.sc:hover{border-color:rgba(255,255,255,0.10)}
 .sc .l{font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.8px;font-weight:600}
 .sc .v{font-weight:700;font-size:18px;letter-spacing:-.5px;line-height:1}
 .sc .s{font-size:10px;color:var(--text2);margin-top:5px;font-weight:500}
@@ -277,8 +255,7 @@ button:not(.mode-tab):not(.btn):not(.qs-stock):not(.login-btn-3d){
 .tw{overflow-x:auto;border-radius:var(--radius-lg);border:1px solid rgba(255,255,255,0.07);
   box-shadow:0 4px 24px rgba(0,0,0,0.25);
   transition:box-shadow 0.4s var(--ease-out-expo),border-color 0.3s}
-.tw:hover{box-shadow:0 8px 32px rgba(0,0,0,0.3),0 0 0 1px rgba(64,112,168,0.08);
-  border-color:rgba(64,112,168,0.1)}
+.tw:hover{box-shadow:0 6px 24px rgba(0,0,0,0.3);border-color:rgba(255,255,255,0.08)}
 table{width:100%;border-collapse:collapse;background:rgba(14,16,20,0.95)}
 thead{background:rgba(21,23,29,0.98)}
 th{
@@ -643,19 +620,10 @@ select option{background:var(--bg3)}
 .depth-layer.mid{filter:blur(0.5px);opacity:0.5}
 .depth-layer.near{filter:none;opacity:1}
 
-/* ── Spatial card system — 3D transform on hover ── */
-/* ── Tiltable elements — 3D perspective on hover + mouse tracking ── */
+/* ── Card hover — flat, no 3D ── */
 .spatial-card,.tilt-3d,.qs-stock,
 .lp-feature,.lp-price-card,.lp-example,.lp-stat,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge{
-  transform:perspective(800px) rotateX(0deg) rotateY(0deg) translateZ(0);
-  transition:transform 0.4s var(--ease-out-expo),box-shadow 0.4s var(--ease-out-expo),border-color 0.3s,background 0.3s;
-  will-change:transform;
-}
-.spatial-card:hover,.tilt-3d:hover,.qs-stock:hover,
-.lp-feature:hover,.lp-price-card:hover,.lp-example:hover,.lp-stat:hover,.lp-step:hover,
-.lp-ex-metric:hover,.lp-roi:hover,.lp-hero-badge:hover{
-  transform:perspective(800px) rotateX(-1deg) rotateY(1deg) translateZ(6px);
-  box-shadow:0 20px 50px rgba(0,0,0,0.3),0 0 0 1px rgba(255,255,255,0.04);
+  transition:box-shadow 0.2s ease,border-color 0.2s ease,background 0.2s ease;
 }
 
 /* ── Section entrance animations (IntersectionObserver driven) ── */
@@ -672,9 +640,9 @@ select option{background:var(--bg3)}
 .page-transition{animation:pageIn 0.5s var(--ease-out-expo) both}
 @keyframes pageIn{0%{opacity:0;transform:translateY(12px) scale(0.99)}100%{opacity:1;transform:translateY(0) scale(1)}}
 
-/* ── Floating hover for interactive elements ── */
-.float-hover{transition:transform 0.3s var(--ease-out-expo),box-shadow 0.3s var(--ease-out-expo)}
-.float-hover:hover{transform:translateY(-3px);box-shadow:0 12px 30px rgba(0,0,0,0.25)}
+/* ── Floating hover — disabled ── */
+.float-hover{transition:box-shadow 0.2s ease}
+.float-hover:hover{transform:none;box-shadow:0 4px 16px rgba(0,0,0,0.2)}
 
 /* ── Premium light sweep on glass surfaces ── */
 .light-sweep{position:relative;overflow:hidden}
@@ -683,9 +651,8 @@ select option{background:var(--bg3)}
   transition:left 0.8s var(--ease-out-expo);pointer-events:none}
 .light-sweep:hover::after{left:140%}
 
-/* ── Breathing glow for accent elements ── */
-@keyframes breatheGlow{0%,100%{box-shadow:0 0 20px rgba(64,112,168,0.05)}50%{box-shadow:0 0 40px rgba(64,112,168,0.1)}}
-.breathe-glow{animation:breatheGlow 4s ease-in-out infinite}
+/* ── Breathing glow — disabled ── */
+.breathe-glow{animation:none}
 
 /* ── Ripple effect keyframe ── */
 @keyframes rippleOut{0%{transform:scale(0);opacity:0.4}100%{transform:scale(1);opacity:0}}
@@ -718,8 +685,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .cascade>*:nth-child(8){animation-delay:0.4s}
 @keyframes cascadeIn{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
 
-/* ── Spatial stat card (3D tilt micro-interaction) ── */
-.sc{transform:perspective(600px) rotateX(0) rotateY(0);will-change:transform}
+/* ── Stat card — flat ── */
 
 /* ── Premium topbar depth ── */
 .topbar{box-shadow:0 2px 30px rgba(0,0,0,0.4),0 8px 32px rgba(0,0,0,0.2)}
@@ -736,8 +702,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   box-shadow:0 8px 30px rgba(0,0,0,0.25),0 0 60px rgba(64,112,168,0.04)}
 
 /* ── Verdict card breathing aura ── */
-.analyzer-verdict{animation:verdictBreathe 4s ease-in-out infinite}
-@keyframes verdictBreathe{0%,100%{box-shadow:0 0 40px rgba(60,120,255,0.2),0 4px 20px rgba(0,0,0,0.3)}50%{box-shadow:0 0 60px rgba(60,120,255,0.35),0 4px 20px rgba(0,0,0,0.3)}}
+.analyzer-verdict{animation:none}
 
 /* ── Picks column — hover lift ── */
 .picks-column{transition:border-color 0.3s ease,box-shadow 0.3s ease}
@@ -759,17 +724,16 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .score-glow-weak{box-shadow:0 0 20px rgba(239,68,68,0.05),0 0 40px rgba(239,68,68,0.02)}
 
 /* ── Depth layers (Z-hierarchy) ── */
-.depth-bg{transform:translateZ(-20px);transform-style:preserve-3d}
-.depth-mid{transform:translateZ(0);transform-style:preserve-3d}
-.depth-focus{transform:translateZ(10px);transform-style:preserve-3d}
+/* ── Depth classes — disabled ── */
+.depth-bg,.depth-mid,.depth-focus{transform:none}
 
-/* ── Analyzer section depth entrance ── */
-.analyzer-section.visible{animation:sectionEmerge 0.6s var(--ease-out-expo) both}
-@keyframes sectionEmerge{0%{opacity:0;transform:perspective(800px) translateZ(-20px) translateY(16px)}100%{opacity:1;transform:perspective(800px) translateZ(0) translateY(0)}}
+/* ── Analyzer section entrance — flat ── */
+.analyzer-section.visible{animation:sectionFadeIn 0.4s ease both}
+@keyframes sectionFadeIn{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
 
-/* ── Tab slide transition (Z-space panel switch) ── */
-@keyframes tabSlideIn{0%{opacity:0;transform:translateX(20px) translateZ(-10px)}100%{opacity:1;transform:translateX(0) translateZ(0)}}
-.tab-slide-enter{animation:tabSlideIn 0.4s var(--ease-out-expo) both}
+/* ── Tab slide transition — flat ── */
+@keyframes tabSlideIn{0%{opacity:0;transform:translateX(16px)}100%{opacity:1;transform:translateX(0)}}
+.tab-slide-enter{animation:tabSlideIn 0.3s ease both}
 
 /* ── Disclaimer banner — visible on every page ── */
 #disclaimer-bar{position:fixed;bottom:0;left:0;right:0;z-index:999;
@@ -998,26 +962,15 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Hero cinematic entrance keyframes ── */
 @keyframes lpHeroIn{0%{opacity:0;transform:translateY(36px) scale(0.97);filter:blur(6px)}55%{filter:blur(0)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
 @keyframes lpBadgeIn{0%{opacity:0;transform:translateY(18px) scale(0.92)}100%{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes lpHeroGlow{0%,100%{text-shadow:0 0 40px rgba(138,162,255,0)}50%{text-shadow:0 0 60px rgba(138,162,255,0.15),0 0 100px rgba(60,100,220,0.06)}}
-@keyframes lpBreatheCta{0%,100%{box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06)}50%{box-shadow:0 4px 30px rgba(60,100,220,0.25),0 0 60px rgba(60,100,220,0.06),inset 0 1px 0 rgba(255,255,255,0.08)}}
-@keyframes lpFloatSlow{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-@keyframes lpPulseNum{0%,100%{box-shadow:0 0 16px rgba(60,100,220,0.08)}50%{box-shadow:0 0 32px rgba(60,100,220,0.18)}}
+/* Breathing/glow/float animations — all disabled */
 
-/* Hero cinematic entrance — staggered children */
-.lp-hero.lp-cinematic .lp-hero-badge{animation:lpBadgeIn 0.7s 0.15s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic h1{animation:lpHeroIn 0.9s 0.35s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-sub{animation:lpHeroIn 0.9s 0.55s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-cta{animation:lpHeroIn 0.7s 0.75s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic .lp-hero-trust{animation:lpHeroIn 0.7s 0.95s var(--ease-out-expo) both}
-.lp-hero.lp-cinematic h1 strong{animation:lpHeroGlow 4s 2s ease-in-out infinite}
-
-/* Breathing CTA */
-.lp-btn-primary{animation:lpBreatheCta 3s ease-in-out infinite}
-
-/* Hero trust badges float */
-.lp-hero.lp-cinematic .lp-hero-trust span{animation:lpFloatSlow 5s ease-in-out infinite}
-.lp-hero.lp-cinematic .lp-hero-trust span:nth-child(2){animation-delay:1.6s}
-.lp-hero.lp-cinematic .lp-hero-trust span:nth-child(3){animation-delay:3.2s}
+/* Hero cinematic entrance — keep fade-in, remove glow */
+.lp-hero.lp-cinematic .lp-hero-badge{animation:lpBadgeIn 0.5s 0.1s ease both}
+.lp-hero.lp-cinematic h1{animation:lpHeroIn 0.6s 0.2s ease both}
+.lp-hero.lp-cinematic .lp-hero-sub{animation:lpHeroIn 0.6s 0.35s ease both}
+.lp-hero.lp-cinematic .lp-hero-cta{animation:lpHeroIn 0.5s 0.5s ease both}
+.lp-hero.lp-cinematic .lp-hero-trust{animation:lpHeroIn 0.5s 0.65s ease both}
+.lp-hero.lp-cinematic h1 strong{animation:none}
 
 /* ── Sheen / light sweep on cards ── */
 .lp-sheen{position:relative;overflow:hidden}
@@ -1132,7 +1085,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp-example.visible .lp-ex-metric:nth-child(5){transition-delay:0.5s}
 
 /* ── Step number pulse when visible ── */
-.lp-step.visible .lp-step-num{animation:lpPulseNum 3s 0.4s ease-in-out infinite}
+.lp-step.visible .lp-step-num{animation:none}
 
 /* ── Stat value — no glow ── */
 .lp-stat.visible .lp-stat-val{text-shadow:none}
@@ -1180,111 +1133,60 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
    ONBOARDING OVERLAY — Premium 3D cinematic first-time flow
    ═══════════════════════════════════════════════════════════════ */
 .ob-overlay{position:fixed;inset:0;z-index:9999;
-  background:radial-gradient(ellipse 70% 60% at 50% 40%,rgba(20,30,60,0.85),rgba(5,6,8,0.94));
-  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  background:rgba(5,6,8,0.94);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
   display:flex;align-items:center;justify-content:center}
-/* Ambient aura behind card */
-.ob-overlay::before{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:600px;height:500px;border-radius:50%;pointer-events:none;
-  background:radial-gradient(ellipse,rgba(60,100,220,0.08),rgba(80,60,200,0.04),transparent 70%);
-  animation:obAuraBreathe 6s ease-in-out infinite}
-@keyframes obAuraBreathe{0%,100%{opacity:0.6;transform:translate(-50%,-50%) scale(1)}50%{opacity:1;transform:translate(-50%,-50%) scale(1.08)}}
+.ob-overlay::before{display:none}
 
 .ob-card{max-width:560px;width:92%;position:relative;
-  background:linear-gradient(145deg,rgba(18,24,44,0.95),rgba(12,16,30,0.97));
-  backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
-  border:1px solid rgba(120,160,255,0.18);
-  border-radius:20px;padding:40px 36px;text-align:center;
-  box-shadow:0 20px 60px rgba(0,0,0,0.5),0 0 80px rgba(60,100,220,0.08),
-    0 0 0 1px rgba(120,160,255,0.06),inset 0 1px 0 rgba(255,255,255,0.06);
-  transform-style:preserve-3d;
-  animation:obCardEntry 0.8s var(--ease-out-expo) both}
-@keyframes obCardEntry{0%{opacity:0;transform:perspective(1000px) translateY(40px) rotateX(6deg) scale(0.94);filter:blur(4px)}
-  100%{opacity:1;transform:perspective(1000px) translateY(0) rotateX(0) scale(1);filter:blur(0)}}
-/* Sheen sweep on card */
-.ob-card::before{content:'';position:absolute;top:0;left:-130%;width:60%;height:100%;
-  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.03) 48%,rgba(255,255,255,0.05) 50%,rgba(255,255,255,0.03) 52%,transparent 70%);
-  pointer-events:none;z-index:2;border-radius:20px;
-  animation:obSheenSweep 4s 1.2s ease-in-out both}
-@keyframes obSheenSweep{0%{left:-130%}100%{left:170%}}
-/* Breathing border glow */
-.ob-card::after{content:'';position:absolute;inset:-1px;border-radius:21px;pointer-events:none;z-index:-1;
-  background:linear-gradient(135deg,rgba(60,100,220,0.12),transparent 40%,transparent 60%,rgba(80,60,200,0.08));
-  animation:obBorderGlow 4s ease-in-out infinite}
-@keyframes obBorderGlow{0%,100%{opacity:0.5}50%{opacity:1}}
+  background:#111113;border:1px solid rgba(255,255,255,0.08);
+  border-radius:18px;padding:40px 36px;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5);
+  animation:obCardEntry 0.5s ease both}
+@keyframes obCardEntry{0%{opacity:0;transform:translateY(20px) scale(0.97)}
+  100%{opacity:1;transform:translateY(0) scale(1)}}
+.ob-card::before{display:none}
+.ob-card::after{display:none}
 
 .ob-step{display:none}
-.ob-step.active{display:block;animation:obStepFade 0.5s var(--ease-out-expo) both}
-@keyframes obStepFade{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
+.ob-step.active{display:block;animation:obStepFade 0.4s ease both}
+@keyframes obStepFade{0%{opacity:0;transform:translateY(8px)}100%{opacity:1;transform:translateY(0)}}
 
 .ob-icon{font-size:36px;margin-bottom:18px;
   width:64px;height:64px;display:flex;align-items:center;justify-content:center;margin-left:auto;margin-right:auto;
-  background:rgba(60,100,220,0.10);border:1px solid rgba(60,100,220,0.18);border-radius:16px;
-  box-shadow:0 4px 16px rgba(60,100,220,0.10),0 0 24px rgba(60,100,220,0.04);
-  transform-style:preserve-3d;transition:transform 0.4s cubic-bezier(.03,.98,.52,.99);
-  animation:obIconFloat 4s 1s ease-in-out infinite}
-@keyframes obIconFloat{0%,100%{transform:translateY(0) translateZ(0)}50%{transform:translateY(-4px) translateZ(8px)}}
+  background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);border-radius:16px;
+  box-shadow:none;animation:none}
 
-.ob-title{font-weight:700;font-size:22px;color:#f0f4ff;letter-spacing:0.3px;margin-bottom:10px;
-  text-shadow:0 2px 12px rgba(60,100,220,0.15)}
-.ob-desc{font-size:13px;color:#b8c2d3;line-height:1.7;margin-bottom:26px;max-width:400px;margin-left:auto;margin-right:auto;font-weight:400}
+.ob-title{font-weight:700;font-size:22px;color:#F5F5F7;letter-spacing:0.3px;margin-bottom:10px;text-shadow:none}
+.ob-desc{font-size:13px;color:#A1A1AA;line-height:1.7;margin-bottom:26px;max-width:400px;margin-left:auto;margin-right:auto;font-weight:400}
 
 .ob-features{display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:left;margin-bottom:24px}
-.ob-feat{background:linear-gradient(145deg,rgba(22,28,48,0.90),rgba(14,18,34,0.90));
-  border:1px solid rgba(120,160,255,0.10);border-radius:12px;padding:14px 16px;
-  box-shadow:0 2px 10px rgba(0,0,0,0.2);
-  transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),
-    box-shadow 0.35s ease,border-color 0.3s}
-.ob-feat:hover{border-color:rgba(120,160,255,0.25);
-  transform:perspective(800px) rotateX(-2deg) rotateY(2deg) translateZ(6px) translateY(-2px);
-  box-shadow:0 10px 30px rgba(0,0,0,0.3),0 0 30px rgba(60,100,220,0.06)}
-.ob-feat-title{font-size:12px;font-weight:700;color:#E6EAF2;margin-bottom:4px}
-.ob-feat-desc{font-size:10px;color:#9aa3b2;line-height:1.5}
+.ob-feat{background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px 16px;
+  box-shadow:none;transition:border-color 0.2s ease}
+.ob-feat:hover{border-color:rgba(255,255,255,0.12);transform:none;box-shadow:none}
+.ob-feat-title{font-size:12px;font-weight:700;color:#F5F5F7;margin-bottom:4px}
+.ob-feat-desc{font-size:10px;color:#71717A;line-height:1.5}
 
 .ob-dots{display:flex;gap:8px;justify-content:center;margin-bottom:22px}
 .ob-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.08);
-  border:1px solid rgba(255,255,255,0.06);transition:all 0.4s var(--ease-out-expo)}
-.ob-dot.active{background:linear-gradient(135deg,#6090e0,#8060d0);
-  border-color:rgba(120,160,255,0.3);
-  box-shadow:0 0 12px rgba(60,100,220,0.35),0 0 24px rgba(60,100,220,0.10);
-  transform:scale(1.2)}
+  border:1px solid rgba(255,255,255,0.06);transition:all 0.3s ease}
+.ob-dot.active{background:#0A84FF;border-color:rgba(10,132,255,0.4);box-shadow:none;transform:scale(1.15)}
 
-.ob-next{background:linear-gradient(135deg,rgba(60,100,220,0.30),rgba(80,60,200,0.20));
-  color:#e0e8ff;border:1px solid rgba(120,160,255,0.30);border-radius:14px;
-  padding:14px 36px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:0.4px;
-  font-family:inherit;transform-style:preserve-3d;position:relative;overflow:hidden;
-  box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06);
-  transition:transform 0.3s var(--ease-out-expo),box-shadow 0.3s ease,background 0.3s;
-  animation:obCtaBreathe 3s ease-in-out infinite}
-@keyframes obCtaBreathe{0%,100%{box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06)}
-  50%{box-shadow:0 4px 28px rgba(60,100,220,0.25),0 0 40px rgba(60,100,220,0.06),inset 0 1px 0 rgba(255,255,255,0.08)}}
-.ob-next:hover{background:linear-gradient(135deg,rgba(60,100,220,0.40),rgba(80,60,200,0.28));
-  transform:perspective(800px) translateZ(5px) translateY(-2px) scale(1.03);
-  box-shadow:0 10px 35px rgba(60,100,220,0.25),0 0 50px rgba(60,100,220,0.08)}
-.ob-next:active{transform:perspective(800px) translateZ(-4px) scale(0.97)!important;
-  box-shadow:0 2px 8px rgba(0,0,0,0.3)!important;transition-duration:0.1s}
-/* Glow sweep on button */
-.ob-next::before{content:'';position:absolute;top:0;left:-100%;width:60%;height:100%;
-  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.06) 48%,rgba(255,255,255,0.10) 50%,rgba(255,255,255,0.06) 52%,transparent 70%);
-  transition:left 0.5s ease;pointer-events:none;z-index:1}
-.ob-next:hover::before{left:180%}
+.ob-next{background:#0A84FF;color:#ffffff;border:1px solid rgba(10,132,255,0.4);border-radius:12px;
+  padding:14px 36px;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
+  font-family:inherit;box-shadow:none;transition:background 0.2s ease;animation:none}
+.ob-next:hover{background:#0070E0;transform:none;box-shadow:none}
+.ob-next:active{transform:scale(0.97)!important;transition-duration:0.1s}
+.ob-next::before{display:none}
 
-/* ob-skip-btn inherits all .ob-next styles — identical look */
-
-/* ── Stock tiles in onboarding — match mode-tab premium style ── */
-.ob-overlay .qs-stock{background:linear-gradient(145deg,rgba(22,28,48,0.90),rgba(14,18,34,0.90));
-  border:1px solid rgba(120,160,255,0.12);border-radius:12px;padding:12px 20px;
-  box-shadow:0 2px 10px rgba(0,0,0,0.2),0 0 0 1px rgba(120,160,255,0.04);
-  transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),
-    box-shadow 0.35s ease,border-color 0.3s}
-.ob-overlay .qs-stock:hover{border-color:rgba(120,160,255,0.30);
-  transform:perspective(800px) rotateX(-3deg) rotateY(3deg) translateZ(8px) translateY(-3px);
-  box-shadow:0 12px 30px rgba(0,0,0,0.35),0 0 40px rgba(60,100,220,0.08),0 0 0 1px rgba(120,160,255,0.15)}
-.ob-overlay .qs-stock:active{transform:perspective(800px) translateZ(-3px) scale(0.96)!important;transition-duration:0.1s}
-.ob-overlay .qs-stock::before{background:linear-gradient(90deg,rgba(60,100,220,0.4),rgba(80,60,200,0.3));height:2px;opacity:0.6}
-.ob-overlay .qs-stock:hover::before{opacity:1}
-.ob-overlay .qs-stock-sym{font-size:13px;font-weight:700;color:#E6EAF2;letter-spacing:0.4px}
-.ob-overlay .qs-stock-score{font-size:10px;color:#8aa2ff;margin-top:3px}
+/* ── Stock tiles in onboarding — flat ── */
+.ob-overlay .qs-stock{background:#1B1B1E;
+  border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:12px 20px;
+  box-shadow:none;transition:border-color 0.2s ease}
+.ob-overlay .qs-stock:hover{border-color:rgba(255,255,255,0.12);transform:none;box-shadow:none}
+.ob-overlay .qs-stock:active{transform:scale(0.97)!important;transition-duration:0.1s}
+.ob-overlay .qs-stock::before{display:none}
+.ob-overlay .qs-stock-sym{font-size:13px;font-weight:700;color:#F5F5F7;letter-spacing:0.4px}
+.ob-overlay .qs-stock-score{font-size:10px;color:#A1A1AA;margin-top:3px}
 
 /* ═══════════════════════════════════════════════════════════════
    DEEP ANALYZER PREMIUM HIERARCHY
@@ -2086,8 +1988,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
 .login-moonlight{position:absolute;top:-20%;left:50%;transform:translateX(-50%);
   width:800px;height:600px;border-radius:50%;pointer-events:none;
   background:radial-gradient(ellipse,rgba(180,200,230,0.04),rgba(100,130,180,0.015),transparent 70%);
-  animation:moonBreathe 8s ease-in-out infinite alternate}
-@keyframes moonBreathe{0%{opacity:0.6;transform:translateX(-50%) scale(1)}100%{opacity:1;transform:translateX(-50%) scale(1.05)}}
+  animation:none}
 
 /* ── Sacred geometry (very subtle rotating mandala rings) ── */
 .login-mandala{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none}
@@ -2124,15 +2025,14 @@ img,video,canvas,svg{max-width:100%;height:auto}
   background:rgba(12,14,18,0.95);backdrop-filter:blur(40px);-webkit-backdrop-filter:blur(40px);
   border:1px solid rgba(255,255,255,0.08);
   box-shadow:0 30px 80px rgba(0,0,0,0.6),0 0 1px rgba(255,255,255,0.06);
-  transform:rotateX(0deg) rotateY(0deg);transform-style:preserve-3d;
-  transition:transform 0.15s ease-out,box-shadow 0.4s ease;
-  animation:cardReveal 1.2s cubic-bezier(0.16,1,0.3,1) both;
+  transition:box-shadow 0.3s ease;
+  animation:cardReveal 0.6s ease both;
 }
 @keyframes cardReveal{
-  0%{opacity:0;transform:rotateX(8deg) translateY(40px) scale(0.96);filter:blur(4px)}
-  100%{opacity:1;transform:rotateX(0) translateY(0) scale(1);filter:blur(0)}
+  0%{opacity:0;transform:translateY(20px) scale(0.97)}
+  100%{opacity:1;transform:translateY(0) scale(1)}
 }
-.login-card:hover{box-shadow:0 35px 90px rgba(0,0,0,0.6),0 0 80px rgba(80,120,180,0.03)}
+.login-card:hover{box-shadow:0 30px 80px rgba(0,0,0,0.5)}
 
 /* ── Sheen (mouse-following highlight) ── */
 .login-sheen{position:absolute;inset:0;border-radius:16px;pointer-events:none;
@@ -2459,19 +2359,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     'animation-duration:'+(12+Math.random()*15)+'s;animation-delay:'+(Math.random()*12)+'s;'+
     'background:rgba(180,190,210,'+(0.15+Math.random()*0.2)+')';dustEl.appendChild(sp);}}
 
-  /* ── 3D card tilt ── */
-  var card=document.getElementById('login-card'),sheen=document.getElementById('login-sheen');
-  if(card){
-    var scr=document.getElementById('login-screen');
-    scr.addEventListener('mousemove',function(e){
-      var r=card.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
-      var dx=(e.clientX-cx)/r.width,dy=(e.clientY-cy)/r.height;
-      card.style.transform='rotateX('+(dy*-8)+'deg) rotateY('+(dx*8)+'deg)';
-      if(sheen){sheen.style.setProperty('--mx',((e.clientX-r.left)/r.width*100)+'%');
-        sheen.style.setProperty('--my',((e.clientY-r.top)/r.height*100)+'%');}
-    });
-    scr.addEventListener('mouseleave',function(){card.style.transform='rotateX(0) rotateY(0)';});
-  }
+  /* ── 3D card tilt — DISABLED ── */
 })();
 </script>
 </div>
@@ -3295,49 +3183,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     container.classList.add('page-transition');
   };
 
-  /* ── 3D tilt mouse tracking — enhanced with stronger angles + depth ── */
-  var _tiltCards='.spatial-card,.tilt-3d,.sc,.qs-stock,.lp-feature,.lp-price-card,.lp-example,.lp-step,.lp-ex-metric,.lp-roi,.lp-hero-badge,.lp-proof>div';
-  var _tiltBtns='.lp-btn-primary,.lp-btn-ghost,.lp-price-btn,.lp-cta-sm,.lp-nav-links a';
-  var _tiltStats='.lp-stat';
-  var _isMobileTilt=window.innerWidth<768;
-  window.addEventListener('resize',function(){_isMobileTilt=window.innerWidth<768;});
-
-  /* Cards — strong 3D tilt following mouse */
-  document.addEventListener('mousemove',function(e){
-    if(_isMobileTilt)return;
-    document.querySelectorAll(_tiltCards).forEach(function(card){
-      var r=card.getBoundingClientRect();
-      if(e.clientX<r.left-80||e.clientX>r.right+80||e.clientY<r.top-80||e.clientY>r.bottom+80){
-        card.style.transform='';return;
-      }
-      var cx=r.left+r.width/2,cy=r.top+r.height/2;
-      var dx=(e.clientX-cx)/r.width,dy=(e.clientY-cy)/r.height;
-      card.style.transform='perspective(800px) rotateX('+(dy*-6)+'deg) rotateY('+(dx*6)+'deg) translateZ(8px) scale(1.02)';
-    });
-    /* Buttons — lighter tilt */
-    document.querySelectorAll(_tiltBtns).forEach(function(btn){
-      var r=btn.getBoundingClientRect();
-      if(e.clientX<r.left-40||e.clientX>r.right+40||e.clientY<r.top-40||e.clientY>r.bottom+40){
-        btn.style.transform='';return;
-      }
-      var cx=r.left+r.width/2,cy=r.top+r.height/2;
-      var dx=(e.clientX-cx)/r.width,dy=(e.clientY-cy)/r.height;
-      btn.style.transform='perspective(600px) rotateX('+(dy*-4)+'deg) rotateY('+(dx*4)+'deg) translateZ(6px)';
-    });
-    /* Stats — pop on proximity */
-    document.querySelectorAll(_tiltStats).forEach(function(st){
-      var r=st.getBoundingClientRect();
-      if(e.clientX<r.left-60||e.clientX>r.right+60||e.clientY<r.top-60||e.clientY>r.bottom+60){
-        st.style.transform='';return;
-      }
-      var cx=r.left+r.width/2,cy=r.top+r.height/2;
-      var dx=(e.clientX-cx)/r.width,dy=(e.clientY-cy)/r.height;
-      st.style.transform='perspective(600px) rotateX('+(dy*-4)+'deg) rotateY('+(dx*4)+'deg) translateZ(10px) scale(1.06)';
-    });
-  });
-  document.addEventListener('mouseleave',function(){
-    document.querySelectorAll(_tiltCards+','+_tiltBtns+','+_tiltStats).forEach(function(c){c.style.transform='';});
-  });
+  /* ── 3D tilt mouse tracking — DISABLED (flat UI) ── */
 
   /* ── Nav glassmorphism depth on scroll ── */
   var _lpNav=document.querySelector('.lp-nav');
@@ -3364,11 +3210,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     btn.style.overflow='hidden';
     btn.appendChild(ripple);
     setTimeout(function(){ripple.remove()},700);
-    /* 3D press bounce */
-    btn.style.animation='none';
-    void btn.offsetWidth;
-    btn.style.animation='tabPress3d 0.35s var(--ease-out-expo)';
-    setTimeout(function(){btn.style.animation='';},400);
+    /* 3D press bounce — disabled */
   });
 
   /* ── Dynamic background dimming — dim particles when user is interacting ── */
