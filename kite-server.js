@@ -8145,6 +8145,170 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// VARSITY M2 CANDLESTICK PATTERN DETECTION (Chapters 5-10)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Returns the strongest bullish / bearish reversal or continuation pattern on the
+// LATEST candle (with look-back up to 2 prior candles for multi-candle patterns).
+// Each pattern has its own Varsity identification rules — see chapter comments.
+
+function _candleMetrics(c) {
+  const body      = Math.abs(c.close - c.open);
+  const range     = Math.max(c.high - c.low, 1e-9);
+  const bullish   = c.close > c.open;
+  const bearish   = c.close < c.open;
+  const upperWick = c.high - Math.max(c.open, c.close);
+  const lowerWick = Math.min(c.open, c.close) - c.low;
+  const bodyPct   = body / range;        // 0..1 — how much of range is body
+  const rangePct  = range / Math.max(c.close, 1e-9); // range as % of price
+  return { body, range, bullish, bearish, upperWick, lowerWick, bodyPct, rangePct };
+}
+
+// Varsity M2 Ch 5-10: canonical bullish-reversal patterns + their M2 weights.
+// Returns { name, bull, weight, description } for the strongest pattern detected
+// in the last 1-3 candles, or null. Weight is in Varsity "conviction points"
+// where 20 = strongest (Engulfing, Morning Star), 10 = medium (Hammer, Piercing),
+// 5 = weak/confirming (Doji, Spinning Top at S/R).
+function detectBullishCandlePattern(candles) {
+  const n = candles.length;
+  if (n < 1) return null;
+  const c0 = candles[n - 1];                           // current candle
+  const c1 = n >= 2 ? candles[n - 2] : null;           // prior
+  const c2 = n >= 3 ? candles[n - 3] : null;           // 2 ago
+  const m0 = _candleMetrics(c0);
+  const m1 = c1 ? _candleMetrics(c1) : null;
+  const m2 = c2 ? _candleMetrics(c2) : null;
+
+  // ── Bullish Marubozu (Ch 5) — no wicks, full body, strong momentum ──
+  // Varsity: open ≈ low, close ≈ high, body ≥ 90% of range.
+  if (m0.bullish && m0.bodyPct >= 0.90 && m0.upperWick / m0.range < 0.05 && m0.lowerWick / m0.range < 0.05 && m0.rangePct > 0.003) {
+    return { name: 'Bullish Marubozu', bull: true, weight: 18, description: 'Full-body bullish — no wicks, strong buying' };
+  }
+
+  // ── Bullish Engulfing (Ch 8) — STRONGEST 2-candle reversal ──
+  // Varsity: prior bearish + current bullish body that fully engulfs prior body.
+  if (c1 && m1.bearish && m0.bullish && c0.close > c1.open && c0.open < c1.close && m0.body > m1.body * 1.05) {
+    return { name: 'Bullish Engulfing', bull: true, weight: 20, description: 'Prior bearish body fully engulfed by bullish body' };
+  }
+
+  // ── Piercing Pattern (Ch 8) — 2-candle bullish reversal ──
+  // Varsity: prior bearish + current bullish opening below prior low, closing above prior midpoint.
+  if (c1 && m1.bearish && m0.bullish && c0.open < c1.low && c0.close > (c1.open + c1.close) / 2 && c0.close < c1.open) {
+    return { name: 'Piercing Pattern', bull: true, weight: 12, description: 'Gap-down open, close above prior midpoint' };
+  }
+
+  // ── Morning Star (Ch 10) — 3-candle reversal, very high conviction ──
+  // Varsity: bearish → small-body (star) → bullish closing above first candle's midpoint.
+  if (c2 && c1 && m2.bearish && m1.bodyPct < 0.30 && m0.bullish && c0.close > (c2.open + c2.close) / 2) {
+    return { name: 'Morning Star', bull: true, weight: 20, description: 'Bearish → indecision star → strong bullish close' };
+  }
+
+  // ── Bullish Harami (Ch 9) — 2-candle reversal, medium conviction ──
+  // Varsity: prior bearish + current small bullish body INSIDE prior body.
+  if (c1 && m1.bearish && m0.bullish && c0.open > c1.close && c0.close < c1.open && m0.body < m1.body * 0.6) {
+    return { name: 'Bullish Harami', bull: true, weight: 10, description: 'Small bullish body inside prior bearish body' };
+  }
+
+  // ── Hammer / Paper Umbrella (Ch 7) — 1-candle reversal at support ──
+  // Varsity: small body near top, lower wick ≥ 2× body, minimal upper wick.
+  if (m0.lowerWick >= m0.body * 2 && m0.upperWick < m0.body * 0.5 && m0.bodyPct < 0.35 && m0.rangePct > 0.004) {
+    return { name: 'Hammer', bull: true, weight: 12, description: 'Small body, long lower wick — buyers rejected lows' };
+  }
+
+  // ── Inverted Hammer (Ch 7) — 1-candle reversal, needs confirmation ──
+  if (m0.upperWick >= m0.body * 2 && m0.lowerWick < m0.body * 0.5 && m0.bodyPct < 0.35 && m0.bullish && m0.rangePct > 0.004) {
+    return { name: 'Inverted Hammer', bull: true, weight: 6, description: 'Long upper wick reversal — needs next-bar confirmation' };
+  }
+
+  // ── Dragonfly Doji (Ch 6) — bullish indecision at support ──
+  if (m0.bodyPct < 0.05 && m0.lowerWick > m0.range * 0.6 && m0.upperWick < m0.range * 0.1) {
+    return { name: 'Dragonfly Doji', bull: true, weight: 8, description: 'Open ≈ close ≈ high, long lower wick — bullish indecision' };
+  }
+
+  // ── Doji (Ch 6) — indecision, weak signal alone, strong at S/R ──
+  if (m0.bodyPct < 0.07) {
+    return { name: 'Doji', bull: true, weight: 4, description: 'Open ≈ close — indecision, reversal signal at key level' };
+  }
+
+  return null;
+}
+
+// Bearish counterpart — used for Breakout/Gap setups to detect exhaustion at highs.
+function detectBearishCandlePattern(candles) {
+  const n = candles.length;
+  if (n < 1) return null;
+  const c0 = candles[n - 1];
+  const c1 = n >= 2 ? candles[n - 2] : null;
+  const c2 = n >= 3 ? candles[n - 3] : null;
+  const m0 = _candleMetrics(c0);
+  const m1 = c1 ? _candleMetrics(c1) : null;
+  const m2 = c2 ? _candleMetrics(c2) : null;
+
+  // Bearish Marubozu (Ch 5)
+  if (m0.bearish && m0.bodyPct >= 0.90 && m0.upperWick / m0.range < 0.05 && m0.lowerWick / m0.range < 0.05 && m0.rangePct > 0.003) {
+    return { name: 'Bearish Marubozu', bull: false, weight: 18, description: 'Full-body bearish — strong selling' };
+  }
+  // Bearish Engulfing (Ch 8)
+  if (c1 && m1.bullish && m0.bearish && c0.open > c1.close && c0.close < c1.open && m0.body > m1.body * 1.05) {
+    return { name: 'Bearish Engulfing', bull: false, weight: 20, description: 'Prior bullish body engulfed by bearish body' };
+  }
+  // Dark Cloud Cover (Ch 8)
+  if (c1 && m1.bullish && m0.bearish && c0.open > c1.high && c0.close < (c1.open + c1.close) / 2 && c0.close > c1.open) {
+    return { name: 'Dark Cloud Cover', bull: false, weight: 12, description: 'Gap-up open, close below prior midpoint' };
+  }
+  // Evening Star (Ch 10)
+  if (c2 && c1 && m2.bullish && m1.bodyPct < 0.30 && m0.bearish && c0.close < (c2.open + c2.close) / 2) {
+    return { name: 'Evening Star', bull: false, weight: 20, description: 'Bullish → star → strong bearish close — top reversal' };
+  }
+  // Shooting Star (Ch 7)
+  if (m0.upperWick >= m0.body * 2 && m0.lowerWick < m0.body * 0.5 && m0.bodyPct < 0.35 && m0.rangePct > 0.004) {
+    return { name: 'Shooting Star', bull: false, weight: 12, description: 'Small body, long upper wick — sellers rejected highs' };
+  }
+  // Hanging Man (Ch 7) — like Hammer but at uptrend top
+  if (m0.lowerWick >= m0.body * 2 && m0.upperWick < m0.body * 0.5 && m0.bodyPct < 0.35 && m0.bearish && m0.rangePct > 0.004) {
+    return { name: 'Hanging Man', bull: false, weight: 8, description: 'Hammer shape in uptrend — potential reversal' };
+  }
+  // Gravestone Doji (Ch 6)
+  if (m0.bodyPct < 0.05 && m0.upperWick > m0.range * 0.6 && m0.lowerWick < m0.range * 0.1) {
+    return { name: 'Gravestone Doji', bull: false, weight: 8, description: 'Open ≈ close ≈ low, long upper wick — bearish indecision' };
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VARSITY M2 CH 22 — CENTRAL PIVOT RANGE (CPR)
+// ═══════════════════════════════════════════════════════════════════════════════
+// CPR = three intraday levels (Pivot Point, Bottom Central, Top Central) computed
+// from the PREVIOUS day's H/L/C. Price respects these levels intraday.
+// Width narrower than 0.5% of price → trending day expected (breakout bias).
+// Width wider than 1.0% → sideways/choppy day (range-bound bias).
+// R1-R3 / S1-S3 are standard pivot resistance/support levels.
+
+function computeCPR(prevDayCandles, refPrice) {
+  if (!prevDayCandles || prevDayCandles.length === 0) return null;
+  const H = Math.max(...prevDayCandles.map(c => c.high));
+  const L = Math.min(...prevDayCandles.map(c => c.low));
+  const C = prevDayCandles[prevDayCandles.length - 1].close;
+  const PP = (H + L + C) / 3;
+  const BC = (H + L) / 2;
+  const TC = 2 * PP - BC;
+  const cprHi = Math.max(TC, BC);
+  const cprLo = Math.min(TC, BC);
+  const width = cprHi - cprLo;
+  const widthPct = refPrice > 0 ? (width / refPrice) * 100 : 0;
+  // Varsity M2 Ch 22: narrow CPR (< 0.5%) = directional day, wide (> 1%) = range
+  const type = widthPct < 0.5 ? 'NARROW' : widthPct > 1.0 ? 'WIDE' : 'NORMAL';
+  return {
+    PP, BC, TC, cprHi, cprLo, width, widthPct, type,
+    R1: 2 * PP - L,
+    S1: 2 * PP - H,
+    R2: PP + (H - L),
+    S2: PP - (H - L),
+    R3: H + 2 * (PP - L),
+    S3: L - 2 * (H - PP),
+  };
+}
+
 function scoreDayTrade(candles, sym) {
   const n = candles.length;
   if (n < 30) return null;
@@ -8273,6 +8437,18 @@ function scoreDayTrade(candles, sym) {
   const pdHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.high)) : dayHigh;
   const pdLow  = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.low))  : dayLow;
 
+  // ── Varsity M2 Ch 22: Central Pivot Range (CPR) ──
+  // Computed from prior day H/L/C. BC/TC act as intraday S/R; width predicts regime.
+  const cpr = computeCPR(prevDayCandles, px);
+  const nearCpr = cpr && px >= cpr.cprLo * 0.998 && px <= cpr.cprHi * 1.002;  // within 0.2% of CPR band
+  const aboveCpr = cpr && px > cpr.cprHi;
+  const belowCpr = cpr && px < cpr.cprLo;
+
+  // ── Varsity M2 Ch 5-10: Candlestick pattern detection on 5-min ──
+  // Use today's candles so pattern reflects the current session's psychology.
+  const bullPattern = detectBullishCandlePattern(todayCandles);
+  const bearPattern = detectBearishCandlePattern(todayCandles);
+
   // Supertrend on 5-min
   let stBull = false;
   try {
@@ -8324,6 +8500,15 @@ function scoreDayTrade(candles, sym) {
   // Penalty: too far above VWAP = chasing, not reclaim
   if (pctVWAP > 2.0) { vwapScore += _penalty('VWAP', 20, 'Extended from VWAP — chasing'); vwapDetail.push('Extended from VWAP — chasing'); }
   if (pctVWAP < -1.5) { vwapScore += _penalty('VWAP', 25, 'Still well below VWAP'); vwapDetail.push('Still well below VWAP'); }
+  // Varsity M2 Ch 5-10: bullish candle pattern confirming the reclaim
+  if (bullPattern && vwapScore > 0) {
+    const bonus = Math.round(bullPattern.weight * 0.6);
+    vwapScore += _gain('VWAP', bonus, `${bullPattern.name} at reclaim`);
+    vwapDetail.push(`${bullPattern.name} at reclaim`);
+  }
+  // Varsity M2 Ch 22: reclaim happening at/above Central Pivot = institutional confluence
+  if (cpr && nearCpr) { vwapScore += _gain('VWAP', 6, 'At CPR — institutional level'); vwapDetail.push('At CPR'); }
+  else if (cpr && aboveCpr && px - cpr.cprHi < px * 0.005) { vwapScore += _gain('VWAP', 4, 'Just cleared CPR'); vwapDetail.push('Just cleared CPR'); }
   vwapScore = Math.max(0, Math.min(100, vwapScore));
 
   // ── SETUP 2: GAP & GO (Varsity M2 Ch7: gap theory + follow-through) ──
@@ -8366,6 +8551,19 @@ function scoreDayTrade(candles, sym) {
   // Penalty: gap filled = the thesis is invalidated
   if (!gapUnfilled && absGap >= 1.0) { gapScore += _penalty('GAP', 15, 'Gap filled — weak'); gapDetail.push('Gap filled — weak'); }
   if (absGap < 0.5) { gapScore = 0; gapDetail = ['No gap']; } // no gap = no setup
+  // Varsity M2 Ch 22: narrow CPR day = directional bias, perfect for gap-and-go
+  if (cpr && cpr.type === 'NARROW' && gapScore > 0) { gapScore += _gain('GAP', 8, `Narrow CPR (${cpr.widthPct.toFixed(2)}%) — trending day`); gapDetail.push('Narrow CPR — trending day'); }
+  else if (cpr && cpr.type === 'WIDE') { gapScore += _penalty('GAP', 5, `Wide CPR (${cpr.widthPct.toFixed(2)}%) — range day, gaps fade`); gapDetail.push('Wide CPR — fade risk'); }
+  // Bullish gap above R1 (Ch 22) = directional breakout above pivot resistance
+  if (cpr && gapPct > 0 && px > cpr.R1) { gapScore += _gain('GAP', 7, 'Price above R1 — pivot breakout'); gapDetail.push('Above R1'); }
+  // Bullish candle pattern confirming the gap direction
+  if (bullPattern && gapPct > 0 && gapScore > 0) {
+    const bonus = Math.round(bullPattern.weight * 0.5);
+    gapScore += _gain('GAP', bonus, `${bullPattern.name} confirming gap-up`);
+    gapDetail.push(`${bullPattern.name} confirm`);
+  }
+  // Bearish pattern on a gap-up = exhaustion / fade risk
+  if (bearPattern && gapPct > 0 && bearPattern.weight >= 12) { gapScore += _penalty('GAP', 10, `${bearPattern.name} — exhaustion on gap`); gapDetail.push(`${bearPattern.name} exhaustion`); }
   gapScore = Math.max(0, Math.min(100, gapScore));
 
   // ── SETUP 3: BREAKOUT (Varsity M2 Ch7+16: S/R breakout + volume expansion) ──
@@ -8401,6 +8599,23 @@ function scoreDayTrade(candles, sym) {
   // Penalty: RSI overbought = exhaustion breakout
   if (lastRSI > 80) { breakoutScore += _penalty('BRK', 15, 'RSI exhaustion zone'); breakoutDetail.push('RSI exhaustion zone'); }
   else if (lastRSI > 75) { breakoutScore += _penalty('BRK', 8, 'RSI overbought'); breakoutDetail.push('RSI overbought'); }
+  // Varsity M2 Ch 22: CPR pivot resistance breakouts (R1, R2 are stronger than day-high alone)
+  if (cpr && px > cpr.R2) { breakoutScore += _gain('BRK', 10, 'Above R2 — strong pivot breakout'); breakoutDetail.push('Above R2'); }
+  else if (cpr && px > cpr.R1) { breakoutScore += _gain('BRK', 6, 'Above R1 — pivot breakout'); breakoutDetail.push('Above R1'); }
+  // Narrow CPR confirms trending-day breakout bias
+  if (cpr && cpr.type === 'NARROW' && breakoutScore >= 30) { breakoutScore += _gain('BRK', 6, `Narrow CPR (${cpr.widthPct.toFixed(2)}%) — trending day`); breakoutDetail.push('Narrow CPR'); }
+  else if (cpr && cpr.type === 'WIDE') { breakoutScore += _penalty('BRK', 8, `Wide CPR (${cpr.widthPct.toFixed(2)}%) — range day fade risk`); breakoutDetail.push('Wide CPR range day'); }
+  // Varsity M2 Ch 5-10: bullish pattern confirming the breakout
+  if (bullPattern && bullPattern.weight >= 12 && breakoutScore >= 30) {
+    const bonus = Math.round(bullPattern.weight * 0.5);
+    breakoutScore += _gain('BRK', bonus, `${bullPattern.name} confirming breakout`);
+    breakoutDetail.push(`${bullPattern.name}`);
+  }
+  // Bearish reversal pattern at day high = classic fake-out signal (Varsity M2 Ch 7+10)
+  if (bearPattern && bearPattern.weight >= 12 && nearDayHigh) {
+    breakoutScore += _penalty('BRK', bearPattern.weight, `${bearPattern.name} at highs — fake-out risk`);
+    breakoutDetail.push(`${bearPattern.name} at highs`);
+  }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -8427,13 +8642,22 @@ function scoreDayTrade(candles, sym) {
   if (volRatio > 3.0) { bounceScore += _gain('BOUNCE', 15, 'Capitulation vol spike'); bounceDetail.push('Capitulation vol spike'); }
   else if (volRatio > 2.0) { bounceScore += _gain('BOUNCE', 10, 'High vol exhaustion'); bounceDetail.push('High vol exhaustion'); }
   else if (volRatio > 1.5) { bounceScore += _gain('BOUNCE', 5, 'Elevated vol'); bounceDetail.push('Elevated vol'); }
-  // Reversal candle pattern: current candle closing above its midpoint (hammer-like)
-  // Varsity M2 Ch11: "Hammer at support = buyers stepping in"
-  const candleMid = (last.high + last.low) / 2;
-  const longLowerWick = (Math.min(last.open, px) - last.low) > (last.high - last.low) * 0.6;
-  if (px > candleMid && last.low < L[n - 2]) {
-    bounceScore += _gain('BOUNCE', 8, 'Reversal candle'); bounceDetail.push('Reversal candle');
-    if (longLowerWick) { bounceScore += _gain('BOUNCE', 5, 'Hammer pattern'); bounceDetail.push('Hammer pattern'); }
+  // Varsity M2 Ch 5-10: explicit bullish reversal pattern detection
+  // Full pattern catalog replaces the old simple "reversal candle + hammer" check.
+  // This is the setup where candlestick patterns matter MOST — a Hammer or Bullish
+  // Engulfing at key support is the textbook oversold-bounce trigger.
+  if (bullPattern) {
+    bounceScore += _gain('BOUNCE', bullPattern.weight, bullPattern.name);
+    bounceDetail.push(bullPattern.name);
+  }
+  // Varsity M2 Ch 22: bounce at CPR support (S1, S2) = high-probability reversal
+  if (cpr) {
+    const atS1 = Math.abs(px - cpr.S1) / px < 0.008;
+    const atS2 = Math.abs(px - cpr.S2) / px < 0.008;
+    const atBC = Math.abs(px - cpr.BC) / px < 0.008;
+    if (atS2) { bounceScore += _gain('BOUNCE', 10, 'At S2 — deep pivot support'); bounceDetail.push('At S2'); }
+    else if (atS1) { bounceScore += _gain('BOUNCE', 7, 'At S1 — pivot support'); bounceDetail.push('At S1'); }
+    else if (atBC) { bounceScore += _gain('BOUNCE', 5, 'At BC — central pivot floor'); bounceDetail.push('At BC'); }
   }
   // MACD turning — momentum shift (Varsity M2 Ch15)
   if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
@@ -8683,6 +8907,17 @@ function scoreDayTrade(candles, sym) {
     dayHigh: +dayHigh.toFixed(2), dayLow: +dayLow.toFixed(2),
     pdHigh: +pdHigh.toFixed(2), pdLow: +pdLow.toFixed(2),
     bbPct: +bbPct.toFixed(2), gapUnfilled,
+    // Varsity M2 Ch 5-10: candlestick pattern on latest 5-min candle (if any)
+    candlePattern: bullPattern ? bullPattern.name : (bearPattern ? bearPattern.name : null),
+    candlePatternBull: bullPattern ? true : (bearPattern ? false : null),
+    candlePatternDesc: bullPattern ? bullPattern.description : (bearPattern ? bearPattern.description : null),
+    // Varsity M2 Ch 22: Central Pivot Range derived from prior day
+    cpr: cpr ? {
+      PP: +cpr.PP.toFixed(2), BC: +cpr.BC.toFixed(2), TC: +cpr.TC.toFixed(2),
+      R1: +cpr.R1.toFixed(2), R2: +cpr.R2.toFixed(2), R3: +cpr.R3.toFixed(2),
+      S1: +cpr.S1.toFixed(2), S2: +cpr.S2.toFixed(2), S3: +cpr.S3.toFixed(2),
+      widthPct: +cpr.widthPct.toFixed(2), type: cpr.type,
+    } : null,
     // Risk
     sl, tgt, rrRatio,
     // Risk management plan (Varsity M9)
