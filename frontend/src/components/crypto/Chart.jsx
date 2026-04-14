@@ -9,7 +9,7 @@ function clr(n) {
 }
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 function fmtT(ts) {

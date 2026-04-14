@@ -10,9 +10,9 @@ import { formatPercent, formatDate, formatTime } from '../../utils/formatters';
 
 function psFmt(n) {
   if (n == null || isNaN(n)) return '--';
-  if (Math.abs(n) >= 1e7) return `Rs${(n / 1e7).toFixed(2)}Cr`;
-  if (Math.abs(n) >= 1e5) return `Rs${(n / 1e5).toFixed(2)}L`;
-  return `Rs${Math.round(n).toLocaleString('en-IN')}`;
+  if (Math.abs(n) >= 1e7) return `₹${(n / 1e7).toFixed(2)}Cr`;
+  if (Math.abs(n) >= 1e5) return `₹${(n / 1e5).toFixed(2)}L`;
+  return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }
 
 /* ── Model Portfolio Tab ── */
@@ -216,8 +216,8 @@ function ModelTab() {
                         <td style={{ padding: 5 }}>
                           <span style={{ background: `${isSell ? '#ef4444' : (stk.actionColor || 'var(--green)')}20`, color: isSell ? '#ef4444' : (stk.actionColor || 'var(--green)'), borderRadius: 3, padding: '1px 6px', fontSize: 9, fontWeight: 800, whiteSpace: 'nowrap' }}>{stk.action || 'BUY'}</span>
                         </td>
-                        <td style={{ padding: 5, color: 'var(--red)', fontSize: 10 }} className="tabular-nums">{stk.stopLoss ? `Rs${stk.stopLoss}` : '--'}</td>
-                        <td style={{ padding: 5, color: 'var(--green)', fontSize: 10 }} className="tabular-nums">{stk.target ? `Rs${stk.target}` : '--'}</td>
+                        <td style={{ padding: 5, color: 'var(--red)', fontSize: 10 }} className="tabular-nums">{stk.stopLoss ? `₹${stk.stopLoss}` : '--'}</td>
+                        <td style={{ padding: 5, color: 'var(--green)', fontSize: 10 }} className="tabular-nums">{stk.target ? `₹${stk.target}` : '--'}</td>
                         <td style={{ padding: 5, fontWeight: 700, color: stk.rrRatio >= 2 ? 'var(--green)' : 'var(--amber)' }} className="tabular-nums">{stk.rrRatio ? `${stk.rrRatio}x` : '--'}</td>
                         <td style={{ padding: 5 }}>
                           {isSell ? <span style={{ fontSize: 9, color: 'var(--red)', fontWeight: 700 }}>Don't buy</span>

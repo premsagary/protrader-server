@@ -5,7 +5,7 @@ import EmptyState from '../shared/EmptyState';
 import { formatPercent } from '../../utils/formatters';
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 function clr(n) {

@@ -2,7 +2,7 @@
  * Format a number as Indian Rupee currency.
  * e.g. 12345.67 -> "12,345.67" (with optional rupee symbol)
  */
-export function formatCurrency(value, { symbol = 'Rs', decimals = 2 } = {}) {
+export function formatCurrency(value, { symbol = '₹', decimals = 2 } = {}) {
   if (value == null || isNaN(value)) return '--';
   const num = Number(value);
   const formatted = num.toLocaleString('en-IN', {

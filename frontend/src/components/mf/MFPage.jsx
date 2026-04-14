@@ -39,9 +39,9 @@ function rvc(v) {
   return <span style={{ color: n >= 1 ? 'var(--green)' : 'var(--red)' }}>{n.toFixed(2)}x</span>;
 }
 function fmtWealth(n) {
-  if (n >= 10000000) return `Rs${(n / 10000000).toFixed(1)}Cr`;
-  if (n >= 100000) return `Rs${(n / 100000).toFixed(1)}L`;
-  return `Rs${n.toLocaleString('en-IN')}`;
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  return `₹${n.toLocaleString('en-IN')}`;
 }
 
 /* ---------- MiroFish Projection Card ---------- */
@@ -141,84 +141,141 @@ function FundCard({ fund, rank, cfg, maxScore }) {
   const sortino = parseFloat(f.sortino);
   const mdd = parseFloat(f.maxDD || f.max_drawdown);
   const vol = parseFloat(f.stdDev || f.volatility);
-  const aumStr = f.aum_cr && f.aum_cr > 0 ? (f.aum_cr >= 1000 ? `Rs${Math.round(f.aum_cr / 1000)}K Cr` : `Rs${Math.round(f.aum_cr)} Cr`) : '-';
+  const aumStr = f.aum_cr && f.aum_cr > 0 ? (f.aum_cr >= 1000 ? `₹${Math.round(f.aum_cr / 1000)}K Cr` : `₹${Math.round(f.aum_cr)} Cr`) : '-';
   const hits = f.hits || {};
   const topHits = Object.keys(hits).filter((k) => hits[k] > 0).slice(0, 5);
+
+  const rankLabel = rank === 1 ? 'Top pick' : rank === 2 ? 'Runner up' : rank === 3 ? 'Third' : `Rank #${rank}`;
+  const aumStrClean = aumStr.replace('Rs', '₹');
 
   return (
     <div style={{
       background: 'var(--bg2)',
-      border: isTop1 ? `2px solid ${cfg.color}` : isTop2 ? `1.5px solid ${cfg.color}aa` : '1px solid var(--border)',
-      borderRadius: 12, padding: 14, position: 'relative',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: 18,
+      position: 'relative',
+      boxShadow: isTop1 ? 'var(--shadow-md)' : 'var(--shadow-sm)',
+      overflow: 'hidden',
     }}>
-      {rank <= 2 && (
-        <div style={{ position: 'absolute', top: -1, right: 14, background: cfg.color, color: '#fff', fontSize: 10, fontWeight: 500, padding: '2px 10px', borderRadius: '0 0 7px 7px' }}>
-          {rank === 1 ? 'Top pick' : 'Runner up'}
-        </div>
+      {/* Premium gradient border for top picks */}
+      {isTop1 && (
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: 'var(--radius-lg)',
+          padding: 1.5,
+          background: 'linear-gradient(135deg, var(--brand) 0%, var(--purple) 100%)',
+          WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+          WebkitMaskComposite: 'xor',
+          maskComposite: 'exclude',
+          pointerEvents: 'none',
+        }} />
       )}
+
+      {/* Top ribbon: rank chip (left) — no more collision with score */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '4px 10px',
+          borderRadius: 'var(--radius-full)',
+          background: isTop1 ? 'var(--brand-gradient)' : isTop2 ? 'var(--brand-bg-strong)' : 'var(--bg3)',
+          color: isTop1 ? '#fff' : isTop2 ? 'var(--brand-text)' : 'var(--text2)',
+          fontSize: 12, fontWeight: 700, letterSpacing: '-0.1px',
+        }}>
+          <span style={{ fontSize: 11, opacity: 0.9 }}>#{rank}</span>
+          <span style={{ opacity: 0.25 }}>•</span>
+          <span>{rankLabel}</span>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            fontSize: 11, fontWeight: 600,
+            color: sebiColor,
+            padding: '3px 8px',
+            background: f.amc_sebi === 'probe' || f.amc_sebi === 'action' ? 'var(--red-bg)' : f.amc_sebi === 'minor' ? 'var(--amber-bg)' : 'var(--green-bg)',
+            borderRadius: 6,
+          }}>{sebiTxt}</span>
+        </div>
+      </div>
 
       {/* DNI banner */}
       {f.dni && (
         <div style={{
           background: f.dni.level === 'red' ? 'var(--red-bg)' : 'var(--amber-bg)',
-          border: `1.5px solid ${f.dni.level === 'red' ? 'var(--red)' : 'var(--amber)'}`,
-          borderRadius: 6, padding: '7px 10px', marginBottom: 8,
+          border: `1px solid ${f.dni.level === 'red' ? 'var(--tier-avoid-border)' : 'var(--tier-accumulate-border)'}`,
+          borderRadius: 10, padding: '10px 12px', marginBottom: 12,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: f.dni.level === 'red' ? 'var(--red)' : 'var(--amber-text)', marginBottom: 3 }}>
-            {f.dni.level === 'red' ? 'X' : '!'} {f.dni.short}
+          <div style={{ fontSize: 13, fontWeight: 700, color: f.dni.level === 'red' ? 'var(--red-text)' : 'var(--amber-text)', marginBottom: 4 }}>
+            {f.dni.short}
           </div>
-          <div style={{ fontSize: 10, color: f.dni.level === 'red' ? 'var(--red)' : 'var(--amber-text)', lineHeight: 1.5, opacity: 0.9 }}>{f.dni.reason}</div>
+          <div style={{ fontSize: 12, color: f.dni.level === 'red' ? 'var(--red-text)' : 'var(--amber-text)', lineHeight: 1.5, opacity: 0.9 }}>{f.dni.reason}</div>
         </div>
       )}
 
       {/* Watchlist badge */}
       {f.watchlist && !f.dni && (
-        <div style={{ background: 'var(--blue-bg)', border: '1px solid var(--tier-buy-border)', borderRadius: 6, padding: '5px 10px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12 }}>Pin</span>
-          <div style={{ fontSize: 10, color: 'var(--blue-text)', lineHeight: 1.4 }}>Watchlist - Fund AUM &lt; Rs5,000 Cr. Strong numbers but unproven at scale.</div>
+        <div style={{ background: 'var(--blue-bg)', border: '1px solid var(--tier-buy-border)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--blue-text)', lineHeight: 1.45, fontWeight: 500 }}>
+            Watchlist — Fund AUM &lt; ₹5,000 Cr. Strong numbers but unproven at scale.
+          </div>
         </div>
       )}
 
       {f.amc_warning && (
-        <div style={{ background: 'var(--red-bg)', border: '1px solid var(--red)', borderRadius: 5, padding: '5px 8px', fontSize: 10, color: 'var(--red)', marginBottom: 8, lineHeight: 1.5 }}>{f.amc_warning}</div>
+        <div style={{ background: 'var(--red-bg)', border: '1px solid var(--tier-avoid-border)', borderRadius: 8, padding: '8px 10px', fontSize: 12, color: 'var(--red-text)', marginBottom: 12, lineHeight: 1.45 }}>{f.amc_warning}</div>
       )}
 
-      {/* Header */}
-      <div className="flex items-start gap-2 mb-2.5">
-        <div style={{ lineHeight: 1, flexShrink: 0, width: 28, height: 28, borderRadius: '50%', background: cfg.bg, color: cfg.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>{rank}</div>
+      {/* Header: name on left, big score on right */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.4 }}>{f.name || ''}</div>
-          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
-            {f.amc || ''}{f.navFormatted ? ` -- ${f.navFormatted}` : ''}{aumStr !== '-' ? ` -- ${aumStr}` : ''}
+          <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.25, color: 'var(--text)', marginBottom: 4 }}>
+            {f.name || ''}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.4 }}>
+            {f.amc || ''}{f.navFormatted ? ` · ${f.navFormatted.replace('Rs', '₹').replace('rs', '₹')}` : ''}{aumStrClean !== '-' ? ` · ${aumStrClean}` : ''}
           </div>
           {f.rolling_3y != null && parseFloat(f.rolling_3y) > 0 && (
-            <div style={{ marginTop: 3, fontSize: 10 }}>
-              <span style={{ color: 'var(--text3)' }}>Roll 3Y: </span>
-              <span style={{ color: 'var(--green)', fontWeight: 600 }}>+{parseFloat(f.rolling_3y).toFixed(1)}%</span>
+            <div style={{ marginTop: 6, fontSize: 12 }}>
+              <span style={{ color: 'var(--text3)' }}>Roll 3Y </span>
+              <span style={{ color: 'var(--green-text)', fontWeight: 600 }}>+{parseFloat(f.rolling_3y).toFixed(1)}%</span>
             </div>
           )}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1, color: cfg.color }}>{f.score || 0}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }}>/ 100 pts</div>
-          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 600, color: sebiColor }}>{sebiTxt}</div>
+          <div style={{
+            fontSize: 36, fontWeight: 800, lineHeight: 1,
+            color: cfg.color,
+            letterSpacing: '-1px',
+            fontVariantNumeric: 'tabular-nums',
+          }}>{f.score || 0}</div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, fontWeight: 500 }}>/ 100 pts</div>
         </div>
       </div>
 
       {/* Progress bar */}
-      <div style={{ height: 3, background: 'var(--bg4)', borderRadius: 2, overflow: 'hidden', marginBottom: 10 }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 2 }} />
+      <div style={{ height: 4, background: 'var(--bg3)', borderRadius: 4, overflow: 'hidden', marginBottom: 14 }}>
+        <div style={{
+          width: `${pct}%`, height: '100%',
+          background: isTop1 ? 'var(--brand-gradient)' : cfg.color,
+          borderRadius: 4,
+        }} />
       </div>
 
       {/* Returns grid */}
-      <div className="grid gap-1.5 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
+      <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
         {[['1Y', f.ret_1y], ['3Y p.a.', f.cagr_3y], ['5Y p.a.', f.cagr_5y], ['10Y p.a.', f.cagr_10y]].map(([label, val]) => {
           const n = parseFloat(val);
           const hasData = val != null && !isNaN(n);
           return (
-            <div key={label} style={{ background: 'var(--bg3)', borderRadius: 6, padding: '6px 7px', textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 2 }}>{label}</div>
-              <div style={{ fontWeight: 600, color: hasData ? (n >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text4)', fontSize: hasData ? 12 : 10 }}>
+            <div key={label} style={{
+              background: 'var(--bg3)',
+              borderRadius: 8, padding: '8px 6px', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3, fontWeight: 500 }}>{label}</div>
+              <div style={{
+                fontWeight: 700,
+                color: hasData ? (n >= 0 ? 'var(--green-text)' : 'var(--red-text)') : 'var(--text4)',
+                fontSize: hasData ? 14 : 11,
+                fontVariantNumeric: 'tabular-nums',
+              }}>
                 {hasData ? `${n >= 0 ? '+' : ''}${n.toFixed(1)}%` : 'no data'}
               </div>
             </div>
@@ -227,45 +284,57 @@ function FundCard({ fund, rank, cfg, maxScore }) {
       </div>
 
       {/* Metrics grid */}
-      <div className="grid gap-1.5 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+      <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
         {[
-          ['Sharpe', isNaN(sharpe) ? '-' : sharpe.toFixed(3), isNaN(sharpe) ? '' : sharpe > 0 ? 'var(--green)' : sharpe > -0.3 ? 'var(--amber)' : 'var(--red)'],
-          ['Sortino', isNaN(sortino) ? '-' : sortino.toFixed(4), isNaN(sortino) ? '' : sortino > 0 ? 'var(--green)' : 'var(--red)'],
-          ['Max DD', isNaN(mdd) ? '-' : `${mdd.toFixed(1)}%`, 'var(--red)'],
-          ['Volatility', isNaN(vol) ? '-' : `${vol.toFixed(2)}%`, ''],
-          ['Expense', isNaN(exp) ? '-' : `${exp.toFixed(2)}%`, isNaN(exp) ? '' : exp < 0.5 ? 'var(--green)' : exp > 1 ? 'var(--red)' : ''],
-          ['AUM', aumStr, ''],
+          ['Sharpe', isNaN(sharpe) ? '-' : sharpe.toFixed(2), isNaN(sharpe) ? '' : sharpe > 0 ? 'var(--green-text)' : sharpe > -0.3 ? 'var(--amber-text)' : 'var(--red-text)'],
+          ['Sortino', isNaN(sortino) ? '-' : sortino.toFixed(2), isNaN(sortino) ? '' : sortino > 0 ? 'var(--green-text)' : 'var(--red-text)'],
+          ['Max DD', isNaN(mdd) ? '-' : `${mdd.toFixed(1)}%`, 'var(--red-text)'],
+          ['Volatility', isNaN(vol) ? '-' : `${vol.toFixed(1)}%`, 'var(--text)'],
+          ['Expense', isNaN(exp) ? '-' : `${exp.toFixed(2)}%`, isNaN(exp) ? '' : exp < 0.5 ? 'var(--green-text)' : exp > 1 ? 'var(--red-text)' : 'var(--text)'],
+          ['AUM', aumStrClean, 'var(--text)'],
         ].map(([label, val, col]) => (
-          <div key={label} style={{ background: 'var(--bg3)', borderRadius: 6, padding: '5px 7px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
-            <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{label}</span>
-            <span style={{ fontSize: 11, fontWeight: 600, textAlign: 'right', color: col || undefined }} className="tabular-nums">{val}</span>
+          <div key={label} style={{
+            background: 'var(--bg3)',
+            borderRadius: 8, padding: '7px 9px',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4,
+          }}>
+            <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, textAlign: 'right', color: col || 'var(--text)' }} className="tabular-nums">{val}</span>
           </div>
         ))}
       </div>
 
       {/* AMC note */}
       {f.amc_note && (
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 6, lineHeight: 1.5, borderLeft: '2px solid var(--border2)', paddingLeft: 7 }}>{f.amc_note}</div>
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8, lineHeight: 1.5, borderLeft: '3px solid var(--border2)', paddingLeft: 10 }}>{f.amc_note}</div>
       )}
 
       {/* Top scoring tags */}
       {topHits.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-1.5">
+        <div className="flex flex-wrap gap-1.5 mb-2">
           {topHits.map((h) => (
-            <span key={h} style={{ background: cfg.bg, color: cfg.color, borderRadius: 3, padding: '1px 6px', fontSize: 10, fontWeight: 500 }}>{h}</span>
+            <span key={h} style={{
+              background: cfg.bg, color: cfg.color,
+              borderRadius: 6, padding: '3px 8px',
+              fontSize: 11, fontWeight: 600,
+            }}>{h}</span>
           ))}
         </div>
       )}
 
       {/* Scoring details */}
       <details>
-        <summary style={{ fontSize: 11, color: 'var(--text2)', cursor: 'pointer', padding: '2px 0' }}>All scoring reasons</summary>
-        <div className="grid gap-0.5 mt-1.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <summary style={{
+          fontSize: 12, color: 'var(--text2)',
+          cursor: 'pointer', padding: '4px 0',
+          fontWeight: 500,
+        }}>All scoring reasons</summary>
+        <div className="grid gap-1 mt-2" style={{ gridTemplateColumns: '1fr 1fr' }}>
           {Object.entries(hits).map(([k, v]) => (
-            <div key={k} className="flex items-center gap-1.5" style={{ fontSize: 10, padding: '1px 0' }}>
-              <span style={{ fontWeight: 600, flexShrink: 0, color: v > 0 ? 'var(--green)' : v === 0 ? 'var(--amber)' : 'var(--red)' }}>{v > 0 ? 'Pass' : v === 0 ? '!' : 'X'}</span>
+            <div key={k} className="flex items-center gap-2" style={{ fontSize: 12, padding: '2px 0' }}>
+              <span style={{ fontWeight: 600, flexShrink: 0, color: v > 0 ? 'var(--green-text)' : v === 0 ? 'var(--amber-text)' : 'var(--red-text)' }}>{v > 0 ? '✓' : v === 0 ? '•' : '✗'}</span>
               <span style={{ color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</span>
-              <span style={{ color: 'var(--text3)', marginLeft: 'auto', flexShrink: 0 }}>{v}</span>
+              <span style={{ color: 'var(--text3)', marginLeft: 'auto', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{v}</span>
             </div>
           ))}
         </div>
@@ -323,8 +392,8 @@ function MFTable({ funds, cfg, cat }) {
       case 3: return { align: 'right', val: f.navFormatted || '-', style: { fontFamily: 'monospace' } };
       case 4: return { align: 'right', val: f.aum_cr ? Math.round(f.aum_cr).toLocaleString('en-IN') : '-' };
       case 5: return { align: 'right', val: exp2 ? `${exp2.toFixed(2)}%` : '-', style: { color: exp2 < 0.5 ? 'var(--green)' : exp2 > 1 ? 'var(--red)' : undefined } };
-      case 6: return { align: 'right', val: f.min_lumpsum ? `Rs${Math.round(f.min_lumpsum).toLocaleString('en-IN')}` : '-' };
-      case 7: return { align: 'right', val: f.min_sip && f.min_sip > 0 ? `Rs${Math.round(f.min_sip)}` : '-' };
+      case 6: return { align: 'right', val: f.min_lumpsum ? `₹${Math.round(f.min_lumpsum).toLocaleString('en-IN')}` : '-' };
+      case 7: return { align: 'right', val: f.min_sip && f.min_sip > 0 ? `₹${Math.round(f.min_sip)}` : '-' };
       case 8: return { align: 'right', val: `${rv(f.exit_load, 0)}%` };
       case 9: return { align: 'right', val: f.months_inception ? `${Math.round(f.months_inception)} mo` : '-' };
       case 10: return { align: 'left', val: f.fund_manager || '-', style: { color: 'var(--text2)', fontSize: 10, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' } };
@@ -465,39 +534,68 @@ function DNISection({ funds }) {
   const visible = expanded ? sorted : sorted.slice(0, DNI_INITIAL);
 
   return (
-    <div style={{ marginBottom: 24, border: '1px solid var(--tier-avoid-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg2)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--red-bg)', borderBottom: '1px solid var(--tier-avoid-border)' }}>
-        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--red)' }}>Do Not Invest</span>
-        <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>({sorted.length} funds flagged)</span>
+    <div style={{
+      marginBottom: 28,
+      border: '1px solid var(--tier-avoid-border)',
+      borderRadius: 'var(--radius-lg)',
+      overflow: 'hidden',
+      background: 'var(--bg2)',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '14px 20px',
+        background: 'var(--red-bg)',
+        borderBottom: '1px solid var(--tier-avoid-border)',
+      }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: 8,
+          background: 'var(--red)', color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 14, fontWeight: 800,
+        }}>!</div>
+        <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--red-text)', letterSpacing: '-0.2px' }}>Do Not Invest</span>
+        <span style={{
+          fontSize: 12, color: 'var(--red-text)',
+          background: 'rgba(239,68,68,0.15)',
+          padding: '3px 10px', borderRadius: 'var(--radius-full)', fontWeight: 600,
+        }}>{sorted.length} flagged</span>
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr style={{ background: 'var(--bg3)' }}>
-            <th style={{ padding: '6px 12px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600 }}>Fund</th>
-            <th style={{ padding: '6px 12px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600 }}>Category</th>
-            <th style={{ padding: '6px 12px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600 }}>Reason</th>
-            <th style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text3)', fontWeight: 600 }}>Score</th>
+            <th style={{ padding: '10px 20px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Fund</th>
+            <th style={{ padding: '10px 20px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Category</th>
+            <th style={{ padding: '10px 20px', textAlign: 'left', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Reason</th>
+            <th style={{ padding: '10px 20px', textAlign: 'right', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Score</th>
           </tr>
         </thead>
         <tbody>
           {visible.map((f, i) => {
-            const lvlColor = f.dni?.level === 'red' ? 'var(--red)' : 'var(--amber)';
+            const lvlColor = f.dni?.level === 'red' ? 'var(--red-text)' : 'var(--amber-text)';
             return (
-              <tr key={i} style={{ borderBottom: '1px solid var(--border2)' }}>
-                <td style={{ padding: '6px 12px', fontWeight: 500 }}>{f.name}</td>
-                <td style={{ padding: '6px 12px', color: 'var(--text3)' }}>{MF_CAT[f._cat]?.label}</td>
-                <td style={{ padding: '6px 12px', color: lvlColor }}>{f.dni?.reason}</td>
-                <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 700, color: lvlColor }}>{Math.round(f.score || 0)}</td>
+              <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text)' }}>{f.name}</td>
+                <td style={{ padding: '12px 20px', color: 'var(--text2)', fontSize: 13 }}>{MF_CAT[f._cat]?.label}</td>
+                <td style={{ padding: '12px 20px', color: lvlColor, fontSize: 13, lineHeight: 1.45 }}>{f.dni?.reason}</td>
+                <td style={{ padding: '12px 20px', textAlign: 'right', fontWeight: 800, color: lvlColor, fontVariantNumeric: 'tabular-nums', fontSize: 16 }}>{Math.round(f.score || 0)}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
       {sorted.length > DNI_INITIAL && (
-        <div style={{ textAlign: 'center', padding: 10, background: 'var(--bg2)', borderTop: '1px solid var(--border2)', cursor: 'pointer' }}>
-          <span onClick={() => setExpanded(!expanded)} style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600, cursor: 'pointer', padding: '4px 14px', border: '1px solid var(--tier-avoid-border)', borderRadius: 20 }}>
-            {expanded ? 'Show less' : `Show all ${sorted.length - DNI_INITIAL} more flagged funds`} {expanded ? '\u25B4' : '\u25BE'}
-          </span>
+        <div style={{ textAlign: 'center', padding: 14, background: 'var(--bg2)', borderTop: '1px solid var(--border)' }}>
+          <button onClick={() => setExpanded(!expanded)} style={{
+            fontSize: 13, color: 'var(--red-text)', fontWeight: 600,
+            cursor: 'pointer', padding: '8px 20px',
+            background: 'transparent',
+            border: '1px solid var(--tier-avoid-border)',
+            borderRadius: 'var(--radius)',
+            fontFamily: 'inherit',
+          }}>
+            {expanded ? 'Show less' : `Show all ${sorted.length - DNI_INITIAL} more flagged funds`}
+          </button>
         </div>
       )}
     </div>
@@ -602,22 +700,79 @@ export default function MFPage() {
 
   const categories = ['smallcap', 'midcap', 'flexicap'];
 
+  // Find top 3 across all categories for hero
+  const allEligible = [];
+  Object.keys(grouped).forEach((cat) => {
+    grouped[cat].forEach((f) => {
+      if (f.eligible !== false && !(f.dni && f.dni.level === 'red')) allEligible.push({ ...f, _cat: cat });
+    });
+  });
+  allEligible.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const topPick = allEligible[0];
+  const totalRated = allEligible.length;
+
   return (
     <div className="animate-fadeIn">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '-.3px' }}>Mutual Fund Recommendations</div>
-          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Tickertape screener data -- 100-point professional scoring -- Eligibility filters applied -- Not SEBI advice</div>
+      {/* HERO — big, modern, confident */}
+      <div style={{
+        background: 'var(--brand-gradient)',
+        borderRadius: 'var(--radius-xl)',
+        padding: '28px 32px',
+        marginBottom: 24,
+        color: '#fff',
+        boxShadow: 'var(--shadow-brand)',
+        position: 'relative',
+        overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', top: -60, right: -60, width: 240, height: 240, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -80, left: 40, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.06)', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase', opacity: 0.85, marginBottom: 6 }}>Mutual Fund Intelligence</div>
+            <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: '-0.8px', lineHeight: 1.15, marginBottom: 8, maxWidth: 620 }}>
+              {topPick ? `${topPick.name}` : 'Your next mutual fund'}
+            </div>
+            <div style={{ fontSize: 14, opacity: 0.9, lineHeight: 1.5, maxWidth: 620 }}>
+              {topPick
+                ? `Top-ranked across ${totalRated} eligible funds. 100-point professional scoring, Tickertape data.`
+                : `Professional scoring across ${total || 0} funds. Tickertape data · SEBI-flagged filtering.`}
+            </div>
+          </div>
+          {topPick && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{
+                fontSize: 64, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px',
+                fontVariantNumeric: 'tabular-nums',
+              }}>{topPick.score || 0}</div>
+              <div style={{ fontSize: 13, opacity: 0.9, marginTop: 4, fontWeight: 600 }}>/ 100 score</div>
+            </div>
+          )}
         </div>
-        <div className="flex gap-1.5 items-center">
-          {total && <span style={{ fontSize: 10, color: 'var(--text3)' }}>{total} funds</span>}
-          <button onClick={handleRefresh} disabled={refreshing} style={{ padding: '6px 14px', background: 'var(--bg3)', border: '1px solid var(--border2)', borderRadius: 'var(--radius)', fontSize: 12, fontWeight: 500, color: 'var(--text2)', cursor: refreshing ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
-          <a href="https://www.tickertape.in/mutual-funds" target="_blank" rel="noopener noreferrer" style={{ padding: '6px 14px', background: 'var(--bg3)', border: '1px solid var(--border2)', borderRadius: 'var(--radius)', fontSize: 12, fontWeight: 500, color: 'var(--text2)', textDecoration: 'none' }}>
-            Tickertape
-          </a>
+        <div style={{ position: 'relative', marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.15)', display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>
+            <b>{total || 0}</b> funds scored · <b>{totalRated}</b> eligible · <b>{allDni.length}</b> flagged
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button onClick={handleRefresh} disabled={refreshing} style={{
+              padding: '8px 16px',
+              background: 'rgba(255,255,255,0.18)',
+              border: '1px solid rgba(255,255,255,0.22)',
+              borderRadius: 10,
+              fontSize: 13, fontWeight: 600, color: '#fff',
+              cursor: refreshing ? 'wait' : 'pointer', fontFamily: 'inherit',
+              backdropFilter: 'blur(8px)',
+            }}>
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <a href="https://www.tickertape.in/mutual-funds" target="_blank" rel="noopener noreferrer" style={{
+              padding: '8px 16px', background: 'rgba(255,255,255,0.18)',
+              border: '1px solid rgba(255,255,255,0.22)',
+              borderRadius: 10, fontSize: 13, fontWeight: 600, color: '#fff',
+              textDecoration: 'none', backdropFilter: 'blur(8px)',
+            }}>
+              Tickertape ↗
+            </a>
+          </div>
         </div>
       </div>
 
@@ -634,14 +789,20 @@ export default function MFPage() {
         const maxS = eligibleFunds[0] ? eligibleFunds[0].score : 1;
 
         return (
-          <div key={cat} style={{ marginBottom: 36 }}>
+          <div key={cat} style={{ marginBottom: 40 }}>
             {/* Category header */}
-            <div className="flex items-center gap-2.5 mb-3.5 pb-2.5" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div style={{ width: 3, height: 18, background: cfg.color, borderRadius: 2 }} />
-              <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-.2px' }}>{cfg.label}</div>
-              <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}40`, borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{cfg.desc}</span>
-              <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 'auto' }}>
-                <b style={{ color: cfg.color }}>{eligibleFunds.length} rated</b> -- {catFunds.length - eligibleFunds.length} not eligible
+            <div className="flex items-center gap-3 mb-4 pb-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div style={{ width: 4, height: 22, background: cfg.color, borderRadius: 2 }} />
+              <div style={{ fontWeight: 700, fontSize: 20, letterSpacing: '-0.4px', color: 'var(--text)' }}>{cfg.label}</div>
+              <span style={{
+                background: cfg.bg, color: cfg.color,
+                borderRadius: 'var(--radius-full)', padding: '4px 12px',
+                fontSize: 12, fontWeight: 600,
+              }}>{cfg.desc}</span>
+              <span style={{ fontSize: 13, color: 'var(--text2)', marginLeft: 'auto', fontWeight: 500 }}>
+                <b style={{ color: cfg.color, fontWeight: 700 }}>{eligibleFunds.length} rated</b>
+                <span style={{ color: 'var(--text3)', margin: '0 6px' }}>·</span>
+                {catFunds.length - eligibleFunds.length} not eligible
               </span>
             </div>
 

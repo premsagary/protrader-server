@@ -6,7 +6,7 @@ import EmptyState from '../shared/EmptyState';
 import { NSE_STOCKS } from '../../utils/constants';
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 const FILTERS = ['All', 'Nifty 50', 'Next 50', 'Midcap'];

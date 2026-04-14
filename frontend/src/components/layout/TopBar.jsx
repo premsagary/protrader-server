@@ -70,23 +70,29 @@ export default function TopBar({ theme, toggleTheme }) {
         className="flex items-center gap-2.5 flex-shrink-0"
         style={{ marginRight: '4px' }}
       >
-        <span
-          className="animate-logoDot"
+        <div
           style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: 'var(--green)',
-            display: 'inline-block',
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            background: 'var(--brand-gradient)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             flexShrink: 0,
+            boxShadow: 'var(--shadow-brand)',
           }}
-        />
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3 11 L7 5 L9 8 L13 3" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
         <span
           style={{
             fontSize: '17px',
-            fontWeight: 700,
+            fontWeight: 800,
             color: 'var(--text)',
-            letterSpacing: '-0.4px',
+            letterSpacing: '-0.5px',
           }}
         >
           ProTrader
@@ -139,18 +145,18 @@ export default function TopBar({ theme, toggleTheme }) {
               key={m.id}
               onClick={() => setMode(m.id)}
               style={{
-                padding: '6px 16px',
+                padding: '7px 16px',
                 background: isActive ? 'var(--bg2)' : 'transparent',
-                color: isActive ? 'var(--text)' : 'var(--text3)',
-                borderRadius: 'var(--radius)',
+                color: isActive ? 'var(--brand)' : 'var(--text3)',
+                borderRadius: 8,
                 fontSize: '13px',
-                fontWeight: isActive ? 600 : 500,
+                fontWeight: isActive ? 700 : 500,
                 fontFamily: 'inherit',
                 border: 'none',
                 cursor: 'pointer',
                 transition: 'all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
                 letterSpacing: '-0.1px',
-                boxShadow: isActive ? 'var(--shadow)' : 'none',
+                boxShadow: isActive ? 'var(--shadow-sm)' : 'none',
                 whiteSpace: 'nowrap',
               }}
             >

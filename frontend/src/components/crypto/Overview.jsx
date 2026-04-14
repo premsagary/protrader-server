@@ -8,7 +8,7 @@ import EmptyState from '../shared/EmptyState';
 import { formatPercent } from '../../utils/formatters';
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 function clr(n) {
@@ -45,40 +45,52 @@ export default function Overview() {
 
   return (
     <div>
-      {/* Crypto header banner */}
-      <div
-        className="flex items-center gap-2 mb-3.5"
-        style={{
-          background: 'var(--purple-bg)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '10px 16px',
-          border: '1px solid var(--border)',
-        }}
-      >
-        <span className="font-bold" style={{ fontSize: 18, color: 'var(--purple-text)' }}>
-          B
-        </span>
-        <div>
-          <div className="font-medium" style={{ color: 'var(--purple-text)' }}>
-            Crypto Paper Trading / 24/7
+      {/* HERO — crypto big P&L */}
+      <div style={{
+        background: 'linear-gradient(135deg, #7C3AED 0%, #6366F1 100%)',
+        borderRadius: 'var(--radius-xl)',
+        padding: '24px 28px',
+        marginBottom: 24,
+        color: '#fff',
+        boxShadow: 'var(--shadow-brand)',
+        position: 'relative',
+        overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', top: -60, right: -60, width: 220, height: 220, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase', opacity: 0.85, marginBottom: 8 }}>Crypto RoboTrade · 24/7</div>
+            <div style={{
+              fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {pnl >= 0 ? '+' : ''}{INR(Math.abs(pnl).toFixed(0))}
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', gap: 18, flexWrap: 'wrap', opacity: 0.92 }}>
+              <span style={{ fontSize: 14, fontWeight: 500 }}>
+                <b>{closedCount}</b> closed · <b>{open.length}</b> open
+              </span>
+              <span style={{ fontSize: 14, fontWeight: 500 }}>
+                Win rate <b>{wr}%</b>
+              </span>
+              <span style={{ fontSize: 14, fontWeight: 500 }}>
+                Open P&L {openPnL >= 0 ? '+' : ''}{INR(openPnL.toFixed(0))}
+              </span>
+            </div>
           </div>
-          <div className="text-xs" style={{ color: 'var(--purple-text)', opacity: 0.8 }}>
-            Powered by Binance public API / No account needed / Scans every 15 minutes
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 12, opacity: 0.85, letterSpacing: '0.4px', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>Binance · Paper Trading</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{CRYPTO_LIST.length} pairs</div>
+            <div style={{ fontSize: 13, opacity: 0.85 }}>Scanning every 15 min</div>
           </div>
         </div>
       </div>
 
       {/* Stat grid */}
       <div
-        className="grid gap-2 mb-4"
-        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}
+        className="grid gap-3 mb-6"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
       >
-        <StatCard
-          label="Total P&L (closed)"
-          value={`${pnl >= 0 ? '+' : ''}${INR(pnl.toFixed(0))}`}
-          valueColor={clr(pnl)}
-          subtitle={`${closedCount} closed`}
-        />
         <StatCard
           label="Open P&L (live)"
           value={`${openPnL >= 0 ? '+' : ''}${INR(openPnL.toFixed(0))}`}
@@ -105,18 +117,6 @@ export default function Overview() {
           label="Best trade"
           value={`+${INR((+(cs.best_trade || 0)).toFixed(0))}`}
           valueColor="var(--green)"
-        />
-        <StatCard
-          label="Pairs scanning"
-          value={String(CRYPTO_LIST.length)}
-          valueColor="var(--purple)"
-          subtitle="Binance / 24/7 / free"
-        />
-        <StatCard
-          label="Scan interval"
-          value="15 min"
-          valueColor="var(--purple)"
-          subtitle="always running"
         />
       </div>
 

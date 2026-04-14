@@ -25,7 +25,7 @@ function fmtT(ts) {
 }
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 export default function Overview() {
@@ -85,7 +85,7 @@ export default function Overview() {
       legend: { display: false },
       tooltip: {
         callbacks: {
-          label: (ctx) => `Rs${ctx.parsed.y}`,
+          label: (ctx) => `₹${ctx.parsed.y}`,
         },
       },
     },
@@ -96,7 +96,7 @@ export default function Overview() {
       },
       y: {
         ticks: {
-          callback: (v) => `Rs${v}`,
+          callback: (v) => `₹${v}`,
           font: { size: 10 },
           color: 'var(--chart-text)',
         },
@@ -107,30 +107,65 @@ export default function Overview() {
 
   const recentTrades = (trades || []).slice(0, 8);
 
+  const totalPnlSign = pnl >= 0 ? '+' : '';
+  const weekChange = eData.length >= 2 ? eData[eData.length - 1] - eData[Math.max(0, eData.length - 7)] : 0;
+
   return (
     <div>
+      {/* HERO — big P&L headline */}
+      <div style={{
+        background: pnl >= 0 ? 'linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(99,102,241,0.08) 100%)' : 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(99,102,241,0.08) 100%)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-xl)',
+        padding: '24px 28px',
+        marginBottom: 24,
+        position: 'relative',
+        overflow: 'hidden',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
+          <div>
+            <div className="label-xs" style={{ marginBottom: 8 }}>Stocks RoboTrade · Total P&L</div>
+            <div style={{
+              fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px',
+              color: pnl >= 0 ? 'var(--green-text)' : 'var(--red-text)',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {totalPnlSign}{INR(Math.abs(pnl).toFixed(0))}
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 14, color: 'var(--text2)', fontWeight: 500 }}>
+                <b style={{ color: 'var(--text)' }}>{closedCount}</b> closed · <b style={{ color: 'var(--text)' }}>{open.length}</b> open
+              </span>
+              <span style={{ fontSize: 14, color: 'var(--text2)', fontWeight: 500 }}>
+                Win rate <b style={{ color: wr >= 55 ? 'var(--green-text)' : wr >= 40 ? 'var(--amber-text)' : 'var(--red-text)' }}>{wr}%</b>
+              </span>
+              <span style={{ fontSize: 14, color: 'var(--text2)', fontWeight: 500 }}>
+                Week {weekChange >= 0 ? '+' : ''}{INR(weekChange.toFixed(0))}
+              </span>
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div className="label-xs" style={{ marginBottom: 8 }}>Holdings Value</div>
+            <div style={{
+              fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.6px',
+              color: 'var(--text)',
+              fontVariantNumeric: 'tabular-nums',
+            }}>{INR(holdingsValue.toFixed(0))}</div>
+            <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 6 }}>{(holdings || []).length} stocks</div>
+          </div>
+        </div>
+      </div>
+
       {/* Stat grid */}
       <div
-        className="grid gap-2 mb-4"
-        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}
+        className="grid gap-3 mb-6"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
       >
-        <StatCard
-          label="Total P&L (closed)"
-          value={`${pnl >= 0 ? '+' : ''}${INR(pnl.toFixed(0))}`}
-          valueColor={clr(pnl)}
-          subtitle={`${closedCount} closed trades`}
-        />
         <StatCard
           label="Open P&L (live)"
           value={`${openPnL >= 0 ? '+' : ''}${INR(openPnL.toFixed(0))}`}
           valueColor={clr(openPnL)}
           subtitle={`${open.length} positions`}
-        />
-        <StatCard
-          label="Win rate"
-          value={`${wr}%`}
-          valueColor={wr >= 55 ? 'var(--green)' : wr >= 40 ? 'var(--amber)' : 'var(--red)'}
-          subtitle={`${nw}W / ${nl}L`}
         />
         <StatCard
           label="Avg win"
@@ -209,12 +244,6 @@ export default function Overview() {
           }
           valueColor="var(--text)"
           subtitle="Kite margin"
-        />
-        <StatCard
-          label="Holdings value"
-          value={INR(holdingsValue.toFixed(0))}
-          valueColor="var(--text)"
-          subtitle={`${(holdings || []).length} stocks`}
         />
       </div>
 

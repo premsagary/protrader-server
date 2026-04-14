@@ -21,7 +21,7 @@ function _rsi(v) { if (v == null) return na; return <span style={{ color: v >= 4
 function _gc(v) { return v == null ? na : v ? <span style={{ color: 'var(--amber)' }}>Yes</span> : <span style={{ color: 'var(--red)' }}>No</span>; }
 function _dma(v, px) { if (v == null) return na; const n = parseFloat(v); const c = px && n ? (px > n ? 'var(--green)' : 'var(--red)') : 'var(--text4)'; return <span style={{ color: c }}>{n.toFixed(1)}</span>; }
 function _fromHi(v) { return _rv(v, 1, '%', v != null && v > -10 ? 'var(--green)' : v != null && v > -20 ? 'var(--amber)' : 'var(--red)'); }
-function _price(v) { return v ? `Rs${parseFloat(v).toFixed(1)}` : '-'; }
+function _price(v) { return v ? `₹${parseFloat(v).toFixed(1)}` : '-'; }
 function _crore(v) { if (v == null) return na; const n = parseFloat(v); if (Math.abs(n) >= 100000) return <span style={{ color: 'var(--text)' }}>{(n / 100000).toFixed(1)}L Cr</span>; if (Math.abs(n) >= 100) return <span style={{ color: 'var(--text)' }}>{n.toFixed(0)} Cr</span>; return <span style={{ color: 'var(--text)' }}>{n.toFixed(1)}</span>; }
 function _vol(v) { if (v == null) return na; return <span style={{ color: v > 1.2 ? 'var(--green)' : v > 0.8 ? 'var(--text)' : 'var(--red)' }}>{v}x</span>; }
 function _trend(v) { if (!v) return na; const c = v === 'up' || v === 'bullish' ? 'var(--green)' : v === 'down' || v === 'bearish' ? 'var(--red)' : 'var(--text)'; return <span style={{ color: c }}>{v}</span>; }
@@ -632,7 +632,7 @@ export default function StockRecPage() {
                         <span style={{ background: `${gcC}22`, color: gcC, borderRadius: 4, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>{s.grp}</span>
                       </td>
                       <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: scoreCol }} className="tabular-nums">{s.score}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', borderRight: '2px solid var(--bg4)' }} className="tabular-nums">{s.price ? `Rs${parseFloat(s.price).toFixed(1)}` : '-'}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', borderRight: '2px solid var(--bg4)' }} className="tabular-nums">{s.price ? `₹${parseFloat(s.price).toFixed(1)}` : '-'}</td>
                       {activeCols.map((col) => (
                         <td key={col.k} style={{ padding: '5px 8px', textAlign: 'right', ...(col.br ? { borderRight: '1px solid var(--border2)' } : {}) }} className="tabular-nums">{col.r(s)}</td>
                       ))}

@@ -10,7 +10,7 @@ import { formatCurrency, formatPercent } from '../../utils/formatters';
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
 
 function INR(n) {
-  return `Rs${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  return `₹${(+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 function clr(n) {
@@ -69,7 +69,7 @@ export default function Trades() {
       legend: { display: false },
       tooltip: {
         callbacks: {
-          label: (ctx) => `Rs${ctx.parsed.y}`,
+          label: (ctx) => `₹${ctx.parsed.y}`,
         },
       },
     },
@@ -80,7 +80,7 @@ export default function Trades() {
       },
       y: {
         ticks: {
-          callback: (v) => `Rs${v}`,
+          callback: (v) => `₹${v}`,
           font: { size: 10 },
           color: 'var(--chart-text)',
         },
