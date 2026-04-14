@@ -8366,6 +8366,23 @@ function scoreDayTrade(candles, sym) {
   const istMin = (now.getUTCMinutes() + 30) % 60;
   const isLateTrade = (istHour === 15 && istMin >= 0) || istHour > 15;
 
+  // ── Session phase classification (Varsity M9 Ch 9 + market microstructure) ──
+  // Intraday isn't uniform — each phase has different volatility, volume, and
+  // reliability characteristics. Setups have phase affinity:
+  //   OPENING   (9:15-10:00)  — high vol, gap/breakout favored, bounce risky
+  //   MORNING   (10:00-12:00) — trends establish, all setups viable
+  //   MIDDAY    (12:00-14:00) — low vol chop, mean-reversion favored
+  //   AFTERNOON (14:00-15:00) — trends resume, breakouts decent
+  //   LATE      (15:00-15:30) — avoid new entries (already penalized)
+  const minsSinceOpen = (istHour - 9) * 60 + istMin - 15;
+  let sessionPhase = 'UNKNOWN';
+  if (minsSinceOpen < 0 || minsSinceOpen > 375) sessionPhase = 'CLOSED';
+  else if (minsSinceOpen < 45)  sessionPhase = 'OPENING';
+  else if (minsSinceOpen < 165) sessionPhase = 'MORNING';
+  else if (minsSinceOpen < 285) sessionPhase = 'MIDDAY';
+  else if (minsSinceOpen < 345) sessionPhase = 'AFTERNOON';
+  else sessionPhase = 'LATE';
+
   // Score explanation tracker
   const _track = [];
   function _gain(bucket, pts, reason) { _track.push({bucket, pts, reason, type:'gain'}); return pts; }
@@ -8429,6 +8446,12 @@ function scoreDayTrade(candles, sym) {
   const sigLine   = calcEma(macdLine, 9);
   const macdBull  = macdLine[n - 1] > sigLine[n - 1];
   const macdCross = macdLine[n - 2] < sigLine[n - 2] && macdBull; // fresh bull cross
+
+  // ── Varsity M2 Ch 14: RSI 50 midline (bull/bear demarcation) ──
+  // Varsity: "Above 50 = bull zone, below 50 = bear zone. RSI crossing 50
+  // from below = momentum flipping bullish." Complements the 30/70 extremes.
+  const rsiAboveMidline = lastRSI > 50;
+  const rsiCrossedMidlineUp = rsiArr.length >= 2 && rsiArr[n - 2] <= 50 && lastRSI > 50;
 
   // ── Varsity M2 Ch 14 + Ch 15: RSI & MACD Divergence ──
   // "Divergence is the single most reliable reversal signal in TA" (Varsity M2 Ch 14).
@@ -8500,8 +8523,31 @@ function scoreDayTrade(candles, sym) {
 
   // ── Varsity M2 Ch 5-10: Candlestick pattern detection on 5-min ──
   // Use today's candles so pattern reflects the current session's psychology.
-  const bullPattern = detectBullishCandlePattern(todayCandles);
-  const bearPattern = detectBearishCandlePattern(todayCandles);
+  // Declared with `let` because Ch 4 prior-trend filter below may demote weight.
+  let bullPattern = detectBullishCandlePattern(todayCandles);
+  let bearPattern = detectBearishCandlePattern(todayCandles);
+
+  // ── Varsity M2 Ch 4: Prior-trend filter for reversal patterns ──
+  // Varsity: "A Bullish Engulfing is meaningful AFTER a downtrend. In an
+  // uptrend it's just continuation." Compute session trend over the last
+  // ~10 bars so reversal patterns in the WRONG trend context get demoted.
+  let sessionTrend = 'RANGE';
+  if (todayCandles.length >= 10) {
+    const tcRecent = todayCandles.slice(-10);
+    const slope = (tcRecent[tcRecent.length - 1].close - tcRecent[0].close) / tcRecent[0].close;
+    if (slope > 0.003) sessionTrend = 'UP';
+    else if (slope < -0.003) sessionTrend = 'DOWN';
+  }
+  // Bullish reversal patterns need a prior DOWN or RANGE context to have full weight.
+  const bullReversalPatterns = ['Bullish Marubozu','Bullish Engulfing','Piercing Pattern','Morning Star','Bullish Harami','Hammer','Inverted Hammer','Dragonfly Doji'];
+  if (bullPattern && sessionTrend === 'UP' && bullReversalPatterns.includes(bullPattern.name)) {
+    bullPattern = { ...bullPattern, weight: Math.round(bullPattern.weight * 0.4), description: bullPattern.description + ' (uptrend context — continuation, not reversal)' };
+  }
+  // Bearish reversal patterns symmetric: only full-weight in UP or RANGE context.
+  const bearReversalPatterns = ['Bearish Marubozu','Bearish Engulfing','Dark Cloud Cover','Evening Star','Shooting Star','Hanging Man','Gravestone Doji'];
+  if (bearPattern && sessionTrend === 'DOWN' && bearReversalPatterns.includes(bearPattern.name)) {
+    bearPattern = { ...bearPattern, weight: Math.round(bearPattern.weight * 0.4), description: bearPattern.description + ' (downtrend context — continuation, not reversal)' };
+  }
 
   // ── Varsity M2 Ch 4: Risk-averse entry confirmation ──
   // "Risk-taker enters on the pattern candle; risk-averse waits for the NEXT
@@ -8526,6 +8572,16 @@ function scoreDayTrade(candles, sym) {
     const cprTouched = todayCandles.some(c => c.high >= cpr.cprLo && c.low <= cpr.cprHi);
     cprVirgin = !cprTouched;
   }
+
+  // ── Varsity M2 Ch 12: Volume EXPANSION trend ──
+  // "Expanding volume precedes sustained moves." Not just current vs avg,
+  // but the LAST 3 BARS must show volume increasing. Distinguishes a
+  // genuine breakout (vol ramping) from a late-stage move (one-bar spike
+  // fading). Requires strictly or nearly-strictly monotonic increase AND
+  // current bar above 1.5x avg to qualify.
+  const vol3 = [V[n - 3] || 0, V[n - 2] || 0, V[n - 1] || 0];
+  const volExpanding = vol3[2] > vol3[1] && vol3[1] >= vol3[0] * 0.8 && vol3[2] > avg20Vol * 1.5;
+  const volContracting = vol3[2] < vol3[1] && vol3[1] < vol3[0]; // opposite: ramp fading
 
   // ── Varsity M2 Ch 12: Volume-Price Action 2x2 matrix ──
   // Price Δ vs Volume Δ — the four quadrants predict next-bar bias:
@@ -8829,6 +8885,12 @@ function scoreDayTrade(candles, sym) {
   if (bullPatternConfirmed) { breakoutScore += _gain('BRK', 5, 'Pattern confirmed next bar'); breakoutDetail.push('Confirmed'); }
   // Varsity M2 Ch 12: weak rally penalty — price up on shrinking volume = fade risk
   if (vpaWeakRally && breakoutScore >= 40) { breakoutScore += _penalty('BRK', 10, 'Weak rally (vol declining) — fade risk'); breakoutDetail.push('Weak rally'); }
+  // Varsity M2 Ch 14: RSI 50 midline cross = momentum bias flipped bullish
+  if (rsiCrossedMidlineUp) { breakoutScore += _gain('BRK', 6, 'RSI crossed 50 midline up'); breakoutDetail.push('RSI>50 cross'); }
+  else if (rsiAboveMidline && breakoutScore >= 40) { breakoutScore += _gain('BRK', 3, 'RSI above 50 (bull zone)'); breakoutDetail.push('RSI>50'); }
+  // Varsity M2 Ch 12: volume expanding across last 3 bars = sustainable breakout
+  if (volExpanding) { breakoutScore += _gain('BRK', 6, 'Volume expanding 3-bar'); breakoutDetail.push('Vol expanding'); }
+  else if (volContracting && breakoutScore >= 40) { breakoutScore += _penalty('BRK', 5, 'Volume contracting — late-stage move'); breakoutDetail.push('Vol contracting'); }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -8935,6 +8997,21 @@ function scoreDayTrade(candles, sym) {
   // Late session penalty
   if (isLateTrade) { overall = Math.max(0, overall + _penalty('MULTI', 15, 'Late session penalty (after 3PM IST — Varsity M9)')); }
 
+  // ── Session-phase setup-affinity adjustment ──
+  // Each of the 4 setups has a reliability profile across the trading session.
+  // Morning gaps shine at 9:15-10:00, midday chop favors mean-reversion, etc.
+  // Bonuses/penalties are small (±2-6) so they fine-tune ranking without
+  // dominating the structural signals.
+  const phaseAffinity = {
+    GAP_AND_GO:      { OPENING:  6, MORNING:  3, MIDDAY: -5, AFTERNOON: -3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    BREAKOUT:        { OPENING:  3, MORNING:  5, MIDDAY: -3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    VWAP_RECLAIM:    { OPENING:  2, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    OVERSOLD_BOUNCE: { OPENING: -3, MORNING:  3, MIDDAY:  5, AFTERNOON:  3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+  };
+  const phaseAdj = (phaseAffinity[best.type] || {})[sessionPhase] || 0;
+  if (phaseAdj > 0) overall = Math.min(100, overall + _gain('MULTI', phaseAdj, `${sessionPhase} phase favors ${best.type}`));
+  else if (phaseAdj < 0) overall = Math.max(0, overall + _penalty('MULTI', Math.abs(phaseAdj), `${sessionPhase} phase weak for ${best.type}`));
+
   // ── Varsity M2 Ch 19: The Finale — unified pre-trade checklist ──
   // Ch 19 distills the whole module into a 5-item checklist. We tally which
   // items pass on this specific pick and award a transparent bonus (+2/item,
@@ -9038,6 +9115,20 @@ function scoreDayTrade(candles, sym) {
   const kellyQtyPer5L  = slDist > 0 && kellyFraction > 0 ? Math.floor((500000 * kellyFraction) / px) : 0;
   const kellyQtyPer10L = slDist > 0 && kellyFraction > 0 ? Math.floor((1000000 * kellyFraction) / px) : 0;
 
+  // ── Varsity M9 Part I: Volatility-scaled position sizing ──
+  // M9 lists 4 sizing models; ATR-based is the fourth: "Scale size inversely
+  // with ATR — high volatility demands smaller exposure, low volatility
+  // allows bigger." We compute an ATR-scale factor applied to the Kelly qty.
+  //   ATR% > 3   → 0.50x (very volatile — half size)
+  //   ATR% 2-3   → 0.75x
+  //   ATR% 1-2   → 1.00x (baseline)
+  //   ATR% < 1   → 1.25x (very calm — can size up slightly)
+  const atrPct = +((atr14val / px) * 100).toFixed(2);
+  const volScale = atrPct > 3 ? 0.50 : atrPct > 2 ? 0.75 : atrPct >= 1 ? 1.00 : 1.25;
+  const atrQtyPer1L  = Math.floor(kellyQtyPer1L * volScale);
+  const atrQtyPer5L  = Math.floor(kellyQtyPer5L * volScale);
+  const atrQtyPer10L = Math.floor(kellyQtyPer10L * volScale);
+
   // SL reason — WHY this stop loss level
   let slReason, slVarsityRef;
   if (best.type === 'OVERSOLD_BOUNCE') {
@@ -9054,8 +9145,7 @@ function scoreDayTrade(candles, sym) {
     slVarsityRef = 'Varsity M2 Ch13: failed VWAP reclaim = no institutional support';
   }
 
-  // ATR context
-  const atrPct = +((atr14val / px) * 100).toFixed(2);
+  // ATR context (atrPct already computed above in volatility-sizing block)
   const slIsATRWidened = slDist >= atr14val * 0.95; // was SL widened by ATR floor?
 
   // Trailing SL levels — Varsity M9: "trail your SL to lock in profits as the trade moves in your favour"
@@ -9229,6 +9319,22 @@ function scoreDayTrade(candles, sym) {
       qtyPer5L: kellyQtyPer5L,
       qtyPer10L: kellyQtyPer10L,
     },
+    // Varsity M9 Part I: ATR-scaled volatility-based position sizing
+    atrPct,
+    volSizing: {
+      volScale,
+      qtyPer1L: atrQtyPer1L,
+      qtyPer5L: atrQtyPer5L,
+      qtyPer10L: atrQtyPer10L,
+    },
+    // Varsity M2 Ch 4: session-trend context used to demote reversal patterns
+    sessionTrend,
+    // Varsity M2 Ch 14: RSI midline state
+    rsiAboveMidline, rsiCrossedMidlineUp,
+    // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
+    volExpanding, volContracting,
+    // Session microstructure
+    sessionPhase, sessionPhaseAdjustment: phaseAdj,
     // Risk
     sl, tgt, rrRatio,
     // Risk management plan (Varsity M9)
