@@ -469,7 +469,13 @@ select option{background:var(--bg3)}
   margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.06)}
 
 /* ── MF Picks ── */
-.mf-wrap{max-width:1500px;margin:0 auto}
+.mf-wrap{max-width:1500px;margin:0 auto;
+  /* Tone down accent colors by ~50% scoped to MF tab */
+  --green:#5b9b7d;--green-bg:rgba(91,155,125,0.05);--green-text:#5b9b7d;
+  --red:#b88792;--red-bg:rgba(184,135,146,0.05);--red-text:#b88792;
+  --amber:#c9a768;--amber-bg:rgba(201,167,104,0.05);--amber-text:#c9a768;
+  --shiva-blue:#5578a0;--shiva-blue-glow:rgba(85,120,160,0.08);
+  --shiva-silver:#7580a0;--shiva-silver-dim:rgba(117,128,160,0.2)}
 .mf-category-card{background:rgba(14,20,32,0.95);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   border:1px solid rgba(120,160,255,0.12);border-radius:18px;padding:26px;margin-bottom:28px;
@@ -735,18 +741,18 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 @keyframes tabSlideIn{0%{opacity:0;transform:translateX(16px)}100%{opacity:1;transform:translateX(0)}}
 .tab-slide-enter{animation:tabSlideIn 0.3s ease both}
 
-/* ── Disclaimer banner — visible on every page ── */
+/* ── Disclaimer banner — neutral, matches main ── */
 #disclaimer-bar{position:fixed;bottom:0;left:0;right:0;z-index:999;
-  background:rgba(18,22,32,0.98);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  border-top:1px solid rgba(251,191,36,0.20);padding:0;
+  background:rgba(26,26,29,0.97);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-top:1px solid rgba(255,255,255,0.08);padding:0;
   text-align:center}
 #disclaimer-bar .disc-inner{max-width:1200px;margin:0 auto;padding:10px 16px;
-  font-size:12.5px;color:#ffffff;line-height:1.5;letter-spacing:0.3px;font-weight:700}
-#disclaimer-bar strong{color:#fde68a;font-weight:800}
-#disclaimer-bar .disc-label{color:#fbbf24;font-weight:800;margin-right:4px;font-size:13px}
+  font-size:12px;color:var(--text2);line-height:1.5;letter-spacing:0.2px;font-weight:500}
+#disclaimer-bar strong{color:var(--text);font-weight:700}
+#disclaimer-bar .disc-label{color:var(--text2);font-weight:700;margin-right:4px;font-size:12px}
 #disclaimer-bar .disc-close{position:absolute;right:12px;top:50%;transform:translateY(-50%);
-  background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;padding:4px 8px}
-#disclaimer-bar .disc-close:hover{color:#c8d0dd}
+  background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:4px 8px}
+#disclaimer-bar .disc-close:hover{color:var(--text)}
 @media(max-width:768px){#disclaimer-bar .disc-inner{font-size:11px;padding:10px 12px}}
 /* ── Three.js canvas container ── */
 #three-login{position:absolute;inset:0;z-index:0}
@@ -5693,12 +5699,12 @@ async function renderMFPage(){
       html+='<div id="cards-'+catId+'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px;margin-bottom:16px"></div>';
       html+='<div style="font-size:11px;color:#9aa3b2;margin-bottom:10px;margin-top:20px;font-weight:500">'+catFunds.length+' total funds · <b style="color:#E6EAF2">'+eligibleFunds.length+' eligible</b> (AUM ≥₹1K Cr, age ≥5Y, 3Y data) · scroll right for all columns · Tickertape Apr 2026</div>';
       html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;background:rgba(12,18,30,0.92);backdrop-filter:blur(10px);border-radius:14px;border:1px solid rgba(120,160,255,0.12);box-shadow:0 4px 20px rgba(0,0,0,0.3)">';
-      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:3050px;width:100%">';
+      html+='<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;min-width:2900px;width:100%">';
       var colGroups = [
-        {label:"IDENTITY",cols:["#","Fund","AMC","NAV","AUM Cr","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
+        {label:"IDENTITY",cols:["#","Fund","AMC","NAV","Exp%","Min ₹","Min SIP","Exit Load","Inception","Fund Manager"]},
         {label:"RETURNS",cols:["1Y%","3M%","6M%","3Y CAGR","5Y CAGR","10Y CAGR","Roll 3Y"]},
         {label:"vs CATEGORY",cols:["vs Cat 1Y%","vs Cat 3Y×","vs Cat 5Y×","vs Cat 10Y×"]},
-        {label:"RISK",cols:["Sharpe","Sortino","Volatility","Cat StdDev","Max DD","From ATH"]},
+        {label:"RISK",cols:["Sharpe","Sortino","Volatility","Cat StdDev","From ATH"]},
         {label:"PORTFOLIO",cols:["PE","Cat PE","Equity%","LgCap%","MidCap%","SmCap%","Cash%","Debt%"]},
         {label:"CONCENTRATION",cols:["Top3%","Top5%","Top10%"]},
         {label:"SCORE",cols:["SEBI","Score"]},
@@ -5790,7 +5796,6 @@ async function renderMFPage(){
           {s:'position:sticky;left:44px;z-index:3;background:inherit;border-right:2px solid rgba(40,50,75,0.5);font-weight:'+(isTop?700:500)+';color:#E6EAF2;max-width:200px;min-width:200px;overflow:hidden;text-overflow:ellipsis;', v:f.name},
           {s:'color:#8b93a5;font-weight:500;', v:(f.amc||'').split(' ')[0]},
           {s:'text-align:right;font-family:monospace;', v:f.navFormatted||'-'},
-          {s:'text-align:right;', v:f.aum_cr?Math.round(f.aum_cr).toLocaleString('en-IN'):'-'},
           {s:'text-align:right;color:'+(exp<0.5?'var(--green)':exp>1?'var(--red)':'var(--text)')+';', v:exp?exp.toFixed(2)+'%':'-'},
           {s:'text-align:right;', v:f.min_lumpsum?'₹'+Math.round(f.min_lumpsum).toLocaleString('en-IN'):'-'},
           {s:'text-align:right;', v:f.min_sip&&f.min_sip>0?'₹'+Math.round(f.min_sip):'-'},
@@ -5812,7 +5817,6 @@ async function renderMFPage(){
           {s:'text-align:right;font-weight:500;', v:rsh(f.sortino)},
           {s:'text-align:right;font-weight:500;color:#DDE3F0;', v:rv(f.volatility,2)+'%'},
           {s:'text-align:right;color:#8b93a5;font-weight:500;', v:rv(f.category_stddev,2)+'%'},
-          {s:'text-align:right;color:var(--red);font-weight:500;', v:rv(f.maxDD||f.max_drawdown,1)+'%'},
           {s:'text-align:right;color:'+(ath<10?'var(--green)':ath<20?'var(--amber)':'var(--red)')+';font-weight:500;border-right:2px solid rgba(40,50,75,0.5);', v:rv(ath,1)+'%'},
           {s:'text-align:right;font-weight:500;color:'+(pe>0&&pe<catPE*0.9?'var(--green)':pe>catPE*1.1?'var(--red)':'#DDE3F0')+';', v:pe?pe.toFixed(1):'-'},
           {s:'text-align:right;color:#8b93a5;font-weight:500;', v:rv(f.category_pe,1)},
@@ -5899,15 +5903,15 @@ async function renderMFPage(){
       var dniContainer=document.createElement('div');
       dniContainer.id='mf-dni-container';
       dniContainer.className='tilt-3d';
-      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(239,68,68,0.30);border-radius:16px;overflow:hidden;background:linear-gradient(135deg,rgba(30,12,12,0.95),rgba(14,18,30,0.95));box-shadow:0 0 30px rgba(239,68,68,0.08),0 4px 24px rgba(0,0,0,0.35)';
+      dniContainer.style.cssText='margin-bottom:28px;border:1px solid rgba(120,160,255,0.12);border-radius:16px;overflow:hidden;background:rgba(14,20,32,0.94);box-shadow:0 4px 20px rgba(0,0,0,0.25)';
       var dniHeader=document.createElement('div');
-      dniHeader.style.cssText='display:flex;align-items:center;gap:10px;padding:14px 18px;background:rgba(239,68,68,0.10);border-bottom:1px solid rgba(239,68,68,0.20)';
-      dniHeader.innerHTML='<span style="font-size:16px">⚠️</span><span style="font-weight:800;font-size:14px;letter-spacing:0.03em;color:#f87171">Warning Before Buying These MFs</span><span style="font-size:11px;color:#9aa3b2;margin-left:6px;font-weight:500">('+sortedDni.length+' funds flagged)</span>';
+      dniHeader.style.cssText='display:flex;align-items:center;gap:10px;padding:14px 18px;background:rgba(18,24,40,0.98);border-bottom:1px solid rgba(120,160,255,0.12)';
+      dniHeader.innerHTML='<span style="font-size:16px">⚠️</span><span style="font-weight:800;font-size:14px;letter-spacing:0.03em;color:#E6EAF2">Warning Before Buying These MFs</span><span style="font-size:11px;color:#9aa3b2;margin-left:6px;font-weight:500">('+sortedDni.length+' funds flagged)</span>';
       dniContainer.appendChild(dniHeader);
       var dniTable=document.createElement('table');
       dniTable.style.cssText='width:100%;border-collapse:collapse;font-size:11px';
       var dniHead=document.createElement('thead');
-      dniHead.innerHTML='<tr style="background:rgba(18,24,40,0.98);border-bottom:1px solid rgba(239,68,68,0.12)"><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
+      dniHead.innerHTML='<tr style="background:rgba(18,24,40,0.98);border-bottom:1px solid rgba(80,120,255,0.15)"><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Fund</th><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Category</th><th style="padding:10px 14px;text-align:left;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Reason</th><th style="padding:10px 14px;text-align:right;color:#c0c8d8;font-weight:700;font-size:11px;letter-spacing:0.06em;text-transform:uppercase">Score</th></tr>';
       dniTable.appendChild(dniHead);
       var dniTbody=document.createElement('tbody');
       var dniRows=[];
@@ -5916,10 +5920,10 @@ async function renderMFPage(){
         var row=document.createElement('tr');
         var rowBg=i%2===0?'rgba(14,20,32,0.6)':'rgba(20,28,44,0.6)';
         row.style.cssText='border-bottom:1px solid rgba(40,50,75,0.4);background:'+rowBg+';transition:background 0.2s ease;'+(i>=DNI_INITIAL?'display:none;':'');
-        row.onmouseenter=function(){this.style.background='rgba(239,68,68,0.06)'};
+        row.onmouseenter=function(){this.style.background='rgba(120,160,255,0.06)'};
         row.onmouseleave=(function(bg){return function(){this.style.background=bg}})(rowBg);
-        var lvlColor=f.dni.level==='red'?'#f87171':'#fbbf24';
-        var lvlBg=f.dni.level==='red'?'rgba(248,113,113,0.08)':'rgba(251,191,36,0.08)';
+        var lvlColor=f.dni.level==='red'?'#c68287':'#d4b35c';
+        var lvlBg=f.dni.level==='red'?'rgba(198,130,135,0.06)':'rgba(212,179,92,0.06)';
         row.innerHTML='<td style="padding:10px 14px;font-weight:600;color:#E6EAF2;font-size:12px">'+f.name+'</td>'
           +'<td style="padding:10px 14px;color:#9aa3b2;font-weight:500;font-size:11px">'+MF_CAT[f._cat].label+'</td>'
           +'<td style="padding:10px 14px;color:'+lvlColor+';font-weight:500;font-size:11px;background:'+lvlBg+';border-radius:4px">'+f.dni.reason+'</td>'
@@ -5931,9 +5935,9 @@ async function renderMFPage(){
       dniContainer.appendChild(dniTable);
       if(sortedDni.length > DNI_INITIAL){
         var dniMore = document.createElement('div');
-        dniMore.style.cssText = 'text-align:center;padding:14px;background:rgba(14,18,30,0.95);border-top:1px solid rgba(239,68,68,0.15);cursor:pointer';
+        dniMore.style.cssText = 'text-align:center;padding:14px;background:rgba(14,18,30,0.95);border-top:1px solid rgba(120,160,255,0.12);cursor:pointer';
         var dniMoreBtn = document.createElement('span');
-        dniMoreBtn.style.cssText = 'font-size:11px;color:#f87171;font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(248,113,113,0.30);border-radius:999px;background:rgba(248,113,113,0.10);transition:all 0.25s ease;letter-spacing:0.02em';
+        dniMoreBtn.style.cssText = 'font-size:11px;color:#c0c8d8;font-weight:700;cursor:pointer;padding:8px 18px;border:1px solid rgba(120,160,255,0.18);border-radius:999px;background:rgba(120,160,255,0.06);transition:all 0.25s ease;letter-spacing:0.02em';
         var dniExpanded = false;
         dniMoreBtn.textContent = 'Show all '+(sortedDni.length - DNI_INITIAL)+' more flagged funds ▾';
         dniMoreBtn.onclick = function(){
@@ -6377,8 +6381,7 @@ function mfCardEl(f, rank, cfg, maxS) {
   var nameSz = isTop1 ? '14px' : '13px';
   var nameEl=div('font-weight:700;font-size:'+nameSz+';line-height:1.4;color:#E6EAF2'); nameEl.textContent=f.name||'';
   var subEl=div('font-size:11px;color:#9aa3b2;margin-top:2px;font-weight:500');
-  subEl.textContent=(f.amc||'')+(f.navFormatted?' · '+f.navFormatted:'')+
-    (f.aum_cr&&f.aum_cr>0?' · ₹'+(f.aum_cr>=1000?Math.round(f.aum_cr/1000)+'K Cr':Math.round(f.aum_cr)+' Cr'):'');
+  subEl.textContent=(f.amc||'')+(f.navFormatted?' · '+f.navFormatted:'');
   var rollEl=div('margin-top:3px');
   if(f.rolling_3y!=null&&parseFloat(f.rolling_3y)>0){
     var rs=span('font-size:10px;color:var(--text3)'); rs.textContent='Roll 3Y: ';
@@ -6416,18 +6419,15 @@ function mfCardEl(f, rank, cfg, maxS) {
   card.appendChild(retGrid);
 
   // Metrics grid
-  var metGrid=div('display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px');
+  var metGrid=div('display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px');
   var sharpe=parseFloat(f.sharpe), sortino=parseFloat(f.sortino);
-  var mdd=parseFloat(f.maxDD||f.max_drawdown), vol2=parseFloat(f.stdDev||f.volatility);
+  var vol2=parseFloat(f.stdDev||f.volatility);
   var exp=parseFloat(f.expense_ratio);
-  var aumStr=f.aum_cr&&f.aum_cr>0?(f.aum_cr>=1000?'₹'+Math.round(f.aum_cr/1000)+'K Cr':'₹'+Math.round(f.aum_cr)+' Cr'):'-';
   [
     ['Sharpe', isNaN(sharpe)?'-':sharpe.toFixed(3), isNaN(sharpe)?'':sharpe>0?'var(--green)':sharpe>-0.3?'var(--amber)':'var(--red)'],
     ['Sortino', isNaN(sortino)?'-':sortino.toFixed(4), isNaN(sortino)?'':sortino>0?'var(--green)':'var(--red)'],
-    ['Max DD', isNaN(mdd)?'-':mdd.toFixed(1)+'%', 'var(--red)'],
     ['Volatility', isNaN(vol2)?'-':vol2.toFixed(2)+'%', ''],
     ['Expense', isNaN(exp)?'-':exp.toFixed(2)+'%', isNaN(exp)?'':exp<0.5?'var(--green)':exp>1?'var(--red)':''],
-    ['AUM', aumStr, ''],
   ].forEach(function(m){
     var cell=div('background:rgba(18,24,40,0.9);border:1px solid rgba(120,160,255,0.08);border-radius:8px;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;gap:4px');
     var lbl=span('font-size:10px;color:#9aa3b2;white-space:nowrap;font-weight:600'); lbl.textContent=m[0];
