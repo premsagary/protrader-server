@@ -1,0 +1,347 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===================================================
+   DESIGN TOKENS — Dark (landing is dark-mode only)
+   Electric Indigo brand + warm charcoal surfaces
+   =================================================== */
+:root {
+  --bg: #0A0A0F;
+  --bg2: #141419;
+  --bg3: #1E1E26;
+  --bg4: #2A2A35;
+
+  --text: #F1F5F9;
+  --text2: #CBD5E1;
+  --text3: #94A3B8;
+  --text4: #64748B;
+
+  --border: #27272E;
+  --border2: #36363F;
+
+  --brand: #6366F1;
+  --brand-light: #818CF8;
+  --brand-hover: #4F46E5;
+  --brand-text: #A5B4FC;
+  --brand-bg: rgba(99,102,241,0.14);
+  --brand-bg-strong: rgba(99,102,241,0.22);
+  --brand-border: rgba(99,102,241,0.30);
+
+  --violet: #8B5CF6;
+  --violet-light: #A78BFA;
+
+  --gradient: linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%);
+  --gradient-soft: linear-gradient(135deg, rgba(99,102,241,0.10) 0%, rgba(139,92,246,0.10) 100%);
+  --gradient-text: linear-gradient(135deg, #A5B4FC 0%, #C4B5FD 100%);
+
+  --green: #34D399;
+  --green-text: #6EE7B7;
+  --green-bg: rgba(16,185,129,0.14);
+  --red: #F87171;
+  --red-text: #FCA5A5;
+  --amber: #FBBF24;
+  --amber-text: #FCD34D;
+
+  --shadow: 0 2px 4px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.55), 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.6), 0 4px 8px rgba(0,0,0,0.4);
+  --shadow-xl: 0 20px 60px rgba(0,0,0,0.7), 0 8px 16px rgba(0,0,0,0.5);
+  --shadow-brand: 0 8px 30px rgba(99,102,241,0.4);
+  --shadow-brand-lg: 0 16px 50px rgba(99,102,241,0.5);
+}
+
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
+
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; scroll-behavior: smooth }
+
+body {
+  font-family: -apple-system, "SF Pro Display", "SF Pro Text", "Inter", BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  background-image:
+    radial-gradient(ellipse 60% 40% at 20% 8%, rgba(99,102,241,0.18), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 85% 18%, rgba(139,92,246,0.15), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 50% 60%, rgba(99,102,241,0.08), transparent 60%);
+  background-attachment: fixed;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ===================================================
+   HERO TYPOGRAPHY
+   =================================================== */
+.hero-num {
+  font-size: clamp(48px, 8vw, 72px);
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-title {
+  font-size: clamp(36px, 5.5vw, 60px);
+  line-height: 1.08;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+}
+
+.section-title {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -1px;
+}
+
+.label-xs {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--brand-text);
+}
+
+.gradient-text {
+  background: var(--gradient-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.gradient-fill {
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ===================================================
+   SCROLLBAR
+   =================================================== */
+*::-webkit-scrollbar { width: 10px }
+*::-webkit-scrollbar-track { background: var(--bg) }
+*::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 5px }
+*::-webkit-scrollbar-thumb:hover { background: var(--text4) }
+
+/* ===================================================
+   MESH / GLOW BACKGROUNDS
+   =================================================== */
+.mesh-bg {
+  background-image:
+    radial-gradient(ellipse 60% 40% at 20% 20%, rgba(99,102,241,0.18), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 85% 30%, rgba(139,92,246,0.15), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(99,102,241,0.12), transparent 65%);
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  background-position: center;
+  mask-image: radial-gradient(ellipse 80% 50% at 50% 30%, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 50% at 50% 30%, black 30%, transparent 80%);
+}
+
+/* ===================================================
+   CARDS
+   =================================================== */
+.card {
+  background: linear-gradient(145deg, rgba(30,30,38,0.7), rgba(20,20,25,0.7));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: border-color 240ms ease, transform 240ms ease, box-shadow 240ms ease;
+}
+
+.card:hover {
+  border-color: var(--brand-border);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.card-premium {
+  position: relative;
+  overflow: hidden;
+}
+
+.card-premium::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: var(--gradient);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ===================================================
+   BUTTONS
+   =================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 22px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  text-decoration: none;
+}
+
+.btn-sm {
+  height: 38px;
+  padding: 0 16px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.btn-primary {
+  background: var(--gradient);
+  color: #fff;
+  box-shadow: var(--shadow-brand);
+}
+.btn-primary:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: var(--shadow-brand-lg);
+}
+
+.btn-secondary {
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  border-color: var(--border2);
+  backdrop-filter: blur(10px);
+}
+.btn-secondary:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: var(--brand-border);
+  color: var(--brand-text);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text2);
+}
+.btn-ghost:hover {
+  color: var(--text);
+}
+
+/* ===================================================
+   CHIPS / PILLS (NOT buttons — non-interactive labels)
+   =================================================== */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  letter-spacing: -0.1px;
+}
+
+.chip-brand {
+  background: var(--brand-bg);
+  border-color: var(--brand-border);
+  color: var(--brand-text);
+}
+
+.chip-dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ===================================================
+   ANIMATIONS
+   =================================================== */
+@keyframes fadeInUp {
+  0% { opacity: 0; transform: translateY(20px) }
+  100% { opacity: 1; transform: translateY(0) }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1 }
+  50% { opacity: 0.6 }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) }
+  50% { transform: translateY(-6px) }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0 }
+  100% { background-position: 200% 0 }
+}
+
+.animate-fadeInUp { animation: fadeInUp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) both }
+.animate-float { animation: float 4s ease-in-out infinite }
+.animate-pulse-custom { animation: pulse 2s ease-in-out infinite }
+
+/* Stagger delays */
+.delay-0 { animation-delay: 0ms }
+.delay-1 { animation-delay: 80ms }
+.delay-2 { animation-delay: 160ms }
+.delay-3 { animation-delay: 240ms }
+.delay-4 { animation-delay: 320ms }
+.delay-5 { animation-delay: 400ms }
+
+/* Reveal on scroll */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94), transform 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ===================================================
+   UTILITIES
+   =================================================== */
+.glass {
+  background: rgba(10,10,15,0.72);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+}
+
+.divider-gradient {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+}
+
+a { color: inherit; text-decoration: none }
+button { font-family: inherit }
+
+input:focus, button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.35);
+}
