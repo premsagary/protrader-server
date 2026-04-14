@@ -8421,6 +8421,23 @@ function scoreDayTrade(candles, sym) {
   const todayVWAPs = vwap(todayCandles);
   const lastVWAP   = todayVWAPs[todayVWAPs.length - 1];
   const pctVWAP    = ((px - lastVWAP) / lastVWAP * 100);
+  // Varsity M2 Ch 13: VWAP ±σ bands (anchored VWAP extensions).
+  // Standard deviation of today's closes around VWAP defines overbought
+  // / oversold statistical bands. Price outside ±2σ = 95% statistical
+  // extreme = strong mean-reversion signal per Ch 13.
+  let vwapSigma = 0, vwapUpper1 = lastVWAP, vwapLower1 = lastVWAP, vwapUpper2 = lastVWAP, vwapLower2 = lastVWAP;
+  if (todayCandles.length >= 5) {
+    const tc = todayCandles;
+    const variance = tc.reduce((acc, c, i) => acc + Math.pow(c.close - todayVWAPs[i], 2), 0) / tc.length;
+    vwapSigma = Math.sqrt(variance);
+    vwapUpper1 = lastVWAP + vwapSigma;
+    vwapLower1 = lastVWAP - vwapSigma;
+    vwapUpper2 = lastVWAP + 2 * vwapSigma;
+    vwapLower2 = lastVWAP - 2 * vwapSigma;
+  }
+  const below2Sigma = vwapSigma > 0 && px < vwapLower2;
+  const below1Sigma = vwapSigma > 0 && px < vwapLower1 && px >= vwapLower2;
+  const above2Sigma = vwapSigma > 0 && px > vwapUpper2;
 
   // Track if price was recently below VWAP (for VWAP Reclaim detection)
   // Varsity M2 Ch13: reclaim = price was below VWAP, then crossed back above
@@ -8446,6 +8463,14 @@ function scoreDayTrade(candles, sym) {
   const sigLine   = calcEma(macdLine, 9);
   const macdBull  = macdLine[n - 1] > sigLine[n - 1];
   const macdCross = macdLine[n - 2] < sigLine[n - 2] && macdBull; // fresh bull cross
+  // Varsity M2 Ch 15: MACD histogram analysis (distinct from line-vs-signal cross)
+  // Histogram = macdLine - sigLine. Rising histogram = momentum accelerating.
+  // Histogram crossing 0 upward = bull momentum starting (earlier than line cross).
+  const macdHist      = macdLine[n - 1] - sigLine[n - 1];
+  const macdHistPrev  = macdLine[n - 2] - sigLine[n - 2];
+  const macdHistPrev2 = n >= 3 ? macdLine[n - 3] - sigLine[n - 3] : macdHistPrev;
+  const macdHistRising = macdHist > macdHistPrev && macdHistPrev >= macdHistPrev2; // 3-bar acceleration
+  const macdHistZeroUp = macdHistPrev <= 0 && macdHist > 0;                         // fresh zero-line cross up
 
   // ── Varsity M2 Ch 14: RSI 50 midline (bull/bear demarcation) ──
   // Varsity: "Above 50 = bull zone, below 50 = bear zone. RSI crossing 50
@@ -8513,6 +8538,40 @@ function scoreDayTrade(candles, sym) {
   // Previous day high/low — Varsity M2 Ch7: PDH/PDL are key S/R levels for intraday
   const pdHigh = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.high)) : dayHigh;
   const pdLow  = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.low))  : dayLow;
+
+  // ── Varsity M2 Ch 7: Gap classification ──
+  // Varsity distinguishes 4 gap types based on context. Previously we treated
+  // every 1-6% gap identically; this classifier gives each its Varsity label
+  // and a conviction multiplier used as a Gap & Go score bonus.
+  //   COMMON      — small gap in range-bound stock (low conviction)
+  //   BREAKAWAY   — gap out of consolidation with volume (highest conviction)
+  //   CONTINUATION — mid-trend gap, trend-aligned (medium-high)
+  //   EXHAUSTION  — gap after extended trend, often reverses (contrarian)
+  let gapClass = 'NONE';
+  let gapClassBonus = 0;
+  if (Math.abs(gapPct) >= 1.0) {
+    const _df = stockFundamentals[sym];   // daily fundamentals (may be undefined)
+    const priorHi = prevDayCandles.length ? Math.max(...prevDayCandles.map(c => c.high)) : pdHigh;
+    const priorLo = prevDayCandles.length ? Math.min(...prevDayCandles.map(c => c.low))  : pdLow;
+    const priorRange = priorHi - priorLo;
+    const priorRangePct = priorLo > 0 ? (priorRange / priorLo) * 100 : 0;
+    // Breakaway: gap emerging from a tight prior range (range < 2.5%) with volume
+    if (priorRangePct < 2.5 && volRatio > 2.0 && Math.abs(gapPct) >= 1.5) {
+      gapClass = 'BREAKAWAY'; gapClassBonus = 12;
+    }
+    // Exhaustion: large gap (>= 4%) after stock already trending same direction on daily
+    else if (Math.abs(gapPct) >= 4.0 && _df && _df.dowTheoryTrend === (gapPct > 0 ? 'UPTREND' : 'DOWNTREND')) {
+      gapClass = 'EXHAUSTION'; gapClassBonus = -10;
+    }
+    // Continuation: trend-aligned gap of moderate size on elevated volume
+    else if (Math.abs(gapPct) >= 1.5 && volRatio > 1.5 && _df && ((gapPct > 0 && _df.dowTheoryTrend === 'UPTREND') || (gapPct < 0 && _df.dowTheoryTrend === 'DOWNTREND'))) {
+      gapClass = 'CONTINUATION'; gapClassBonus = 8;
+    }
+    // Everything else = Common gap (minimal conviction)
+    else {
+      gapClass = 'COMMON'; gapClassBonus = 0;
+    }
+  }
 
   // ── Varsity M2 Ch 22: Central Pivot Range (CPR) ──
   // Computed from prior day H/L/C. BC/TC act as intraday S/R; width predicts regime.
@@ -8652,6 +8711,40 @@ function scoreDayTrade(candles, sym) {
   const orHighTouches  = _touches(orHigh);
   const pdHighTouches  = _touches(pdHigh);
   const pdLowTouches   = _touches(pdLow);
+
+  // ── Varsity M2 Ch 7: Failed-breakout / Bull-trap detection ──
+  // "A breakout that reverses within 3 bars is a failed breakout — the
+  // ORIGINAL level has reasserted itself." Check if any of the last 3
+  // bars' HIGH exceeded the level but current close is back BELOW it.
+  function _failedBreak(level) {
+    if (!level || todayCandles.length < 4) return false;
+    const recent = todayCandles.slice(-4, -1); // 3 prior bars (not current)
+    const brokeAbove = recent.some(c => c.high > level);
+    const closedBelow = px < level * 0.999;   // back inside with ~0.1% buffer
+    return brokeAbove && closedBelow;
+  }
+  const orFailedBreak  = _failedBreak(orHigh);
+  const pdhFailedBreak = _failedBreak(pdHigh);
+
+  // ── Varsity M2 Ch 11: Equal highs / equal lows detection ──
+  // "Multiple matched highs form coiled resistance; matched lows form coiled
+  // support." Distinct from touch-count: equal highs mean two+ candles
+  // printed the exact same high (within 0.1% tolerance), signaling price
+  // memory — a failed-breakout cluster ripe for a decisive break.
+  function _equalExtremes(values, tol) {
+    // Count how many of the last ~15 bars' values are within `tol` of the max/min
+    const window = values.slice(-15);
+    if (window.length < 3) return { equalHi: 0, equalLo: 0 };
+    const mx = Math.max(...window);
+    const mn = Math.min(...window);
+    const equalHi = window.filter(v => mx - v <= mx * tol).length;
+    const equalLo = window.filter(v => v - mn <= mn * tol).length;
+    return { equalHi, equalLo };
+  }
+  const eqExtremes = _equalExtremes(todayCandles.map(c => c.high), 0.001);
+  const eqLowExtremes = _equalExtremes(todayCandles.map(c => c.low), 0.001);
+  const hasEqualHighs = eqExtremes.equalHi >= 2;  // 2+ matched highs = coiled resistance
+  const hasEqualLows  = eqLowExtremes.equalLo >= 2; // 2+ matched lows = coiled support
 
   // ── Varsity M2 Ch 16: Bollinger Squeeze (width contraction precedes expansion) ──
   // Compute BB width for each of the last ~30 bars and check whether current
@@ -8812,6 +8905,10 @@ function scoreDayTrade(candles, sym) {
   if (atRoundNumber && gapPct > 0 && lastPriceUp) { gapScore += _gain('GAP', 5, `Gap cleared ₹${round.level}`); gapDetail.push(`Above ₹${round.level}`); }
   // Varsity M2 Ch 12: gap-up needs vol confirmation. Weak rally = fade warning.
   if (vpaWeakRally && gapPct > 0 && gapScore >= 40) { gapScore += _penalty('GAP', 8, 'Gap fading on weak volume'); gapDetail.push('Weak rally'); }
+  // Varsity M2 Ch 7: gap classification (Breakaway / Continuation / Exhaustion / Common)
+  if (gapClass === 'BREAKAWAY') { gapScore += _gain('GAP', gapClassBonus, 'Breakaway gap (from tight range + vol)'); gapDetail.push('Breakaway'); }
+  else if (gapClass === 'CONTINUATION') { gapScore += _gain('GAP', gapClassBonus, 'Continuation gap (trend-aligned)'); gapDetail.push('Continuation'); }
+  else if (gapClass === 'EXHAUSTION') { gapScore += _penalty('GAP', Math.abs(gapClassBonus), 'Exhaustion gap (after extended trend)'); gapDetail.push('Exhaustion'); }
   gapScore = Math.max(0, Math.min(100, gapScore));
 
   // ── SETUP 3: BREAKOUT (Varsity M2 Ch7+16: S/R breakout + volume expansion) ──
@@ -8891,6 +8988,17 @@ function scoreDayTrade(candles, sym) {
   // Varsity M2 Ch 12: volume expanding across last 3 bars = sustainable breakout
   if (volExpanding) { breakoutScore += _gain('BRK', 6, 'Volume expanding 3-bar'); breakoutDetail.push('Vol expanding'); }
   else if (volContracting && breakoutScore >= 40) { breakoutScore += _penalty('BRK', 5, 'Volume contracting — late-stage move'); breakoutDetail.push('Vol contracting'); }
+  // Varsity M2 Ch 15: MACD histogram signals (separate from line-signal cross)
+  if (macdHistZeroUp) { breakoutScore += _gain('BRK', 8, 'MACD histogram zero-cross up'); breakoutDetail.push('Hist 0-cross'); }
+  else if (macdHistRising) { breakoutScore += _gain('BRK', 4, 'MACD histogram accelerating'); breakoutDetail.push('Hist rising'); }
+  // Varsity M2 Ch 11: equal highs = coiled resistance about to release
+  if (hasEqualHighs && nearDayHigh) { breakoutScore += _gain('BRK', 7, `Equal highs (${eqExtremes.equalHi}x) — coiled release`); breakoutDetail.push(`Eq highs ${eqExtremes.equalHi}x`); }
+  // Varsity M2 Ch 13: breakout already above VWAP +2σ = overextended, likely mean-revert
+  if (above2Sigma) { breakoutScore += _penalty('BRK', 8, 'Above VWAP +2σ band — statistically overextended'); breakoutDetail.push('>VWAP +2σ'); }
+  // Varsity M2 Ch 7: failed-breakout / bull-trap penalty — price poked above
+  // a level in the last 3 bars but came back below, invalidating the break.
+  if (orFailedBreak) { breakoutScore += _penalty('BRK', 12, 'Failed OR break — bull trap'); breakoutDetail.push('OR bull trap'); }
+  if (pdhFailedBreak) { breakoutScore += _penalty('BRK', 10, 'Failed PDH break — bull trap'); breakoutDetail.push('PDH bull trap'); }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -8949,6 +9057,11 @@ function scoreDayTrade(candles, sym) {
   if (atRoundNumber && lastPriceDown) { bounceScore += _gain('BOUNCE', 5, `At ₹${round.level} — psychological support`); bounceDetail.push(`At ₹${round.level}`); }
   // Varsity M2 Ch 12: volume-price confirmation for mean reversion
   if (vpaWeakDecline) { bounceScore += _gain('BOUNCE', 6, 'Weak decline (price down, vol down) — exhaustion'); bounceDetail.push('Weak decline'); }
+  // Varsity M2 Ch 11: equal lows = coiled support, buyers defending the level
+  if (hasEqualLows) { bounceScore += _gain('BOUNCE', 6, `Equal lows (${eqLowExtremes.equalLo}x) — coiled support`); bounceDetail.push(`Eq lows ${eqLowExtremes.equalLo}x`); }
+  // Varsity M2 Ch 13: VWAP -2σ band = 95% statistical extreme, strong mean-reversion
+  if (below2Sigma) { bounceScore += _gain('BOUNCE', 12, 'Below VWAP -2σ band (95% extreme)'); bounceDetail.push('<VWAP -2σ'); }
+  else if (below1Sigma) { bounceScore += _gain('BOUNCE', 6, 'Below VWAP -1σ band'); bounceDetail.push('<VWAP -1σ'); }
   // MACD turning — momentum shift (Varsity M2 Ch15)
   if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
   else if (macdBull) { bounceScore += _gain('BOUNCE', 4, 'MACD bull'); bounceDetail.push('MACD bull'); }
@@ -9284,6 +9397,21 @@ function scoreDayTrade(candles, sym) {
       S1: +cpr.S1.toFixed(2), S2: +cpr.S2.toFixed(2), S3: +cpr.S3.toFixed(2),
       widthPct: +cpr.widthPct.toFixed(2), type: cpr.type,
     } : null,
+    // Varsity M2 Ch 7: gap classification + failed-break flags
+    gapClass, gapClassBonus,
+    orFailedBreak, pdhFailedBreak,
+    // Varsity M2 Ch 11: equal highs/lows (price memory — coiled levels)
+    equalHighsCount: eqExtremes.equalHi,
+    equalLowsCount: eqLowExtremes.equalLo,
+    hasEqualHighs, hasEqualLows,
+    // Varsity M2 Ch 13: VWAP sigma bands
+    vwapSigma: +vwapSigma.toFixed(3),
+    vwapUpper1: +vwapUpper1.toFixed(2), vwapLower1: +vwapLower1.toFixed(2),
+    vwapUpper2: +vwapUpper2.toFixed(2), vwapLower2: +vwapLower2.toFixed(2),
+    below2Sigma, below1Sigma, above2Sigma,
+    // Varsity M2 Ch 15: MACD histogram state
+    macdHist: +macdHist.toFixed(3),
+    macdHistRising, macdHistZeroUp,
     // Varsity M2 Ch 16: Fibonacci — session retracement level price is sitting at
     fibLevel: nearFib ? nearFib.name : null,
     fibStrength: nearFib ? nearFib.strength : 0,
