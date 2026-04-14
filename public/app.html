@@ -33,58 +33,69 @@
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   /* ════════════════════════════════════════════════════════════════
-     🕉  MAHADEV PREMIUM — Cinematic Shiva Design System
+     PROTRADER — Modern Indigo Aurora Design System (v2)
      ─────────────────────────────────────────────────────────────
-     Darkness. Stillness. Cosmic silence. Himalayan depth.
-     Deep charcoal + ash white + restrained silver + muted gold
-     Shiva-blue aura · Sacred geometry · Smoke & mist aesthetic
+     Matches the landing page: electric indigo + violet,
+     warm charcoal surfaces, aurora glow, 15px base typography.
      ════════════════════════════════════════════════════════════════ */
-  /* ── Core surfaces: charcoal → obsidian depth ── */
-  --bg:#08090c;--bg2:#0e1014;--bg3:#15171d;--bg4:#1c1f28;
-  /* ── Glass surfaces (for glassmorphism) — boosted for readability ── */
-  --glass:rgba(12,14,18,0.92);--glass-border:rgba(255,255,255,0.08);
-  --glass-hover:rgba(18,20,26,0.94);--glass-glow:rgba(120,160,220,0.04);
-  /* ── Typography: ash-white hierarchy — bolder for clarity ── */
-  --text:#E6EAF2;--text2:#AAB2C0;--text3:#7A8191;
-  /* ── Borders: slightly stronger ── */
-  --border:#1e2130;--border2:#2a2d38;
-  /* ── Semantic colors (muted, sophisticated) ── */
-  --green:#34d399;--green-bg:rgba(52,211,153,0.06);--green-text:#34d399;
-  --red:#fb7185;--red-bg:rgba(251,113,133,0.06);--red-text:#fb7185;
-  --amber:#facc15;--amber-bg:rgba(250,204,21,0.06);--amber-text:#facc15;
-  --blue:#6098d0;--blue-bg:rgba(96,152,208,0.06);--blue-text:#6098d0;
-  --purple:#9080c0;--purple-bg:rgba(144,128,192,0.06);--purple-text:#9080c0;
-  --teal:#50b8a0;--accent:#7898c0;
-  --text4:#6a6e7a;--border3:#161820;
-  --amber-bright:#d4a040;--emerald:#50b8a0;
-  /* ── Shiva sacred tokens ── */
-  --shiva-blue:#4070a8;--shiva-blue-glow:rgba(64,112,168,0.12);
-  --shiva-silver:#8090a8;--shiva-silver-dim:rgba(128,144,168,0.3);
-  --shiva-gold:#a08848;--shiva-gold-dim:rgba(160,136,72,0.2);
-  --shiva-ash:#c0b8a8;--shiva-smoke:rgba(200,190,170,0.04);
-  --shiva-moon:rgba(200,210,230,0.6);--shiva-aura:rgba(80,120,180,0.08);
+  /* ── Core surfaces: warm charcoal depth ── */
+  --bg:#0A0A12;--bg2:#141419;--bg3:#1E1E26;--bg4:#2A2A35;
+  /* ── Glass surfaces ── */
+  --glass:rgba(20,20,25,0.82);--glass-border:rgba(255,255,255,0.08);
+  --glass-hover:rgba(26,26,34,0.90);--glass-glow:rgba(99,102,241,0.06);
+  /* ── Typography hierarchy ── */
+  --text:#F1F5F9;--text2:#CBD5E1;--text3:#94A3B8;
+  /* ── Borders ── */
+  --border:#27272E;--border2:#36363F;
+  /* ── Semantic colors ── */
+  --green:#34D399;--green-bg:rgba(52,211,153,0.14);--green-text:#6EE7B7;
+  --red:#F87171;--red-bg:rgba(248,113,113,0.14);--red-text:#FCA5A5;
+  --amber:#FBBF24;--amber-bg:rgba(251,191,36,0.14);--amber-text:#FCD34D;
+  --blue:#60A5FA;--blue-bg:rgba(96,165,250,0.14);--blue-text:#93C5FD;
+  --purple:#A78BFA;--purple-bg:rgba(167,139,250,0.14);--purple-text:#C4B5FD;
+  --teal:#2DD4BF;--accent:#6366F1;
+  --text4:#64748B;--border3:#1E1E26;
+  --amber-bright:#FBBF24;--emerald:#34D399;
+  /* ── Indigo brand tokens (used app-wide) ── */
+  --brand:#6366F1;--brand-light:#818CF8;--brand-hover:#4F46E5;
+  --brand-text:#A5B4FC;--brand-bg:rgba(99,102,241,0.14);
+  --brand-border:rgba(99,102,241,0.30);
+  --brand-gradient:linear-gradient(135deg,#6366F1 0%,#8B5CF6 100%);
+  /* ── Shiva tokens (remapped to indigo for backwards compat) ── */
+  --shiva-blue:#818CF8;--shiva-blue-glow:rgba(99,102,241,0.18);
+  --shiva-silver:#94A3B8;--shiva-silver-dim:rgba(148,163,184,0.3);
+  --shiva-gold:#FBBF24;--shiva-gold-dim:rgba(251,191,36,0.2);
+  --shiva-ash:#CBD5E1;--shiva-smoke:rgba(200,190,170,0.04);
+  --shiva-moon:rgba(200,210,230,0.6);--shiva-aura:rgba(99,102,241,0.12);
   /* ── Aliases for existing code ── */
-  --gold:#a08848;--gold-dim:#706038;--gold-glow:rgba(160,136,72,0.12);
-  --saffron:#c09050;--ash:#c0b8a8;--trident:#6080b0;
+  --gold:#FBBF24;--gold-dim:#B45309;--gold-glow:rgba(251,191,36,0.18);
+  --saffron:#F59E0B;--ash:#CBD5E1;--trident:#818CF8;
   /* ── Conviction tiers ── */
-  --tier-strong-buy-bg:rgba(94,204,138,0.07);--tier-strong-buy-text:#5ecc8a;--tier-strong-buy-border:rgba(94,204,138,0.15);
-  --tier-buy-bg:rgba(94,204,138,0.04);--tier-buy-text:#70b880;--tier-buy-border:rgba(94,204,138,0.10);
-  --tier-accumulate-bg:rgba(212,160,64,0.06);--tier-accumulate-text:#d4a040;--tier-accumulate-border:rgba(212,160,64,0.12);
-  --tier-watch-bg:rgba(138,134,128,0.06);--tier-watch-text:#8a8680;--tier-watch-border:rgba(138,134,128,0.10);
-  --tier-avoid-bg:rgba(224,96,96,0.06);--tier-avoid-text:#e06060;--tier-avoid-border:rgba(224,96,96,0.12);
-  /* ── Surface tints: subtle per-section color separation ── */
-  --surface-base:rgba(15,20,30,0.75);--surface-blue:rgba(20,30,50,0.75);
-  --surface-green:rgba(20,40,35,0.75);--surface-gold:rgba(40,35,20,0.75);
-  --radius:8px;--radius-lg:12px;
+  --tier-strong-buy-bg:rgba(52,211,153,0.14);--tier-strong-buy-text:#6EE7B7;--tier-strong-buy-border:rgba(52,211,153,0.28);
+  --tier-buy-bg:rgba(52,211,153,0.10);--tier-buy-text:#34D399;--tier-buy-border:rgba(52,211,153,0.22);
+  --tier-accumulate-bg:rgba(251,191,36,0.12);--tier-accumulate-text:#FCD34D;--tier-accumulate-border:rgba(251,191,36,0.28);
+  --tier-watch-bg:rgba(148,163,184,0.10);--tier-watch-text:#CBD5E1;--tier-watch-border:rgba(148,163,184,0.22);
+  --tier-avoid-bg:rgba(248,113,113,0.14);--tier-avoid-text:#FCA5A5;--tier-avoid-border:rgba(248,113,113,0.28);
+  /* ── Surface tints ── */
+  --surface-base:rgba(20,20,25,0.78);--surface-blue:rgba(30,30,55,0.80);
+  --surface-green:rgba(20,40,35,0.78);--surface-gold:rgba(40,35,20,0.78);
+  --radius:10px;--radius-lg:14px;
   /* ── Premium transitions ── */
   --ease-out-expo:cubic-bezier(0.16,1,0.3,1);--ease-out-quad:cubic-bezier(0.25,0.46,0.45,0.94);
   --transition-fast:0.15s var(--ease-out-quad);--transition-med:0.3s var(--ease-out-expo);--transition-slow:0.5s var(--ease-out-expo);
 }
-html{scroll-behavior:smooth}
+html{scroll-behavior:smooth;background-color:#0A0A12}
 html,body{height:100%}
 body.in-app{overflow:hidden}
-body{font-family:"SF Pro Display","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
-  background:var(--bg);color:var(--text);font-size:13px;display:flex;flex-direction:column;
+body{font-family:"SF Pro Display","SF Pro Text","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
+  color:var(--text);font-size:15px;display:flex;flex-direction:column;
+  background-color:#0A0A12;
+  background-image:
+    radial-gradient(ellipse 900px 600px at 15% 10%,rgba(99,102,241,0.28),transparent 60%),
+    radial-gradient(ellipse 800px 500px at 90% 20%,rgba(139,92,246,0.22),transparent 60%),
+    radial-gradient(ellipse 700px 500px at 75% 70%,rgba(168,85,247,0.15),transparent 60%),
+    radial-gradient(ellipse 600px 500px at 10% 90%,rgba(99,102,241,0.15),transparent 65%);
+  background-attachment:fixed;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 
 /* ── Global contrast scrim — darkens center behind UI, above 3D canvas ── */
