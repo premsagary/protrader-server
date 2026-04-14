@@ -8737,10 +8737,25 @@ async function scanDayTrades(force = false) {
       if ((ok + fail) % 10 === 0) await new Promise(r => setTimeout(r, 100));
     }
 
-    results.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-    _dayTradeCache   = results;
-    _dayTradeCacheTs = Date.now();
-    console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
+    // ── Cache guard: don't wipe a good cache with an empty scan ──
+    // When Kite rate-limits mid-scan, most fetches fail, no stocks get
+    // scored, and `results` ends up empty. Blindly assigning here caused
+    // the "data disappears and reappears" flicker users saw — every poll
+    // at 5s intervals briefly sees 0 picks right after a bad scan, then
+    // picks come back on the next successful run.
+    //
+    // Only overwrite when (a) we got picks, or (b) the previous cache is
+    // already empty (first run), or (c) the scan was comprehensive enough
+    // that 0 picks is a legitimate signal ("no setups today").
+    const successRatio = ok / Math.max(UNIVERSE.length, 1);
+    if (results.length > 0 || _dayTradeCache.length === 0 || successRatio > 0.3) {
+      results.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
+      _dayTradeCache   = results;
+      _dayTradeCacheTs = Date.now();
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
+    } else {
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
+    }
   } catch (e) {
     console.error('🔴 DayTrade scanner error:', e.message);
   } finally {
@@ -8962,18 +8977,24 @@ async function runUnifiedKitePipeline(force = false) {
       if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 350));
     }
 
-    // ── Finalize DayTrade cache ──
-    // (The old code called rebuildScoreCache() here in parallel, but that
-    //  function was never defined anywhere in this file — it threw a
-    //  ReferenceError synchronously inside Promise.all, which aborted the
-    //  whole pipeline BEFORE _dayTradeCache got assigned. That's why every
-    //  unified-pipeline run logged "rebuildScoreCache is not defined" and
-    //  DayTrade picks stayed at 0. The daily score cache is maintained by
-    //  refreshAllFundamentals() on its own cadence, so nothing depends on
-    //  that missing function here.)
-    dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-    _dayTradeCache   = dayTradeResults;
-    _dayTradeCacheTs = Date.now();
+    // ── Finalize DayTrade cache with the same guard as scanDayTrades ──
+    // If Kite rate-limits or auth fails mid-run, dayTradeResults can come
+    // out empty and wipe a previously-good cache. Only overwrite when the
+    // scan produced picks, the previous cache is already empty, or enough
+    // DayTrade fetches succeeded that 0 picks is a meaningful signal.
+    //
+    // (Old code called a Promise.all with rebuildScoreCache() which isn't
+    //  defined anywhere — threw a ReferenceError that aborted the pipeline
+    //  before cache assignment. Removed in the earlier fix. Daily score
+    //  cache is maintained by refreshAllFundamentals() on its own cadence.)
+    const dtSuccessRatio = okDT / Math.max(syms.length, 1);
+    if (dayTradeResults.length > 0 || _dayTradeCache.length === 0 || dtSuccessRatio > 0.3) {
+      dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
+      _dayTradeCache   = dayTradeResults;
+      _dayTradeCacheTs = Date.now();
+    } else {
+      console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
+    }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length };
