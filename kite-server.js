@@ -8309,6 +8309,34 @@ function computeCPR(prevDayCandles, refPrice) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// VARSITY M9: SECTOR CORRELATION CAP (diversification)
+// ═══════════════════════════════════════════════════════════════════════════════
+// "Never take N correlated positions" — stocks in the same sector are
+// effectively one trade. After sorting picks by dayTradeScore, interleave
+// them so no sector exceeds `maxPerSector` within the top 10. Picks beyond
+// the cap are demoted (not dropped) to positions 11+ so the admin can still
+// see them if they scroll.
+
+function applySectorCap(sortedPicks, maxPerSector = 2) {
+  if (!Array.isArray(sortedPicks) || sortedPicks.length <= maxPerSector) return sortedPicks;
+  const topCandidate = [];
+  const tail = [];
+  const sectorCount = Object.create(null);
+  for (const p of sortedPicks) {
+    const sect = (p.sector || 'Other').toString();
+    if (topCandidate.length < 10 && (sectorCount[sect] || 0) < maxPerSector) {
+      topCandidate.push(p);
+      sectorCount[sect] = (sectorCount[sect] || 0) + 1;
+    } else {
+      tail.push(p);
+    }
+  }
+  // Fill top 10 if under (should only happen with very few picks total)
+  while (topCandidate.length < 10 && tail.length > 0) topCandidate.push(tail.shift());
+  return topCandidate.concat(tail);
+}
+
 function scoreDayTrade(candles, sym) {
   const n = candles.length;
   if (n < 30) return null;
@@ -8448,6 +8476,71 @@ function scoreDayTrade(candles, sym) {
   // Use today's candles so pattern reflects the current session's psychology.
   const bullPattern = detectBullishCandlePattern(todayCandles);
   const bearPattern = detectBearishCandlePattern(todayCandles);
+
+  // ── Varsity M2 Ch 16: Fibonacci retracement levels ──
+  // Compute from the session swing (dayHigh → dayLow). In an uptrend that's
+  // pulled back, the 38.2/50/61.8% levels act as support; 61.8% is the
+  // "golden ratio" bounce zone Varsity highlights as highest-probability.
+  const fibRange = dayHigh - dayLow;
+  const fib = {
+    lvl236: dayHigh - fibRange * 0.236,
+    lvl382: dayHigh - fibRange * 0.382,
+    lvl500: dayHigh - fibRange * 0.500,
+    lvl618: dayHigh - fibRange * 0.618,
+    lvl786: dayHigh - fibRange * 0.786,
+  };
+  // Tag the Fib level the price is currently nearest to (within 0.5% of it)
+  let nearFib = null;
+  if (fibRange > 0) {
+    const fibEntries = [
+      { name: '61.8% (golden ratio)', level: fib.lvl618, strength: 10 },
+      { name: '50%',                   level: fib.lvl500, strength: 7 },
+      { name: '38.2%',                 level: fib.lvl382, strength: 6 },
+      { name: '78.6%',                 level: fib.lvl786, strength: 5 },
+      { name: '23.6%',                 level: fib.lvl236, strength: 3 },
+    ];
+    for (const fe of fibEntries) {
+      if (Math.abs(px - fe.level) / px < 0.005) { nearFib = fe; break; }
+    }
+  }
+
+  // ── Varsity M2 Ch 11: S/R touch count ──
+  // "A level tested 3+ times is strong; once is weak." Count how many 5-min
+  // candles intersected each key level (within 0.15% tolerance). Used as a
+  // breakout strength multiplier in the Breakout setup.
+  function _touches(level) {
+    if (!level || !isFinite(level)) return 0;
+    const tol = level * 0.0015;
+    return todayCandles.reduce((acc, c) => (c.high >= level - tol && c.low <= level + tol ? acc + 1 : acc), 0);
+  }
+  const dayHighTouches = _touches(dayHigh);
+  const orHighTouches  = _touches(orHigh);
+  const pdHighTouches  = _touches(pdHigh);
+  const pdLowTouches   = _touches(pdLow);
+
+  // ── Varsity M2 Ch 16: Bollinger Squeeze (width contraction precedes expansion) ──
+  // Compute BB width for each of the last ~30 bars and check whether current
+  // width is in the bottom 30% of that window. A squeeze that resolves with
+  // price closing above the upper band = textbook breakout trigger.
+  let bbSqueeze = false, bbSqueezeReleaseUp = false;
+  try {
+    const widths = [];
+    for (let i = Math.max(20, n - 30); i <= n; i++) {
+      const win = C.slice(i - 20, i);
+      if (win.length < 20) continue;
+      const mean = win.reduce((a, b) => a + b, 0) / 20;
+      const variance = win.reduce((a, v) => a + (v - mean) ** 2, 0) / 20;
+      const sd = Math.sqrt(variance);
+      widths.push(sd * 4 / (mean || 1)); // width-normalized-by-mean
+    }
+    if (widths.length >= 10) {
+      const curW = widths[widths.length - 1];
+      const sorted = [...widths].sort((a, b) => a - b);
+      const p30 = sorted[Math.floor(sorted.length * 0.3)];
+      bbSqueeze = curW <= p30;
+      bbSqueezeReleaseUp = bbSqueeze && px > bbUpper; // fresh release above upper
+    }
+  } catch (e) { /* ok */ }
 
   // Supertrend on 5-min
   let stBull = false;
@@ -8616,6 +8709,15 @@ function scoreDayTrade(candles, sym) {
     breakoutScore += _penalty('BRK', bearPattern.weight, `${bearPattern.name} at highs — fake-out risk`);
     breakoutDetail.push(`${bearPattern.name} at highs`);
   }
+  // Varsity M2 Ch 11: S/R touch count — a level tested 3+ times is "strong".
+  // Breaking a 3+ touched level is more significant than breaking a 1-touch level.
+  if (aboveOR && orHighTouches >= 3) { breakoutScore += _gain('BRK', 8, `OR tested ${orHighTouches}x — strong break`); breakoutDetail.push(`OR ${orHighTouches}x`); }
+  else if (aboveOR && orHighTouches >= 2) { breakoutScore += _gain('BRK', 4, `OR tested ${orHighTouches}x`); breakoutDetail.push(`OR ${orHighTouches}x`); }
+  if (abovePDH && pdHighTouches >= 3) { breakoutScore += _gain('BRK', 6, `PDH tested ${pdHighTouches}x`); breakoutDetail.push(`PDH ${pdHighTouches}x`); }
+  if (nearDayHigh && dayHighTouches >= 4) { breakoutScore += _gain('BRK', 6, `Day high tested ${dayHighTouches}x — coiled`); breakoutDetail.push(`DH ${dayHighTouches}x coiled`); }
+  // Varsity M2 Ch 16: Bollinger Squeeze release — compressed energy unleashing.
+  if (bbSqueezeReleaseUp) { breakoutScore += _gain('BRK', 12, 'BB squeeze release — compressed → expansion'); breakoutDetail.push('BB squeeze release'); }
+  else if (bbSqueeze) { breakoutScore += _gain('BRK', 4, 'BB squeeze — coiled, pending release'); breakoutDetail.push('BB squeeze'); }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -8659,6 +8761,9 @@ function scoreDayTrade(candles, sym) {
     else if (atS1) { bounceScore += _gain('BOUNCE', 7, 'At S1 — pivot support'); bounceDetail.push('At S1'); }
     else if (atBC) { bounceScore += _gain('BOUNCE', 5, 'At BC — central pivot floor'); bounceDetail.push('At BC'); }
   }
+  // Varsity M2 Ch 16: Fibonacci retracement — 61.8% (golden ratio) is the
+  // highest-probability bounce zone within a session pullback.
+  if (nearFib) { bounceScore += _gain('BOUNCE', nearFib.strength, `At Fib ${nearFib.name}`); bounceDetail.push(`Fib ${nearFib.name}`); }
   // MACD turning — momentum shift (Varsity M2 Ch15)
   if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
   else if (macdBull) { bounceScore += _gain('BOUNCE', 4, 'MACD bull'); bounceDetail.push('MACD bull'); }
@@ -8707,6 +8812,27 @@ function scoreDayTrade(candles, sym) {
   // Late session penalty
   if (isLateTrade) { overall = Math.max(0, overall + _penalty('MULTI', 15, 'Late session penalty (after 3PM IST — Varsity M9)')); }
 
+  // ── Varsity M2 Ch 19: The Finale — unified pre-trade checklist ──
+  // Ch 19 distills the whole module into a 5-item checklist. We tally which
+  // items pass on this specific pick and award a transparent bonus (+2/item,
+  // max +10). This is Varsity's explicit "can I trade this?" filter.
+  const ch19 = {
+    priceAction:  !!bullPattern,                                                     // ✅ candlestick signal on latest candle
+    volume:       volRatio >= 1.5,                                                   // ✅ volume confirming the move
+    srContext:    !!(nearCpr || nearFib ||                                           // ✅ at a recognized S/R level
+                    Math.abs(px - pdLow) / pdLow < 0.01 ||
+                    Math.abs(px - pdHigh) / pdHigh < 0.01 ||
+                    Math.abs(px - orHigh) / orHigh < 0.01 ||
+                    Math.abs(px - orLow) / orLow < 0.01),
+    indicators:   [ema9[n - 1] > ema20[n - 1], macdBull, stBull, stochK > 20 && stochK < 80]
+                    .filter(Boolean).length >= 2,                                    // ✅ at least 2 of 4 indicators aligned
+    rrRatio:      true,  // filled in below after sl/tgt are computed — placeholder passes for now
+  };
+  const ch19PassCount = [ch19.priceAction, ch19.volume, ch19.srContext, ch19.indicators, ch19.rrRatio].filter(Boolean).length;
+  if (ch19PassCount >= 4) overall = Math.min(100, overall + _gain('MULTI', 8, `M2 Ch 19 checklist: ${ch19PassCount}/5 passed`));
+  else if (ch19PassCount === 3) overall = Math.min(100, overall + _gain('MULTI', 4, 'M2 Ch 19 checklist: 3/5 passed'));
+  else if (ch19PassCount <= 1) overall = Math.max(0, overall + _penalty('MULTI', 6, `M2 Ch 19 checklist: only ${ch19PassCount}/5 — weak setup`));
+
   if (overall < 30) return null; // below threshold — not worth showing
 
   // Stop loss + target based on setup type
@@ -8746,6 +8872,17 @@ function scoreDayTrade(candles, sym) {
 
   // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward
   if (rrRatio < 1.0) return null;
+
+  // Ch 19 checklist retroactive R:R correction. If the ATR-adjusted R:R
+  // ended up < 1.5, the rrRatio check we placeholded above was too
+  // generous — drop that tick from the checklist and recompute the bonus.
+  if (rrRatio < 1.5) {
+    ch19.rrRatio = false;
+    const revisedPass = [ch19.priceAction, ch19.volume, ch19.srContext, ch19.indicators, ch19.rrRatio].filter(Boolean).length;
+    if (revisedPass < ch19PassCount && revisedPass <= 2) {
+      overall = Math.max(0, overall + _penalty('MULTI', 4, `M2 Ch 19: R:R ${rrRatio.toFixed(1)} below 1.5 — weakened checklist`));
+    }
+  }
 
   // ── RISK MANAGEMENT PLAN (Varsity M9 + M2) ──────────────────────────────
   // Comprehensive SL/TGT/position-sizing recommendation grounded in Varsity knowledge
@@ -8918,6 +9055,16 @@ function scoreDayTrade(candles, sym) {
       S1: +cpr.S1.toFixed(2), S2: +cpr.S2.toFixed(2), S3: +cpr.S3.toFixed(2),
       widthPct: +cpr.widthPct.toFixed(2), type: cpr.type,
     } : null,
+    // Varsity M2 Ch 16: Fibonacci — session retracement level price is sitting at
+    fibLevel: nearFib ? nearFib.name : null,
+    fibStrength: nearFib ? nearFib.strength : 0,
+    // Varsity M2 Ch 11: S/R touch counts — >= 3 = strong level
+    dayHighTouches, orHighTouches, pdHighTouches, pdLowTouches,
+    // Varsity M2 Ch 16: Bollinger Squeeze state
+    bbSqueeze, bbSqueezeReleaseUp,
+    // Varsity M2 Ch 19: unified checklist (5 items)
+    ch19Checklist: ch19,
+    ch19PassCount,
     // Risk
     sl, tgt, rrRatio,
     // Risk management plan (Varsity M9)
@@ -8985,7 +9132,10 @@ async function scanDayTrades(force = false) {
     const successRatio = ok / Math.max(UNIVERSE.length, 1);
     if (results.length > 0 || _dayTradeCache.length === 0 || successRatio > 0.3) {
       results.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-      _dayTradeCache   = results;
+      // Varsity M9: sector-correlation cap. "Never take N correlated positions
+      // at once" — same-sector picks are effectively one trade. Interleave so
+      // no single sector dominates the top 10 with more than 2 picks.
+      _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
       console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
     } else {
@@ -9225,7 +9375,8 @@ async function runUnifiedKitePipeline(force = false) {
     const dtSuccessRatio = okDT / Math.max(syms.length, 1);
     if (dayTradeResults.length > 0 || _dayTradeCache.length === 0 || dtSuccessRatio > 0.3) {
       dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-      _dayTradeCache   = dayTradeResults;
+      // Varsity M9 sector-correlation cap — same logic as scanDayTrades.
+      _dayTradeCache   = applySectorCap(dayTradeResults, 2);
       _dayTradeCacheTs = Date.now();
     } else {
       console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
