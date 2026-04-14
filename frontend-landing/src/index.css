@@ -55,45 +55,27 @@
 
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; scroll-behavior: smooth }
 
+html {
+  background-color: #0A0A12;
+}
+
 body {
   font-family: -apple-system, "SF Pro Display", "SF Pro Text", "Inter", BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   color: var(--text);
-  /* Base dark surface with a page-long linear gradient so it never feels flat */
-  background:
+  /* Solid dark surface + color-stopped gradient layered on top.
+     Solid first to guarantee a base color even if compositing fails. */
+  background-color: #0A0A12;
+  background-image:
+    radial-gradient(ellipse 900px 600px at 15% 10%, rgba(99,102,241,0.28), transparent 60%),
+    radial-gradient(ellipse 800px 500px at 90% 20%, rgba(139,92,246,0.24), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 75% 70%, rgba(168,85,247,0.18), transparent 60%),
+    radial-gradient(ellipse 600px 500px at 10% 90%, rgba(99,102,241,0.18), transparent 65%),
     linear-gradient(180deg, #0E0E18 0%, #0A0A12 30%, #0C0A18 60%, #0A0A14 100%);
+  background-attachment: scroll, scroll, scroll, scroll, scroll;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
-}
-
-/* Primary aurora orbs — fixed so they live behind content as you scroll */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 900px 600px at 15% 10%, rgba(99,102,241,0.32), transparent 60%),
-    radial-gradient(ellipse 800px 500px at 90% 20%, rgba(139,92,246,0.28), transparent 60%),
-    radial-gradient(ellipse 700px 500px at 75% 70%, rgba(168,85,247,0.22), transparent 60%),
-    radial-gradient(ellipse 600px 500px at 10% 90%, rgba(99,102,241,0.20), transparent 65%);
-}
-
-/* Soft grid mesh — adds subtle texture depth without competing with content */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(120,120,180,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(120,120,180,0.04) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(ellipse 90% 75% at 50% 35%, black 30%, transparent 85%);
-  -webkit-mask-image: radial-gradient(ellipse 90% 75% at 50% 35%, black 30%, transparent 85%);
 }
 
 /* Each <section> gets a subtle top highlight for section rhythm */
