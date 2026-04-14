@@ -8430,6 +8430,32 @@ function scoreDayTrade(candles, sym) {
   const macdBull  = macdLine[n - 1] > sigLine[n - 1];
   const macdCross = macdLine[n - 2] < sigLine[n - 2] && macdBull; // fresh bull cross
 
+  // ── Varsity M2 Ch 14 + Ch 15: RSI & MACD Divergence ──
+  // "Divergence is the single most reliable reversal signal in TA" (Varsity M2 Ch 14).
+  //   Bullish divergence: price makes a lower low, RSI makes a HIGHER low → reversal up
+  //   Bearish divergence: price makes a higher high, RSI makes a LOWER high → reversal down
+  // Same logic applies to MACD line. We look over the last 20 bars for the
+  // prior extreme (by price) and compare to the current extreme.
+  function _findPivot(arr, extremeFn, window) {
+    // Return the index of the extreme (min or max) in last `window` bars, excluding last 2.
+    const start = Math.max(0, arr.length - window);
+    const end   = arr.length - 3;
+    let idx = start;
+    for (let i = start; i <= end; i++) if (extremeFn(arr[i], arr[idx])) idx = i;
+    return idx;
+  }
+  let rsiBullDiv = false, rsiBearDiv = false, macdBullDiv = false, macdBearDiv = false;
+  if (n >= 25) {
+    // Bullish: current close < prior-pivot close but current RSI > prior-pivot RSI
+    const loIdx = _findPivot(C, (a, b) => a < b, 20);
+    if (C[n - 1] < C[loIdx] * 1.001 && rsiArr[n - 1] > rsiArr[loIdx] + 2) rsiBullDiv = true;
+    if (C[n - 1] < C[loIdx] * 1.001 && macdLine[n - 1] > macdLine[loIdx]) macdBullDiv = true;
+    // Bearish: current close > prior-pivot high but current RSI < prior-pivot RSI
+    const hiIdx = _findPivot(C, (a, b) => a > b, 20);
+    if (C[n - 1] > C[hiIdx] * 0.999 && rsiArr[n - 1] < rsiArr[hiIdx] - 2) rsiBearDiv = true;
+    if (C[n - 1] > C[hiIdx] * 0.999 && macdLine[n - 1] < macdLine[hiIdx]) macdBearDiv = true;
+  }
+
   // Bollinger %B
   const dma20 = C.slice(n - 20).reduce((a, b) => a + b, 0) / 20;
   const bbStd = Math.sqrt(C.slice(n - 20).reduce((a, v) => a + (v - dma20) ** 2, 0) / 20);
@@ -8476,6 +8502,59 @@ function scoreDayTrade(candles, sym) {
   // Use today's candles so pattern reflects the current session's psychology.
   const bullPattern = detectBullishCandlePattern(todayCandles);
   const bearPattern = detectBearishCandlePattern(todayCandles);
+
+  // ── Varsity M2 Ch 4: Risk-averse entry confirmation ──
+  // "Risk-taker enters on the pattern candle; risk-averse waits for the NEXT
+  // candle to confirm direction." A pattern that formed 1-2 bars ago AND
+  // whose direction is still holding is a confirmed pattern — higher conviction.
+  let bullPatternConfirmed = false, bearPatternConfirmed = false;
+  if (todayCandles.length >= 3) {
+    const priorBars = todayCandles.slice(0, todayCandles.length - 1);
+    const priorBull = detectBullishCandlePattern(priorBars);
+    const priorBear = detectBearishCandlePattern(priorBars);
+    // Confirmed bull: pattern existed 1 bar ago + current candle closed higher
+    if (priorBull && todayCandles[todayCandles.length - 1].close > todayCandles[todayCandles.length - 2].close) bullPatternConfirmed = true;
+    if (priorBear && todayCandles[todayCandles.length - 1].close < todayCandles[todayCandles.length - 2].close) bearPatternConfirmed = true;
+  }
+
+  // ── Varsity M2 Ch 22: Virgin CPR detection ──
+  // A previous-day CPR band that wasn't touched today yet stays "virgin" —
+  // Varsity: virgin CPR acts as extra-strong S/R when price finally approaches
+  // it. Iterate today's candles; if none intersect the CPR band, flag virgin.
+  let cprVirgin = false;
+  if (cpr) {
+    const cprTouched = todayCandles.some(c => c.high >= cpr.cprLo && c.low <= cpr.cprHi);
+    cprVirgin = !cprTouched;
+  }
+
+  // ── Varsity M2 Ch 12: Volume-Price Action 2x2 matrix ──
+  // Price Δ vs Volume Δ — the four quadrants predict next-bar bias:
+  //   price up + vol up   → CONFIRM BULL  (already rewarded in setups)
+  //   price up + vol down → WEAK RALLY    (penalize bullish setups)
+  //   price down + vol up → CONFIRM BEAR  (used in bear-pattern penalties)
+  //   price down + vol down → WEAK DECLINE (potential exhaustion / bounce setup)
+  const lastPriceUp   = last.close > last.open;
+  const lastPriceDown = last.close < last.open;
+  const vpaWeakRally    = lastPriceUp && volRatio < 0.8;
+  const vpaWeakDecline  = lastPriceDown && volRatio < 0.8;
+  const vpaConfirmBull  = lastPriceUp && volRatio >= 1.5;
+  const vpaConfirmBear  = lastPriceDown && volRatio >= 1.5;
+
+  // ── Varsity M2 Ch 11: Round-number (psychological) S/R ──
+  // Price often hesitates at ₹100, ₹500, ₹1000 etc. Pick the step size by
+  // magnitude, then flag when current price is within 0.3% of a round number.
+  function _nearestRoundNumber(p) {
+    let step;
+    if (p < 100) step = 10;
+    else if (p < 500) step = 50;
+    else if (p < 1000) step = 100;
+    else if (p < 5000) step = 500;
+    else step = 1000;
+    const nearest = Math.round(p / step) * step;
+    return { level: nearest, step, distPct: Math.abs(p - nearest) / p * 100 };
+  }
+  const round = _nearestRoundNumber(px);
+  const atRoundNumber = round.distPct < 0.3;
 
   // ── Varsity M2 Ch 16: Fibonacci retracement levels ──
   // Compute from the session swing (dayHigh → dayLow). In an uptrend that's
@@ -8602,6 +8681,15 @@ function scoreDayTrade(candles, sym) {
   // Varsity M2 Ch 22: reclaim happening at/above Central Pivot = institutional confluence
   if (cpr && nearCpr) { vwapScore += _gain('VWAP', 6, 'At CPR — institutional level'); vwapDetail.push('At CPR'); }
   else if (cpr && aboveCpr && px - cpr.cprHi < px * 0.005) { vwapScore += _gain('VWAP', 4, 'Just cleared CPR'); vwapDetail.push('Just cleared CPR'); }
+  // Varsity M2 Ch 14+15: bullish divergence strengthens any reclaim setup
+  if (rsiBullDiv && vwapScore > 0) { vwapScore += _gain('VWAP', 8, 'RSI bullish divergence'); vwapDetail.push('RSI bull div'); }
+  if (macdBullDiv && vwapScore > 0) { vwapScore += _gain('VWAP', 5, 'MACD bullish divergence'); vwapDetail.push('MACD bull div'); }
+  // Varsity M2 Ch 4: risk-averse confirmed pattern
+  if (bullPatternConfirmed && vwapScore > 0) { vwapScore += _gain('VWAP', 5, 'Pattern confirmed next bar'); vwapDetail.push('Confirmed'); }
+  // Varsity M2 Ch 11: reclaim at round number (e.g., price crossing back above ₹500)
+  if (atRoundNumber && lastPriceUp) { vwapScore += _gain('VWAP', 4, `At ₹${round.level} support`); vwapDetail.push(`At ₹${round.level}`); }
+  // Varsity M2 Ch 12: weak rally check — reclaim on shrinking volume = suspect
+  if (vpaWeakRally && vwapScore >= 40) { vwapScore += _penalty('VWAP', 8, 'Weak rally (vol declining)'); vwapDetail.push('Weak rally'); }
   vwapScore = Math.max(0, Math.min(100, vwapScore));
 
   // ── SETUP 2: GAP & GO (Varsity M2 Ch7: gap theory + follow-through) ──
@@ -8657,6 +8745,17 @@ function scoreDayTrade(candles, sym) {
   }
   // Bearish pattern on a gap-up = exhaustion / fade risk
   if (bearPattern && gapPct > 0 && bearPattern.weight >= 12) { gapScore += _penalty('GAP', 10, `${bearPattern.name} — exhaustion on gap`); gapDetail.push(`${bearPattern.name} exhaustion`); }
+  // Varsity M2 Ch 14+15: divergence warnings on gap-ups (bearish div = fade)
+  if (rsiBearDiv && gapPct > 0) { gapScore += _penalty('GAP', 8, 'RSI bearish divergence on gap-up'); gapDetail.push('RSI bear div'); }
+  if (macdBearDiv && gapPct > 0) { gapScore += _penalty('GAP', 4, 'MACD bearish divergence'); gapDetail.push('MACD bear div'); }
+  // Varsity M2 Ch 22: virgin R1/R2 = extra conviction when gap clears them
+  if (cpr && cprVirgin && aboveCpr && gapPct > 0) { gapScore += _gain('GAP', 6, 'Gap cleared virgin CPR'); gapDetail.push('Virgin CPR cleared'); }
+  // Varsity M2 Ch 4: confirmed gap direction via next-bar pattern
+  if (bullPatternConfirmed && gapPct > 0) { gapScore += _gain('GAP', 5, 'Pattern confirmed'); gapDetail.push('Confirmed'); }
+  // Varsity M2 Ch 11: gap clearing a round number = psychological breakout
+  if (atRoundNumber && gapPct > 0 && lastPriceUp) { gapScore += _gain('GAP', 5, `Gap cleared ₹${round.level}`); gapDetail.push(`Above ₹${round.level}`); }
+  // Varsity M2 Ch 12: gap-up needs vol confirmation. Weak rally = fade warning.
+  if (vpaWeakRally && gapPct > 0 && gapScore >= 40) { gapScore += _penalty('GAP', 8, 'Gap fading on weak volume'); gapDetail.push('Weak rally'); }
   gapScore = Math.max(0, Math.min(100, gapScore));
 
   // ── SETUP 3: BREAKOUT (Varsity M2 Ch7+16: S/R breakout + volume expansion) ──
@@ -8718,6 +8817,18 @@ function scoreDayTrade(candles, sym) {
   // Varsity M2 Ch 16: Bollinger Squeeze release — compressed energy unleashing.
   if (bbSqueezeReleaseUp) { breakoutScore += _gain('BRK', 12, 'BB squeeze release — compressed → expansion'); breakoutDetail.push('BB squeeze release'); }
   else if (bbSqueeze) { breakoutScore += _gain('BRK', 4, 'BB squeeze — coiled, pending release'); breakoutDetail.push('BB squeeze'); }
+  // Varsity M2 Ch 14+15: bearish divergence at breakout = classic fake-out
+  // warning — price made new high but momentum didn't confirm.
+  if (rsiBearDiv) { breakoutScore += _penalty('BRK', 12, 'RSI bearish divergence — fake-out risk'); breakoutDetail.push('RSI bear div'); }
+  if (macdBearDiv) { breakoutScore += _penalty('BRK', 6, 'MACD bearish divergence'); breakoutDetail.push('MACD bear div'); }
+  // Varsity M2 Ch 22: breakout above a VIRGIN pivot level = extra-strong move.
+  if (cpr && cprVirgin && aboveCpr) { breakoutScore += _gain('BRK', 8, 'Broke virgin CPR — untested resistance'); breakoutDetail.push('Virgin CPR break'); }
+  // Varsity M2 Ch 11: breaking above a round number = psychological breakout
+  if (atRoundNumber && lastPriceUp) { breakoutScore += _gain('BRK', 5, `Clearing ₹${round.level} — psychological resistance`); breakoutDetail.push(`Above ₹${round.level}`); }
+  // Varsity M2 Ch 4: confirmed pattern (2-bar) adds conviction
+  if (bullPatternConfirmed) { breakoutScore += _gain('BRK', 5, 'Pattern confirmed next bar'); breakoutDetail.push('Confirmed'); }
+  // Varsity M2 Ch 12: weak rally penalty — price up on shrinking volume = fade risk
+  if (vpaWeakRally && breakoutScore >= 40) { breakoutScore += _penalty('BRK', 10, 'Weak rally (vol declining) — fade risk'); breakoutDetail.push('Weak rally'); }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -8764,6 +8875,18 @@ function scoreDayTrade(candles, sym) {
   // Varsity M2 Ch 16: Fibonacci retracement — 61.8% (golden ratio) is the
   // highest-probability bounce zone within a session pullback.
   if (nearFib) { bounceScore += _gain('BOUNCE', nearFib.strength, `At Fib ${nearFib.name}`); bounceDetail.push(`Fib ${nearFib.name}`); }
+  // Varsity M2 Ch 14: RSI bullish divergence = single most reliable reversal
+  // signal. Price made a new low but RSI didn't = institutions accumulating.
+  if (rsiBullDiv) { bounceScore += _gain('BOUNCE', 15, 'RSI bullish divergence'); bounceDetail.push('RSI bull div'); }
+  // Varsity M2 Ch 15: MACD bullish divergence — confluence signal
+  if (macdBullDiv) { bounceScore += _gain('BOUNCE', 8, 'MACD bullish divergence'); bounceDetail.push('MACD bull div'); }
+  // Varsity M2 Ch 4: risk-averse entry — pattern was from a prior bar AND
+  // direction held on current bar = CONFIRMED setup, deserves extra weight.
+  if (bullPatternConfirmed) { bounceScore += _gain('BOUNCE', 6, 'Pattern confirmed next bar'); bounceDetail.push('Confirmed'); }
+  // Varsity M2 Ch 11: round-number psychological support
+  if (atRoundNumber && lastPriceDown) { bounceScore += _gain('BOUNCE', 5, `At ₹${round.level} — psychological support`); bounceDetail.push(`At ₹${round.level}`); }
+  // Varsity M2 Ch 12: volume-price confirmation for mean reversion
+  if (vpaWeakDecline) { bounceScore += _gain('BOUNCE', 6, 'Weak decline (price down, vol down) — exhaustion'); bounceDetail.push('Weak decline'); }
   // MACD turning — momentum shift (Varsity M2 Ch15)
   if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
   else if (macdBull) { bounceScore += _gain('BOUNCE', 4, 'MACD bull'); bounceDetail.push('MACD bull'); }
@@ -8819,7 +8942,7 @@ function scoreDayTrade(candles, sym) {
   const ch19 = {
     priceAction:  !!bullPattern,                                                     // ✅ candlestick signal on latest candle
     volume:       volRatio >= 1.5,                                                   // ✅ volume confirming the move
-    srContext:    !!(nearCpr || nearFib ||                                           // ✅ at a recognized S/R level
+    srContext:    !!(nearCpr || nearFib || atRoundNumber ||                          // ✅ at a recognized S/R level (CPR/Fib/round/pivot)
                     Math.abs(px - pdLow) / pdLow < 0.01 ||
                     Math.abs(px - pdHigh) / pdHigh < 0.01 ||
                     Math.abs(px - orHigh) / orHigh < 0.01 ||
@@ -8898,6 +9021,22 @@ function scoreDayTrade(candles, sym) {
   const qtyPer1L  = slDist > 0 ? Math.floor((100000 * 0.02) / slDist) : 0;
   const qtyPer5L  = slDist > 0 ? Math.floor((500000 * 0.02) / slDist) : 0;
   const qtyPer10L = slDist > 0 ? Math.floor((1000000 * 0.02) / slDist) : 0;
+
+  // ── Varsity M9 Part I: Kelly Criterion ──
+  // f* = (bp - q) / b  where b=reward/risk ratio, p=win probability, q=1-p.
+  // We use overall/100 as a conviction-proxy for p (Varsity treats checklist
+  // score as a directional win-rate estimate; it's a proxy, not a real
+  // back-tested win rate). Capped at 25% (Varsity: "half-Kelly or quarter-Kelly
+  // in practice to avoid ruin") so the suggestion is never reckless.
+  const winProb = Math.max(0.30, Math.min(0.85, overall / 100));
+  const b = Math.max(0.5, rrRatio);
+  const kellyRaw = (b * winProb - (1 - winProb)) / b;
+  const kellyFraction = Math.max(0, Math.min(0.25, kellyRaw));
+  const kellyPct = +(kellyFraction * 100).toFixed(1);
+  // Position sizing at Kelly fraction for each reference capital level
+  const kellyQtyPer1L  = slDist > 0 && kellyFraction > 0 ? Math.floor((100000 * kellyFraction) / px) : 0;
+  const kellyQtyPer5L  = slDist > 0 && kellyFraction > 0 ? Math.floor((500000 * kellyFraction) / px) : 0;
+  const kellyQtyPer10L = slDist > 0 && kellyFraction > 0 ? Math.floor((1000000 * kellyFraction) / px) : 0;
 
   // SL reason — WHY this stop loss level
   let slReason, slVarsityRef;
@@ -9065,6 +9204,31 @@ function scoreDayTrade(candles, sym) {
     // Varsity M2 Ch 19: unified checklist (5 items)
     ch19Checklist: ch19,
     ch19PassCount,
+    // Varsity M2 Ch 14 + Ch 15: RSI / MACD divergence flags
+    rsiBullDiv, rsiBearDiv, macdBullDiv, macdBearDiv,
+    // Varsity M2 Ch 4: risk-averse entry — pattern confirmed on next bar
+    patternConfirmed: bullPatternConfirmed || bearPatternConfirmed,
+    // Varsity M2 Ch 22: virgin CPR = untested band today (extra-strong S/R)
+    cprVirgin,
+    // Varsity M2 Ch 12: Volume-Price Action matrix quadrants (one-hot)
+    vpa: {
+      confirmBull: vpaConfirmBull,
+      confirmBear: vpaConfirmBear,
+      weakRally: vpaWeakRally,
+      weakDecline: vpaWeakDecline,
+    },
+    // Varsity M2 Ch 11: nearest round-number psychological level
+    roundNumber: round.level,
+    atRoundNumber,
+    // Varsity M9 Part I: Kelly Criterion position sizing
+    kelly: {
+      fractionPct: kellyPct,
+      winProb: +winProb.toFixed(2),
+      edge: +(b * winProb - (1 - winProb)).toFixed(2),
+      qtyPer1L: kellyQtyPer1L,
+      qtyPer5L: kellyQtyPer5L,
+      qtyPer10L: kellyQtyPer10L,
+    },
     // Risk
     sl, tgt, rrRatio,
     // Risk management plan (Varsity M9)
