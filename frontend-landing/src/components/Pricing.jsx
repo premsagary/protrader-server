@@ -3,13 +3,18 @@ import { goToApp } from '../App';
 
 const FEATURES = [
   'Deep Analyzer — 14-point Varsity checklist + 30+ indicators',
-  'AI Council Review — 5 models + Claude judge synthesis',
   'Stock Picks — Rebound, Momentum, Long-Term lists (daily)',
   'Mutual Fund scoring — 100-point framework, 4 categories',
   'Stock Data browser — all 567 NSE stocks with filters',
-  'Holdings tracking — live CMP, P&L, AI review on demand',
-  'Paper RoboTrade — stocks (9:15–15:30) + crypto (24/7)',
-  'DayTrade scanner — intraday setups (coming soon)',
+  'Support/resistance, Fibonacci levels & buy zones',
+  'Live news sentiment per stock',
+];
+
+const SOON = [
+  'AI Council Review — 5 models + Claude judge',
+  'Holdings + AI Review — track your real portfolio',
+  'Paper RoboTrade — stocks & crypto',
+  'DayTrade scanner — intraday setups',
 ];
 
 export default function Pricing() {
@@ -60,14 +65,27 @@ export default function Pricing() {
           </div>
           <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 32 }}>forever · no upgrades · no limits</div>
 
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '1.2px',
+              textTransform: 'uppercase',
+              color: 'var(--green-text)',
+              textAlign: 'left',
+              marginBottom: 12,
+            }}
+          >
+            Included free
+          </div>
           <ul
             style={{
               listStyle: 'none',
               padding: 0,
-              margin: '0 0 32px',
+              margin: '0 0 20px',
               textAlign: 'left',
               display: 'grid',
-              gap: 12,
+              gap: 10,
             }}
           >
             {FEATURES.map((f, i) => (
@@ -88,8 +106,8 @@ export default function Pricing() {
                     width: 20,
                     height: 20,
                     borderRadius: 6,
-                    background: 'var(--brand-bg)',
-                    border: '1px solid var(--brand-border)',
+                    background: 'var(--green-bg)',
+                    border: '1px solid rgba(52,211,153,0.3)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -98,7 +116,70 @@ export default function Pricing() {
                   }}
                 >
                   <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                    <path d="M2.5 5.5 L4.5 7.5 L8.5 3.5" stroke="var(--brand-text)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2.5 5.5 L4.5 7.5 L8.5 3.5" stroke="var(--green-text)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                {f}
+              </li>
+            ))}
+          </ul>
+
+          {/* Divider */}
+          <div style={{ height: 1, background: 'var(--border)', margin: '20px 0 18px' }} />
+
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '1.2px',
+              textTransform: 'uppercase',
+              color: 'var(--amber-text)',
+              textAlign: 'left',
+              marginBottom: 12,
+            }}
+          >
+            Coming soon · advanced tier
+          </div>
+          <ul
+            style={{
+              listStyle: 'none',
+              padding: 0,
+              margin: '0 0 32px',
+              textAlign: 'left',
+              display: 'grid',
+              gap: 10,
+            }}
+          >
+            {SOON.map((f, i) => (
+              <li
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'flex-start',
+                  fontSize: 14,
+                  color: 'var(--text2)',
+                  lineHeight: 1.5,
+                  fontWeight: 500,
+                }}
+              >
+                <span
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 6,
+                    background: 'rgba(251,191,36,0.1)',
+                    border: '1px solid rgba(251,191,36,0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    marginTop: 1,
+                  }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                    <circle cx="5.5" cy="5.5" r="3.8" stroke="var(--amber-text)" strokeWidth="1.5" />
+                    <path d="M5.5 3.5 V5.5 L6.8 6.3" stroke="var(--amber-text)" strokeWidth="1.5" strokeLinecap="round" />
                   </svg>
                 </span>
                 {f}

@@ -64,22 +64,39 @@ export default function Footer() {
           </a>
         </div>
 
-        <div style={{ fontSize: 11, color: 'var(--text4)' }}>
-          Free public beta ·{' '}
+        <div style={{ fontSize: 12, color: 'var(--text3)', display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>Free public beta</span>
+          <span style={{ color: 'var(--text4)' }}>·</span>
           <button
             onClick={showAdminLogin}
             style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text4)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 14px',
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid var(--border)',
+              borderRadius: 9999,
+              color: 'var(--text2)',
               cursor: 'pointer',
-              textDecoration: 'underline',
-              fontSize: 11,
-              opacity: 0.6,
+              fontSize: 12,
+              fontWeight: 500,
               fontFamily: 'inherit',
-              padding: 0,
+              transition: 'all 180ms ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--brand-border)';
+              e.currentTarget.style.color = 'var(--brand-text)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border)';
+              e.currentTarget.style.color = 'var(--text2)';
             }}
           >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <rect x="2" y="5" width="8" height="6" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M4 5 V3.5 C4 2.7 4.7 2 5.5 2 H6.5 C7.3 2 8 2.7 8 3.5 V5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
             Admin
           </button>
         </div>

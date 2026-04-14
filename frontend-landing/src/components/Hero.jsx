@@ -39,12 +39,12 @@ export default function Hero() {
             fontSize: 18,
             lineHeight: 1.6,
             color: 'var(--text2)',
-            maxWidth: 620,
+            maxWidth: 640,
             margin: '0 auto 36px',
             fontWeight: 400,
           }}
         >
-          14-point Varsity checklist. A council of 5 AI models with a Claude judge. Exact buy zones, 30+ indicators, live news sentiment — for every NSE stock.
+          14-point Varsity checklist, 30+ technical indicators, exact buy zones, Fibonacci levels, and live news sentiment — for every NSE stock. No signup.
         </p>
 
         {/* CTAs */}
