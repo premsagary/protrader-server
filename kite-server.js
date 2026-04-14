@@ -8586,6 +8586,28 @@ function scoreDayTrade(candles, sym) {
   let bullPattern = detectBullishCandlePattern(todayCandles);
   let bearPattern = detectBearishCandlePattern(todayCandles);
 
+  // ── Varsity M2 Ch 5-12 confluence: Candlestick + Volume multiplier ──
+  // "A Hammer on 3x volume is meaningfully stronger than a Hammer on 0.5x
+  // volume." Varsity: confluence of price action + volume = highest-conviction
+  // entry. We modulate the pattern's weight by the volume environment of the
+  // bar that printed the pattern. Multiplier range: 0.7x (weak vol) to 1.3x
+  // (strong vol), applied BEFORE the Ch 4 prior-trend filter so the trend
+  // context still demotes a high-vol continuation pattern.
+  function _candleVolumeConfluence(pattern, vr) {
+    if (!pattern) return pattern;
+    let mult = 1.0;
+    if (vr >= 3.0)      mult = 1.3;
+    else if (vr >= 2.0) mult = 1.2;
+    else if (vr >= 1.5) mult = 1.1;
+    else if (vr >= 1.0) mult = 1.0;
+    else if (vr >= 0.7) mult = 0.85;
+    else                mult = 0.7;
+    if (mult === 1.0) return pattern;
+    return { ...pattern, weight: Math.round(pattern.weight * mult), description: pattern.description + ` (vol ${vr.toFixed(1)}x ${mult > 1 ? 'boost' : 'weak'})` };
+  }
+  if (bullPattern) bullPattern = _candleVolumeConfluence(bullPattern, volRatio);
+  if (bearPattern) bearPattern = _candleVolumeConfluence(bearPattern, volRatio);
+
   // ── Varsity M2 Ch 4: Prior-trend filter for reversal patterns ──
   // Varsity: "A Bullish Engulfing is meaningful AFTER a downtrend. In an
   // uptrend it's just continuation." Compute session trend over the last
