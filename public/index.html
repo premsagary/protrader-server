@@ -812,164 +812,141 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 .lp{height:100vh;background:transparent;color:#d4d0c8;overflow-x:hidden;overflow-y:auto;position:relative;z-index:1}
 /* ── Landing nav bar — glassmorphism container ── */
 .lp-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 36px;position:fixed;top:0;left:0;right:0;z-index:300;
-  background:rgba(8,10,18,0.92);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
-  border-bottom:1px solid rgba(120,160,255,0.10);
-  box-shadow:0 4px 24px rgba(0,0,0,0.35),0 0 40px rgba(60,100,220,0.03)}
-.lp-logo{font-weight:800;font-size:15px;color:#f0f4ff;letter-spacing:2.5px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
-.lp-logo-dot{width:7px;height:7px;border-radius:50%;background:#8aa2ff;animation:pdot 3s ease-in-out infinite;box-shadow:0 0 10px rgba(138,162,255,0.5)}
+  background:rgba(10,10,11,0.92);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  box-shadow:none}
+.lp-logo{font-weight:800;font-size:15px;color:#F5F5F7;letter-spacing:2.5px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.lp-logo-dot{width:7px;height:7px;border-radius:50%;background:#30D158;animation:pdot 3s ease-in-out infinite;box-shadow:0 0 8px rgba(48,209,88,0.4)}
 
 /* ── Nav links — bright, readable, premium ── */
 .lp-nav-links{display:flex;gap:32px;align-items:center}
-.lp-nav-links a{color:#d0d5e0;font-size:13px;font-weight:500;text-decoration:none;letter-spacing:0.4px;
-  transition:color 0.2s ease,transform 0.2s ease,text-shadow 0.3s ease;position:relative;padding:2px 0}
-.lp-nav-links a:not(.lp-cta-sm):hover{color:#ffffff;transform:translateY(-1px);
-  text-shadow:0 0 12px rgba(138,162,255,0.25)}
+.lp-nav-links a{color:#A1A1AA;font-size:13px;font-weight:500;text-decoration:none;letter-spacing:0.4px;
+  transition:color 0.2s ease;position:relative;padding:2px 0}
+.lp-nav-links a:not(.lp-cta-sm):hover{color:#F5F5F7;transform:none;text-shadow:none}
 /* Animated underline on hover */
-.lp-nav-links a:not(.lp-cta-sm)::after{content:'';position:absolute;bottom:-2px;left:0;right:0;height:1.5px;
-  background:linear-gradient(90deg,#8aa2ff,#22d3ee);border-radius:2px;
-  transform:scaleX(0);transform-origin:center;transition:transform 0.3s var(--ease-out-expo)}
+.lp-nav-links a:not(.lp-cta-sm)::after{content:'';position:absolute;bottom:-2px;left:0;right:0;height:1px;
+  background:rgba(255,255,255,0.3);border-radius:2px;
+  transform:scaleX(0);transform-origin:center;transition:transform 0.2s ease}
 .lp-nav-links a:not(.lp-cta-sm):hover::after{transform:scaleX(1)}
 
-/* ── CTA button — dominant, glowing, unmissable ── */
-.lp-cta-sm{background:linear-gradient(135deg,rgba(60,100,220,0.40),rgba(80,60,200,0.30));color:#ffffff;
-  border:1px solid rgba(120,160,255,0.35);border-radius:16px;
-  padding:14px 36px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:0.5px;
-  transform:perspective(600px) translateZ(0);
-  box-shadow:0 4px 16px rgba(60,100,220,0.20),0 0 20px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s;
-  text-decoration:none;animation:lpCtaGlow 3s ease-in-out infinite}
-@keyframes lpCtaGlow{0%,100%{box-shadow:0 4px 16px rgba(60,100,220,0.20),0 0 20px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}
-  50%{box-shadow:0 4px 24px rgba(60,100,220,0.30),0 0 30px rgba(60,100,220,0.14),inset 0 1px 0 rgba(255,255,255,0.10)}}
-.lp-cta-sm:hover{background:linear-gradient(135deg,rgba(60,100,220,0.55),rgba(80,60,200,0.40));color:#ffffff;
-  transform:perspective(600px) translateZ(5px) translateY(-2px) scale(1.04);
-  box-shadow:0 8px 30px rgba(60,100,220,0.30),0 0 40px rgba(60,100,220,0.12)}
+/* ── CTA button — Apple ghost style ── */
+.lp-cta-sm{background:rgba(255,255,255,0.06);color:#F5F5F7;
+  border:1px solid rgba(255,255,255,0.10);border-radius:12px;
+  padding:12px 28px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.2px;
+  box-shadow:none;transition:background 0.2s ease,border-color 0.2s ease;
+  text-decoration:none;animation:none}
+.lp-cta-sm:hover{background:rgba(255,255,255,0.10);color:#ffffff;
+  transform:none;box-shadow:none}
 
 /* Hero */
 .lp-hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
   min-height:100vh;padding:120px 24px 80px;position:relative;z-index:1}
 .lp-hero::before{content:'';position:absolute;top:10%;left:50%;transform:translateX(-50%);width:80vw;height:60vh;
-  background:radial-gradient(ellipse at center,rgba(60,100,220,0.06),rgba(120,60,200,0.03),transparent 70%);
+  background:radial-gradient(ellipse at center,rgba(255,255,255,0.02),transparent 70%);
   pointer-events:none;filter:blur(60px);z-index:-1}
 .lp-hero-badge{display:inline-flex;align-items:center;gap:10px;
-  background:linear-gradient(135deg,rgba(60,100,220,0.14),rgba(80,60,200,0.08));
-  border:1px solid rgba(120,160,255,0.25);
-  border-radius:999px;padding:8px 22px;font-size:11px;color:#a0b8ff;letter-spacing:0.5px;font-weight:700;margin-bottom:28px;
-  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  box-shadow:0 4px 20px rgba(60,100,220,0.12),0 0 40px rgba(60,100,220,0.04),
-    inset 0 1px 0 rgba(255,255,255,0.06);
-  transform-style:preserve-3d;position:relative;overflow:hidden;
-  animation:lpBadgeBreathe 4s ease-in-out infinite}
-@keyframes lpBadgeBreathe{0%,100%{box-shadow:0 4px 20px rgba(60,100,220,0.12),0 0 40px rgba(60,100,220,0.04),inset 0 1px 0 rgba(255,255,255,0.06)}
-  50%{box-shadow:0 4px 28px rgba(60,100,220,0.20),0 0 60px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}}
-/* Glow sweep on badge */
-.lp-hero-badge::after{content:'';position:absolute;top:0;left:-130%;width:50%;height:100%;
-  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.06) 48%,rgba(255,255,255,0.10) 50%,rgba(255,255,255,0.06) 52%,transparent 70%);
-  pointer-events:none;animation:lpBadgeSweep 5s 2s ease-in-out infinite}
-@keyframes lpBadgeSweep{0%,80%{left:-130%}100%{left:170%}}
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:999px;padding:8px 22px;font-size:11px;color:#A1A1AA;letter-spacing:0.5px;font-weight:600;margin-bottom:28px;
+  position:relative;overflow:hidden;animation:none}
+.lp-hero-badge::after{display:none}
 .lp-hero-badge::before{content:'';width:7px;height:7px;border-radius:50%;
-  background:linear-gradient(135deg,#8aa2ff,#60d0ff);
+  background:#30D158;
   animation:pdot 3s ease-in-out infinite;
-  box-shadow:0 0 10px rgba(138,162,255,0.5),0 0 20px rgba(138,162,255,0.15);flex-shrink:0}
+  box-shadow:0 0 8px rgba(48,209,88,0.4);flex-shrink:0}
 .lp-hero h1{font-weight:300;font-size:clamp(34px,5.5vw,60px);letter-spacing:0.5px;line-height:1.12;margin-bottom:20px;
-  color:#f0f4ff;max-width:760px}
-.lp-hero h1 strong{font-weight:800;background:linear-gradient(135deg,#8aa2ff,#22d3ee);-webkit-background-clip:text;
+  color:#F5F5F7;max-width:760px}
+.lp-hero h1 strong{font-weight:800;background:linear-gradient(135deg,#22d3ee,#30D158);-webkit-background-clip:text;
   background-clip:text;color:transparent}
-.lp-hero-sub{font-size:clamp(13px,1.5vw,17px);color:#b8c2d3;max-width:560px;line-height:1.7;margin-bottom:40px;font-weight:400}
+.lp-hero-sub{font-size:clamp(13px,1.5vw,17px);color:#A1A1AA;max-width:560px;line-height:1.7;margin-bottom:40px;font-weight:400}
 .lp-hero-cta{display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center}
-.lp-btn-primary{background:linear-gradient(135deg,rgba(60,100,220,0.30),rgba(80,60,200,0.20));color:#e0e8ff;
-  border:1px solid rgba(120,160,255,0.30);border-radius:14px;padding:14px 34px;font-size:14px;font-weight:700;
-  cursor:pointer;letter-spacing:0.4px;font-family:inherit;
-  transform:perspective(600px) translateZ(0);backdrop-filter:blur(10px);
-  box-shadow:0 4px 20px rgba(60,100,220,0.15),inset 0 1px 0 rgba(255,255,255,0.06);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s}
-.lp-btn-primary:hover{background:linear-gradient(135deg,rgba(60,100,220,0.40),rgba(80,60,200,0.28));
-  transform:perspective(600px) translateZ(5px) translateY(-2px);
-  box-shadow:0 12px 40px rgba(60,100,220,0.22),0 0 60px rgba(60,100,220,0.06);color:#f0f4ff}
-.lp-btn-ghost{background:rgba(255,255,255,0.04);color:#E6EAF2;border:1px solid rgba(255,255,255,0.12);border-radius:14px;
-  padding:14px 30px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
-  transform:perspective(600px) translateZ(0);backdrop-filter:blur(8px);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;font-family:inherit;text-decoration:none}
-.lp-btn-ghost:hover{border-color:rgba(120,160,255,0.20);background:rgba(60,100,220,0.06);color:#f0f4ff;
-  transform:perspective(600px) translateZ(5px) translateY(-2px);box-shadow:0 10px 30px rgba(0,0,0,0.20);text-decoration:none}
-.lp-hero-trust{display:flex;gap:20px;margin-top:52px;font-size:11px;color:#9aa3b2;letter-spacing:0.3px;flex-wrap:wrap;justify-content:center}
+.lp-btn-primary{background:rgba(255,255,255,0.08);color:#F5F5F7;
+  border:1px solid rgba(255,255,255,0.10);border-radius:12px;padding:14px 34px;font-size:14px;font-weight:600;
+  cursor:pointer;letter-spacing:0.3px;font-family:inherit;
+  box-shadow:none;transition:background 0.2s ease,border-color 0.2s ease}
+.lp-btn-primary:hover{background:rgba(255,255,255,0.12);
+  transform:none;box-shadow:none;color:#ffffff}
+.lp-btn-ghost{background:rgba(255,255,255,0.04);color:#A1A1AA;border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+  padding:14px 30px;font-size:13px;font-weight:500;cursor:pointer;letter-spacing:0.3px;
+  transition:background 0.2s ease,border-color 0.2s ease;font-family:inherit;text-decoration:none}
+.lp-btn-ghost:hover{border-color:rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#F5F5F7;
+  transform:none;box-shadow:none;text-decoration:none}
+.lp-hero-trust{display:flex;gap:20px;margin-top:52px;font-size:11px;color:#71717A;letter-spacing:0.3px;flex-wrap:wrap;justify-content:center}
 .lp-hero-trust span{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,0.03);padding:6px 14px;
-  border-radius:999px;border:1px solid rgba(255,255,255,0.06);transition:all 0.3s ease}
-.lp-hero-trust span:hover{background:rgba(60,100,220,0.06);border-color:rgba(120,160,255,0.12)}
+  border-radius:999px;border:1px solid rgba(255,255,255,0.06);transition:all 0.2s ease}
+.lp-hero-trust span:hover{background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.10)}
 
 /* Features grid */
 .lp-features{padding:80px 24px;max-width:1100px;margin:0 auto}
-.lp-section-label{font-size:10px;color:#8aa2ff;text-transform:uppercase;letter-spacing:2.5px;font-weight:700;margin-bottom:14px;text-align:center}
-.lp-section-title{font-weight:300;font-size:clamp(24px,3.5vw,36px);color:#f0f4ff;text-align:center;margin-bottom:52px;letter-spacing:0.3px;line-height:1.2}
+.lp-section-label{font-size:10px;color:#A1A1AA;text-transform:uppercase;letter-spacing:2.5px;font-weight:700;margin-bottom:14px;text-align:center}
+.lp-section-title{font-weight:300;font-size:clamp(24px,3.5vw,36px);color:#F5F5F7;text-align:center;margin-bottom:52px;letter-spacing:0.3px;line-height:1.2}
 .lp-section-title strong{font-weight:700}
 .lp-feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-.lp-feature{background:linear-gradient(145deg,rgba(22,28,48,0.95),rgba(16,20,36,0.95));backdrop-filter:blur(14px);border:1px solid rgba(120,160,255,0.12);border-radius:16px;
-  padding:30px 26px;box-shadow:0 4px 20px rgba(0,0,0,0.30),0 0 0 1px rgba(120,160,255,0.04);transition:all 0.3s ease}
-.lp-feature:hover{border-color:rgba(120,160,255,0.30);box-shadow:0 16px 50px rgba(0,0,0,0.5),0 0 60px rgba(60,100,220,0.10),0 0 0 1px rgba(120,160,255,0.15),inset 0 1px 0 rgba(255,255,255,0.05)}
+.lp-feature{background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);border-radius:14px;
+  padding:30px 26px;box-shadow:0 4px 16px rgba(0,0,0,0.25);transition:all 0.2s ease}
+.lp-feature:hover{border-color:rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.3)}
 .lp-feature-icon{font-size:24px;margin-bottom:14px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;
-  background:rgba(60,100,220,0.12);border-radius:12px;border:1px solid rgba(60,100,220,0.20);box-shadow:0 0 12px rgba(60,100,220,0.10)}
-.lp-feature h3{font-size:15px;font-weight:700;color:#E6EAF2;margin-bottom:10px;letter-spacing:0.2px}
-.lp-feature p{font-size:12px;color:#b8c2d3;line-height:1.65;font-weight:400}
+  background:rgba(255,255,255,0.06);border-radius:12px;border:1px solid rgba(255,255,255,0.08);box-shadow:none}
+.lp-feature h3{font-size:15px;font-weight:700;color:#F5F5F7;margin-bottom:10px;letter-spacing:0.2px}
+.lp-feature p{font-size:12px;color:#71717A;line-height:1.65;font-weight:400}
 
 /* Stats banner */
-.lp-stats{display:flex;justify-content:center;gap:56px;padding:56px 24px;border-top:1px solid rgba(120,160,255,0.08);
-  border-bottom:1px solid rgba(120,160,255,0.08);flex-wrap:wrap;position:relative}
-.lp-stats::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(60,100,220,0.03),transparent 70%);pointer-events:none}
+.lp-stats{display:flex;justify-content:center;gap:56px;padding:56px 24px;border-top:1px solid rgba(255,255,255,0.06);
+  border-bottom:1px solid rgba(255,255,255,0.06);flex-wrap:wrap;position:relative}
+.lp-stats::before{display:none}
 .lp-stat{text-align:center;position:relative;z-index:1}
-.lp-stat-val{font-size:32px;font-weight:800;color:#f0f4ff;letter-spacing:-0.5px;
-  background:linear-gradient(135deg,#f0f4ff,#8aa2ff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lp-stat-label{font-size:10px;color:#9aa3b2;margin-top:6px;letter-spacing:0.5px;text-transform:uppercase;font-weight:600}
+.lp-stat-val{font-size:32px;font-weight:800;color:#F5F5F7;letter-spacing:-0.5px}
+.lp-stat-label{font-size:10px;color:#71717A;margin-top:6px;letter-spacing:0.5px;text-transform:uppercase;font-weight:600}
 
 /* Pricing */
 .lp-pricing{padding:80px 24px;max-width:900px;margin:0 auto;position:relative}
 .lp-price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start}
-.lp-price-card{background:linear-gradient(145deg,rgba(22,28,48,0.95),rgba(14,18,34,0.95));backdrop-filter:blur(14px);border:1px solid rgba(120,160,255,0.12);border-radius:18px;padding:36px 28px;
-  text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.35),0 0 0 1px rgba(120,160,255,0.04);transition:all 0.3s ease}
-.lp-price-card:hover{border-color:rgba(120,160,255,0.30);box-shadow:0 18px 50px rgba(0,0,0,0.5),0 0 60px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.05)}
-.lp-price-card.featured{border-color:rgba(60,100,220,0.30);background:linear-gradient(135deg,rgba(60,100,220,0.10),rgba(14,18,30,0.95));
-  box-shadow:0 0 40px rgba(60,100,220,0.08),0 8px 30px rgba(0,0,0,0.30)}
+.lp-price-card{background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:36px 28px;
+  text-align:center;box-shadow:0 4px 16px rgba(0,0,0,0.25);transition:all 0.2s ease}
+.lp-price-card:hover{border-color:rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.3)}
+.lp-price-card.featured{border-color:rgba(255,255,255,0.10);background:#232326;
+  box-shadow:0 4px 20px rgba(0,0,0,0.3)}
 .lp-price-card.featured .lp-price-badge{display:inline-block}
-.lp-price-badge{display:none;background:rgba(60,100,220,0.12);color:#8aa2ff;border-radius:999px;padding:4px 14px;
+.lp-price-badge{display:none;background:rgba(255,255,255,0.06);color:#A1A1AA;border-radius:999px;padding:4px 14px;
   font-size:9px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;margin-bottom:14px}
-.lp-price-name{font-size:15px;font-weight:800;color:#E6EAF2;letter-spacing:0.3px;margin-bottom:6px}
-.lp-price-cost{font-size:36px;font-weight:800;margin:14px 0;letter-spacing:-0.5px;
-  background:linear-gradient(135deg,#f0f4ff,#8aa2ff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lp-price-cost span{font-size:13px;font-weight:400;color:#9aa3b2;-webkit-text-fill-color:#9aa3b2}
-.lp-price-desc{font-size:11px;color:#b8c2d3;margin-bottom:22px;line-height:1.6;font-weight:400}
+.lp-price-name{font-size:15px;font-weight:800;color:#F5F5F7;letter-spacing:0.3px;margin-bottom:6px}
+.lp-price-cost{font-size:36px;font-weight:800;margin:14px 0;letter-spacing:-0.5px;color:#F5F5F7}
+.lp-price-cost span{font-size:13px;font-weight:400;color:#71717A;-webkit-text-fill-color:#71717A}
+.lp-price-desc{font-size:11px;color:#A1A1AA;margin-bottom:22px;line-height:1.6;font-weight:400}
 .lp-price-list{list-style:none;padding:0;margin:0 0 28px;text-align:left}
-.lp-price-list li{font-size:11px;color:#E6EAF2;padding:8px 0;border-bottom:1px solid rgba(120,160,255,0.06);display:flex;gap:8px;align-items:flex-start;font-weight:500}
+.lp-price-list li{font-size:11px;color:#F5F5F7;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);display:flex;gap:8px;align-items:flex-start;font-weight:500}
 .lp-price-list li::before{content:'✓';color:#22c55e;font-size:12px;font-weight:700;flex-shrink:0;margin-top:0px}
-.lp-price-btn{width:100%;padding:14px;border-radius:14px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:0.3px;
-  transform:perspective(600px) translateZ(0);
-  transition:transform 0.25s var(--ease-out-expo),box-shadow 0.25s var(--ease-out-expo),background 0.3s,color 0.3s,border-color 0.3s;
-  font-family:inherit;border:1px solid rgba(120,160,255,0.12);background:rgba(60,100,220,0.08);color:#E6EAF2}
-.lp-price-btn:hover{background:rgba(60,100,220,0.15);color:#f0f4ff;
-  transform:perspective(600px) translateZ(4px) translateY(-2px);box-shadow:0 8px 24px rgba(60,100,220,0.12)}
-.lp-price-card.featured .lp-price-btn{background:linear-gradient(135deg,rgba(60,100,220,0.25),rgba(80,60,200,0.18));color:#e0e8ff;
-  border-color:rgba(120,160,255,0.25);box-shadow:0 4px 16px rgba(60,100,220,0.12)}
-.lp-price-card.featured .lp-price-btn:hover{background:linear-gradient(135deg,rgba(60,100,220,0.35),rgba(80,60,200,0.25));
-  box-shadow:0 8px 30px rgba(60,100,220,0.18);color:#f0f4ff}
+.lp-price-btn{width:100%;padding:14px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.3px;
+  transition:background 0.2s ease,border-color 0.2s ease;
+  font-family:inherit;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.06);color:#F5F5F7}
+.lp-price-btn:hover{background:rgba(255,255,255,0.10);color:#ffffff;
+  transform:none;box-shadow:none}
+.lp-price-card.featured .lp-price-btn{background:rgba(255,255,255,0.10);color:#F5F5F7;
+  border-color:rgba(255,255,255,0.12);box-shadow:none}
+.lp-price-card.featured .lp-price-btn:hover{background:rgba(255,255,255,0.14);
+  box-shadow:none;color:#ffffff}
 
 /* How it works */
 .lp-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;max-width:960px;margin:0 auto}
-.lp-step{text-align:center;position:relative;background:linear-gradient(145deg,rgba(22,28,48,0.90),rgba(14,18,34,0.90));border:1px solid rgba(120,160,255,0.10);
-  border-radius:16px;padding:28px 22px;box-shadow:0 4px 16px rgba(0,0,0,0.25);transition:all 0.3s ease}
-.lp-step:hover{border-color:rgba(120,160,255,0.28);box-shadow:0 16px 45px rgba(0,0,0,0.5),0 0 50px rgba(60,100,220,0.08),inset 0 1px 0 rgba(255,255,255,0.04)}
-.lp-step-num{width:36px;height:36px;border-radius:50%;border:1px solid rgba(60,100,220,0.30);background:rgba(60,100,220,0.12);
-  display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:13px;font-weight:700;color:var(--shiva-blue);
-  box-shadow:0 0 12px rgba(60,100,220,0.15);transition:transform 0.4s cubic-bezier(.03,.98,.52,.99),box-shadow 0.3s ease}
-.lp-step h4{font-size:14px;font-weight:700;color:#E6EAF2;margin-bottom:8px}
-.lp-step p{font-size:11px;color:#9aa3b2;line-height:1.65}
+.lp-step{text-align:center;position:relative;background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);
+  border-radius:14px;padding:28px 22px;box-shadow:0 4px 16px rgba(0,0,0,0.25);transition:all 0.2s ease}
+.lp-step:hover{border-color:rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.4)}
+.lp-step-num{width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.06);
+  display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:13px;font-weight:700;color:#A1A1AA;
+  box-shadow:none;transition:transform 0.3s ease}
+.lp-step h4{font-size:14px;font-weight:700;color:#F5F5F7;margin-bottom:8px}
+.lp-step p{font-size:11px;color:#71717A;line-height:1.65}
 
 /* Example walkthrough */
-.lp-example{max-width:700px;margin:0 auto;background:linear-gradient(145deg,rgba(22,28,48,0.95),rgba(14,18,34,0.95));backdrop-filter:blur(14px);border:1px solid rgba(120,160,255,0.14);
+.lp-example{max-width:700px;margin:0 auto;background:#1B1B1E;border:1px solid rgba(255,255,255,0.06);
   border-radius:14px;padding:28px 24px;box-shadow:0 4px 24px rgba(0,0,0,0.30)}
 .lp-ex-header{display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap}
-.lp-ex-sym{font-size:20px;font-weight:800;color:#E6EAF2;letter-spacing:0.5px}
+.lp-ex-sym{font-size:20px;font-weight:800;color:#F5F5F7;letter-spacing:0.5px}
 .lp-ex-tag{font-size:9px;padding:4px 12px;border-radius:999px;font-weight:700;letter-spacing:0.3px}
 .lp-ex-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.lp-ex-metric{flex:1;min-width:100px;background:rgba(60,100,220,0.05);border:1px solid rgba(120,160,255,0.08);border-radius:10px;padding:12px 14px;text-align:center;transition:all 0.3s ease}
-.lp-ex-metric:hover{border-color:rgba(120,160,255,0.18);background:rgba(60,100,220,0.08)}
-.lp-ex-metric-label{font-size:9px;color:#8b93a5;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;font-weight:600}
+.lp-ex-metric{flex:1;min-width:100px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px 14px;text-align:center;transition:all 0.2s ease}
+.lp-ex-metric:hover{border-color:rgba(255,255,255,0.12);background:rgba(255,255,255,0.05)}
+.lp-ex-metric-label{font-size:9px;color:#71717A;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;font-weight:600}
 .lp-ex-metric-val{font-size:16px;font-weight:800;letter-spacing:-0.3px}
 
 /* Social proof */
@@ -1049,106 +1026,64 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   transition:left 0.65s var(--ease-out-expo);pointer-events:none;z-index:2}
 .lp-sheen:hover::after{left:170%}
 
-/* ── Enhanced hover glow — layered depth shadows ── */
-.lp-feature:hover,.lp-step:hover{box-shadow:0 12px 40px rgba(0,0,0,0.35),0 0 60px rgba(60,100,220,0.05),0 0 0 1px rgba(120,160,255,0.06)}
-.lp-price-card:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(60,100,220,0.04),0 0 0 1px rgba(120,160,255,0.06)}
-.lp-price-card.featured:hover{box-shadow:0 14px 44px rgba(0,0,0,0.35),0 0 70px rgba(60,100,220,0.10),0 0 0 1px rgba(60,100,220,0.18)}
-.lp-example:hover{box-shadow:0 18px 55px rgba(0,0,0,0.35),0 0 70px rgba(60,100,220,0.05)}
+/* ── Hover shadows — clean, no color tint ── */
+.lp-feature:hover,.lp-step:hover{box-shadow:0 8px 30px rgba(0,0,0,0.3)}
+.lp-price-card:hover{box-shadow:0 8px 30px rgba(0,0,0,0.3)}
+.lp-price-card.featured:hover{box-shadow:0 8px 30px rgba(0,0,0,0.35)}
+.lp-example:hover{box-shadow:0 8px 30px rgba(0,0,0,0.3)}
 
 /* ═══════════════════════════════════════════════════════════════
    3D TILT + ANIME EFFECTS — Landing page immersive depth
    Smooth perspective transforms, glowing edges, floating depth
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── 3D tilt container — all interactive LP elements ── */
-.lp-tilt{transform-style:preserve-3d;transition:transform 0.4s cubic-bezier(.03,.98,.52,.99),box-shadow 0.4s ease}
+/* ── Flat minimal interactions — Apple style ── */
+.lp-tilt{transition:box-shadow 0.2s ease}
 .lp-tilt:hover{z-index:2}
 
-/* ── Buttons — 3D push/pop with glow burst ── */
+/* ── Buttons — flat, no 3D ── */
 .lp-btn-primary,.lp-btn-ghost,.lp-price-btn,.lp-cta-sm{
-  transform-style:preserve-3d;position:relative;overflow:hidden;
-  transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),box-shadow 0.35s ease,background 0.3s,color 0.3s,border-color 0.3s}
-.lp-btn-primary:hover,.lp-price-btn:hover,.lp-cta-sm:hover{
-  transform:perspective(800px) rotateX(-4deg) rotateY(3deg) translateZ(8px) translateY(-3px) scale(1.03);
-  box-shadow:0 16px 40px rgba(60,100,220,0.25),0 0 50px rgba(60,100,220,0.10),0 0 0 1px rgba(120,160,255,0.20),inset 0 1px 0 rgba(255,255,255,0.12)}
-.lp-btn-ghost:hover{
-  transform:perspective(800px) rotateX(-3deg) rotateY(2deg) translateZ(6px) translateY(-2px) scale(1.02);
-  box-shadow:0 12px 32px rgba(0,0,0,0.25),0 0 40px rgba(60,100,220,0.06),0 0 0 1px rgba(120,160,255,0.15)}
-/* Active press — push into screen */
+  position:relative;overflow:hidden;
+  transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease}
+.lp-btn-primary:hover,.lp-price-btn:hover,.lp-cta-sm:hover{transform:none;box-shadow:none}
+.lp-btn-ghost:hover{transform:none;box-shadow:none}
 .lp-btn-primary:active,.lp-btn-ghost:active,.lp-price-btn:active,.lp-cta-sm:active{
-  transform:perspective(800px) translateZ(-4px) scale(0.97) !important;
-  box-shadow:0 2px 8px rgba(0,0,0,0.3),inset 0 2px 4px rgba(0,0,0,0.2) !important;
-  transition-duration:0.1s}
-/* Glow sweep on buttons */
-.lp-btn-primary::before,.lp-price-btn::before{content:'';position:absolute;top:0;left:-100%;width:60%;height:100%;
-  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,0.06) 48%,rgba(255,255,255,0.10) 50%,rgba(255,255,255,0.06) 52%,transparent 70%);
-  transition:left 0.5s ease;pointer-events:none;z-index:1}
-.lp-btn-primary:hover::before,.lp-price-btn:hover::before{left:180%}
+  transform:scale(0.98) !important;box-shadow:none !important;transition-duration:0.1s}
+.lp-btn-primary::before,.lp-price-btn::before{display:none}
 
-/* ── Feature cards — 3D tilt with floating depth ── */
-.lp-feature{transform-style:preserve-3d;transition:transform 0.45s cubic-bezier(.03,.98,.52,.99),box-shadow 0.45s ease,border-color 0.3s}
-.lp-feature:hover{transform:perspective(1000px) rotateX(-3deg) rotateY(4deg) translateZ(12px) translateY(-6px);
-  box-shadow:0 20px 50px rgba(0,0,0,0.4),0 0 80px rgba(60,100,220,0.08),0 0 0 1px rgba(120,160,255,0.12);
-  border-color:rgba(120,160,255,0.25)}
-.lp-feature:nth-child(2):hover{transform:perspective(1000px) rotateX(-2deg) rotateY(-3deg) translateZ(14px) translateY(-8px)}
-.lp-feature:nth-child(3):hover{transform:perspective(1000px) rotateX(-4deg) rotateY(2deg) translateZ(10px) translateY(-5px)}
-/* Icon pops forward in 3D */
-.lp-feature:hover .lp-feature-icon{transform:translateZ(20px) scale(1.12) rotateY(-5deg);
-  box-shadow:0 8px 24px rgba(60,100,220,0.20);border-color:rgba(60,100,220,0.30)}
-.lp-feature-icon{transition:transform 0.4s cubic-bezier(.03,.98,.52,.99),box-shadow 0.3s ease,border-color 0.3s;transform-style:preserve-3d}
+/* ── Feature cards — subtle hover ── */
+.lp-feature{transition:border-color 0.2s ease,box-shadow 0.2s ease}
+.lp-feature:hover{transform:none;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-color:rgba(255,255,255,0.10)}
+.lp-feature:nth-child(2):hover,.lp-feature:nth-child(3):hover{transform:none}
+.lp-feature:hover .lp-feature-icon{transform:none;box-shadow:none;border-color:rgba(255,255,255,0.10)}
+.lp-feature-icon{transition:border-color 0.2s ease}
 
-/* ── Step cards — staggered 3D float ── */
-.lp-step{transform-style:preserve-3d;transition:transform 0.45s cubic-bezier(.03,.98,.52,.99),box-shadow 0.45s ease,border-color 0.3s}
-.lp-step:hover{transform:perspective(1000px) rotateX(-3deg) rotateY(3deg) translateZ(10px) translateY(-6px);
-  box-shadow:0 18px 45px rgba(0,0,0,0.35),0 0 60px rgba(60,100,220,0.06),0 0 0 1px rgba(120,160,255,0.10);
-  border-color:rgba(120,160,255,0.20)}
-.lp-step:nth-child(2):hover{transform:perspective(1000px) rotateX(-2deg) rotateY(-4deg) translateZ(12px) translateY(-7px)}
-.lp-step:nth-child(3):hover{transform:perspective(1000px) rotateX(-4deg) rotateY(2deg) translateZ(8px) translateY(-5px)}
-/* Step number pops forward */
-.lp-step:hover .lp-step-num{transform:translateZ(18px) scale(1.15);
-  box-shadow:0 4px 20px rgba(60,100,220,0.25);animation:lpPulseNum 2s ease-in-out infinite}
+/* ── Step cards — subtle hover ── */
+.lp-step:hover{transform:none;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-color:rgba(255,255,255,0.10)}
+.lp-step:nth-child(2):hover,.lp-step:nth-child(3):hover{transform:none}
+.lp-step:hover .lp-step-num{transform:none;box-shadow:none}
 .lp-step-num{transition:transform 0.4s cubic-bezier(.03,.98,.52,.99),box-shadow 0.3s ease;transform-style:preserve-3d}
 
-/* ── Pricing cards — 3D depth with featured spotlight ── */
-.lp-price-card{transform-style:preserve-3d;transition:transform 0.45s cubic-bezier(.03,.98,.52,.99),box-shadow 0.45s ease,border-color 0.3s}
-.lp-price-card:hover{transform:perspective(1000px) rotateX(-3deg) rotateY(3deg) translateZ(14px) translateY(-8px)}
-.lp-price-card:nth-child(2):hover{transform:perspective(1000px) rotateX(-2deg) rotateY(-2deg) translateZ(18px) translateY(-10px)}
-.lp-price-card:nth-child(3):hover{transform:perspective(1000px) rotateX(-3deg) rotateY(-4deg) translateZ(12px) translateY(-6px)}
-/* Featured card permanent float */
-.lp-price-card.featured{animation:lpFeaturedFloat 5s ease-in-out infinite}
-@keyframes lpFeaturedFloat{0%,100%{transform:translateY(0) translateZ(0)}50%{transform:translateY(-4px) translateZ(6px)}}
-.lp-price-card.featured:hover{animation:none;transform:perspective(1000px) rotateX(-2deg) rotateY(-2deg) translateZ(20px) translateY(-10px)}
+/* ── Pricing cards — flat ── */
+.lp-price-card:hover{transform:none}
+.lp-price-card:nth-child(2):hover,.lp-price-card:nth-child(3):hover{transform:none}
+.lp-price-card.featured{animation:none}
+.lp-price-card.featured:hover{animation:none;transform:none}
 
-/* ── Example walkthrough — deep glass panel ── */
-.lp-example{transform-style:preserve-3d;transition:transform 0.5s cubic-bezier(.03,.98,.52,.99),box-shadow 0.5s ease,border-color 0.3s}
-.lp-example:hover{transform:perspective(1200px) rotateX(-2deg) rotateY(2deg) translateZ(10px) translateY(-4px);
-  box-shadow:0 22px 60px rgba(0,0,0,0.4),0 0 80px rgba(60,100,220,0.06),0 0 0 1px rgba(120,160,255,0.12);
-  border-color:rgba(120,160,255,0.22)}
-/* Metric tiles pop forward on parent hover */
-.lp-example:hover .lp-ex-metric{transform:translateZ(8px);
-  border-color:rgba(120,160,255,0.18);background:rgba(60,100,220,0.08)}
-.lp-ex-metric{transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),border-color 0.3s,background 0.3s}
+/* ── Example walkthrough — flat ── */
+.lp-example:hover{transform:none;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-color:rgba(255,255,255,0.10)}
+.lp-example:hover .lp-ex-metric{transform:none;border-color:rgba(255,255,255,0.10);background:rgba(255,255,255,0.05)}
 
-/* ── Stats banner — 3D counter hover ── */
-.lp-stat{transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99)}
-.lp-stat:hover{transform:perspective(600px) translateZ(10px) translateY(-4px) scale(1.08)}
-.lp-stat:hover .lp-stat-val{filter:brightness(1.3);text-shadow:0 0 30px rgba(138,162,255,0.3)}
-.lp-stat-val{transition:filter 0.3s ease,text-shadow 0.3s ease}
+/* ── Stats banner — flat ── */
+.lp-stat:hover{transform:none}
+.lp-stat:hover .lp-stat-val{filter:none;text-shadow:none}
 
-/* ── ROI callout — breathing depth ── */
-.lp-roi{transform-style:preserve-3d;transition:transform 0.45s cubic-bezier(.03,.98,.52,.99),box-shadow 0.4s ease}
-.lp-roi:hover{transform:perspective(800px) rotateX(-2deg) translateZ(8px) translateY(-4px);
-  box-shadow:0 14px 40px rgba(0,0,0,0.3),0 0 50px rgba(60,100,220,0.06);border-color:rgba(60,100,220,0.22)}
+/* ── ROI callout — flat ── */
+.lp-roi:hover{transform:none;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-color:rgba(255,255,255,0.10)}
 
-/* ── Methodology / proof section — subtle tilt ── */
-.lp-proof{transform-style:preserve-3d;transition:transform 0.5s cubic-bezier(.03,.98,.52,.99)}
-
-/* ── Nav bar — glass depth on scroll ── */
-.lp-nav{transform-style:preserve-3d;transition:box-shadow 0.3s ease,background 0.3s ease}
-.lp-nav.scrolled{box-shadow:0 8px 40px rgba(0,0,0,0.5),0 0 60px rgba(60,100,220,0.04);background:rgba(8,10,18,0.97)}
-
-/* ── Hero badge — float + glow ── */
-.lp-hero-badge{transform-style:preserve-3d;transition:transform 0.35s cubic-bezier(.03,.98,.52,.99),box-shadow 0.3s ease}
+/* ── Nav bar — clean glass on scroll ── */
+.lp-nav{transition:box-shadow 0.2s ease,background 0.2s ease}
+.lp-nav.scrolled{box-shadow:0 1px 0 rgba(255,255,255,0.06);background:rgba(10,10,11,0.95)}
 .lp-hero-badge:hover{transform:perspective(600px) translateZ(8px) translateY(-3px) scale(1.05);
   box-shadow:0 8px 24px rgba(60,100,220,0.15),0 0 40px rgba(60,100,220,0.06)}
 
@@ -1159,8 +1094,7 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 @keyframes lpAuraDrift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
 .lp-features,.lp-steps-wrap{position:relative}
 .lp-features::before,.lp-steps-wrap::before{content:'';position:absolute;inset:-40px;opacity:0.4;pointer-events:none;z-index:-1;
-  background:radial-gradient(ellipse at 30% 50%,rgba(60,100,220,0.03),transparent 50%),radial-gradient(ellipse at 70% 50%,rgba(120,60,200,0.02),transparent 50%);
-  background-size:200% 200%;animation:lpAuraDrift 12s ease-in-out infinite}
+  background:none;animation:none}
 
 /* ── LP reveal animations ── */
 .lp-reveal-up{opacity:0;transform:translateY(36px);transition:opacity 0.75s var(--ease-out-expo),transform 0.75s var(--ease-out-expo)}
@@ -1180,19 +1114,12 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 [data-lp-delay="5"]{transition-delay:0.40s!important}
 [data-lp-delay="6"]{transition-delay:0.48s!important}
 
-/* ── Section atmosphere overlays ── */
-.lp [data-lp-zone]{position:relative}
-.lp [data-lp-zone]::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity 1.4s ease;z-index:0}
-[data-lp-zone="hero"]::before{background:radial-gradient(ellipse 60% 40% at 50% 30%,rgba(60,100,220,0.04),transparent)}
-[data-lp-zone="stats"]::before{background:linear-gradient(180deg,rgba(60,100,220,0.02),transparent 40%,transparent 60%,rgba(60,100,220,0.02))}
-[data-lp-zone="howit"]::before{background:radial-gradient(ellipse 80% 50% at 50% 50%,rgba(60,100,220,0.03),transparent)}
-[data-lp-zone="features"]::before{background:radial-gradient(ellipse 70% 45% at 50% 40%,rgba(60,100,220,0.025),transparent)}
-[data-lp-zone="pricing"]::before{background:radial-gradient(ellipse 55% 50% at 50% 50%,rgba(60,100,220,0.03),transparent)}
-.lp [data-lp-zone].lp-zone-active::before{opacity:1}
+/* ── Section atmosphere overlays — disabled ── */
+.lp [data-lp-zone]::before{display:none}
 
 /* ── Scroll progress bar ── */
 .lp-scroll-progress{position:fixed;top:0;left:0;width:100%;height:2px;z-index:400;pointer-events:none;
-  background:linear-gradient(90deg,rgba(138,162,255,0.6),rgba(34,211,238,0.3));transform-origin:left;transform:scaleX(0);transition:transform 0.12s linear}
+  background:rgba(255,255,255,0.15);transform-origin:left;transform:scaleX(0);transition:transform 0.12s linear}
 
 /* ── Sequential metric reveal in example card ── */
 .lp-example .lp-ex-metric{opacity:0;transform:perspective(800px) translateY(14px) scale(0.96);
@@ -1207,49 +1134,35 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
 /* ── Step number pulse when visible ── */
 .lp-step.visible .lp-step-num{animation:lpPulseNum 3s 0.4s ease-in-out infinite}
 
-/* ── Stat value glow ── */
-.lp-stat.visible .lp-stat-val{text-shadow:0 0 28px rgba(64,112,168,0.08)}
+/* ── Stat value — no glow ── */
+.lp-stat.visible .lp-stat-val{text-shadow:none}
 
 /* ── Featured price card border glow ── */
 .lp-price-card.featured{position:relative}
-.lp-price-card.featured::before{content:'';position:absolute;inset:-1px;border-radius:19px;
-  background:linear-gradient(135deg,rgba(60,100,220,0.15),rgba(60,100,220,0.02),rgba(80,60,200,0.10));
-  z-index:-1;opacity:0;transition:opacity 0.7s ease}
-.lp-price-card.featured.visible::before,.lp-price-card.featured:hover::before{opacity:1}
+.lp-price-card.featured::before{display:none}
 
-/* ── ROI card shimmer ── */
-.lp-roi.visible{box-shadow:0 0 40px rgba(64,112,168,0.04);border-color:rgba(64,112,168,0.12)}
+/* ── ROI card — no shimmer ── */
+.lp-roi.visible{box-shadow:none;border-color:rgba(255,255,255,0.08)}
 
 /* ── Section divider glow ── */
 .lp-section-divider{height:1px;border:none;margin:0;
-  background:linear-gradient(90deg,transparent,rgba(120,160,255,0.12) 30%,rgba(120,160,255,0.12) 70%,transparent)}
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.06) 30%,rgba(255,255,255,0.06) 70%,transparent)}
 
 /* ── Parallax ── */
 .lp-parallax{will-change:transform}
 
 /* ── Mobile simplifications ── */
-/* ── Glass transparency upgrade — reveal 3D background through UI tiles ── */
-.lp .lp-feature,.lp .lp-step,.lp .lp-stat{
-  background:rgba(10,12,18,0.55);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-  border-color:rgba(80,120,180,0.10)}
-.lp .lp-price-card{
-  background:rgba(10,12,18,0.52);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  border-color:rgba(80,120,180,0.10)}
-.lp .lp-price-card.featured{
-  background:linear-gradient(135deg,rgba(64,112,168,0.10),rgba(10,12,18,0.52));
-  border-color:rgba(80,120,180,0.18)}
-.lp .lp-example{
-  background:rgba(10,12,18,0.50);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  border-color:rgba(80,120,180,0.12)}
-.lp .lp-ex-metric{
-  background:rgba(10,12,18,0.48);border-color:rgba(80,120,180,0.08)}
-.lp .lp-roi{
-  background:rgba(10,12,18,0.50);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border-color:rgba(80,120,180,0.10)}
-.lp .lp-hero-badge{
-  background:rgba(10,12,18,0.45);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+/* ── Solid neutral backgrounds — Apple style ── */
+.lp .lp-feature,.lp .lp-step{background:#1B1B1E;border-color:rgba(255,255,255,0.06)}
+.lp .lp-stat{background:transparent}
+.lp .lp-price-card{background:#1B1B1E;border-color:rgba(255,255,255,0.06)}
+.lp .lp-price-card.featured{background:#232326;border-color:rgba(255,255,255,0.10)}
+.lp .lp-example{background:#1B1B1E;border-color:rgba(255,255,255,0.06)}
+.lp .lp-ex-metric{background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.06)}
+.lp .lp-roi{background:#1B1B1E;border-color:rgba(255,255,255,0.06)}
+.lp .lp-hero-badge{background:rgba(255,255,255,0.04)}
 /* Subtle glow tint on section dividers */
-.lp .lp-section-divider{border-color:rgba(80,128,200,0.08)}
+.lp .lp-section-divider{border-color:rgba(255,255,255,0.04)}
 
 @media(max-width:768px){
   .lp-sheen::after{display:none}
@@ -1259,9 +1172,8 @@ tbody tr:hover{box-shadow:inset 3px 0 0 var(--shiva-blue)}
   .lp-hero.lp-cinematic .lp-hero-trust span{animation:none}
   .lp-scroll-progress{display:none}
   .lp-reveal-up,.lp-reveal-scale,.lp-reveal-left,.lp-reveal-right{transition-duration:0.4s!important}
-  /* Restore opacity on mobile for readability */
-  .lp .lp-feature,.lp .lp-step,.lp .lp-stat,.lp .lp-price-card,.lp .lp-example,.lp .lp-roi{
-    background:rgba(12,14,20,0.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  /* Solid backgrounds on mobile */
+  .lp .lp-feature,.lp .lp-step,.lp .lp-price-card,.lp .lp-example,.lp .lp-roi{background:#1B1B1E}
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1972,8 +1884,8 @@ img,video,canvas,svg{max-width:100%;height:auto}
 <nav class="lp-nav">
   <div class="lp-logo"><span class="lp-logo-dot"></span>ProTrader</div>
   <div class="lp-nav-links">
-    <a href="#how" class="lp-btn-primary lp-nav-desktop-link" style="text-decoration:none;padding:8px 20px;font-size:13px">How It Works</a>
-    <a href="#features" class="lp-btn-primary lp-nav-desktop-link" style="text-decoration:none;padding:8px 20px;font-size:13px">Features</a>
+    <a href="#how" class="lp-cta-sm lp-nav-desktop-link" style="text-decoration:none;padding:8px 20px;font-size:13px">How It Works</a>
+    <a href="#features" class="lp-cta-sm lp-nav-desktop-link" style="text-decoration:none;padding:8px 20px;font-size:13px">Features</a>
     <button class="lp-btn-primary lp-nav-cta" onclick="enterFreeMode()">Start Analyzing — Free</button>
   </div>
   <!-- Mobile hamburger -->
@@ -1996,12 +1908,12 @@ img,video,canvas,svg{max-width:100%;height:auto}
   <p class="lp-hero-sub">14-point Varsity checklist, AI council of 5 models, exact buy zones, and 30+ indicators for every NSE stock. No signup required — just open and analyze.</p>
   <div class="lp-hero-cta">
     <button class="lp-btn-primary" onclick="enterFreeMode()">Start Analyzing — Free</button>
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">No Signup Needed</button>
-    <a href="#example" class="lp-btn-primary" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15));text-decoration:none">See Live Example ↓</a>
+    <button class="lp-btn-ghost" onclick="enterFreeMode()">No Signup Needed</button>
+    <a href="#example" class="lp-btn-ghost" style="text-decoration:none">See Live Example ↓</a>
   </div>
   <div class="lp-hero-cta" style="margin-top:10px">
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">⚡ Results in under 10s</button>
-    <button class="lp-btn-primary" onclick="enterFreeMode()" style="background:linear-gradient(135deg,rgba(40,80,180,0.25),rgba(60,40,160,0.15))">🆓 100% free forever</button>
+    <button class="lp-btn-ghost" onclick="enterFreeMode()">⚡ Results in under 10s</button>
+    <button class="lp-btn-ghost" onclick="enterFreeMode()">🆓 100% free forever</button>
   </div>
 </section>
 
