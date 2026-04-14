@@ -8337,7 +8337,15 @@ function applySectorCap(sortedPicks, maxPerSector = 2) {
   return topCandidate.concat(tail);
 }
 
-function scoreDayTrade(candles, sym) {
+// Module-level Nifty snapshot set by runUnifiedKitePipeline on each run so
+// scoreDayTrade can compute relative strength (stock vs index) without
+// needing Kite index fetches inside the per-stock scoring loop.
+let _niftyDailyChangePct = null;
+
+function scoreDayTrade(candles, sym, ctx) {
+  ctx = ctx || {};
+  // Prefer per-scan injection via ctx, otherwise fall back to module snapshot.
+  const _niftyChange = typeof ctx.niftyDailyChange === 'number' ? ctx.niftyDailyChange : _niftyDailyChangePct;
   const n = candles.length;
   if (n < 30) return null;
 
@@ -8734,6 +8742,75 @@ function scoreDayTrade(candles, sym) {
   const pdHighTouches  = _touches(pdHigh);
   const pdLowTouches   = _touches(pdLow);
 
+  // ── Varsity M2 Ch 12: On-Balance Volume (OBV) + divergence ──
+  // OBV adds volume on up-closes, subtracts on down-closes, accumulates as a
+  // directional running total. Ch 12: "OBV often leads price — when OBV makes
+  // a new high before price does, accumulation is underway."
+  // Bullish div: price makes lower low, OBV makes higher low -> reversal up.
+  // Bearish div: price makes higher high, OBV makes lower high -> reversal down.
+  const obv = [0];
+  for (let i = 1; i < n; i++) {
+    const prev = obv[obv.length - 1];
+    if (C[i] > C[i - 1]) obv.push(prev + V[i]);
+    else if (C[i] < C[i - 1]) obv.push(prev - V[i]);
+    else obv.push(prev);
+  }
+  let obvBullDiv = false, obvBearDiv = false;
+  if (n >= 25) {
+    const loIdx = _findPivot(C, (a, b) => a < b, 20);
+    if (C[n - 1] < C[loIdx] * 1.001 && obv[n - 1] > obv[loIdx]) obvBullDiv = true;
+    const hiIdx = _findPivot(C, (a, b) => a > b, 20);
+    if (C[n - 1] > C[hiIdx] * 0.999 && obv[n - 1] < obv[hiIdx]) obvBearDiv = true;
+  }
+
+  // ── Relative Strength vs Nifty (Dow Theory implicit: averages must confirm) ──
+  // Stock's daily % change compared to Nifty's. A stock up 1% when Nifty is
+  // down 1% has +2% relative strength — strong bullish signal. Inversely,
+  // -2% relative = weak stock, favors mean-reversion (bounce) setup.
+  const stockDailyChange = prevClose > 0 ? ((px - prevClose) / prevClose) * 100 : 0;
+  const relStrength = (_niftyChange !== null && typeof _niftyChange === 'number')
+    ? +(stockDailyChange - _niftyChange).toFixed(2)
+    : null;
+
+  // ── Varsity M9 intraday rule: ADR (Average Daily Range) used % ──
+  // "If stock has already consumed X% of its typical daily range, the
+  // remaining move is limited." Compute ADR from prior-day ranges in the
+  // candle history (excluding today), then express today's range as % of ADR.
+  //   ADR used > 80%  -> likely exhausted, avoid new long entries
+  //   ADR used < 30%  -> lots of room, favorable for trend continuation
+  let adrUsedPct = 0, adrAvg = 0;
+  {
+    const seenDates = new Map(); // dateStr -> {hi, lo}
+    for (const c of candles) {
+      const d = _candleDateStr(c.date || c.timestamp);
+      if (!d || d === todayStart) continue;
+      const cur = seenDates.get(d);
+      if (!cur) seenDates.set(d, { hi: c.high, lo: c.low });
+      else { if (c.high > cur.hi) cur.hi = c.high; if (c.low < cur.lo) cur.lo = c.low; }
+    }
+    const ranges = [...seenDates.values()]
+      .map(r => r.lo > 0 ? ((r.hi - r.lo) / r.lo) * 100 : 0)
+      .filter(r => r > 0);
+    if (ranges.length >= 2) {
+      adrAvg = +(ranges.reduce((a, b) => a + b, 0) / ranges.length).toFixed(2);
+      const todayRangePct = dayLow > 0 ? ((dayHigh - dayLow) / dayLow) * 100 : 0;
+      adrUsedPct = adrAvg > 0 ? +((todayRangePct / adrAvg) * 100).toFixed(0) : 0;
+    }
+  }
+
+  // ── Varsity M2 Ch 11: Role reversal (broken resistance becomes support) ──
+  // "A level that was resistance becomes support once decisively broken."
+  // Check today's candles: did we break above the level AND later retest it
+  // from above without breaking back down? That's role-reversal in action.
+  function _roleReversalSupport(level) {
+    if (!level || todayCandles.length < 4) return false;
+    const broke = todayCandles.some(c => c.high > level * 1.005);        // broke by 0.5%+
+    const retest = todayCandles.slice(-5).some(c => c.low <= level * 1.002 && c.close > level);  // pulled back to touch
+    return broke && retest && px > level;                                // and still holding above
+  }
+  const pdhRoleSupport  = _roleReversalSupport(pdHigh);
+  const orHighRoleSupport = _roleReversalSupport(orHigh);
+
   // ── Varsity M2 Ch 7: Failed-breakout / Bull-trap detection ──
   // "A breakout that reverses within 3 bars is a failed breakout — the
   // ORIGINAL level has reasserted itself." Check if any of the last 3
@@ -8861,6 +8938,10 @@ function scoreDayTrade(candles, sym) {
   if (atRoundNumber && lastPriceUp) { vwapScore += _gain('VWAP', 4, `At ₹${round.level} support`); vwapDetail.push(`At ₹${round.level}`); }
   // Varsity M2 Ch 12: weak rally check — reclaim on shrinking volume = suspect
   if (vpaWeakRally && vwapScore >= 40) { vwapScore += _penalty('VWAP', 8, 'Weak rally (vol declining)'); vwapDetail.push('Weak rally'); }
+  // Relative strength: reclaiming VWAP while outperforming Nifty = institutional interest
+  if (relStrength !== null && relStrength > 1.0 && vwapScore > 0) { vwapScore += _gain('VWAP', 5, `Outperforming Nifty by ${relStrength.toFixed(1)}%`); vwapDetail.push(`RS +${relStrength.toFixed(1)}%`); }
+  // OBV bullish div supports reclaim (smart-money accumulation)
+  if (obvBullDiv && vwapScore > 0) { vwapScore += _gain('VWAP', 5, 'OBV bullish divergence'); vwapDetail.push('OBV bull div'); }
   vwapScore = Math.max(0, Math.min(100, vwapScore));
 
   // ── SETUP 2: GAP & GO (Varsity M2 Ch7: gap theory + follow-through) ──
@@ -8931,6 +9012,10 @@ function scoreDayTrade(candles, sym) {
   if (gapClass === 'BREAKAWAY') { gapScore += _gain('GAP', gapClassBonus, 'Breakaway gap (from tight range + vol)'); gapDetail.push('Breakaway'); }
   else if (gapClass === 'CONTINUATION') { gapScore += _gain('GAP', gapClassBonus, 'Continuation gap (trend-aligned)'); gapDetail.push('Continuation'); }
   else if (gapClass === 'EXHAUSTION') { gapScore += _penalty('GAP', Math.abs(gapClassBonus), 'Exhaustion gap (after extended trend)'); gapDetail.push('Exhaustion'); }
+  // Relative strength vs Nifty during gap-up
+  if (relStrength !== null && gapPct > 0 && relStrength > 1.5) { gapScore += _gain('GAP', 5, `Outperforming Nifty (${relStrength.toFixed(1)}%)`); gapDetail.push(`RS +${relStrength.toFixed(1)}%`); }
+  // ADR exhaustion: if today's range is already at ADR, gap-and-go has no room
+  if (adrUsedPct > 80 && gapPct > 0) { gapScore += _penalty('GAP', 8, `ADR ${adrUsedPct}% used — gap already spent the move`); gapDetail.push(`ADR ${adrUsedPct}%`); }
   gapScore = Math.max(0, Math.min(100, gapScore));
 
   // ── SETUP 3: BREAKOUT (Varsity M2 Ch7+16: S/R breakout + volume expansion) ──
@@ -9021,6 +9106,17 @@ function scoreDayTrade(candles, sym) {
   // a level in the last 3 bars but came back below, invalidating the break.
   if (orFailedBreak) { breakoutScore += _penalty('BRK', 12, 'Failed OR break — bull trap'); breakoutDetail.push('OR bull trap'); }
   if (pdhFailedBreak) { breakoutScore += _penalty('BRK', 10, 'Failed PDH break — bull trap'); breakoutDetail.push('PDH bull trap'); }
+  // Varsity M2 Ch 12: OBV bearish divergence at breakout = accumulation not confirming
+  if (obvBearDiv) { breakoutScore += _penalty('BRK', 10, 'OBV bearish divergence — distribution'); breakoutDetail.push('OBV bear div'); }
+  // Varsity M2 Ch 11: role reversal — broken resistance acting as support = confirmed breakout structure
+  if (pdhRoleSupport) { breakoutScore += _gain('BRK', 7, 'PDH role-reversed (resistance→support held)'); breakoutDetail.push('PDH role-rev'); }
+  if (orHighRoleSupport) { breakoutScore += _gain('BRK', 5, 'OR role-reversed (held retest)'); breakoutDetail.push('OR role-rev'); }
+  // Relative strength vs Nifty — breakouts are more trustworthy when stock is outperforming
+  if (relStrength !== null && relStrength > 1.5) { breakoutScore += _gain('BRK', 5, `Strong vs Nifty (${relStrength.toFixed(1)}%)`); breakoutDetail.push(`RS +${relStrength.toFixed(1)}%`); }
+  else if (relStrength !== null && relStrength < -1.0 && breakoutScore >= 40) { breakoutScore += _penalty('BRK', 5, 'Breaking out but lagging Nifty'); breakoutDetail.push(`RS ${relStrength.toFixed(1)}%`); }
+  // M9 ADR rule: if stock has already burned >80% of its typical daily range, breakout late-stage
+  if (adrUsedPct > 80) { breakoutScore += _penalty('BRK', 8, `ADR ${adrUsedPct}% used — likely exhausted`); breakoutDetail.push(`ADR ${adrUsedPct}%`); }
+  else if (adrUsedPct > 0 && adrUsedPct < 40) { breakoutScore += _gain('BRK', 4, `ADR ${adrUsedPct}% used — room to run`); breakoutDetail.push(`ADR ${adrUsedPct}%`); }
   breakoutScore = Math.max(0, Math.min(100, breakoutScore));
 
   // ── SETUP 4: OVERSOLD BOUNCE (Varsity M2 Ch14+15+18: RSI + Stochastic + BB reversal) ──
@@ -9084,6 +9180,10 @@ function scoreDayTrade(candles, sym) {
   // Varsity M2 Ch 13: VWAP -2σ band = 95% statistical extreme, strong mean-reversion
   if (below2Sigma) { bounceScore += _gain('BOUNCE', 12, 'Below VWAP -2σ band (95% extreme)'); bounceDetail.push('<VWAP -2σ'); }
   else if (below1Sigma) { bounceScore += _gain('BOUNCE', 6, 'Below VWAP -1σ band'); bounceDetail.push('<VWAP -1σ'); }
+  // Varsity M2 Ch 12: OBV bullish divergence — accumulation underneath a weak price
+  if (obvBullDiv) { bounceScore += _gain('BOUNCE', 10, 'OBV bullish divergence — accumulation'); bounceDetail.push('OBV bull div'); }
+  // Relative weakness can favor mean-reversion bounce when stock is oversold vs index
+  if (relStrength !== null && relStrength < -1.5) { bounceScore += _gain('BOUNCE', 5, `Weak vs Nifty (${relStrength.toFixed(1)}%) — oversold setup`); bounceDetail.push(`RS ${relStrength.toFixed(1)}%`); }
   // MACD turning — momentum shift (Varsity M2 Ch15)
   if (macdCross) { bounceScore += _gain('BOUNCE', 10, 'MACD turning up'); bounceDetail.push('MACD turning up'); }
   else if (macdBull) { bounceScore += _gain('BOUNCE', 4, 'MACD bull'); bounceDetail.push('MACD bull'); }
@@ -9434,6 +9534,15 @@ function scoreDayTrade(candles, sym) {
     // Varsity M2 Ch 15: MACD histogram state
     macdHist: +macdHist.toFixed(3),
     macdHistRising, macdHistZeroUp,
+    // Varsity M2 Ch 12: OBV + divergence
+    obv: obv.length ? obv[obv.length - 1] : 0,
+    obvBullDiv, obvBearDiv,
+    // Relative strength vs Nifty (Dow Theory implicit confirmation)
+    relStrength, niftyDailyChange: _niftyChange,
+    // M9 intraday: ADR usage
+    adrAvg, adrUsedPct,
+    // Varsity M2 Ch 11: role reversal flags
+    pdhRoleSupport, orHighRoleSupport,
     // Varsity M2 Ch 16: Fibonacci — session retracement level price is sitting at
     fibLevel: nearFib ? nearFib.name : null,
     fibStrength: nearFib ? nearFib.strength : 0,
@@ -9721,6 +9830,8 @@ async function runUnifiedKitePipeline(force = false) {
         niftyBenchmark['6m']  = nn >= 126 ? (NC[nn-1] - NC[nn-126]) / NC[nn-126] : 0;
         niftyBenchmark['3m']  = nn >= 63  ? (NC[nn-1] - NC[nn-63])  / NC[nn-63]  : 0;
         niftyBenchmark['1m']  = nn >= 21  ? (NC[nn-1] - NC[nn-21])  / NC[nn-21]  : 0;
+        // Expose today's Nifty % change to scoreDayTrade for relative-strength scoring.
+        if (nn >= 2) _niftyDailyChangePct = +((NC[nn-1] - NC[nn-2]) / NC[nn-2] * 100).toFixed(2);
       }
     } catch (e) { /* non-critical */ }
 
