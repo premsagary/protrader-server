@@ -23,6 +23,10 @@ const screenerScraper = require("./screener-scraper");
 // Data logging layer for future ML training. All calls are non-blocking
 // internally — a DB outage never propagates to the scoring path.
 const mlLogger  = require("./ml-logger");
+// Outcome computation engine — runs async via cron, fills outcome_metrics
+// with MFE / MAE / forward returns / time-to-barrier. Lookahead-safe by
+// construction (only processes snapshots older than 31 minutes).
+const outcomeEngine = require("./outcome-engine");
 
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
@@ -9802,6 +9806,18 @@ app.get('/api/admin/ml-logger-status', async (req, res) => {
   }
 });
 
+// Manual outcome-engine run — useful after backfills or when the cron
+// seems stuck. Non-blocking: kicks off a background run and returns
+// immediately with the current state.
+app.post('/api/admin/outcome-engine/run', async (req, res) => {
+  if (outcomeEngine.isRunning()) return res.json({ status: 'already_running' });
+  const batch = parseInt(req.query.batch || '500', 10);
+  outcomeEngine.computeOutcomes(batch)
+    .then(r => console.log('[outcome-engine] manual run complete:', JSON.stringify(r)))
+    .catch(e => console.error('[outcome-engine] manual run error:', e.message));
+  res.json({ status: 'started', batch });
+});
+
 // Test endpoint — fetch 3 stocks and return detailed results for debugging
 app.get('/api/admin/pipeline-test', async (req, res) => {
   const results = { steps: [], errors: [] };
@@ -19278,6 +19294,15 @@ async function start() {
   //   - Score cache rebuild and DayTrade sort run in parallel at the end
   cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
     runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+
+  // ── Outcome computation — every 5 minutes, 24×7 ─────────────────────────
+  // Cheap no-op if no pending snapshots. Runs outside market hours too so
+  // afternoon/evening scans get their outcomes filled by midnight. Lookahead
+  // safety is enforced inside computeOutcomes (ts < NOW - 31 min filter).
+  cron.schedule("*/5 * * * *", () => {
+    outcomeEngine.computeOutcomes(500).catch(e =>
+      console.error('[outcome-engine] cron error:', e.message));
   }, { timezone: "Asia/Kolkata" });
   // Standalone fallback: intradayRescoreTA() and scanDayTrades() still exist
   // as individual functions for manual API triggers or edge cases (e.g. if
