@@ -5469,9 +5469,11 @@ async function buildMFCache() {
     console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
 }
-// Build MF cache on startup + every 30 min Mon-Fri 8AM-5PM IST
+// Build MF cache on startup + at :15 and :45 every hour Mon-Fri 8AM-5PM IST.
+// Offset 15 min from the TA pipeline's *:00/*:30 schedule so logs don't
+// interleave and the two refreshes don't sit idle at the same moment.
 buildMFCache();
-cron.schedule('*/30 8-16 * * 1-5', () => {
+cron.schedule('15,45 8-16 * * 1-5', () => {
   const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   console.log(`🏦 ${hour}: Mutual fund rescore starting...`);
   buildMFCache();
@@ -18198,9 +18200,21 @@ async function start() {
   } else {
     console.log("⚠️  No token - visit /auth/login or paste token in dashboard");
   }
-  // NSE: every 3 min during market hours Mon-Fri
-  cron.schedule("*/3 9-15 * * 1-5", ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
-  cron.schedule("15 9 * * 1-5",     ()=>scanAndTrade(), {timezone:"Asia/Kolkata"});
+  // NSE RoboTrade scan — every ~3 min during market hours Mon-Fri, but
+  // carefully offset so it never lands on a unified-pipeline minute
+  // (which runs at :01,:06,:11,:16,:21,:26,:31,:36,:41,:46,:51,:56).
+  // This avoids two heavy Kite workloads firing on the same tick and
+  // triggering "Too many requests" during :06/:21/:36/:51. Cadence is
+  // 16 firings per hour (~3.75 min avg, 6 min worst-case gap).
+  //
+  // The old separate `15 9 * * 1-5` opening cron was removed — minute
+  // :15 is already in this list, so the opener was a silent duplicate
+  // (second fire got blocked by the _scanning flag anyway).
+  cron.schedule(
+    "0,3,9,12,15,18,24,27,30,33,39,42,45,48,54,57 9-15 * * 1-5",
+    () => scanAndTrade(),
+    { timezone: "Asia/Kolkata" }
+  );
 
   // ── Unified Kite Pipeline — every 5 min during market hours ──
   // Replaces separate intradayRescoreTA() + scanDayTrades() with a single pass:
