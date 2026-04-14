@@ -8696,10 +8696,12 @@ function scoreDayTrade(candles, sym) {
 
 let _unifiedPipelineRunning = false;
 
-// Scan all UNIVERSE stocks on 5-min candles and populate _dayTradeCache
-async function scanDayTrades() {
+// Scan all UNIVERSE stocks on 5-min candles and populate _dayTradeCache.
+// force=true allows off-hours scans (startup warm-up, manual admin refresh)
+// — scoreDayTrade() already has a last-trading-day fallback.
+async function scanDayTrades(force = false) {
   if (_dayTradeScanning) return;
-  if (!isMarketOpen()) return;
+  if (!force && !isMarketOpen()) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
 
   _dayTradeScanning = true;
@@ -18177,6 +18179,15 @@ async function start() {
     refreshAllFundamentals();                                                    // Kite candles → scores (background)
     refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message));  // Yahoo enrichment (background)
     setTimeout(scanAndTrade, 5000);
+    // ── DayTrade warm-up on startup ──
+    // Cache is in-memory; every Railway restart wipes it. Force a scan on
+    // boot so admins see last-session picks even if we come up outside
+    // market hours. scoreDayTrade() falls back to the last trading day's
+    // 5-min candles when today has none (weekend / evening / holiday).
+    setTimeout(() => {
+      console.log('📊 DayTrade cache warm-up on startup...');
+      scanDayTrades(true).catch(e => console.error('DayTrade warm-up error:', e.message));
+    }, 15000);
   } else {
     console.log("⚠️  No token - visit /auth/login or paste token in dashboard");
   }
