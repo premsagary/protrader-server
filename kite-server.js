@@ -8960,17 +8960,18 @@ async function runUnifiedKitePipeline(force = false) {
       if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 350));
     }
 
-    // ── Rebuild score caches (both in parallel) ──
-    const [,] = await Promise.all([
-      // Rebuild the daily score cache with fresh TA data
-      rebuildScoreCache().catch(e => console.error('Score cache rebuild error:', e.message)),
-      // Sort and update DayTrade cache immediately
-      Promise.resolve().then(() => {
-        dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
-        _dayTradeCache   = dayTradeResults;
-        _dayTradeCacheTs = Date.now();
-      }),
-    ]);
+    // ── Finalize DayTrade cache ──
+    // (The old code called rebuildScoreCache() here in parallel, but that
+    //  function was never defined anywhere in this file — it threw a
+    //  ReferenceError synchronously inside Promise.all, which aborted the
+    //  whole pipeline BEFORE _dayTradeCache got assigned. That's why every
+    //  unified-pipeline run logged "rebuildScoreCache is not defined" and
+    //  DayTrade picks stayed at 0. The daily score cache is maintained by
+    //  refreshAllFundamentals() on its own cadence, so nothing depends on
+    //  that missing function here.)
+    dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
+    _dayTradeCache   = dayTradeResults;
+    _dayTradeCacheTs = Date.now();
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length };
@@ -18184,10 +18185,20 @@ async function start() {
     // boot so admins see last-session picks even if we come up outside
     // market hours. scoreDayTrade() falls back to the last trading day's
     // 5-min candles when today has none (weekend / evening / holiday).
+    //
+    // We delay to 3 minutes after boot because:
+    //   1. refreshAllFundamentals() runs in background and saturates Kite
+    //      quota for the first ~90s. Warming sooner triggers "Too many
+    //      requests" on every candle fetch.
+    //   2. We need validTokens populated — guard below handles the race.
     setTimeout(() => {
-      console.log('📊 DayTrade cache warm-up on startup...');
+      if (!Object.keys(validTokens || {}).length) {
+        console.log('📊 DayTrade warm-up skipped: validTokens empty (instrument fetch still pending)');
+        return;
+      }
+      console.log(`📊 DayTrade cache warm-up on startup (validTokens=${Object.keys(validTokens).length})...`);
       scanDayTrades(true).catch(e => console.error('DayTrade warm-up error:', e.message));
-    }, 15000);
+    }, 180000);
   } else {
     console.log("⚠️  No token - visit /auth/login or paste token in dashboard");
   }
