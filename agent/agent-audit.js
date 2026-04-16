@@ -169,6 +169,72 @@ async function getRecentDecisions(pool, limit = 30) {
   }
 }
 
+// ── Phase 2 paper-trade helpers ─────────────────────────────────────────────
+
+// Summary row for the status endpoint — headline PnL + win/loss breakdown.
+async function getPaperStatsToday(pool) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*)::INT                                                   AS total,
+        COUNT(*) FILTER (WHERE exit_at IS NULL)::INT                    AS open_count,
+        COUNT(*) FILTER (WHERE exit_at IS NOT NULL)::INT                AS closed_count,
+        COUNT(*) FILTER (WHERE exit_at IS NOT NULL AND pnl_rupees > 0)::INT AS wins,
+        COUNT(*) FILTER (WHERE exit_at IS NOT NULL AND pnl_rupees <= 0)::INT AS losses,
+        COALESCE(SUM(pnl_rupees) FILTER (WHERE exit_at IS NOT NULL), 0) AS realized_pnl,
+        COALESCE(AVG(pnl_pct)    FILTER (WHERE exit_at IS NOT NULL), 0) AS avg_pct,
+        COALESCE(MAX(pnl_rupees) FILTER (WHERE exit_at IS NOT NULL), 0) AS best_trade,
+        COALESCE(MIN(pnl_rupees) FILTER (WHERE exit_at IS NOT NULL), 0) AS worst_trade
+      FROM agent_trades
+      WHERE agent_mode = 'paper' AND created_at::date = CURRENT_DATE
+    `);
+    return rows[0] || {
+      total: 0, open_count: 0, closed_count: 0, wins: 0, losses: 0,
+      realized_pnl: 0, avg_pct: 0, best_trade: 0, worst_trade: 0,
+    };
+  } catch (e) {
+    if (/relation .* does not exist/i.test(String(e.message))) return { tablesMissing: true };
+    throw e;
+  }
+}
+
+async function getOpenTrades(pool) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, agent_decision_id, sym, side, quantity,
+             planned_entry, planned_stop_loss, planned_target,
+             fill_price, filled_at, created_at
+        FROM agent_trades
+       WHERE exit_at IS NULL AND agent_mode = 'paper'
+       ORDER BY filled_at DESC NULLS LAST, id DESC
+    `);
+    return rows;
+  } catch (e) {
+    if (/relation .* does not exist/i.test(String(e.message))) return [];
+    throw e;
+  }
+}
+
+async function getClosedTradesToday(pool) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, agent_decision_id, sym, side, quantity,
+             planned_entry, planned_stop_loss, planned_target,
+             fill_price, filled_at, exit_at, exit_price, exit_reason,
+             pnl_rupees, pnl_pct, created_at
+        FROM agent_trades
+       WHERE exit_at IS NOT NULL
+         AND agent_mode = 'paper'
+         AND created_at::date = CURRENT_DATE
+       ORDER BY exit_at DESC
+    `);
+    return rows;
+  } catch (e) {
+    if (/relation .* does not exist/i.test(String(e.message))) return [];
+    throw e;
+  }
+}
+
 module.exports = {
   newRunId,
   ensureTablesExist,
@@ -178,4 +244,7 @@ module.exports = {
   writeTradeEvent,
   getTodayStats,
   getRecentDecisions,
+  getPaperStatsToday,
+  getOpenTrades,
+  getClosedTradesToday,
 };

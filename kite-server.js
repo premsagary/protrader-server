@@ -22884,17 +22884,60 @@ app.get('/api/ai/validation', async (req, res) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// AUTO-AGENT (Phase 1 — rule-based intraday dry-run)
+// AUTO-AGENT — Phase 1 (dry-run) + Phase 2 (paper)
 // ═════════════════════════════════════════════════════════════════════════════
 // Reads picks from _dayTradeCache every minute during market hours, applies
 // Varsity filters + hard constraints, writes every decision to agent_decisions.
-// NO order placement until AGENT_MODE=paper (Phase 2) or live (Phase 3).
+//
+// Phase 1 (AGENT_MODE=dry_run): logs decisions only, no fills.
+// Phase 2 (AGENT_MODE=paper):   arms candidates; fills when trigger hit;
+//                               trade-manager poller (every 15s) applies
+//                               SL/TGT/time-exit/trailing.
+// Phase 3 (AGENT_MODE=live):    not built — intentionally throws.
+//
 // Mode is controlled from the UI /api/agent/mode endpoint and persisted in
-// app_config so it survives Railway redeploys. Migration is auto-applied.
+// app_config. Tables auto-migrate on first boot.
 // ═════════════════════════════════════════════════════════════════════════════
 (async () => {
   try {
     const agent = require('./agent');
+
+    // Bulk price fetch for paper mode — checks the in-memory live tick cache
+    // first (zero API cost) and falls back to a single Kite LTP call for any
+    // symbols missing from the cache. Returns { sym: price | null }.
+    async function agentGetPrices(syms) {
+      const out = {};
+      const need = [];
+      for (const s of syms || []) {
+        const p = livePrices[s]?.price;
+        if (p && Number.isFinite(p) && p > 0) out[s] = p;
+        else need.push(s);
+      }
+      if (need.length && kite && process.env.KITE_ACCESS_TOKEN) {
+        try {
+          const keys = need.map(s => `NSE:${s}`);
+          const r = await kite.getLTP(keys);
+          for (const s of need) {
+            const px = r?.[`NSE:${s}`]?.last_price;
+            out[s] = (px && Number.isFinite(px) && px > 0) ? px : null;
+          }
+        } catch (e) {
+          for (const s of need) if (out[s] == null) out[s] = null;
+        }
+      } else {
+        for (const s of need) if (!(s in out)) out[s] = null;
+      }
+      return out;
+    }
+
+    // ATR% lookup for the trailing-SL path. Uses the most recent scanner
+    // snapshot in _dayTradeCache. If the stock is no longer in the cache
+    // (rotated out), returns null → trailing falls back to breakeven-only.
+    function agentGetAtrPct(sym) {
+      const hit = (_dayTradeCache || []).find(p => p && p.sym === sym);
+      return hit && Number.isFinite(hit.atrPct) ? hit.atrPct : null;
+    }
+
     await agent.bootstrap({
       app,
       pool,
@@ -22903,6 +22946,8 @@ app.get('/api/ai/validation', async (req, res) => {
       getKiteToken:        () => process.env.KITE_ACCESS_TOKEN || null,
       getPicks:            () => _dayTradeCache,
       getNiftyDailyChange: () => _niftyDailyChangePct,
+      getPrices:           agentGetPrices,
+      getAtrPct:           agentGetAtrPct,
     });
   } catch (e) {
     console.error('🤖 agent wiring failed:', e.message);

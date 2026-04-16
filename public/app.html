@@ -13224,6 +13224,7 @@ function _renderAgentPanel(d){
 
     +statsBox
     +reasonBreak
+    +_agentPaperSections(d)
 
     +'<div style="margin-top:26px">'
       +'<div style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text2)">Recent decisions (last 20)</div>'
@@ -13232,6 +13233,161 @@ function _renderAgentPanel(d){
     +'</div>';
 
   cont.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2 paper-trade sections: PnL summary, armed candidates, open, closed
+// ═══════════════════════════════════════════════════════════════════════════
+function _agentPaperSections(d){
+  // Don't show anything in dry_run / off — paper data is always zeros there.
+  if(d.mode !== 'paper' && (!d.paper || (d.paper.total|0)===0) && (!d.armed || d.armed.length===0) && (!d.openTrades || d.openTrades.length===0)){
+    return '';
+  }
+  var p = d.paper || { total:0, open_count:0, closed_count:0, wins:0, losses:0, realized_pnl:0, avg_pct:0, best_trade:0, worst_trade:0 };
+  var realized = Number(p.realized_pnl || 0);
+  var winRate = (p.closed_count > 0) ? ((p.wins / p.closed_count) * 100).toFixed(0) : '-';
+
+  var pnlColor = realized > 0 ? 'var(--green)' : realized < 0 ? 'var(--red)' : 'var(--text2)';
+
+  var pnlCard = ''
+    +'<div style="margin-top:22px;padding:18px 20px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,rgba(168,85,247,0.04),rgba(168,85,247,0.01))">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+        +'<div style="font-size:14px;font-weight:800;letter-spacing:-0.2px;color:var(--text1)">Paper PnL · today</div>'
+        +'<span style="font-size:10px;color:var(--text4);background:rgba(168,85,247,0.1);padding:2px 8px;border-radius:10px;letter-spacing:0.5px">PHASE 2</span>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">'
+        +_pnlCell('Realized', '₹'+Math.round(realized).toLocaleString('en-IN'), pnlColor)
+        +_pnlCell('Open',    p.open_count||0, 'var(--text1)')
+        +_pnlCell('Closed',  p.closed_count||0, 'var(--text2)')
+        +_pnlCell('Win rate', winRate==='-' ? '-' : winRate+'%', winRate==='-'?'var(--text3)':(+winRate>=50?'var(--green)':'var(--red)'))
+        +_pnlCell('Best',    '₹'+Math.round(Number(p.best_trade||0)).toLocaleString('en-IN'), 'var(--green)')
+        +_pnlCell('Worst',   '₹'+Math.round(Number(p.worst_trade||0)).toLocaleString('en-IN'), 'var(--red)')
+      +'</div>'
+    +'</div>';
+
+  // Armed candidates — proposals waiting for trigger price to fire
+  var armedBlock = '';
+  if(Array.isArray(d.armed) && d.armed.length){
+    armedBlock = '<div style="margin-top:14px;padding:14px 18px;border:1px dashed #a855f7;border-radius:10px;background:rgba(168,85,247,0.04)">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+        +'<div style="font-size:12px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:#c084fc">🎯 Armed · waiting for trigger ('+d.armed.length+')</div>'
+        +'<div style="flex:1"></div>'
+        +'<button onclick="_agentClearArmed()" style="padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text4)">Cancel all</button>'
+      +'</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:8px">'
+      +d.armed.map(function(a){
+        return '<span style="font-family:var(--mono),monospace;font-size:11px;padding:4px 10px;border-radius:8px;background:rgba(168,85,247,0.12);color:#e9d5ff;border:1px solid rgba(168,85,247,0.3)">'
+          +'<strong>'+a.sym+'</strong> '+a.side+' @ ₹'+a.trigger_price+' × '+a.quantity+' ('+(a.ageMins|0)+'m)'
+        +'</span>';
+      }).join('')
+      +'</div></div>';
+  }
+
+  // Open trades table
+  var openBlock = '';
+  if(Array.isArray(d.openTrades) && d.openTrades.length){
+    openBlock = '<div style="margin-top:18px">'
+      +'<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--text2)">📂 Open paper positions ('+d.openTrades.length+')</div>'
+      +_agentOpenTradesTable(d.openTrades)
+    +'</div>';
+  }
+
+  return pnlCard + armedBlock + openBlock + _agentClosedSection(d);
+}
+
+function _pnlCell(label, value, color){
+  return '<div style="padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid var(--border)">'
+    +'<div style="font-size:10px;color:var(--text4);letter-spacing:0.5px;text-transform:uppercase;font-weight:600">'+label+'</div>'
+    +'<div style="font-size:20px;font-weight:800;margin-top:3px;color:'+color+'">'+value+'</div>'
+  +'</div>';
+}
+
+function _agentOpenTradesTable(rows){
+  return '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+    +'<thead><tr style="text-align:left;color:var(--text4);font-size:11px;letter-spacing:0.4px;text-transform:uppercase;border-bottom:1px solid var(--border)">'
+      +'<th style="padding:7px 10px">Filled</th>'
+      +'<th style="padding:7px 10px">Sym</th>'
+      +'<th style="padding:7px 10px">Side</th>'
+      +'<th style="padding:7px 10px;text-align:right">Qty</th>'
+      +'<th style="padding:7px 10px;text-align:right">Entry</th>'
+      +'<th style="padding:7px 10px;text-align:right">SL</th>'
+      +'<th style="padding:7px 10px;text-align:right">Tgt</th>'
+    +'</tr></thead><tbody>'
+    +rows.map(function(r){
+      var t = r.filled_at ? new Date(r.filled_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false}) : '…';
+      return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+        +'<td style="padding:7px 10px;font-family:var(--mono),monospace;color:var(--text4)">'+t+'</td>'
+        +'<td style="padding:7px 10px;font-weight:700">'+r.sym+'</td>'
+        +'<td style="padding:7px 10px;color:'+(r.side==='BUY'?'var(--green)':'var(--red)')+';font-weight:600">'+r.side+'</td>'
+        +'<td style="padding:7px 10px;text-align:right">'+r.quantity+'</td>'
+        +'<td style="padding:7px 10px;text-align:right;color:var(--text2)">₹'+Number(r.fill_price||r.planned_entry).toFixed(2)+'</td>'
+        +'<td style="padding:7px 10px;text-align:right;color:#fca5a5">₹'+Number(r.planned_stop_loss).toFixed(2)+'</td>'
+        +'<td style="padding:7px 10px;text-align:right;color:#86efac">₹'+Number(r.planned_target).toFixed(2)+'</td>'
+      +'</tr>';
+    }).join('')
+    +'</tbody></table>';
+}
+
+function _agentClosedSection(d){
+  // If we don't have closed-trades data on hand, pull it lazily
+  if(!d._closed){ _agentFetchTrades(); }
+  var closed = d._closed || [];
+  if(!closed.length) return '';
+  return '<div style="margin-top:22px">'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--text2)">🏁 Closed paper trades today ('+closed.length+')</div>'
+    +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr style="text-align:left;color:var(--text4);font-size:11px;letter-spacing:0.4px;text-transform:uppercase;border-bottom:1px solid var(--border)">'
+        +'<th style="padding:7px 10px">Exit</th>'
+        +'<th style="padding:7px 10px">Sym</th>'
+        +'<th style="padding:7px 10px;text-align:right">Qty</th>'
+        +'<th style="padding:7px 10px;text-align:right">Entry</th>'
+        +'<th style="padding:7px 10px;text-align:right">Exit</th>'
+        +'<th style="padding:7px 10px">Reason</th>'
+        +'<th style="padding:7px 10px;text-align:right">PnL</th>'
+        +'<th style="padding:7px 10px;text-align:right">%</th>'
+      +'</tr></thead><tbody>'
+      +closed.map(function(r){
+        var t = r.exit_at ? new Date(r.exit_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false}) : '…';
+        var pnlR = Number(r.pnl_rupees||0);
+        var pnlP = Number(r.pnl_pct||0);
+        var col = pnlR > 0 ? 'var(--green)' : pnlR < 0 ? 'var(--red)' : 'var(--text3)';
+        var reasonColor = r.exit_reason === 'TARGET_HIT' ? 'var(--green)' : r.exit_reason === 'SL_HIT' ? 'var(--red)' : 'var(--text3)';
+        return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+          +'<td style="padding:7px 10px;font-family:var(--mono),monospace;color:var(--text4)">'+t+'</td>'
+          +'<td style="padding:7px 10px;font-weight:700">'+r.sym+'</td>'
+          +'<td style="padding:7px 10px;text-align:right">'+r.quantity+'</td>'
+          +'<td style="padding:7px 10px;text-align:right;color:var(--text2)">₹'+Number(r.fill_price||r.planned_entry).toFixed(2)+'</td>'
+          +'<td style="padding:7px 10px;text-align:right;color:var(--text1);font-weight:600">₹'+Number(r.exit_price||0).toFixed(2)+'</td>'
+          +'<td style="padding:7px 10px;font-family:var(--mono),monospace;font-size:11px;color:'+reasonColor+'">'+(r.exit_reason||'?')+'</td>'
+          +'<td style="padding:7px 10px;text-align:right;font-weight:700;color:'+col+'">'+(pnlR>=0?'+':'')+'₹'+Math.round(pnlR).toLocaleString('en-IN')+'</td>'
+          +'<td style="padding:7px 10px;text-align:right;color:'+col+'">'+(pnlP>=0?'+':'')+pnlP.toFixed(2)+'%</td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody></table>'
+    +'</div>';
+}
+
+async function _agentFetchTrades(){
+  try{
+    var r = await fetch('/api/agent/trades', _authToken ? { headers:{Authorization:'Bearer '+_authToken} } : undefined);
+    if(!r.ok) return;
+    var d = await r.json();
+    if(_agentLastStatus && d.closed){
+      _agentLastStatus._closed = d.closed;
+      _renderAgentPanel(_agentLastStatus);
+    }
+  }catch(e){}
+}
+
+async function _agentClearArmed(){
+  if(!confirm('Cancel all armed candidates? They will not fill even if triggered.')) return;
+  try{
+    await fetch('/api/agent/clear-armed', {
+      method:'POST',
+      headers: _authToken ? {Authorization:'Bearer '+_authToken} : {}
+    });
+    _agentFetchStatus();
+  }catch(e){ alert('clear-armed failed: '+e.message); }
 }
 
 function renderAgentPage(){
