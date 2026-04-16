@@ -5462,9 +5462,12 @@ let mfScoreCachedAt = null;
 // return an instant 503 with a "warming" hint instead of blocking the
 // request for >30s (Railway's proxy will 502 long before the build finishes).
 let _mfCacheBuilding = false;
+
 // Label shown in the "source" column of every scored MF row. Default value is a
 // cold-start fallback; the real label is loaded from app_config.mf_data_source
 // on startup and rewritten by POST /api/mf/import on every successful import.
+// Declared here (before the DB-persistence helpers) so saveMFCacheToDB can
+// read it safely — previously shadowed by hoisting order.
 let mfDataSourceLabel = 'Tickertape - Apr 11 2026';
 (async () => {
   try {
@@ -5473,11 +5476,77 @@ let mfDataSourceLabel = 'Tickertape - Apr 11 2026';
   } catch(e) {}
 })();
 
+// How long a DB-persisted scored cache remains valid. Tickertape CSV is
+// imported quarterly and scoreMFTickertape() is deterministic over that
+// input, so rescoring every restart is pure waste. 24h = safe upper bound;
+// cron still refreshes every 15-45 min during trading hours anyway.
+const MF_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// ── MF cache DB persistence ───────────────────────────────────────────────
+// Keeps a single-row JSONB blob in `mf_score_cache` so Railway restarts
+// repopulate `mfScoreCache` instantly (no rescoring, no 30-60s warmup).
+async function _initMFCacheTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mf_score_cache (
+        id       INT PRIMARY KEY DEFAULT 1,
+        payload  JSONB NOT NULL,
+        built_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        version  TEXT
+      )
+    `).catch(()=>{});
+  } catch(_) {}
+}
+_initMFCacheTable();
+
+async function loadMFCacheFromDB() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT payload, EXTRACT(EPOCH FROM built_at)*1000 AS built_at_ms
+         FROM mf_score_cache WHERE id = 1`
+    );
+    if (!rows.length) return false;
+    const ageMs = Date.now() - Number(rows[0].built_at_ms || 0);
+    if (ageMs > MF_CACHE_TTL_MS) {
+      console.log(`MF cache in DB is ${(ageMs/3600000).toFixed(1)}h old — will rebuild`);
+      return false;
+    }
+    const payload = rows[0].payload;
+    if (!payload || !Array.isArray(payload) || payload.length === 0) return false;
+    mfScoreCache = payload;
+    mfScoreCachedAt = Number(rows[0].built_at_ms);
+    console.log(`✓ MF cache loaded from DB (${payload.length} funds, ${(ageMs/60000).toFixed(0)}m old) — skipping rescore`);
+    return true;
+  } catch(e) {
+    console.log('loadMFCacheFromDB error:', e.message);
+    return false;
+  }
+}
+
+async function saveMFCacheToDB() {
+  if (!mfScoreCache || !mfScoreCache.length) return;
+  try {
+    await pool.query(
+      `INSERT INTO mf_score_cache (id, payload, built_at, version)
+         VALUES (1, $1::jsonb, NOW(), $2)
+       ON CONFLICT (id) DO UPDATE
+         SET payload = EXCLUDED.payload, built_at = EXCLUDED.built_at, version = EXCLUDED.version`,
+      [JSON.stringify(mfScoreCache), mfDataSourceLabel || null]
+    );
+    console.log(`✓ MF cache persisted to DB (${mfScoreCache.length} funds)`);
+  } catch(e) {
+    console.log('saveMFCacheToDB error:', e.message);
+  }
+}
+
 async function buildMFCache() {
   if (_mfCacheBuilding) return;   // serialize — no parallel rebuilds
   _mfCacheBuilding = true;
+  const _t0 = Date.now();
   try {
+    const _tq = Date.now();
     const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
+    const _tqMs = Date.now() - _tq;
     if (!rows.length) { console.log('buildMFCache: no rows in mf_tickertape'); _mfCacheBuilding = false; return; }
 
     const pf = (v) => v!=null ? parseFloat(v) : null;
@@ -5573,14 +5642,23 @@ async function buildMFCache() {
 
     mfScoreCache = allFunds;
     mfScoreCachedAt = Date.now();
-    console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
+    const _totalMs = Date.now() - _t0;
+    console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible) · ${_totalMs}ms total, ${_tqMs}ms SELECT`);
+    // Persist so a restart skips the 30-60s rescore entirely
+    saveMFCacheToDB().catch(()=>{});
   } catch(e) { console.log('buildMFCache error:', e.message); }
   finally { _mfCacheBuilding = false; }
 }
 // Build MF cache on startup + at :15 and :45 every hour Mon-Fri 8AM-5PM IST.
 // Offset 15 min from the TA pipeline's *:00/*:30 schedule so logs don't
 // interleave and the two refreshes don't sit idle at the same moment.
-buildMFCache();
+// Fast-path: try to hydrate the scored cache from DB first (survives
+// restarts instantly since Tickertape CSV is only imported quarterly).
+// Only rescore on a cold cache or if the stored payload is too old.
+(async () => {
+  const hydrated = await loadMFCacheFromDB();
+  if (!hydrated) buildMFCache();
+})();
 cron.schedule('15,45 8-16 * * 1-5', () => {
   const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   console.log(`🏦 ${hour}: Mutual fund rescore starting...`);
