@@ -41,6 +41,32 @@ function setMode(m) {
 }
 function listValidModes() { return [...VALID_MODES]; }
 
+// ── Auto-schedule ────────────────────────────────────────────────────────────
+// When enabled, the agent auto-flips to `targetMode` at market open (9:15 IST)
+// and auto-flips back to 'off' at market close (15:30 IST) on trading days.
+// Persistence handled by kite-server via app_config — this module just holds
+// the runtime state. Target mode can be 'paper' or 'dry_run' (never 'live'
+// until Phase 3 is explicitly unlocked).
+const AUTO_VALID_TARGETS = new Set(['paper', 'dry_run']);
+let _autoEnabled = false;
+let _autoTargetMode = 'paper';
+
+function getAutoSchedule() {
+  return { enabled: _autoEnabled, targetMode: _autoTargetMode };
+}
+function setAutoSchedule({ enabled, targetMode }) {
+  const e = Boolean(enabled);
+  const t = targetMode ? String(targetMode).toLowerCase() : _autoTargetMode;
+  if (!AUTO_VALID_TARGETS.has(t)) {
+    throw new Error(`agent-config.setAutoSchedule: targetMode must be one of ${[...AUTO_VALID_TARGETS].join(',')}`);
+  }
+  const prev = { enabled: _autoEnabled, targetMode: _autoTargetMode };
+  _autoEnabled = e;
+  _autoTargetMode = t;
+  return { prev, current: { enabled: _autoEnabled, targetMode: _autoTargetMode } };
+}
+function listAutoTargets() { return [...AUTO_VALID_TARGETS]; }
+
 // Legacy export — snapshot at require-time. Prefer getMode() for anything that
 // needs to react to runtime changes.
 const AGENT_MODE = _INITIAL_MODE;
@@ -107,6 +133,7 @@ module.exports = {
   CONFIG_VERSION,
   AGENT_MODE,          // snapshot at boot — do not use for live checks
   getMode, setMode, listValidModes,
+  getAutoSchedule, setAutoSchedule, listAutoTargets,
   PAPER_CAPITAL_RUPEES,
   FILTERS,
   CONSTRAINTS,

@@ -24,8 +24,11 @@
 
 const cron = require('node-cron');
 
-const { getMode, setMode, listValidModes, CYCLE } = require('./agent-config');
-const { getVerifiedState, isSystemKilled } = require('./agent-state');
+const {
+  getMode, setMode, listValidModes, CYCLE,
+  getAutoSchedule, setAutoSchedule, listAutoTargets,
+} = require('./agent-config');
+const { getVerifiedState, isSystemKilled, nowIST, minsSinceOpenIST } = require('./agent-state');
 const tradeAgent       = require('./trade-agent');
 const constraintEngine = require('./constraint-engine');
 const audit            = require('./agent-audit');
@@ -36,6 +39,13 @@ const tradeManager     = require('./trade-manager');
 let _cycleRunning = false;
 let _deps = null;
 let _cronTask = null;
+let _autoOpenTask = null;
+let _autoCloseTask = null;
+// Persistence keys — kept in sync with kite-server (read in bootstrap + write
+// on every auto-schedule update).
+const AUTO_ENABLED_KEY = 'agent_auto_schedule_enabled';
+const AUTO_TARGET_KEY  = 'agent_auto_schedule_target';
+const MODE_KEY         = 'agent_mode_override';
 
 // ────────────────────────────────────────────────────────────────────────────
 // runCycle — callable ad-hoc (admin API) or on cron tick
@@ -167,7 +177,7 @@ async function _evaluateArmedIfPaper({ pool, getPrices, runId }) {
 // ────────────────────────────────────────────────────────────────────────────
 // wire — called once by kite-server.js at startup.
 // ────────────────────────────────────────────────────────────────────────────
-function wire(deps, persistedMode) {
+function wire(deps, persistedMode, persistedAuto) {
   _deps = deps;
 
   if (persistedMode && listValidModes().includes(persistedMode)) {
@@ -178,10 +188,37 @@ function wire(deps, persistedMode) {
     }
   }
 
+  // Apply persisted auto-schedule state BEFORE starting the cron — the open/
+  // close crons need to read this to decide whether to fire.
+  if (persistedAuto && typeof persistedAuto.enabled === 'boolean') {
+    try {
+      setAutoSchedule({
+        enabled: persistedAuto.enabled,
+        targetMode: persistedAuto.targetMode || 'paper',
+      });
+      console.log(
+        `🤖 agent: auto-schedule restored: enabled=${persistedAuto.enabled} `
+        + `target=${persistedAuto.targetMode || 'paper'}`
+      );
+    } catch (e) {
+      console.error('🤖 agent: failed to restore auto-schedule:', e.message);
+    }
+  }
+
   if (_cronTask) _cronTask.stop();
   _cronTask = cron.schedule(CYCLE.CRON_EXPR_SIMPLE, () => {
     runCycle().catch(e => console.error('🤖 agent cycle uncaught:', e.message));
   });
+
+  // Register the two IST-timezone crons that auto-flip mode at market
+  // open/close. They check getAutoSchedule() at fire time so toggling the UI
+  // takes effect without needing to re-schedule.
+  _registerAutoCrons();
+
+  // If we're booting mid-session, reconcile state with where we "should" be.
+  _reconcileMidSessionMode().catch(e =>
+    console.error('🤖 agent: mid-session reconcile error:', e.message)
+  );
 
   // Start the trade-manager poller. It gates internally on market hours and
   // bails fast when there are no open trades — safe to leave running.
@@ -190,7 +227,7 @@ function wire(deps, persistedMode) {
     isMarketOpen: deps.isMarketOpen,
     getPrices: deps.getPrices,
     getAtrPct: deps.getAtrPct,
-    runId: null,  // poller generates its own per-tick; nulls fine for now
+    runId: null,
   });
 
   const mode = getMode();
@@ -198,9 +235,121 @@ function wire(deps, persistedMode) {
   return { wired: true, mode, cron: true, poller: tradeManager.getStatus() };
 }
 
+// ── Auto-schedule crons ─────────────────────────────────────────────────────
+// 9:15 IST — flip to target mode.   15:30 IST — flip to off.
+// Both are registered unconditionally on wire(). Their callbacks check
+// getAutoSchedule().enabled at fire time, so disabling auto-schedule via the
+// UI takes effect immediately without tearing down the cron.
+//
+// node-cron supports IANA timezones natively; we pass 'Asia/Kolkata' so the
+// schedule is interpreted in IST regardless of Railway's server timezone.
+function _registerAutoCrons() {
+  if (_autoOpenTask) _autoOpenTask.stop();
+  if (_autoCloseTask) _autoCloseTask.stop();
+
+  _autoOpenTask = cron.schedule('15 9 * * 1-5', async () => {
+    await _autoFireOpen('cron_9:15_IST');
+  }, { timezone: 'Asia/Kolkata' });
+
+  _autoCloseTask = cron.schedule('30 15 * * 1-5', async () => {
+    await _autoFireClose('cron_15:30_IST');
+  }, { timezone: 'Asia/Kolkata' });
+
+  console.log('🤖 agent: auto-schedule crons registered (9:15 open / 15:30 close IST, Mon-Fri)');
+}
+
+async function _autoFireOpen(source) {
+  const auto = getAutoSchedule();
+  if (!auto.enabled) return { skipped: 'auto_disabled' };
+
+  // Safety: only auto-start when current mode is 'off'. If the user has
+  // manually set a different mode, respect that choice.
+  const cur = getMode();
+  if (cur !== 'off') {
+    console.log(`🤖 agent auto-open [${source}]: mode is "${cur}", not overriding.`);
+    return { skipped: 'manual_mode_set', currentMode: cur };
+  }
+
+  const target = auto.targetMode || 'paper';
+  const r = setMode(target);
+  await _persistMode(target);
+  console.log(`🤖 agent auto-open [${source}]: ${r.prev} → ${r.current}`);
+  return { ok: true, prev: r.prev, current: r.current };
+}
+
+async function _autoFireClose(source) {
+  const auto = getAutoSchedule();
+  if (!auto.enabled) return { skipped: 'auto_disabled' };
+
+  const cur = getMode();
+  // Only auto-stop if we're in the target mode. Respect manual modes.
+  if (cur !== auto.targetMode && cur !== 'off') {
+    console.log(`🤖 agent auto-close [${source}]: mode is "${cur}", not overriding.`);
+    return { skipped: 'manual_mode_set', currentMode: cur };
+  }
+
+  // Also cancel any pending armed candidates — they shouldn't fire after close.
+  paper.clearArmed();
+
+  const r = setMode('off');
+  await _persistMode('off');
+  console.log(`🤖 agent auto-close [${source}]: ${r.prev} → ${r.current}, armed cleared`);
+  return { ok: true, prev: r.prev, current: r.current };
+}
+
+async function _persistMode(m) {
+  if (!_deps || !_deps.pool) return;
+  try {
+    await _deps.pool.query(
+      `INSERT INTO app_config(key,value,updated_at) VALUES($1,$2,NOW())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=NOW()`,
+      [MODE_KEY, m]
+    );
+  } catch (e) {
+    console.error('🤖 agent: failed to persist auto mode change:', e.message);
+  }
+}
+
+// ── Boot reconciliation ─────────────────────────────────────────────────────
+// Covers the case where Railway restarts mid-session: without this, we'd
+// remain in whatever the last-persisted mode was until the next 9:15 cron.
+// With it, if auto-schedule is on and we're IN market hours, flip to target
+// immediately; if we're OUTSIDE market hours, flip to off.
+//
+// Only fires when auto-schedule is enabled. If user has manually set a mode
+// that doesn't match expectations, we leave it alone (treat as intentional
+// override).
+async function _reconcileMidSessionMode() {
+  const auto = getAutoSchedule();
+  if (!auto.enabled) return { skipped: 'auto_disabled' };
+  if (!_deps || !_deps.pool) return { skipped: 'not_wired' };
+
+  const marketOpen = _deps.isMarketOpen ? _deps.isMarketOpen() : false;
+  const cur = getMode();
+
+  if (marketOpen && cur === 'off') {
+    // We should be trading — flip on
+    const target = auto.targetMode || 'paper';
+    setMode(target);
+    await _persistMode(target);
+    console.log(`🤖 agent: boot reconcile — market open, auto-starting ${target}`);
+    return { ok: true, action: 'started', current: target };
+  }
+  if (!marketOpen && cur !== 'off' && cur === auto.targetMode) {
+    // Market is closed but we're in auto's target mode — flip off
+    paper.clearArmed();
+    setMode('off');
+    await _persistMode('off');
+    console.log('🤖 agent: boot reconcile — market closed, auto-stopping');
+    return { ok: true, action: 'stopped' };
+  }
+  return { ok: true, action: 'none', currentMode: cur, marketOpen };
+}
+
 function applyMode(m) { return setMode(m); }
 
 function getStatus() {
+  const auto = getAutoSchedule();
   return {
     mode: getMode(),
     validModes: listValidModes(),
@@ -209,11 +358,20 @@ function getStatus() {
     cronActive: Boolean(_cronTask),
     trader: tradeManager.getStatus(),
     armedCount: paper.armedCount(),
+    autoSchedule: {
+      enabled: auto.enabled,
+      targetMode: auto.targetMode,
+      validTargets: listAutoTargets(),
+      openCronActive: Boolean(_autoOpenTask),
+      closeCronActive: Boolean(_autoCloseTask),
+    },
   };
 }
 
 function stop() {
   if (_cronTask) { _cronTask.stop(); _cronTask = null; }
+  if (_autoOpenTask) { _autoOpenTask.stop(); _autoOpenTask = null; }
+  if (_autoCloseTask) { _autoCloseTask.stop(); _autoCloseTask = null; }
   tradeManager.stopPoller();
   return { stopped: true };
 }
@@ -234,7 +392,7 @@ function mountRoutes(app, opts = {}) {
   }
   const pool = _deps.pool;
   const gate = opts.requireAdmin || ((req, res, next) => next());
-  const MODE_KEY = 'agent_mode_override';
+  // MODE_KEY / AUTO_* keys are module-level consts (defined near top)
 
   app.get('/api/agent/status', gate, async (req, res) => {
     try {
@@ -322,7 +480,42 @@ function mountRoutes(app, opts = {}) {
     res.json({ ok: true, ...paper.clearArmed() });
   });
 
-  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed}');
+  // Auto-schedule: { enabled: bool, targetMode?: 'paper'|'dry_run' }
+  // Persists to app_config under two keys so a Railway restart restores both.
+  app.post('/api/agent/auto-schedule', gate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const enabled = Boolean(body.enabled);
+      const targetMode = body.targetMode ? String(body.targetMode).toLowerCase() : undefined;
+      const r = setAutoSchedule({ enabled, targetMode });
+
+      try {
+        await pool.query(
+          `INSERT INTO app_config(key,value,updated_at) VALUES($1,$2,NOW())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=NOW()`,
+          [AUTO_ENABLED_KEY, enabled ? 'true' : 'false']
+        );
+        await pool.query(
+          `INSERT INTO app_config(key,value,updated_at) VALUES($1,$2,NOW())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=NOW()`,
+          [AUTO_TARGET_KEY, r.current.targetMode]
+        );
+      } catch (pe) {
+        console.error('🤖 agent: failed to persist auto-schedule:', pe.message);
+      }
+
+      // If user just turned it ON during market hours with mode=off, auto-start now.
+      // If they just turned it OFF, leave the current mode as-is (don't surprise them).
+      if (enabled) await _reconcileMidSessionMode();
+
+      console.log(`🤖 agent: auto-schedule ${enabled ? 'ENABLED' : 'DISABLED'} target=${r.current.targetMode}`);
+      res.json({ ok: true, prev: r.prev, current: r.current, persisted: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}');
   return { mounted: true };
 }
 
@@ -358,22 +551,34 @@ async function bootstrap({
 }) {
   const mig = await _ensureMigration(pool);
 
-  const MODE_KEY = 'agent_mode_override';
+  // Load persisted mode + auto-schedule state in a single query round-trip.
   let persistedMode = null;
+  let persistedAuto = null;
   try {
-    const { rows } = await pool.query('SELECT value FROM app_config WHERE key=$1', [MODE_KEY]);
-    if (rows[0] && rows[0].value) persistedMode = String(rows[0].value).toLowerCase();
+    const { rows } = await pool.query(
+      `SELECT key, value FROM app_config WHERE key = ANY($1::text[])`,
+      [[MODE_KEY, AUTO_ENABLED_KEY, AUTO_TARGET_KEY]]
+    );
+    const kv = {};
+    for (const r of rows) kv[r.key] = r.value;
+    if (kv[MODE_KEY])          persistedMode = String(kv[MODE_KEY]).toLowerCase();
+    if (kv[AUTO_ENABLED_KEY] != null) {
+      persistedAuto = {
+        enabled: String(kv[AUTO_ENABLED_KEY]).toLowerCase() === 'true',
+        targetMode: (kv[AUTO_TARGET_KEY] || 'paper').toLowerCase(),
+      };
+    }
   } catch (e) { /* app_config may be absent on first boot */ }
 
   wire({
     pool, kite, isMarketOpen,
     getKiteToken, getPicks, getNiftyDailyChange,
     getPrices, getAtrPct,
-  }, persistedMode);
+  }, persistedMode, persistedAuto);
 
   if (app) mountRoutes(app, { requireAdmin });
 
-  return { ok: true, mode: getMode(), persistedMode, migration: mig };
+  return { ok: true, mode: getMode(), persistedMode, persistedAuto, migration: mig };
 }
 
 module.exports = {
