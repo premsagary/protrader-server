@@ -5403,8 +5403,15 @@ app.get("/api/mf/tickertape", async(req,res)=>{
 // /api/mf/funds - primary endpoint, uses Tickertape DB (real data)
 // Falls back to MFAPI cache if DB table not yet loaded
 app.get("/api/mf/funds", async(req,res)=>{
+  // Never let any CDN / proxy / browser cache the warming-state response —
+  // that's what was serving stale 503s to users even after the origin had
+  // refreshed the cache.
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+
   try {
-    // Serve from pre-scored in-memory cache (built on startup — instant, fully scored)
+    // 1. Fast path — in-memory cache populated (hot, instant)
     if (mfScoreCache && mfScoreCache.length > 0) {
       const eligible_count   = mfScoreCache.filter(f=>f.eligible).length;
       const ineligible_count = mfScoreCache.filter(f=>!f.eligible).length;
@@ -5418,29 +5425,43 @@ app.get("/api/mf/funds", async(req,res)=>{
       });
     }
 
-    // Cache not ready. Two states to distinguish:
-    //   (a) Build already in-flight (post-restart warmup): return 503 fast
-    //       with {warming:true} so UI can show "warming up" + auto-retry.
-    //       Previously we awaited here, which blew past Railway's 30s proxy
-    //       timeout → 502 in the browser.
-    //   (b) Build NOT in-flight (cold start): kick one off in the background
-    //       and still return 503 immediately.
-    if (_mfCacheBuilding) {
-      return res.status(503).json({
-        warming: true,
-        funds: [], total: 0,
-        error: 'MF cache building after restart — retry in ~30 seconds',
-        retryAfterSec: 30,
-      });
+    // 2. In-memory cache is empty — before kicking off a 30-60s rebuild,
+    //    try the DB blob. This is the critical fallback that was missing:
+    //    if the server restarted and startup-time DB load raced against the
+    //    CREATE TABLE, or the instance lost its in-memory state, the DB row
+    //    written by the previous successful build IS still there and should
+    //    be served immediately.
+    try {
+      const hydrated = await loadMFCacheFromDB();
+      if (hydrated && mfScoreCache && mfScoreCache.length > 0) {
+        const eligible_count   = mfScoreCache.filter(f=>f.eligible).length;
+        const ineligible_count = mfScoreCache.filter(f=>!f.eligible).length;
+        console.log('/api/mf/funds: served from DB fallback (in-memory was empty)');
+        return res.json({
+          funds: mfScoreCache,
+          total: mfScoreCache.length,
+          eligible_count, not_eligible_count: ineligible_count,
+          source: 'DB-hydrated (in-memory was empty)',
+          filters: 'AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%',
+          cached_at: mfScoreCachedAt,
+        });
+      }
+    } catch (dbErr) {
+      console.log('/api/mf/funds DB fallback failed:', dbErr.message);
     }
 
-    // Kick off background build (fire-and-forget — we return immediately)
-    buildMFCache().catch(e => console.log('buildMFCache bg error:', e.message));
+    // 3. Both in-memory AND DB are empty — genuinely cold start.
+    //    Kick off a build in the background (if not already running) and
+    //    return an instant 503 with the warming hint so the UI can loop
+    //    without timing out at Railway's proxy layer.
+    if (!_mfCacheBuilding) {
+      buildMFCache().catch(e => console.log('buildMFCache bg error:', e.message));
+    }
     return res.status(503).json({
       warming: true,
       funds: [], total: 0,
-      error: 'MF cache build triggered — retry in ~30 seconds',
-      retryAfterSec: 30,
+      error: 'MF cache building — retry in ~10 seconds',
+      retryAfterSec: 10,
     });
 
   } catch(e) {
@@ -5449,6 +5470,38 @@ app.get("/api/mf/funds", async(req,res)=>{
     if (funds.length > 0) return res.json({funds, total:funds.length, source:"MFAPI (fallback)", cached_at:mfCacheTime});
     res.status(503).json({error:"No MF data. Run mf_load_v2.sql in Railway PostgreSQL.", funds:[], total:0});
   }
+});
+
+// Diagnostic — shows what /api/mf/funds can actually see without peeking
+// at admin endpoints. Helpful when the UI claims "warming" but the DB has data.
+app.get("/api/mf/cache-status", async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const inMemory = {
+    populated: !!(mfScoreCache && mfScoreCache.length > 0),
+    count: mfScoreCache ? mfScoreCache.length : 0,
+    cachedAt: mfScoreCachedAt ? new Date(mfScoreCachedAt).toISOString() : null,
+    ageMins: mfScoreCachedAt ? Math.round((Date.now() - mfScoreCachedAt) / 60000) : null,
+    building: _mfCacheBuilding,
+  };
+  let db = { exists: false };
+  try {
+    const { rows } = await pool.query(
+      `SELECT EXTRACT(EPOCH FROM built_at)*1000 AS built_at_ms,
+              jsonb_array_length(payload) AS count
+         FROM mf_score_cache WHERE id = 1`
+    );
+    if (rows.length) {
+      const ageMs = Date.now() - Number(rows[0].built_at_ms || 0);
+      db = {
+        exists: true,
+        count: Number(rows[0].count),
+        builtAt: new Date(Number(rows[0].built_at_ms)).toISOString(),
+        ageMins: Math.round(ageMs / 60000),
+        stale: ageMs > MF_CACHE_TTL_MS,
+      };
+    }
+  } catch (e) { db.error = e.message; }
+  res.json({ inMemory, db, ttlHours: MF_CACHE_TTL_MS / 3600000 });
 });
 
 app.post("/api/mf/refresh", async(req,res) => {
