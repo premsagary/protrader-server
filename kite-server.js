@@ -22883,3 +22883,29 @@ app.get('/api/ai/validation', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTO-AGENT (Phase 1 — rule-based intraday dry-run)
+// ═════════════════════════════════════════════════════════════════════════════
+// Reads picks from _dayTradeCache every minute during market hours, applies
+// Varsity filters + hard constraints, writes every decision to agent_decisions.
+// NO order placement until AGENT_MODE=paper (Phase 2) or live (Phase 3).
+// Mode is controlled from the UI /api/agent/mode endpoint and persisted in
+// app_config so it survives Railway redeploys. Migration is auto-applied.
+// ═════════════════════════════════════════════════════════════════════════════
+(async () => {
+  try {
+    const agent = require('./agent');
+    await agent.bootstrap({
+      app,
+      pool,
+      kite,
+      isMarketOpen,
+      getKiteToken:        () => process.env.KITE_ACCESS_TOKEN || null,
+      getPicks:            () => _dayTradeCache,
+      getNiftyDailyChange: () => _niftyDailyChangePct,
+    });
+  } catch (e) {
+    console.error('🤖 agent wiring failed:', e.message);
+  }
+})();
+

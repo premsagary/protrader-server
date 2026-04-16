@@ -3532,6 +3532,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <button class="mode-tab admin-only" onclick="setMode('mirofish')" id="mode-mirofish" style="display:none" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata">📊 Stock Data</button>
     <button class="mode-tab admin-only" onclick="setMode('daytrade')" id="mode-daytrade" style="color:#ef4444;display:none">⚡ DayTrade</button>
+    <button class="mode-tab admin-only" onclick="setMode('agent')" id="mode-agent" style="color:#a855f7;display:none" title="Rule-based auto-trading agent (Phase 1 dry-run)">🤖 Agent</button>
     <button class="mode-tab admin-only" onclick="setMode('architecture')" id="mode-architecture" style="display:none">🏛 Architecture</button>
     <button class="mode-tab admin-only" onclick="setMode('admin')" id="mode-admin" style="display:none">⚙</button>
   </div>
@@ -3752,7 +3753,7 @@ async function fetchAll(){
     if(cr[0].status==="fulfilled"&&cr[0].value.ok){const d=await cr[0].value.json();if(Array.isArray(d))S.cryptoTrades=d;}
     if(cr[1].status==="fulfilled"&&cr[1].value.ok) S.cryptoStats = await cr[1].value.json();
   } catch(e){}
-  if(S.mode!=="mf" && S.mode!=="stockrec" && S.mode!=="stockdata" && S.mode!=="stockanalyzer" && S.mode!=="holdings" && S.mode!=="mirofish" && S.mode!=="daytrade" && S.mode!=="architecture" && S.mode!=="admin") render(); // preserve all custom-rendered tabs
+  if(S.mode!=="mf" && S.mode!=="stockrec" && S.mode!=="stockdata" && S.mode!=="stockanalyzer" && S.mode!=="holdings" && S.mode!=="mirofish" && S.mode!=="daytrade" && S.mode!=="agent" && S.mode!=="architecture" && S.mode!=="admin") render(); // preserve all custom-rendered tabs
 }
 
 async function fetchCryptoPrices(){
@@ -3835,6 +3836,7 @@ function setMode(mode){
   try{ document.getElementById("mode-mirofish").className ="mode-tab admin-only"+(mode==="mirofish"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
   try{ document.getElementById("mode-daytrade").className ="mode-tab admin-only"+(mode==="daytrade"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-agent").className    ="mode-tab admin-only"+(mode==="agent"   ?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab admin-only"+(mode==="admin"    ?" active":""); }catch(e){}
   // Re-enforce admin-only visibility after className reset
@@ -3880,6 +3882,12 @@ function setMode(mode){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){}
     renderDayTradePage();
+    return;
+  }
+  if(mode==="agent"){
+    try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
+    try{ renderTopBar(); }catch(e){}
+    renderAgentPage();
     return;
   }
   if(mode==="architecture"){
@@ -13029,6 +13037,210 @@ function renderDayTradePage(){
   html += '</div>';
 
   cont.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AGENT TAB — rule-based auto-trading agent control panel
+// ═══════════════════════════════════════════════════════════════════════════
+var _agentPollTimer = null;
+var _agentLastStatus = null;
+
+async function _agentFetchStatus(){
+  try{
+    var r = await fetch('/api/agent/status', _authToken ? { headers:{Authorization:'Bearer '+_authToken} } : undefined);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var d = await r.json();
+    _agentLastStatus = d;
+    _renderAgentPanel(d);
+  }catch(e){
+    var cont = document.getElementById("main-content");
+    if(cont && S.mode==='agent') cont.innerHTML =
+      '<div style="padding:32px;color:var(--red);font-family:var(--mono),monospace">'
+      +'Agent API unreachable: '+String(e.message)
+      +'<br><br>Make sure you ran <code>agent/migrations/001_agent_tables.sql</code> '
+      +'and added the agent bootstrap block to <code>kite-server.js</code>.'
+      +'</div>';
+  }
+}
+
+async function _agentSetMode(newMode){
+  if(!confirm('Switch agent to "'+newMode+'"?\n\n'
+    + (newMode==='off'      ? 'Agent will do nothing. Cron continues to tick but bails immediately.' :
+       newMode==='dry_run'  ? 'Agent will propose+validate+log every minute. No orders will be placed.' :
+       newMode==='paper'    ? 'Agent will simulate fills against live quotes (Phase 2 — may not be implemented yet).' :
+       newMode==='live'     ? '⚠ LIVE mode will place REAL Zerodha MIS orders. Not built in Phase 1.' : '')
+  )) return;
+  try{
+    var r = await fetch('/api/agent/mode', {
+      method:'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, _authToken ? {Authorization:'Bearer '+_authToken} : {}),
+      body: JSON.stringify({ mode:newMode })
+    });
+    var d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'unknown error');
+    _agentFetchStatus();
+  }catch(e){ alert('Failed to switch mode: '+e.message); }
+}
+
+async function _agentRunNow(){
+  var btn = document.getElementById('agent-run-now-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Running…'; }
+  try{
+    var r = await fetch('/api/agent/run-now', {
+      method:'POST',
+      headers: _authToken ? {Authorization:'Bearer '+_authToken} : {}
+    });
+    var d = await r.json();
+    if(btn){ btn.disabled=false; btn.textContent='▶ Force-run cycle'; }
+    _agentFetchStatus();
+    setTimeout(_agentFetchStatus, 1500);
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent='▶ Force-run cycle'; }
+    alert('run-now failed: '+e.message);
+  }
+}
+
+function _agentModeBadge(mode){
+  var c = mode==='off' ? '#64748b' : mode==='dry_run' ? '#3b82f6' : mode==='paper' ? '#eab308' : '#ef4444';
+  return '<span style="background:'+c+'22;color:'+c+';border:1px solid '+c+'55;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.5px">'+mode.toUpperCase()+'</span>';
+}
+
+function _renderAgentPanel(d){
+  var cont = document.getElementById("main-content");
+  if(!cont || S.mode!=='agent') return;
+
+  var stats = d.stats || { total:0, approved:0, rejected:0, rejection_breakdown:{} };
+  var recent = d.recent || [];
+  var validModes = d.validModes || ['off','dry_run','paper','live'];
+  var tablesMissing = stats.tablesMissing;
+
+  var modeButtons = validModes.map(function(m){
+    var active = d.mode===m;
+    var c = m==='off' ? '#64748b' : m==='dry_run' ? '#3b82f6' : m==='paper' ? '#eab308' : '#ef4444';
+    return '<button onclick="_agentSetMode(\''+m+'\')" '
+      +'style="padding:10px 18px;border-radius:10px;cursor:pointer;font-weight:700;font-size:13px;letter-spacing:0.4px;'
+      +'border:2px solid '+(active?c:'var(--border)')+';'
+      +'background:'+(active?c+'22':'transparent')+';'
+      +'color:'+(active?c:'var(--text3)')+';'
+      +'transition:all 0.18s">'
+      +(active?'● ':'')+m.toUpperCase()
+      +'</button>';
+  }).join('');
+
+  var statsBox = tablesMissing
+    ? '<div style="padding:20px;border:1px dashed var(--border);border-radius:10px;color:var(--amber);background:rgba(251,191,36,0.05)">'
+      +'Agent audit tables not found. Run <code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px">agent/migrations/001_agent_tables.sql</code> against your DB.'
+      +'</div>'
+    : '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">'
+      +'<div style="padding:16px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,0.02)">'
+        +'<div style="font-size:11px;color:var(--text4);letter-spacing:0.5px;text-transform:uppercase">Proposals today</div>'
+        +'<div style="font-size:28px;font-weight:800;color:var(--text1);margin-top:4px">'+stats.total+'</div>'
+      +'</div>'
+      +'<div style="padding:16px;border:1px solid rgba(94,204,138,0.35);border-radius:10px;background:rgba(94,204,138,0.06)">'
+        +'<div style="font-size:11px;color:#86efac;letter-spacing:0.5px;text-transform:uppercase">Approved</div>'
+        +'<div style="font-size:28px;font-weight:800;color:var(--green);margin-top:4px">'+stats.approved+'</div>'
+      +'</div>'
+      +'<div style="padding:16px;border:1px solid rgba(239,68,68,0.35);border-radius:10px;background:rgba(239,68,68,0.06)">'
+        +'<div style="font-size:11px;color:#fca5a5;letter-spacing:0.5px;text-transform:uppercase">Rejected</div>'
+        +'<div style="font-size:28px;font-weight:800;color:var(--red);margin-top:4px">'+stats.rejected+'</div>'
+      +'</div>'
+      +'</div>';
+
+  var reasonBreak = '';
+  if(stats.rejection_breakdown && Object.keys(stats.rejection_breakdown).length){
+    var pairs = Object.entries(stats.rejection_breakdown)
+      .filter(function(p){ return p[0] && p[0]!=='null'; })
+      .sort(function(a,b){ return b[1]-a[1]; });
+    if(pairs.length){
+      reasonBreak = '<div style="margin-top:14px;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,0.02)">'
+        +'<div style="font-size:11px;color:var(--text4);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:8px">Rejection reasons</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:6px">'
+        +pairs.map(function(p){
+          return '<span style="font-family:var(--mono),monospace;font-size:11px;padding:3px 8px;border-radius:6px;background:rgba(239,68,68,0.08);color:#fca5a5">'+p[0]+' × '+p[1]+'</span>';
+        }).join('')
+        +'</div></div>';
+    }
+  }
+
+  var recentTable = '';
+  if(!tablesMissing){
+    if(!recent.length){
+      recentTable = '<div style="padding:24px;text-align:center;color:var(--text4);border:1px dashed var(--border);border-radius:10px">No decisions yet today. Cycle runs every minute during market hours when mode ≠ off.</div>';
+    } else {
+      recentTable = '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+        +'<thead><tr style="text-align:left;color:var(--text4);font-size:11px;letter-spacing:0.4px;text-transform:uppercase;border-bottom:1px solid var(--border)">'
+          +'<th style="padding:8px 10px">Time</th>'
+          +'<th style="padding:8px 10px">Sym</th>'
+          +'<th style="padding:8px 10px">Setup</th>'
+          +'<th style="padding:8px 10px;text-align:right">Score</th>'
+          +'<th style="padding:8px 10px;text-align:right">Qty</th>'
+          +'<th style="padding:8px 10px;text-align:right">Entry</th>'
+          +'<th style="padding:8px 10px;text-align:right">SL</th>'
+          +'<th style="padding:8px 10px;text-align:right">Tgt</th>'
+          +'<th style="padding:8px 10px;text-align:right">RR</th>'
+          +'<th style="padding:8px 10px">Result</th>'
+        +'</tr></thead><tbody>'
+        +recent.map(function(r){
+          var ts = new Date(r.decided_at);
+          var tstr = ts.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+          var ok = r.approved;
+          var reason = ok ? '<span style="color:var(--green);font-weight:700">APPROVED</span>' :
+            '<span style="color:var(--red);font-family:var(--mono),monospace;font-size:11px" title="'+(r.rejection_detail||'')+'">'+(r.failed_filter||r.rejection_reason||'?')+'</span>';
+          return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+            +'<td style="padding:7px 10px;color:var(--text4);font-family:var(--mono),monospace">'+tstr+'</td>'
+            +'<td style="padding:7px 10px;font-weight:700">'+r.sym+'</td>'
+            +'<td style="padding:7px 10px;color:var(--text3)">'+(r.best_setup||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right;color:var(--text2)">'+(r.day_trade_score||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right">'+(r.quantity||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right;color:var(--text2)">'+(r.entry_price||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right;color:#fca5a5">'+(r.stop_loss||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right;color:#86efac">'+(r.target||'-')+'</td>'
+            +'<td style="padding:7px 10px;text-align:right">'+(r.rr_ratio||'-')+'</td>'
+            +'<td style="padding:7px 10px">'+reason+'</td>'
+          +'</tr>';
+        }).join('')
+        +'</tbody></table>';
+    }
+  }
+
+  var html = '<div style="padding:24px 28px;max-width:1280px">'
+    +'<div style="display:flex;align-items:center;gap:14px;margin-bottom:8px">'
+      +'<div style="font-size:22px;font-weight:800;letter-spacing:-0.3px">🤖 Auto-Agent</div>'
+      +_agentModeBadge(d.mode)
+      +'<span style="color:var(--text4);font-size:11px;margin-left:auto">env fallback: '+(d.envFallback||'off')+' · config '+(d.configVersion||'?')+'</span>'
+    +'</div>'
+    +'<div style="color:var(--text3);font-size:13px;margin-bottom:22px;line-height:1.55;max-width:900px">'
+      +'Rule-based intraday agent. Reads picks from the DayTrade scanner every minute, applies filters + hard constraints, writes every decision to <code>agent_decisions</code>. '
+      +'Paper capital: <strong>₹'+(d.paperCapital||0).toLocaleString('en-IN')+'</strong>. '
+      +'Cycle auto-skips when mode is <code>off</code>.'
+    +'</div>'
+
+    +'<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center">'
+      +modeButtons
+      +'<div style="flex:1"></div>'
+      +'<button id="agent-run-now-btn" onclick="_agentRunNow()" style="padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700;font-size:12px;border:1px solid var(--border);background:transparent;color:var(--text2)">▶ Force-run cycle</button>'
+      +'<button onclick="_agentFetchStatus()" style="padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700;font-size:12px;border:1px solid var(--border);background:transparent;color:var(--text2)">↻ Refresh</button>'
+    +'</div>'
+
+    +statsBox
+    +reasonBreak
+
+    +'<div style="margin-top:26px">'
+      +'<div style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text2)">Recent decisions (last 20)</div>'
+      +recentTable
+    +'</div>'
+    +'</div>';
+
+  cont.innerHTML = html;
+}
+
+function renderAgentPage(){
+  _agentFetchStatus();
+  if(_agentPollTimer){ clearInterval(_agentPollTimer); _agentPollTimer=null; }
+  _agentPollTimer = setInterval(function(){
+    if(S.mode!=='agent'){ clearInterval(_agentPollTimer); _agentPollTimer=null; return; }
+    _agentFetchStatus();
+  }, 10000);
 }
 
 function renderArchitecturePage(){
