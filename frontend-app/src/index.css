@@ -100,6 +100,7 @@ body {
 .card:hover {
   border-color: var(--brand-border);
   box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 .card-premium { position: relative; overflow: hidden }
 .card-premium::before {

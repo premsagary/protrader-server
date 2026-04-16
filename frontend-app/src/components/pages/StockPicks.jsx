@@ -43,15 +43,38 @@ export default function StockPicks() {
 
   return (
     <div>
-      {/* Hero */}
-      <div style={{ marginBottom: 28 }}>
-        <div className="label-xs" style={{ marginBottom: 10 }}>Daily picks · Updated automatically</div>
-        <h1 style={{ fontSize: 40, fontWeight: 800, letterSpacing: '-1px', lineHeight: 1.1, color: 'var(--text)', marginBottom: 10 }}>
-          <span className="gradient-fill">Stock Picks</span>
-        </h1>
-        <p style={{ fontSize: 16, color: 'var(--text2)', maxWidth: 720, lineHeight: 1.5 }}>
-          Three daily strategies ranked from {counts.total} NSE stocks. Rebound (quality on sale), Momentum (5-factor), Long-Term (Buffett criteria). Fully transparent scoring.
-        </p>
+      {/* ═══ HERO BANNER — gradient like landing ═══ */}
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(52,211,153,0.10) 50%, rgba(251,191,36,0.10) 100%)',
+          border: '1px solid var(--border)',
+          borderRadius: 18,
+          padding: '32px 36px',
+          marginBottom: 28,
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ position: 'absolute', top: -60, right: -40, width: 220, height: 220, borderRadius: '50%', background: 'rgba(99,102,241,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
+          <div>
+            <div className="label-xs" style={{ marginBottom: 10 }}>Daily picks · Updated automatically</div>
+            <h1 style={{ fontSize: 40, fontWeight: 800, letterSpacing: '-1.2px', lineHeight: 1.05, color: 'var(--text)', marginBottom: 10 }}>
+              <span className="gradient-fill">Stock Picks</span>
+            </h1>
+            <p style={{ fontSize: 16, color: 'var(--text2)', maxWidth: 620, lineHeight: 1.5 }}>
+              Three daily strategies ranked from {counts.total || 567} NSE stocks. Rebound, Momentum, Long-Term. Fully transparent scoring.
+            </p>
+          </div>
+          {counts.total > 0 && (
+            <div style={{ textAlign: 'right' }}>
+              <div className="tabular-nums gradient-fill" style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px' }}>
+                {counts.total}
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 6, fontWeight: 500 }}>stocks scored</div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Stats strip */}
@@ -71,11 +94,17 @@ export default function StockPicks() {
           { l: 'Midcap', v: counts.midcap, c: 'var(--purple-text)' },
           { l: 'Smallcap', v: counts.smallcap, c: 'var(--red-text)' },
         ].map((s, i) => (
-          <div key={i} className="card" style={{ padding: '14px 16px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.6px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>
+          <div
+            key={i}
+            className="card"
+            style={{ padding: '18px 20px', cursor: 'default' }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = 'var(--shadow-lg)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 8 }}>
               {s.l}
             </div>
-            <div className="tabular-nums" style={{ fontSize: 22, fontWeight: 800, color: s.c, letterSpacing: '-0.5px' }}>
+            <div className="tabular-nums" style={{ fontSize: 28, fontWeight: 800, color: s.c, letterSpacing: '-0.8px', lineHeight: 1 }}>
               {loading ? '—' : s.v}
             </div>
           </div>
