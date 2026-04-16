@@ -13,7 +13,7 @@ export default function DeepAnalyzer() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    apiGet('/api/stocks/scored')
+    apiGet('/api/stocks/score')
       .then((d) => {
         const list = (d.stocks || d || []).map((s) => ({
           sym: s.sym || s.symbol,

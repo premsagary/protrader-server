@@ -9,7 +9,7 @@ export default function StockPicks() {
 
   useEffect(() => {
     setLoading(true);
-    apiGet('/api/stocks/scored')
+    apiGet('/api/stocks/score')
       .then((d) => {
         setData(d);
         setLoading(false);

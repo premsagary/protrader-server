@@ -6,9 +6,9 @@ const TABS = [
   { id: 'mf', label: 'MF Picks', migrated: false },
   { id: 'stocks/overview', label: 'Stocks RoboTrade', migrated: false, admin: true },
   { id: 'crypto/overview', label: 'Crypto RoboTrade', migrated: false, admin: true },
-  { id: 'holdings', label: 'Holdings', migrated: false, admin: true },
+  { id: 'holdings', label: 'Holdings', migrated: true, admin: true },
   { id: 'mirofish', label: 'MiroFish Lab', migrated: false, admin: true },
-  { id: 'stockdata', label: 'Stock Data', migrated: false },
+  { id: 'stockdata', label: 'Stock Data', migrated: true },
   { id: 'daytrade', label: 'DayTrade', migrated: false, admin: true, accent: 'red' },
   { id: 'architecture', label: 'Architecture', migrated: false, admin: true },
 ];
