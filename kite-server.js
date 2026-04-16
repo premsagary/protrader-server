@@ -5547,10 +5547,11 @@ async function _initMFCacheTable() {
         built_at TIMESTAMP NOT NULL DEFAULT NOW(),
         version  TEXT
       )
-    `).catch(()=>{});
-  } catch(_) {}
+    `);
+  } catch(e) { console.log('[MF] _initMFCacheTable error:', e.message); }
 }
-_initMFCacheTable();
+// Note: deliberately NOT called here. The boot IIFE below awaits it
+// explicitly so the CREATE TABLE completes before loadMFCacheFromDB runs.
 
 async function loadMFCacheFromDB() {
   try {
@@ -5558,20 +5559,34 @@ async function loadMFCacheFromDB() {
       `SELECT payload, EXTRACT(EPOCH FROM built_at)*1000 AS built_at_ms
          FROM mf_score_cache WHERE id = 1`
     );
-    if (!rows.length) return false;
+    if (!rows.length) { console.log('[MF] loadMFCacheFromDB: no row in mf_score_cache'); return false; }
+
     const ageMs = Date.now() - Number(rows[0].built_at_ms || 0);
     if (ageMs > MF_CACHE_TTL_MS) {
-      console.log(`MF cache in DB is ${(ageMs/3600000).toFixed(1)}h old — will rebuild`);
+      console.log(`[MF] cache in DB is ${(ageMs/3600000).toFixed(1)}h old (> ${MF_CACHE_TTL_MS/3600000}h TTL) — will rebuild`);
       return false;
     }
-    const payload = rows[0].payload;
-    if (!payload || !Array.isArray(payload) || payload.length === 0) return false;
+
+    // Defensive parsing: pg usually returns JSONB as a parsed object, but
+    // some pg driver versions + type-parser overrides can return it as a
+    // raw JSON string. Handle both so a driver quirk doesn't force a
+    // 30-60s rescore on every boot.
+    let payload = rows[0].payload;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); }
+      catch(e) { console.log('[MF] JSON.parse of payload failed:', e.message); return false; }
+    }
+    if (!payload || !Array.isArray(payload) || payload.length === 0) {
+      console.log('[MF] payload invalid — type=' + typeof payload + ' isArray=' + Array.isArray(payload) + ' len=' + (payload && payload.length));
+      return false;
+    }
+
     mfScoreCache = payload;
     mfScoreCachedAt = Number(rows[0].built_at_ms);
-    console.log(`✓ MF cache loaded from DB (${payload.length} funds, ${(ageMs/60000).toFixed(0)}m old) — skipping rescore`);
+    console.log(`[MF] ✓ cache hydrated from DB (${payload.length} funds, ${(ageMs/60000).toFixed(0)}m old) — skipping rescore`);
     return true;
   } catch(e) {
-    console.log('loadMFCacheFromDB error:', e.message);
+    console.log('[MF] loadMFCacheFromDB error:', e.message);
     return false;
   }
 }
@@ -5708,9 +5723,21 @@ async function buildMFCache() {
 // Fast-path: try to hydrate the scored cache from DB first (survives
 // restarts instantly since Tickertape CSV is only imported quarterly).
 // Only rescore on a cold cache or if the stored payload is too old.
+// AWAIT _initMFCacheTable first to prevent the startup race where
+// loadMFCacheFromDB's SELECT fires before the CREATE TABLE completes —
+// that race caused false "table missing" failures on first deploy,
+// unnecessarily triggering a 30-60s rescore.
 (async () => {
+  console.log('[MF] boot: ensuring cache table exists...');
+  await _initMFCacheTable();
+  console.log('[MF] boot: attempting to hydrate cache from DB...');
   const hydrated = await loadMFCacheFromDB();
-  if (!hydrated) buildMFCache();
+  if (!hydrated) {
+    console.log('[MF] boot: DB hydration failed/missing → starting full rescore (30-60s one-time)');
+    buildMFCache();
+  } else {
+    console.log('[MF] boot: DB hydration succeeded → MF tab ready instantly');
+  }
 })();
 cron.schedule('15,45 8-16 * * 1-5', () => {
   const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
