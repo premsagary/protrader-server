@@ -1976,6 +1976,13 @@ const CONFIG = {
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
+  // NEW — Varsity M2 full-stack gate. Require dayTradeScore (the 14-point
+  // Varsity checklist + CPR + OBV + S/R + candlestick + VPA matrix) before
+  // any entry. Cuts marginal-quality setups that pass the 3-strategy vote
+  // but fail the richer checklist. Tune down to 60 if too restrictive,
+  // up to 70 to be selective. Disable entirely with env ROBOTRADE_VARSITY_GATE=off.
+  VARSITY_GATE_ENABLED: (process.env.ROBOTRADE_VARSITY_GATE || 'on').toLowerCase() !== 'off',
+  MIN_VARSITY_SCORE:    parseInt(process.env.ROBOTRADE_MIN_VARSITY_SCORE || '65', 10),
   SCAN_DELAY_MS:  250,
 };
 
@@ -2833,6 +2840,7 @@ let _latestPass2Debug = {
   skippedCorr:  0,
   skippedDup:   0,
   skippedFilter: 0,
+  skippedVarsity: 0,   // Phase 5 — dayTradeScore < MIN_VARSITY_SCORE
   rejectedStructure: 0,
   rejectedLLM:  0,
 };
@@ -3654,7 +3662,18 @@ async function scanAndTrade() {
                  && result.signal==="BUY"
                  && result.buyVotes >= CONFIG.CONSENSUS_NEEDED
                  && result.score >= CONFIG.BUY_SCORE) {
-        buyCandidates.push({ stock, result, candles, last });
+        // Phase 5 · Varsity gate — compute the full 14-point Varsity score so
+        // Pass 2 can filter on it. Uses the SAME candles already in memory +
+        // stock.sym for relative-strength context. Returns null for penny
+        // stocks, illiquid names, abnormal 5-min bars — all of which we
+        // already want to skip. Attach to candidate for audit trail.
+        let dts = null;
+        try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
+        buyCandidates.push({
+          stock, result, candles, last,
+          dayTradeScore: dts ? dts.dayTradeScore : null,
+          varsityBestSetup: dts ? dts.bestSetup : null,
+        });
       }
 
       await delay(CONFIG.SCAN_DELAY_MS);
@@ -3855,6 +3874,7 @@ async function scanAndTrade() {
     skippedCorr:       0,
     skippedDup:        0,
     skippedFilter:     0,
+    skippedVarsity:    0,
     rejectedStructure: filterStats.rejectedByStructure || 0,
     rejectedLLM:       filterStats.rejectedByLLM || 0,
   };
@@ -3896,6 +3916,24 @@ async function scanAndTrade() {
       _latestPass2Debug.skippedFilter += 1;
       recordPass2(candidate, 'SKIPPED', candidate.rejectReason || 'structure filter');
       continue;
+    }
+
+    // Phase 5 · Varsity gate — require the full 14-point Varsity checklist
+    // to pass a minimum score. Cheap check (dayTradeScore was already computed
+    // in Pass 1 from the same candles), high filter rate on marginal setups.
+    // Combined with existing consensus + BUY_SCORE filters, this should
+    // meaningfully compress over-trading on choppy days.
+    if (CONFIG.VARSITY_GATE_ENABLED) {
+      const dts = candidate.dayTradeScore;
+      if (dts == null || dts < CONFIG.MIN_VARSITY_SCORE) {
+        const reason = dts == null
+          ? 'varsity_score_null (illiquid or quality gate failed)'
+          : `varsity_score_${dts}<${CONFIG.MIN_VARSITY_SCORE}`;
+        console.log(`  ⊘ SKIP ${stock.sym} (strat score:${result.score.toFixed(1)}) — ${reason}`);
+        _latestPass2Debug.skippedVarsity += 1;
+        recordPass2(candidate, 'SKIPPED', reason);
+        continue;
+      }
     }
 
     // Re-check slot availability (exits in pass 1 may have freed slots)
@@ -4082,6 +4120,9 @@ async function scanAndTrade() {
   if (_latestFilterStats && _latestFilterStats.total > 0) {
     const fs = _latestFilterStats;
     scanMsg += ` | Filter: ${fs.total}→${fs.approved} (S-rej:${fs.rejectedByStructure}${fs.rejectedByLLM?`, LLM-rej:${fs.rejectedByLLM}`:''})`;
+  }
+  if (CONFIG.VARSITY_GATE_ENABLED && _latestPass2Debug.skippedVarsity > 0) {
+    scanMsg += ` | Varsity-gate skipped ${_latestPass2Debug.skippedVarsity} (score<${CONFIG.MIN_VARSITY_SCORE})`;
   }
 
   // Phase 3 · Part 8 — record scan latency + warn if it exceeded threshold
