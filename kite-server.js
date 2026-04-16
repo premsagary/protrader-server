@@ -20,6 +20,7 @@
 require("dotenv").config();
 const express   = require("express");
 const screenerScraper = require("./screener-scraper");
+const robotradeGuards = require("./robotrade-guards");
 // Data logging layer for future ML training. All calls are non-blocking
 // internally — a DB outage never propagates to the scoring path.
 const mlLogger  = require("./ml-logger");
@@ -104,6 +105,8 @@ async function initDB() {
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS costs          DECIMAL(18,4)`).catch(()=>{});
     // Phase 4 — ranking score breakdown (audit), portfolio impact, reward/risk
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS ranking_json   JSONB`).catch(()=>{});
+    // Phase 5 — trailing high-water mark persisted so stops survive restarts (robotrade-guards.js)
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS hwm_price      DECIMAL(18,8)`).catch(()=>{});
     // Phase 4 — Part 9: rejected candidates table with forward-tracking columns
     await pool.query(`
       CREATE TABLE IF NOT EXISTS rejected_candidates (
@@ -1959,10 +1962,20 @@ const CONFIG = {
   MAX_SECTOR_POSITIONS: 3,     // Varsity M9 Ch 8: concentration limit
   MAX_CORRELATION:    0.7,     // Varsity M9 Ch 4: skip if >70% correlated with existing
   MAX_PORTFOLIO_BETA: 1.5,
-  // Drawdown circuit breaker — Varsity M9 Ch 6
+  // Drawdown circuit breaker — Varsity M9 Ch 6 (rolling high-water mark)
   DD_REDUCE_PCT:  0.10,  // reduce size 50% at 10% drawdown
   DD_PAUSE_PCT:   0.15,  // pause new entries at 15%
   DD_HALT_PCT:    0.20,  // halt all trading at 20%
+  // NEW — Varsity M9 Ch 6: daily loss cap (calendar-reset at IST midnight)
+  // Complements DD_HALT_PCT: halts trading when TODAY's realized loss hits 2%.
+  DAILY_LOSS_CAP_PCT: 0.02,
+  // NEW — hard cap on number of trades opened per calendar day. Existing code
+  // had no such limit → death-by-1000-cuts on choppy days. 8 is generous but
+  // finite; reduce to 5-6 if over-trading continues.
+  MAX_TRADES_PER_DAY: 8,
+  // NEW — Varsity M9: time-decay exit so positions can't linger past session
+  MAX_HOLD_HOURS:     6,
+  MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
   SCAN_DELAY_MS:  250,
 };
 
@@ -3490,7 +3503,30 @@ async function scanAndTrade() {
     return;
   }
   const sizeMult = ddStatus.action === 'REDUCE_SIZE' ? 0.5 : 1.0;
-  const canEnterNew = ddStatus.action !== 'PAUSE' && ddStatus.action !== 'HALT';
+  let canEnterNew = ddStatus.action !== 'PAUSE' && ddStatus.action !== 'HALT';
+
+  // Phase 5 · Part 1 — daily loss cap (Varsity M9 Ch 6). Complements the
+  // rolling DD check: halts NEW entries when today's realized loss hits
+  // DAILY_LOSS_CAP_PCT of live equity. Already-open positions are still
+  // managed normally (exits continue).
+  const dailyCap = await robotradeGuards.checkDailyLossCap(pool, ddStatus.equity, {
+    DAILY_LOSS_CAP_PCT: CONFIG.DAILY_LOSS_CAP_PCT, ENABLED: true,
+  });
+  if (dailyCap.tripped) {
+    console.log(`🛑 Daily loss cap hit — realized ₹${dailyCap.realizedToday} ≤ cap ₹${dailyCap.cap}. Blocking new entries.`);
+    canEnterNew = false;
+  }
+
+  // Phase 5 · Part 4 — over-trading guard. Hard cap on new entries per
+  // calendar day. Addresses the "death by a thousand cuts" failure where
+  // choppy markets produced 15+ marginal entries and steady-state losses.
+  const tradeCap = await robotradeGuards.checkTradeCountCap(pool, {
+    MAX_TRADES_PER_DAY: CONFIG.MAX_TRADES_PER_DAY,
+  });
+  if (tradeCap.tripped) {
+    console.log(`🛑 Daily trade cap hit — ${tradeCap.countToday}/${tradeCap.cap} trades today. Blocking new entries.`);
+    canEnterNew = false;
+  }
 
   // Phase 3: Kelly-based risk sizing
   const kellyRisk = await computeKelly();
@@ -3561,8 +3597,16 @@ async function scanAndTrade() {
         const hitSL  = cmp <= Math.max(sl, trailSL);
         const hitTgt = cmp >= tgt;
         const exitSig = result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
+        // Phase 5 · Part 2 — time-decay exit (Varsity M9: don't hold intraday
+        // setups past their thesis window). Uses per-setup overrides so
+        // breakouts close faster than mean-reversion plays.
+        const timeExit = robotradeGuards.shouldTimeExit(openPos, Date.now(), {
+          MAX_HOLD_HOURS:           CONFIG.MAX_HOLD_HOURS,
+          MAX_HOLD_HOURS_BY_SETUP:  CONFIG.MAX_HOLD_HOURS_BY_SETUP,
+          ENABLED: true,
+        });
 
-        if (hitSL||hitTgt||exitSig) {
+        if (hitSL||hitTgt||exitSig||timeExit.exit) {
           // Phase 3 · Part 2 — slippage + brokerage-adjusted exit pricing
           const realistic = computeRealisticExitPnL(entryPrice, cmp, openPos.quantity);
           const exitFill  = realistic.exitPrice;
@@ -3570,7 +3614,10 @@ async function scanAndTrade() {
           const pnlPct    = realistic.pnlPct;
           const grossPnL  = realistic.grossPnL;
           const costs     = realistic.costs;
-          const reason = hitSL?"Stop Loss (trailing)":hitTgt?"Target Hit":`Strategy Exit (${result.sellVotes}/3 SELL)`;
+          const reason = hitSL  ? "Stop Loss (trailing)"
+                       : hitTgt ? "Target Hit"
+                       : timeExit.exit ? `Time Exit (${timeExit.heldHours}h/${timeExit.maxHours}h)`
+                       :                 `Strategy Exit (${result.sellVotes}/3 SELL)`;
           await pool.query(
             `UPDATE paper_trades
                 SET status='CLOSED', exit_price=$1, exit_time=NOW(),
@@ -13824,18 +13871,30 @@ function evaluateExitSignals(position, f) {
 }
 
 // ── UPDATE TRAILING STOPS (Varsity M9: ratchet stops up, never down) ──
-// In-memory high-water-mark tracker for trailing stops
+// In-memory high-water-mark tracker for trailing stops. Persisted to
+// paper_trades.hwm_price so values survive Railway restarts (previously,
+// a redeploy would reset every trailing stop back to entry-1ATR, giving
+// back accumulated profits).
 const _posHighWaterMark = {};
 
 function updateTrailingStop(position, currentPrice) {
   const entryPx = parseFloat(position.avg_price) || parseFloat(position.entryPrice) || parseFloat(position.price) || 0;
   if (!currentPrice || currentPrice <= 0 || !entryPx || entryPx <= 0) return position.trailing_stop || position.stopLoss || null;
 
-  // Track highest price since entry (not just current price)
+  // Track highest price since entry (not just current price).
+  // Seed from DB-persisted hwm_price if in-memory map was cleared (e.g. restart).
   const posKey = position.id || position.sym;
-  const prevHigh = _posHighWaterMark[posKey] || entryPx;
+  const dbHwm = Number.isFinite(Number(position.hwm_price)) ? Number(position.hwm_price) : null;
+  const prevHigh = _posHighWaterMark[posKey] || dbHwm || entryPx;
   const highestSeen = Math.max(prevHigh, currentPrice);
-  _posHighWaterMark[posKey] = highestSeen;
+  if (highestSeen !== _posHighWaterMark[posKey]) {
+    _posHighWaterMark[posKey] = highestSeen;
+    // Persist fire-and-forget — we don't await, so the hot path stays fast.
+    // The helper swallows errors (HWM is best-effort; in-memory still works).
+    if (position.id) {
+      robotradeGuards.persistHwm(pool, position.id, highestSeen).catch(() => {});
+    }
+  }
 
   const f = stockFundamentals[position.sym];
   const vol = f?.annualVol || 30;
@@ -19098,6 +19157,16 @@ app.post("/crypto/scan-now", (req,res) => { res.json({message:"Crypto scan start
 // -- Start ---------------------------------------------------------------------
 async function start() {
   await initDB();
+
+  // Phase 5 · Part 3 — rehydrate trailing-stop HWM map from paper_trades so
+  // a restart mid-session doesn't reset every trailing stop back to entry.
+  // Fire-and-forget: if it fails, in-memory tracking still works.
+  try {
+    const loaded = await robotradeGuards.loadHwmFromDb(pool);
+    Object.assign(_posHighWaterMark, loaded);
+    const n = Object.keys(loaded).length;
+    if (n) console.log(`🧭 robotrade: rehydrated ${n} HWM entries from paper_trades`);
+  } catch (e) { console.error('robotrade HWM rehydrate failed:', e.message); }
 
   // Load token: env var takes priority, then DB (persisted from last session)
   let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
