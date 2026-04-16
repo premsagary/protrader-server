@@ -5418,24 +5418,30 @@ app.get("/api/mf/funds", async(req,res)=>{
       });
     }
 
-    // Cache not ready — build it now (blocks until done, first request only)
-    await buildMFCache();
-
-    if (mfScoreCache && mfScoreCache.length > 0) {
-      const eligible_count   = mfScoreCache.filter(f=>f.eligible).length;
-      const ineligible_count = mfScoreCache.filter(f=>!f.eligible).length;
-      return res.json({
-        funds: mfScoreCache,
-        total: mfScoreCache.length,
-        eligible_count, not_eligible_count: ineligible_count,
-        source: 'Tickertape CSV - Apr 4 2026',
-        filters: 'AUM >=₹1,000 Cr · Age >=5Y · 3Y rolling data · Expense <2%',
-        cached_at: mfScoreCachedAt,
+    // Cache not ready. Two states to distinguish:
+    //   (a) Build already in-flight (post-restart warmup): return 503 fast
+    //       with {warming:true} so UI can show "warming up" + auto-retry.
+    //       Previously we awaited here, which blew past Railway's 30s proxy
+    //       timeout → 502 in the browser.
+    //   (b) Build NOT in-flight (cold start): kick one off in the background
+    //       and still return 503 immediately.
+    if (_mfCacheBuilding) {
+      return res.status(503).json({
+        warming: true,
+        funds: [], total: 0,
+        error: 'MF cache building after restart — retry in ~30 seconds',
+        retryAfterSec: 30,
       });
     }
 
-    throw new Error('No MF data in cache or DB');
-
+    // Kick off background build (fire-and-forget — we return immediately)
+    buildMFCache().catch(e => console.log('buildMFCache bg error:', e.message));
+    return res.status(503).json({
+      warming: true,
+      funds: [], total: 0,
+      error: 'MF cache build triggered — retry in ~30 seconds',
+      retryAfterSec: 30,
+    });
 
   } catch(e) {
     console.log("Tickertape DB not ready:", e.message);
@@ -5452,6 +5458,10 @@ app.post("/api/mf/refresh", async(req,res) => {
 // -- MF scored cache (pre-computed so tab loads in <1s) -----------------------
 let mfScoreCache = null;
 let mfScoreCachedAt = null;
+// Warmup flag — true while buildMFCache() is in flight. Lets /api/mf/funds
+// return an instant 503 with a "warming" hint instead of blocking the
+// request for >30s (Railway's proxy will 502 long before the build finishes).
+let _mfCacheBuilding = false;
 // Label shown in the "source" column of every scored MF row. Default value is a
 // cold-start fallback; the real label is loaded from app_config.mf_data_source
 // on startup and rewritten by POST /api/mf/import on every successful import.
@@ -5464,9 +5474,11 @@ let mfDataSourceLabel = 'Tickertape - Apr 11 2026';
 })();
 
 async function buildMFCache() {
+  if (_mfCacheBuilding) return;   // serialize — no parallel rebuilds
+  _mfCacheBuilding = true;
   try {
     const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
-    if (!rows.length) { console.log('buildMFCache: no rows in mf_tickertape'); return; }
+    if (!rows.length) { console.log('buildMFCache: no rows in mf_tickertape'); _mfCacheBuilding = false; return; }
 
     const pf = (v) => v!=null ? parseFloat(v) : null;
     const funds = rows.map(f => ({
@@ -5563,6 +5575,7 @@ async function buildMFCache() {
     mfScoreCachedAt = Date.now();
     console.log(`MF cache built: ${allFunds.length} funds (${scoredEligible.length} eligible, ${scoredIneligible.length} ineligible)`);
   } catch(e) { console.log('buildMFCache error:', e.message); }
+  finally { _mfCacheBuilding = false; }
 }
 // Build MF cache on startup + at :15 and :45 every hour Mon-Fri 8AM-5PM IST.
 // Offset 15 min from the TA pipeline's *:00/*:30 schedule so logs don't

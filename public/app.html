@@ -5714,17 +5714,30 @@ async function renderMFPage(){
     if (window._mfCachedData && window._mfCachedData.funds && window._mfCachedData.funds.length > 0) {
       data = window._mfCachedData;
     } else {
+      // Retry loop — handles both transient failures AND the "warming up after
+      // restart" state that the server now signals explicitly with
+      // { warming:true, retryAfterSec:N } on a 503. Total tolerance ~90 seconds.
       var attempts = 0;
-      while (attempts < 3) {
+      var MAX_ATTEMPTS = 8;
+      while (attempts < MAX_ATTEMPTS) {
         attempts++;
-        if(statusEl) statusEl.textContent = attempts === 1 ? "Loading fund data..." : "Retrying... ("+attempts+"/3)";
+        if(statusEl) statusEl.textContent = attempts === 1 ? "Loading fund data..." : "Retrying... ("+attempts+"/"+MAX_ATTEMPTS+")";
+        var body = null;
+        var status = 0;
         try {
           var r = await fetch("/api/mf/funds");
-          if (!r.ok) throw new Error("Server error "+r.status);
-          data = await r.json();
-          if (data.funds && data.funds.length > 0) break;
+          status = r.status;
+          body = await r.json().catch(function(){ return null; });
+          if (r.ok && body && body.funds && body.funds.length > 0) { data = body; break; }
         } catch(fetchErr) {
-          if (attempts >= 3) throw fetchErr;
+          if (attempts >= MAX_ATTEMPTS) throw fetchErr;
+        }
+        // Cache rebuilding after Railway restart — server sends 503 with warming:true
+        if (body && body.warming) {
+          if (statusEl) statusEl.textContent = "MF cache rebuilding after restart";
+          if (subEl)    subEl.textContent    = "Scoring ~1,000 funds · retrying in "+(body.retryAfterSec||10)+"s · attempt "+attempts+"/"+MAX_ATTEMPTS;
+          await new Promise(res=>setTimeout(res, (body.retryAfterSec||10)*1000));
+          continue;
         }
         if(subEl) subEl.textContent = "Server warming up... retrying in 5s";
         await new Promise(res=>setTimeout(res,5000));
