@@ -29,10 +29,16 @@ export default function Admin() {
   const tickertapeFilesRef = useRef(null);
 
   useEffect(() => {
-    apiGet('/api/admin/users').then((d) => setUsers(d.users || d || [])).catch(() => {});
+    apiGet('/api/admin/users').then((d) => setUsers(Array.isArray(d?.users) ? d.users : Array.isArray(d) ? d : [])).catch(() => {});
     const pollLogs = () => {
       if (logPaused) return;
-      apiGet('/api/admin/logs').then((d) => setLogs(d.logs || d || [])).catch(() => {});
+      apiGet('/api/admin/logs').then((d) => {
+        // Server may return { logs: [...] } or { lines: [...] } or raw array — be defensive
+        const arr = Array.isArray(d?.logs) ? d.logs
+                  : Array.isArray(d?.lines) ? d.lines
+                  : Array.isArray(d) ? d : [];
+        setLogs(arr);
+      }).catch(() => {});
     };
     pollLogs();
     const id = setInterval(pollLogs, 5000);
