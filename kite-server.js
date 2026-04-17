@@ -5450,10 +5450,21 @@ app.get("/api/mf/funds", async(req,res)=>{
       console.log('/api/mf/funds DB fallback failed:', dbErr.message);
     }
 
-    // 3. Both in-memory AND DB are empty — genuinely cold start.
-    //    Kick off a build in the background (if not already running) and
-    //    return an instant 503 with the warming hint so the UI can loop
-    //    without timing out at Railway's proxy layer.
+    // 3. Both in-memory AND DB are empty. Three sub-cases:
+    //    (a) source table mf_tickertape is missing → can NEVER warm up,
+    //        return a clear "run mf_load_v2.sql" message instead of
+    //        pretending to warm forever.
+    //    (b) source exists, build already running → warming.
+    //    (c) source exists, no build running → kick one off, warming.
+    if (_mfSourceTableMissing) {
+      return res.status(503).json({
+        warming: false,
+        needsDataLoad: true,
+        funds: [], total: 0,
+        error: "MF source data not loaded. Run mf_load_v2.sql in Railway Postgres (~105KB, one-time).",
+        howTo: "Railway dashboard → Postgres service → Data/Query tab → paste the contents of protrader-server/mf_load_v2.sql → execute",
+      });
+    }
     if (!_mfCacheBuilding) {
       buildMFCache().catch(e => console.log('buildMFCache bg error:', e.message));
     }
@@ -5607,13 +5618,30 @@ async function saveMFCacheToDB() {
   }
 }
 
+// Set when buildMFCache discovers the mf_tickertape source table doesn't
+// exist. The endpoint uses this to return a clear "run mf_load_v2.sql"
+// message instead of a misleading "warming" state.
+let _mfSourceTableMissing = false;
+
 async function buildMFCache() {
   if (_mfCacheBuilding) return;   // serialize — no parallel rebuilds
   _mfCacheBuilding = true;
   const _t0 = Date.now();
   try {
     const _tq = Date.now();
-    const {rows} = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name");
+    let rows;
+    try {
+      ({ rows } = await pool.query("SELECT * FROM mf_tickertape ORDER BY sub_category, name"));
+      _mfSourceTableMissing = false;
+    } catch (qErr) {
+      if (/relation .* does not exist/i.test(String(qErr.message))) {
+        _mfSourceTableMissing = true;
+        console.log('[MF] source table mf_tickertape missing — run mf_load_v2.sql in Railway Postgres to fix');
+        _mfCacheBuilding = false;
+        return;
+      }
+      throw qErr;
+    }
     const _tqMs = Date.now() - _tq;
     if (!rows.length) { console.log('buildMFCache: no rows in mf_tickertape'); _mfCacheBuilding = false; return; }
 

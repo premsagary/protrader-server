@@ -5732,6 +5732,11 @@ async function renderMFPage(){
         } catch(fetchErr) {
           if (attempts >= MAX_ATTEMPTS) throw fetchErr;
         }
+        // Terminal state: source data not loaded — no point retrying. Show
+        // actionable instructions and stop the loop.
+        if (body && body.needsDataLoad) {
+          throw new Error('DATA_NOT_LOADED::' + (body.error || 'MF source data missing') + '::' + (body.howTo || ''));
+        }
         // Cache rebuilding after Railway restart — server sends 503 with warming:true
         if (body && body.warming) {
           if (statusEl) statusEl.textContent = "MF cache rebuilding after restart";
