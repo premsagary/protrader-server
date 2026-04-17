@@ -908,7 +908,43 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_dlq_unresolved ON writer_dead_letter(resolved, next_retry) WHERE resolved = FALSE`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter tables included)");
+    // outcome_metrics: computed forward-return metrics per features_snapshot
+    // row. Joined back to features_snapshot by (sym, ts) for ML training.
+    // outcome-engine.js populates this 31+ minutes after a snapshot row.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS outcome_metrics (
+        snapshot_id          BIGINT,
+        sym                  VARCHAR(40) NOT NULL,
+        ts                   TIMESTAMP NOT NULL,
+        entry_ref_price      DOUBLE PRECISION,
+        mfe_price            DOUBLE PRECISION,
+        mfe_ts               TIMESTAMP,
+        mfe_pct              DOUBLE PRECISION,
+        mae_price            DOUBLE PRECISION,
+        mae_ts               TIMESTAMP,
+        mae_pct              DOUBLE PRECISION,
+        ret_5m_pct           DOUBLE PRECISION,
+        ret_15m_pct          DOUBLE PRECISION,
+        ret_30m_pct          DOUBLE PRECISION,
+        ret_60m_pct          DOUBLE PRECISION,
+        vol_during_window    DOUBLE PRECISION,
+        bars_observed        INTEGER,
+        time_to_plus_0_3pct  INTEGER,
+        time_to_plus_0_5pct  INTEGER,
+        time_to_plus_0_8pct  INTEGER,
+        time_to_plus_1_0pct  INTEGER,
+        time_to_minus_0_3pct INTEGER,
+        time_to_minus_0_5pct INTEGER,
+        time_to_minus_0_8pct INTEGER,
+        time_to_minus_1_0pct INTEGER,
+        computed_at          TIMESTAMP DEFAULT NOW(),
+        computed_version     VARCHAR(20) DEFAULT 'v1',
+        PRIMARY KEY (sym, ts)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_outcome_snapshot ON outcome_metrics(snapshot_id)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -918,6 +954,18 @@ function initKite(token) {
   const { KiteConnect } = require("kiteconnect");
   kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
   if (token) kite.setAccessToken(token);
+  // ── Global rate-limit wrapper on getHistoricalData (Apr-2026) ────────────
+  // There are 13+ call sites across the server that call kite.getHistoricalData
+  // directly (Smart Scan loop at 3737, day-trade path at 10213/10363/10475,
+  // /api endpoints at 19540, etc.). Rather than wrap each caller, patch the
+  // method itself ONCE so every call goes through _withKiteHistoricalLimit.
+  if (kite && kite.getHistoricalData && !kite.getHistoricalData._rateLimited) {
+    const _origGetHistoricalData = kite.getHistoricalData.bind(kite);
+    kite.getHistoricalData = function (...args) {
+      return _withKiteHistoricalLimit(() => _origGetHistoricalData(...args));
+    };
+    kite.getHistoricalData._rateLimited = true;
+  }
   return kite;
 }
 
