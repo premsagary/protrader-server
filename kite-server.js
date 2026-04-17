@@ -8666,25 +8666,34 @@ async function fetchKiteDaily(sym) {
   const toStr = to.toISOString().split('T')[0];
   const fromStr = from.toISOString().split('T')[0];
 
-  // Up to 3 attempts on 429-style errors (rate limit). Exponential backoff:
-  // 0ms (initial) → 2s → 4s. After 3 failures, give up and return null.
+  // Up to 3 attempts on 429-style errors (rate limit) or timeout. Exponential
+  // backoff: 0ms (initial) → 2s → 4s. After 3 failures, give up and return null.
+  //
+  // NOTE: kite.getHistoricalData is already monkey-patched through
+  // _withKiteHistoricalLimit in initKite(). Wrapping again here would
+  // double-queue and cause timeouts when the queue is long. Just call the
+  // monkey-patched method directly — the queue handles rate limiting.
+  //
+  // Timeout bumped to 30s: under heavy concurrent load the queue wait itself
+  // can take 5-10s on a single instance and more on dual instances. 30s
+  // gives comfortable headroom while still catching a genuinely hung request.
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const candles = await _withKiteHistoricalLimit(() =>
-        Promise.race([
-          kite.getHistoricalData(token, 'day', fromStr, toStr),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
-        ])
-      );
+      const candles = await Promise.race([
+        kite.getHistoricalData(token, 'day', fromStr, toStr),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000)),
+      ]);
       if (sym === 'RELIANCE' || sym === 'TCS' || sym === 'HDFCBANK') {
         console.log(`📈 fetchKiteDaily(${sym}): token=${token}, range=${fromStr}→${toStr}, got ${candles?.length||0} candles`);
       }
       return (candles && candles.length >= 50) ? candles : null;
     } catch (e) {
       const msg = String(e?.message || e);
-      const is429 = /too many requests|429|rate.?limit|network/i.test(msg);
-      if (is429 && attempt < MAX_ATTEMPTS) {
+      // Include 'timeout' in the retry set — a timed-out call is often a
+      // queue backup that resolves on retry.
+      const isRetryable = /too many requests|429|rate.?limit|network|timeout/i.test(msg);
+      if (isRetryable && attempt < MAX_ATTEMPTS) {
         const backoff = 1000 * Math.pow(2, attempt); // 2s, 4s
         await new Promise(r => setTimeout(r, backoff));
         continue;
