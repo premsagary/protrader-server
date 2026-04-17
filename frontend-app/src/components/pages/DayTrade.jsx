@@ -61,8 +61,32 @@ const COLS = [
   { k: 'sl',            l: 'SL',        w: 75,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'tgt',           l: 'Target',    w: 75,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'rrRatio',       l: 'R:R',       w: 60,  align: 'right', fmt: (v) => v != null ? `${Number(v).toFixed(2)}` : '—' },
-  { k: 'optionRec',     l: 'Option',    w: 130, align: 'left',  fmt: (v) => v ? `${v.type || ''} ${v.strike || ''} (${v.lots || '—'}L)` : '—' },
+  { k: 'optionRec',     l: 'Option',    w: 160, align: 'left',  fmt: (v) => formatOption(v) },
 ];
+
+// Rich option formatter: "NIFTY 24000 CE 24-Oct (Lot 50)"
+function formatOption(v) {
+  if (!v || typeof v !== 'object') return '—';
+  const parts = [];
+  if (v.type) parts.push(String(v.type).toUpperCase());
+  if (v.strike != null) parts.push(String(v.strike));
+  if (v.expiry) {
+    // Accept "2026-10-24" or "24-Oct" or Date
+    try {
+      const d = new Date(v.expiry);
+      if (!isNaN(d)) {
+        const mo = d.toLocaleString('en-US', { month: 'short' });
+        parts.push(`${d.getDate()}-${mo}`);
+      } else { parts.push(String(v.expiry)); }
+    } catch { parts.push(String(v.expiry)); }
+  }
+  let out = parts.join(' ');
+  const tail = [];
+  if (v.lots != null) tail.push(`Lot ${v.lots}`);
+  if (v.iv != null) tail.push(`IV ${Number(v.iv).toFixed(0)}%`);
+  if (tail.length) out += ` (${tail.join(' · ')})`;
+  return out || '—';
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Main component
@@ -80,6 +104,8 @@ export default function DayTrade() {
   const [expanded, setExpanded] = useState(null);
   const [forceRunning, setForceRunning] = useState(false);
   const [forceMsg, setForceMsg] = useState('');
+  const [totalScanned, setTotalScanned] = useState(null);
+  const [copyMsg, setCopyMsg] = useState('');
   const mounted = useRef(false);
 
   const fetchPicks = () => {
@@ -94,6 +120,7 @@ export default function DayTrade() {
         setPicks(arr);
         setScannedAt(d?.lastScannedAt || d?.scannedAt || null);
         setMarketOpen(d?.marketOpen ?? null);
+        setTotalScanned(typeof d?.total === 'number' ? d.total : null);
         setLoading(false);
       })
       .catch((e) => { setError(e.message || 'Failed'); setLoading(false); });
@@ -119,6 +146,44 @@ export default function DayTrade() {
     } catch (e) { setForceMsg(`❌ ${e.message}`); }
     setForceRunning(false);
     setTimeout(() => setForceMsg(''), 6000);
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      const header = ['Rank', 'Symbol', 'Group', 'Sector', 'Score', 'Setup', 'Price', 'RSI', 'VWAP%', 'Vol', 'Gap%', 'SL', 'Target', 'R:R', 'Option'];
+      const rows = (Array.isArray(filtered) ? filtered : []).map((p, i) => [
+        i + 1,
+        p.sym || '',
+        p.grp || '',
+        p.sector || '',
+        p.dayTradeScore != null ? Math.round(p.dayTradeScore) : '',
+        p.bestSetup || '',
+        p.price != null ? Number(p.price).toFixed(2) : '',
+        p.rsi != null ? Math.round(p.rsi) : '',
+        p.vwapDist != null ? Number(p.vwapDist).toFixed(2) : '',
+        p.volRatio != null ? Number(p.volRatio).toFixed(2) : '',
+        p.gapPct != null ? Number(p.gapPct).toFixed(2) : '',
+        p.sl != null ? Number(p.sl).toFixed(2) : '',
+        p.tgt != null ? Number(p.tgt).toFixed(2) : '',
+        p.rrRatio != null ? Number(p.rrRatio).toFixed(2) : '',
+        formatOption(p.optionRec),
+      ]);
+      const csv = [header, ...rows]
+        .map((r) => r.map((c) => {
+          const s = String(c == null ? '' : c);
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(','))
+        .join('\n');
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(csv);
+        setCopyMsg(`✓ Copied ${rows.length} rows to clipboard`);
+      } else {
+        setCopyMsg('❌ Clipboard unavailable');
+      }
+    } catch (e) {
+      setCopyMsg(`❌ ${e.message || 'Copy failed'}`);
+    }
+    setTimeout(() => setCopyMsg(''), 4000);
   };
 
   // ── Summary counts per setup type (pre-filter) ────────────────────
@@ -189,6 +254,15 @@ export default function DayTrade() {
               ↻ Refresh
             </button>
             <button
+              onClick={handleExportCSV}
+              className="btn btn-secondary"
+              disabled={!filtered.length}
+              style={{ height: 36, fontSize: 12, padding: '0 14px', opacity: filtered.length ? 1 : 0.5 }}
+              title="Copy current filtered picks to clipboard as CSV"
+            >
+              ⎘ Export CSV
+            </button>
+            <button
               onClick={handleForceScan}
               disabled={forceRunning}
               className="btn btn-primary"
@@ -198,9 +272,33 @@ export default function DayTrade() {
             </button>
           </div>
         </div>
+        {/* ── Scan diagnostics ── */}
+        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 11, color: 'var(--text3)' }}>
+          {scannedAt && (
+            <span className="chip" style={{ height: 22, fontSize: 10.5 }}>
+              🕒 Scanned {scannedAgo}
+            </span>
+          )}
+          {totalScanned != null && (
+            <span className="chip" style={{ height: 22, fontSize: 10.5 }}>
+              📊 {picks.length} picks / {totalScanned} scanned
+              {totalScanned > 0 && <> · {((picks.length / totalScanned) * 100).toFixed(1)}%</>}
+            </span>
+          )}
+          {marketOpen === false && (
+            <span className="chip chip-amber" style={{ height: 22, fontSize: 10.5, fontWeight: 700 }}>
+              ⚠ FROM LAST SESSION — data not live
+            </span>
+          )}
+        </div>
         {forceMsg && (
-          <div style={{ marginTop: 10, fontSize: 12, color: forceMsg.startsWith('❌') ? 'var(--red-text)' : 'var(--green-text)' }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: forceMsg.startsWith('❌') ? 'var(--red-text)' : 'var(--green-text)' }}>
             {forceMsg}
+          </div>
+        )}
+        {copyMsg && (
+          <div style={{ marginTop: 8, fontSize: 12, color: copyMsg.startsWith('❌') ? 'var(--red-text)' : 'var(--green-text)' }}>
+            {copyMsg}
           </div>
         )}
       </div>
@@ -375,17 +473,24 @@ export default function DayTrade() {
                             borderBottom: '1px solid var(--border)',
                             padding: '12px 18px',
                           }}>
-                            <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                              {p.whyPicked || 'No explanation available for this pick.'}
-                            </div>
-                            {Array.isArray(p.scoreGains) && p.scoreGains.length > 0 && (
-                              <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                {p.scoreGains.slice(0, 6).map((g, idx) => (
-                                  <span key={idx} className="chip" style={{ background: 'var(--green-bg)', color: 'var(--green-text)', height: 20, fontSize: 10 }}>+{g.pts} {g.reason}</span>
+                            <ColorizedWhy text={p.whyPicked} />
+                            {(Array.isArray(p.scoreGains) && p.scoreGains.length > 0) || (Array.isArray(p.scorePenalties) && p.scorePenalties.length > 0) ? (
+                              <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {(Array.isArray(p.scoreGains) ? p.scoreGains : []).slice(0, 8).map((g, idx) => (
+                                  <span key={idx} className="chip chip-green" style={{ height: 22, fontSize: 10.5, fontWeight: 600 }}>
+                                    +{g.pts} {g.reason}
+                                  </span>
                                 ))}
-                                {(p.scorePenalties || []).slice(0, 3).map((g, idx) => (
-                                  <span key={`p${idx}`} className="chip" style={{ background: 'var(--red-bg)', color: 'var(--red-text)', height: 20, fontSize: 10 }}>−{g.pts} {g.reason}</span>
+                                {(Array.isArray(p.scorePenalties) ? p.scorePenalties : []).slice(0, 6).map((g, idx) => (
+                                  <span key={`p${idx}`} className="chip chip-red" style={{ height: 22, fontSize: 10.5, fontWeight: 600 }}>
+                                    −{g.pts} {g.reason}
+                                  </span>
                                 ))}
+                              </div>
+                            ) : null}
+                            {p.optionRec && (
+                              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text3)' }}>
+                                <b style={{ color: 'var(--brand-text)' }}>Options:</b> {formatOption(p.optionRec)}
                               </div>
                             )}
                           </td>
@@ -404,6 +509,144 @@ export default function DayTrade() {
           )}
         </div>
       )}
+
+      {/* ═══ PER-SETUP MINI-TABLES ═══ */}
+      {!loading && !error && picks.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <div className="label-xs" style={{ marginBottom: 10 }}>Top picks by setup type</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 14 }}>
+            {SETUPS.map((s) => (
+              <SetupMiniTable
+                key={s.type}
+                setup={s}
+                rows={(Array.isArray(picks) ? picks : [])
+                  .filter((p) => String(p.bestSetup || '').toUpperCase() === s.type)
+                  .sort((a, b) => (b.dayTradeScore || 0) - (a.dayTradeScore || 0))
+                  .slice(0, 10)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Per-setup mini-table (top 10 by score for a given setup type)
+// ══════════════════════════════════════════════════════════════════════
+function SetupMiniTable({ setup, rows }) {
+  const list = Array.isArray(rows) ? rows : [];
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${setup.color}22` }}>
+      <div style={{
+        padding: '10px 14px',
+        background: setup.bg,
+        borderBottom: `1px solid ${setup.color}22`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 16 }}>{setup.icon}</span>
+          <div style={{ fontSize: 12, fontWeight: 700, color: setup.color, letterSpacing: '0.3px' }}>
+            {setup.label}
+          </div>
+        </div>
+        <div style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 600 }}>
+          {list.length} {list.length === 1 ? 'pick' : 'picks'}
+        </div>
+      </div>
+      {list.length === 0 ? (
+        <div style={{ padding: 20, textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>
+          No {setup.label} picks right now.
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                <th style={miniTh}>Stock</th>
+                <th style={{ ...miniTh, textAlign: 'right' }}>Score</th>
+                <th style={{ ...miniTh, textAlign: 'right' }}>Price</th>
+                <th style={{ ...miniTh, textAlign: 'right' }}>SL</th>
+                <th style={{ ...miniTh, textAlign: 'right' }}>TGT</th>
+                <th style={{ ...miniTh, textAlign: 'right' }}>R:R</th>
+                <th style={{ ...miniTh, textAlign: 'left' }}>Option</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((p) => (
+                <tr key={p.sym} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ ...miniTd, fontWeight: 700, color: 'var(--text)' }}>{p.sym}</td>
+                  <td className="tabular-nums" style={{
+                    ...miniTd, textAlign: 'right', fontWeight: 700,
+                    color: (p.dayTradeScore || 0) >= 70 ? 'var(--green-text)' : (p.dayTradeScore || 0) >= 50 ? 'var(--amber-text)' : 'var(--text2)',
+                  }}>
+                    {p.dayTradeScore != null ? Math.round(p.dayTradeScore) : '—'}
+                  </td>
+                  <td className="tabular-nums" style={{ ...miniTd, textAlign: 'right', color: 'var(--text2)' }}>
+                    {p.price != null ? `₹${Number(p.price).toFixed(1)}` : '—'}
+                  </td>
+                  <td className="tabular-nums" style={{ ...miniTd, textAlign: 'right', color: 'var(--red-text)' }}>
+                    {p.sl != null ? `₹${Number(p.sl).toFixed(1)}` : '—'}
+                  </td>
+                  <td className="tabular-nums" style={{ ...miniTd, textAlign: 'right', color: 'var(--green-text)' }}>
+                    {p.tgt != null ? `₹${Number(p.tgt).toFixed(1)}` : '—'}
+                  </td>
+                  <td className="tabular-nums" style={{
+                    ...miniTd, textAlign: 'right',
+                    color: (p.rrRatio || 0) >= 2 ? 'var(--green-text)' : (p.rrRatio || 0) >= 1.5 ? 'var(--text)' : 'var(--red-text)',
+                  }}>
+                    {p.rrRatio != null ? Number(p.rrRatio).toFixed(2) : '—'}
+                  </td>
+                  <td style={{ ...miniTd, color: 'var(--text3)', fontSize: 10.5 }}>
+                    {formatOption(p.optionRec)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Colorized whyPicked — parses prose and tags +N / −N fragments with color
+// ══════════════════════════════════════════════════════════════════════
+function ColorizedWhy({ text }) {
+  if (!text) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>
+        No explanation available for this pick.
+      </div>
+    );
+  }
+  // Split on sentence-like boundaries; color fragments that contain + or − numbers
+  const parts = String(text).split(/(?<=[.;])\s+|\s+\|\s+|\s*·\s*/);
+  return (
+    <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.7, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {parts.filter(Boolean).map((frag, i) => {
+        const hasPlus = /(^|\s)\+\d/.test(frag);
+        const hasMinus = /(^|\s)[−-]\d/.test(frag);
+        let color = 'var(--text2)';
+        let bg = 'transparent';
+        if (hasPlus && !hasMinus) { color = 'var(--green-text)'; bg = 'var(--green-bg)'; }
+        else if (hasMinus && !hasPlus) { color = 'var(--red-text)'; bg = 'var(--red-bg)'; }
+        return (
+          <span key={i} style={{
+            padding: bg === 'transparent' ? 0 : '2px 8px',
+            borderRadius: bg === 'transparent' ? 0 : 6,
+            background: bg,
+            color,
+            fontSize: 11.5,
+          }}>
+            {frag}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -449,5 +692,22 @@ const tdStyle = {
   padding: '9px 12px',
   borderBottom: '1px solid var(--border)',
   fontSize: 12,
+  whiteSpace: 'nowrap',
+};
+
+const miniTh = {
+  padding: '7px 10px',
+  fontSize: 9.5,
+  fontWeight: 700,
+  letterSpacing: '0.5px',
+  textTransform: 'uppercase',
+  color: 'var(--text3)',
+  textAlign: 'left',
+  whiteSpace: 'nowrap',
+};
+
+const miniTd = {
+  padding: '7px 10px',
+  fontSize: 11,
   whiteSpace: 'nowrap',
 };

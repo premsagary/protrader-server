@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { apiGet } from '../../api/client';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { apiGet, apiPost } from '../../api/client';
 
 // ══════════════════════════════════════════════════════════════════════
 // Sector canonicalization — mirrors kite-server.js canonicalSector()
@@ -153,6 +153,27 @@ const TABS = [
 ];
 
 // ══════════════════════════════════════════════════════════════════════
+// Sort helper — null-safe, respects asc/desc, strings fall to locale compare
+// ══════════════════════════════════════════════════════════════════════
+function sortBy(arr, key, dir) {
+  const mult = dir === 'asc' ? 1 : -1;
+  return [...arr].sort((a, b) => {
+    let av = a[key], bv = b[key];
+    const aNull = (av == null), bNull = (bv == null);
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    if (typeof av === 'string' || typeof bv === 'string') {
+      av = String(av).toUpperCase(); bv = String(bv).toUpperCase();
+      if (av < bv) return -1 * mult;
+      if (av > bv) return  1 * mult;
+      return 0;
+    }
+    return (av - bv) * mult;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Main component
 // ══════════════════════════════════════════════════════════════════════
 export default function StockPicks() {
@@ -161,6 +182,19 @@ export default function StockPicks() {
   const [error, setError] = useState(null);
   const [marketCapFilter, setMarketCapFilter] = useState('ALL');
 
+  // Per-tab sort state — {key, dir} tuple per tab id
+  const [sorts, setSorts] = useState({
+    rebound:  { key: 'fallenScore', dir: 'desc' },
+    momentum: { key: 'composite',   dir: 'desc' },
+    longterm: { key: 'scoreV2',     dir: 'desc' },
+  });
+
+  // AI review state per category
+  const [aiReviews, setAiReviews] = useState({}); // { category: { sym: [reviews...] } }
+  const [aiLoading, setAiLoading] = useState({}); // { category: bool }
+  const [aiRunning, setAiRunning] = useState({}); // { category: bool }
+  const [aiExpanded, setAiExpanded] = useState({}); // { "category:sym": true }
+
   useEffect(() => {
     setLoading(true);
     apiGet('/api/stocks/score?scoreVersion=2')
@@ -168,7 +202,62 @@ export default function StockPicks() {
       .catch((e) => { setError(e.message || 'Failed to load picks'); setLoading(false); });
   }, []);
 
-  const stocks = (data?.stocks || []).filter(Boolean);
+  // Load cached AI reviews for all 3 categories on first render
+  useEffect(() => {
+    ['rebound', 'momentum', 'longterm'].forEach((cat) => {
+      setAiLoading((p) => ({ ...p, [cat]: true }));
+      apiGet(`/api/picks/ai-review?category=${cat}`)
+        .then((d) => {
+          setAiReviews((p) => ({ ...p, [cat]: d.reviews || {} }));
+        })
+        .catch(() => {
+          setAiReviews((p) => ({ ...p, [cat]: {} }));
+        })
+        .finally(() => {
+          setAiLoading((p) => ({ ...p, [cat]: false }));
+        });
+    });
+  }, []);
+
+  const runDeepReview = useCallback(async (category) => {
+    if (aiRunning[category]) return;
+    setAiRunning((p) => ({ ...p, [category]: true }));
+    try {
+      const d = await apiPost(`/api/picks/ai-review?category=${category}`, {});
+      if (d && d.error) {
+        alert('Deep AI Review failed: ' + d.error);
+      }
+      // Reload cached reviews
+      const fresh = await apiGet(`/api/picks/ai-review?category=${category}`);
+      setAiReviews((p) => ({ ...p, [category]: fresh.reviews || {} }));
+    } catch (e) {
+      alert('Deep AI Review failed: ' + (e.message || 'Unknown error'));
+    } finally {
+      setAiRunning((p) => ({ ...p, [category]: false }));
+    }
+  }, [aiRunning]);
+
+  const toggleExpand = useCallback((category, sym) => {
+    const k = `${category}:${sym}`;
+    setAiExpanded((p) => {
+      const copy = { ...p };
+      if (copy[k]) delete copy[k];
+      else copy[k] = true;
+      return copy;
+    });
+  }, []);
+
+  const setSort = useCallback((tabId, key) => {
+    setSorts((p) => {
+      const cur = p[tabId];
+      if (cur.key === key) {
+        return { ...p, [tabId]: { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } };
+      }
+      return { ...p, [tabId]: { key, dir: 'desc' } };
+    });
+  }, []);
+
+  const stocks = Array.isArray(data?.stocks) ? data.stocks.filter(Boolean) : [];
 
   // Market-cap filter
   const filteredByGrp = useMemo(() => {
@@ -176,17 +265,18 @@ export default function StockPicks() {
     return stocks.filter((s) => (s.grp || '').toUpperCase().includes(marketCapFilter));
   }, [stocks, marketCapFilter]);
 
-  // Build each tab's top-10 list: filter → sort desc → sector cap → slice
+  // Build each tab's list: filter → sort → sector cap → top 25
   const tabPicks = useMemo(() => {
     const out = {};
     for (const tab of TABS) {
       const filtered = filteredByGrp.filter(tab.filter);
-      const sorted = [...filtered].sort((a, b) => (b[tab.scoreField] || 0) - (a[tab.scoreField] || 0));
-      const capped = applySectorCap(sorted, 2);
-      out[tab.id] = capped.slice(0, 15);
+      const sortCfg = sorts[tab.id] || { key: tab.scoreField, dir: 'desc' };
+      const sorted  = sortBy(filtered, sortCfg.key, sortCfg.dir);
+      const capped  = applySectorCap(sorted, 2);
+      out[tab.id] = capped.slice(0, 25);
     }
     return out;
-  }, [filteredByGrp]);
+  }, [filteredByGrp, sorts]);
 
   // Header stat counts (before cap)
   const counts = useMemo(() => ({
@@ -195,9 +285,16 @@ export default function StockPicks() {
     momentum: stocks.filter((s) => s.composite != null && s.composite >= 55).length,
     longTerm: stocks.filter((s) => (s.scoreV2 || 0) >= 60).length,
     disqualified: stocks.filter((s) => s.disqualified).length,
+    highRoe: stocks.filter((s) => s.roe != null && s.roe >= 15).length,
+    goldenCross: stocks.filter((s) => s.goldenCross).length,
+    nifty50: stocks.filter((s) => s.grp === 'NIFTY50').length,
+    next50:  stocks.filter((s) => s.grp === 'NEXT50').length,
+    midcap:  stocks.filter((s) => s.grp === 'MIDCAP').length,
+    smallcap: stocks.filter((s) => s.grp === 'SMALLCAP').length,
   }), [stocks]);
 
   const filterPills = ['ALL', 'NIFTY50', 'NEXT50', 'MIDCAP', 'SMALLCAP'];
+  const scopeLbl = marketCapFilter === 'ALL' ? 'All Stocks' : marketCapFilter;
 
   return (
     <div>
@@ -235,12 +332,12 @@ export default function StockPicks() {
         </div>
       </div>
 
-      {/* ═══ STATS STRIP ═══ */}
+      {/* ═══ STATS STRIP (extended: ROE, Golden Cross, market-cap splits) ═══ */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+          gap: 10,
           marginBottom: 20,
         }}
       >
@@ -249,13 +346,24 @@ export default function StockPicks() {
           { l: 'Rebound',      v: counts.rebound,      c: 'var(--amber-text)' },
           { l: 'Momentum',     v: counts.momentum,     c: 'var(--green-text)' },
           { l: 'Long-Term',    v: counts.longTerm,     c: 'var(--brand-text)' },
-          { l: 'Disqualified', v: counts.disqualified, c: 'var(--red-text)' },
+          { l: 'ROE ≥15%',     v: counts.highRoe,      c: 'var(--green-text)', tip: 'Companies with ROE ≥ 15% — compounder candidates' },
+          { l: 'Golden Cross', v: counts.goldenCross,  c: 'var(--amber-text)', tip: '50 DMA crossed above 200 DMA — bullish trend signal' },
+          { l: 'Nifty50',      v: counts.nifty50,      c: 'var(--brand-text)' },
+          { l: 'Next50',       v: counts.next50,       c: 'var(--text2)' },
+          { l: 'Midcap',       v: counts.midcap,       c: 'var(--amber-text)' },
+          { l: 'Smallcap',     v: counts.smallcap,     c: 'var(--green-text)' },
+          { l: 'Disqualified', v: counts.disqualified, c: 'var(--red-text)', tip: 'Hard-disqualified (pledge >75%, D/E >5 non-fin, auditor red flag, SEBI, persistent losses, data <30%)' },
         ].map((s, i) => (
-          <div key={i} className="card" style={{ padding: '16px 18px', cursor: 'default' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 8 }}>
+          <div
+            key={i}
+            className="card"
+            style={{ padding: '14px 16px', cursor: s.tip ? 'help' : 'default' }}
+            title={s.tip || ''}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>
               {s.l}
             </div>
-            <div className="tabular-nums" style={{ fontSize: 26, fontWeight: 800, color: s.c, letterSpacing: '-0.8px', lineHeight: 1 }}>
+            <div className="tabular-nums" style={{ fontSize: 22, fontWeight: 800, color: s.c, letterSpacing: '-0.6px', lineHeight: 1 }}>
               {loading ? '—' : s.v}
             </div>
           </div>
@@ -263,7 +371,7 @@ export default function StockPicks() {
       </div>
 
       {/* ═══ MARKET-CAP FILTER PILLS ═══ */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
         {filterPills.map((f) => (
           <button
             key={f}
@@ -284,6 +392,47 @@ export default function StockPicks() {
             {f}
           </button>
         ))}
+      </div>
+
+      {/* ═══ SCORE LEGEND — how to read the three scores ═══ */}
+      <div
+        className="card"
+        style={{
+          padding: '14px 18px',
+          marginBottom: 18,
+          fontSize: 11,
+        }}
+      >
+        <div style={{
+          fontWeight: 700,
+          color: 'var(--text)',
+          fontSize: 11,
+          letterSpacing: '0.8px',
+          marginBottom: 10,
+          textTransform: 'uppercase',
+        }}>
+          How to Read the Scores
+        </div>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '140px 1fr',
+          rowGap: 8,
+          columnGap: 14,
+          alignItems: 'center',
+        }}>
+          <span className="chip chip-amber" style={{ justifyContent: 'center', fontWeight: 700 }}>REBOUND</span>
+          <span style={{ color: 'var(--text2)', lineHeight: 1.5, fontSize: 12 }}>
+            Quality business pulled back ≥20% with RSI ≤52 — tradeable pullback setup
+          </span>
+          <span className="chip chip-green" style={{ justifyContent: 'center', fontWeight: 700 }}>MOMENTUM</span>
+          <span style={{ color: 'var(--text2)', lineHeight: 1.5, fontSize: 12 }}>
+            5-factor blend (FA 35 + Val 15 + TA 20 + Mom 15 + Risk 15) — high-conviction 1–3M trade
+          </span>
+          <span className="chip chip-brand" style={{ justifyContent: 'center', fontWeight: 700 }}>INVESTMENT</span>
+          <span style={{ color: 'var(--text2)', lineHeight: 1.5, fontSize: 12 }}>
+            Varsity 4-pillar (Quality 40 + Growth 25 + Val 20 + Business 15) — fundamentals only, 12M hold
+          </span>
+        </div>
       </div>
 
       {/* ═══ ERROR ═══ */}
@@ -310,13 +459,67 @@ export default function StockPicks() {
       {/* ═══ THREE-COLUMN PICKS ═══ */}
       {!loading && !error && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14 }}>
-          {TABS.map((tab) => (
-            <PicksColumn
-              key={tab.id}
-              tab={tab}
-              picks={tabPicks[tab.id] || []}
-            />
-          ))}
+          {TABS.map((tab) => {
+            const picks = tabPicks[tab.id] || [];
+            const totalBeforeCap = filteredByGrp.filter(tab.filter).length;
+            return (
+              <PicksColumn
+                key={tab.id}
+                tab={tab}
+                picks={picks}
+                totalAvailable={totalBeforeCap}
+                scopeLbl={scopeLbl}
+                sort={sorts[tab.id]}
+                onSort={(k) => setSort(tab.id, k)}
+                aiReviews={aiReviews[tab.id] || {}}
+                aiLoading={!!aiLoading[tab.id]}
+                aiRunning={!!aiRunning[tab.id]}
+                onRunReview={() => runDeepReview(tab.id)}
+                aiExpanded={aiExpanded}
+                onToggleExpand={toggleExpand}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* ═══ SCORING METHODOLOGY ═══ */}
+      {!loading && !error && (
+        <div className="card" style={{ padding: 16, marginTop: 18 }}>
+          <div style={{ fontWeight: 700, color: 'var(--text)', fontSize: 13, marginBottom: 10 }}>
+            Scoring Methodology · 100 Points
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {[
+              { name: 'Quality',   pts: 25, c: 'var(--amber-text)', factors: 'ROE · ROA/ROCE · Debt/Equity · Operating Margin · Percentile vs sector peers' },
+              { name: 'Value',     pts: 20, c: 'var(--green-text)', factors: 'P/E ratio · P/B ratio · PEG (growth-adj value) · Dividend Yield · NSE Value 50 methodology' },
+              { name: 'Momentum',  pts: 20, c: 'var(--brand-text)', factors: '52-week price return · % from 52w high · Beta · NSE Momentum index methodology' },
+              { name: 'Growth',    pts: 20, c: 'var(--purple-text)', factors: 'Revenue growth YoY · EPS growth YoY · Analyst consensus (NSE + Screener.in)' },
+              { name: 'Technical', pts: 15, c: 'var(--red-text)', factors: 'Price vs 50 DMA · Price vs 200 DMA · Golden/Death Cross · Volume accumulation' },
+            ].map((p) => (
+              <div
+                key={p.name}
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  flex: 1,
+                  minWidth: 180,
+                }}
+              >
+                <div style={{ color: p.c, fontWeight: 700, fontSize: 11, letterSpacing: '0.3px' }}>
+                  {p.name} <span style={{ opacity: 0.7 }}>{p.pts} pts</span>
+                </div>
+                <div style={{ color: 'var(--text3)', fontSize: 10, marginTop: 4, lineHeight: 1.5 }}>
+                  {p.factors}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text4)' }}>
+            Data: NSE + Screener.in v11 fundamentals · All scores percentile-ranked within sector · Refreshed daily 7AM IST · Source: NSE Quality/Value/Momentum index methodology
+          </div>
         </div>
       )}
     </div>
@@ -326,9 +529,12 @@ export default function StockPicks() {
 // ══════════════════════════════════════════════════════════════════════
 // Column component — renders one of the three tabs
 // ══════════════════════════════════════════════════════════════════════
-function PicksColumn({ tab, picks }) {
-  const [expanded, setExpanded] = useState(null); // sym of currently expanded card
-
+function PicksColumn({
+  tab, picks, totalAvailable, scopeLbl,
+  sort, onSort,
+  aiReviews, aiLoading, aiRunning, onRunReview,
+  aiExpanded, onToggleExpand,
+}) {
   return (
     <div
       className="card"
@@ -344,9 +550,12 @@ function PicksColumn({ tab, picks }) {
         borderBottom: '1px solid var(--border)',
         background: tab.accentSoft,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
           <h3 style={{ fontSize: 15, fontWeight: 800, color: tab.accent, letterSpacing: '-0.1px' }}>
             {tab.label}
+            <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 500, marginLeft: 6 }}>
+              · {scopeLbl}
+            </span>
           </h3>
           <span className="chip" style={{
             fontSize: 10,
@@ -360,10 +569,59 @@ function PicksColumn({ tab, picks }) {
             {picks.length}
           </span>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.45 }}>
+        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.45, marginBottom: 10 }}>
           {tab.desc}
         </div>
+
+        {/* Deep AI Review button */}
+        <button
+          onClick={onRunReview}
+          disabled={aiRunning}
+          title={`Run Deep AI Review on the top 10 ${tab.label} across all 5 AI models (full Varsity payload per stock).`}
+          style={{
+            background: aiRunning
+              ? 'rgba(124,58,237,0.25)'
+              : `linear-gradient(135deg, #8B5CF6, ${tab.accent})`,
+            color: '#fff',
+            border: 'none',
+            borderRadius: 9999,
+            padding: '6px 14px',
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: aiRunning ? 'wait' : 'pointer',
+            opacity: aiRunning ? 0.7 : 1,
+            boxShadow: '0 2px 8px rgba(99,102,241,0.25)',
+            fontFamily: 'inherit',
+            transition: 'all 180ms ease',
+          }}
+        >
+          {aiRunning ? '🧠 Running…' : '🧠 Deep AI Review'}
+        </button>
       </div>
+
+      {/* Sortable header row */}
+      {picks.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '24px 1fr 80px 72px',
+            gap: 6,
+            padding: '10px 20px',
+            borderBottom: '1px solid var(--border)',
+            background: 'rgba(255,255,255,0.02)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.5px',
+            textTransform: 'uppercase',
+            color: 'var(--text3)',
+          }}
+        >
+          <span>#</span>
+          <SortHeader label="Stock" sortKey="sym" sort={sort} onSort={onSort} align="left" />
+          <SortHeader label="Score" sortKey={tab.scoreField} sort={sort} onSort={onSort} align="right" />
+          <SortHeader label="Price" sortKey="price" sort={sort} onSort={onSort} align="right" />
+        </div>
+      )}
 
       {/* Column body */}
       {picks.length === 0 && (
@@ -377,24 +635,84 @@ function PicksColumn({ tab, picks }) {
           stock={s}
           rank={idx + 1}
           tab={tab}
-          expanded={expanded === s.sym}
-          onToggle={() => setExpanded(expanded === s.sym ? null : s.sym)}
+          aiReviews={aiReviews[s.sym]}
+          aiLoading={aiLoading}
+          expanded={!!aiExpanded[`${tab.id}:${s.sym}`]}
+          onToggle={() => onToggleExpand(tab.id, s.sym)}
         />
       ))}
+
+      {/* Top-N-of-M overflow indicator */}
+      {totalAvailable > picks.length && picks.length >= 25 && (
+        <div style={{
+          textAlign: 'center',
+          padding: 10,
+          fontSize: 10,
+          color: 'var(--text4)',
+          borderTop: '1px solid var(--border)',
+        }}>
+          Showing top {picks.length} of {totalAvailable} · see full data in <b style={{ color: 'var(--text3)' }}>Stock Data</b> tab
+        </div>
+      )}
     </div>
   );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Per-stock row — compact with expand-on-click
+// Sortable header cell
 // ══════════════════════════════════════════════════════════════════════
-function PickRow({ stock: s, rank, tab, expanded, onToggle }) {
+function SortHeader({ label, sortKey, sort, onSort, align }) {
+  const active = sort && sort.key === sortKey;
+  const arrow = active ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅';
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onSort(sortKey); }}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+        color: active ? 'var(--brand-text)' : 'var(--text3)',
+        textAlign: align || 'right',
+        padding: 0,
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}{' '}
+      <span style={{ opacity: active ? 1 : 0.4, fontSize: 9, marginLeft: 2 }}>
+        {arrow}
+      </span>
+    </button>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Per-stock row — compact with expand-on-click to see AI reviews + flags
+// ══════════════════════════════════════════════════════════════════════
+function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle }) {
   const rawScore = s[tab.scoreField];
   const score = rawScore != null ? Math.round(rawScore * 10) / 10 : null;
   const rawOrig = s[tab.scoreRaw];
   const priceStr = s.price != null ? `₹${Number(s.price).toLocaleString('en-IN', { maximumFractionDigits: 1 })}` : '—';
   const flags = Array.isArray(s.riskFlags) ? s.riskFlags : [];
   const disq = s.disqualifier;
+
+  // AI review badges (top 10 only — match old server scoping)
+  const showAiBadges = rank <= 10;
+  const council = Array.isArray(aiReviews) ? aiReviews.filter((r) => r.model_id !== 'ai-judge') : [];
+  const judge = Array.isArray(aiReviews) ? aiReviews.find((r) => r.model_id === 'ai-judge') : null;
+  const aiCounts = { AGREE: 0, CAUTION: 0, DISAGREE: 0, NO_REVIEW: 0 };
+  council.forEach((r) => {
+    const v = (r.verdict || 'NO_REVIEW').toUpperCase();
+    if (aiCounts[v] != null) aiCounts[v]++;
+    else aiCounts.CAUTION++;
+  });
+  const hasReviews = council.length > 0;
 
   return (
     <div
@@ -466,6 +784,49 @@ function PickRow({ stock: s, rank, tab, expanded, onToggle }) {
         </div>
       )}
 
+      {/* AI Review badges (council tally + judge verdict) */}
+      {showAiBadges && hasReviews && (
+        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+          {aiCounts.AGREE > 0 && (
+            <span className="chip chip-green" style={{ fontSize: 9.5, height: 18, padding: '0 6px', fontWeight: 700 }}>
+              {aiCounts.AGREE} AI ✓
+            </span>
+          )}
+          {aiCounts.CAUTION > 0 && (
+            <span className="chip chip-amber" style={{ fontSize: 9.5, height: 18, padding: '0 6px', fontWeight: 700 }}>
+              {aiCounts.CAUTION} AI ⚠
+            </span>
+          )}
+          {aiCounts.DISAGREE > 0 && (
+            <span className="chip chip-red" style={{ fontSize: 9.5, height: 18, padding: '0 6px', fontWeight: 700 }}>
+              {aiCounts.DISAGREE} AI ✗
+            </span>
+          )}
+          {judge && judge.verdict && (() => {
+            const jv = String(judge.verdict || '').toUpperCase();
+            const cls = jv === 'AGREE' ? 'chip-green' : jv === 'CAUTION' ? 'chip-amber' : jv === 'DISAGREE' ? 'chip-red' : '';
+            const jl = jv === 'AGREE' ? '✓ BUY' : jv === 'CAUTION' ? '⚠ HOLD' : jv === 'DISAGREE' ? '✗ AVOID' : '— N/A';
+            return (
+              <span
+                className={`chip ${cls}`}
+                title="Claude Sonnet 4.6 final synthesis"
+                style={{ fontSize: 9.5, height: 18, padding: '0 8px', fontWeight: 700, letterSpacing: '0.3px' }}
+              >
+                ⚖ JUDGE {jl}
+                {judge.confidence != null && (
+                  <span style={{ marginLeft: 4, opacity: 0.75 }}>{Math.round(judge.confidence)}%</span>
+                )}
+              </span>
+            );
+          })()}
+        </div>
+      )}
+      {showAiBadges && !hasReviews && !aiLoading && (
+        <div style={{ marginTop: 6, fontSize: 9.5, color: 'var(--text4)', fontStyle: 'italic' }}>
+          No AI review yet — click "Deep AI Review" above
+        </div>
+      )}
+
       {/* Risk flag badges */}
       {flags.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
@@ -513,7 +874,7 @@ function PickRow({ stock: s, rank, tab, expanded, onToggle }) {
             </div>
           )}
           {flags.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
               {flags.slice(0, 4).map((fl, i) => (
                 <div key={i} style={{ fontSize: 11, color: 'var(--text2)' }}>
                   <span style={{ color: severityColors(fl.severity).fg, fontWeight: 700 }}>
@@ -528,12 +889,149 @@ function PickRow({ stock: s, rank, tab, expanded, onToggle }) {
             </div>
           )}
           {flags.length === 0 && !disq && (
-            <div style={{ color: 'var(--text3)', fontStyle: 'italic' }}>
+            <div style={{ color: 'var(--text3)', fontStyle: 'italic', marginBottom: 10 }}>
               No risk flags firing. Clean signal.
             </div>
           )}
+
+          {/* AI Council verdicts (per-model detail) */}
+          {showAiBadges && hasReviews && (
+            <ExpandedAIReview council={council} judge={judge} sym={s.sym} />
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Expanded AI council + judge panel
+// ══════════════════════════════════════════════════════════════════════
+function ExpandedAIReview({ council, judge, sym }) {
+  function verdictColor(v) {
+    const u = String(v || 'NO_REVIEW').toUpperCase();
+    if (u === 'AGREE')    return 'var(--green-text)';
+    if (u === 'CAUTION')  return 'var(--amber-text)';
+    if (u === 'DISAGREE') return 'var(--red-text)';
+    return 'var(--text3)';
+  }
+  function verdictIcon(v) {
+    const u = String(v || 'NO_REVIEW').toUpperCase();
+    if (u === 'AGREE')    return '✓';
+    if (u === 'CAUTION')  return '⚠';
+    if (u === 'DISAGREE') return '✗';
+    return '‼';
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{
+        fontSize: 10,
+        fontWeight: 700,
+        color: 'var(--text3)',
+        marginBottom: 6,
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+      }}>
+        AI Council · {sym}{' '}
+        <span style={{ color: 'var(--text4)', fontWeight: 500, textTransform: 'none' }}>
+          (5 models vote · judge synthesises)
+        </span>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 6,
+        marginBottom: judge ? 10 : 0,
+      }}>
+        {council.map((rv, i) => {
+          const v = String(rv.verdict || 'NO_REVIEW').toUpperCase();
+          const vCol = verdictColor(v);
+          return (
+            <div
+              key={i}
+              style={{
+                background: 'rgba(255,255,255,0.02)',
+                border: '1px solid var(--border)',
+                borderLeft: `3px solid ${vCol}`,
+                borderRadius: 6,
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                <span style={{ color: vCol, fontWeight: 800, fontSize: 11 }}>
+                  {verdictIcon(v)} {v}
+                </span>
+                <span style={{ color: 'var(--text4)', fontSize: 9 }}>
+                  · {rv.model_name || rv.model_id}
+                </span>
+                {rv.confidence != null && (
+                  <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text3)' }}>
+                    {rv.confidence}%
+                  </span>
+                )}
+              </div>
+              {rv.varsity_reasoning && (
+                <div style={{ fontSize: 10, color: 'var(--text2)', lineHeight: 1.4, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--brand-text)', fontWeight: 700, fontSize: 8, letterSpacing: '0.5px' }}>
+                    📘 VARSITY
+                  </span>
+                  {' '}
+                  {rv.varsity_reasoning}
+                </div>
+              )}
+              {rv.pure_reasoning && (
+                <div style={{ fontSize: 10, color: 'var(--text2)', lineHeight: 1.4 }}>
+                  <span style={{ color: 'var(--purple-text)', fontWeight: 700, fontSize: 8, letterSpacing: '0.5px' }}>
+                    🧠 PURE
+                  </span>
+                  {' '}
+                  {rv.pure_reasoning}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {judge && judge.verdict && (() => {
+        const jv = String(judge.verdict || '').toUpperCase();
+        const jCol = verdictColor(jv);
+        return (
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(34,211,238,0.08))',
+            border: `1px solid ${jCol}`,
+            borderLeft: `3px solid ${jCol}`,
+            borderRadius: 6,
+            padding: '10px 12px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span className="gradient-fill" style={{ fontWeight: 900, fontSize: 11, letterSpacing: '1px' }}>
+                ⚖ AI JUDGE · FINAL
+              </span>
+              <span style={{ color: 'var(--text4)', fontSize: 9 }}>
+                · {judge.model_name || 'Claude Sonnet 4.6'}
+              </span>
+              <span style={{ color: jCol, fontWeight: 800, fontSize: 12, marginLeft: 'auto' }}>
+                {verdictIcon(jv)} {jv}
+              </span>
+              {judge.confidence != null && (
+                <span style={{ fontSize: 9, color: 'var(--text3)' }}>{judge.confidence}%</span>
+              )}
+            </div>
+            {judge.varsity_reasoning && (
+              <div style={{ fontSize: 10.5, color: 'var(--text2)', lineHeight: 1.45, marginBottom: 4 }}>
+                {judge.varsity_reasoning}
+              </div>
+            )}
+            {judge.recommendation && (
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>
+                <b style={{ color: 'var(--text2)' }}>Rec:</b> {judge.recommendation}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -10,12 +10,14 @@ export default function DeepAnalyzer() {
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState(null);
   const [universe, setUniverse] = useState(null);
+  const [highlightIdx, setHighlightIdx] = useState(-1); // keyboard-nav highlight
   const inputRef = useRef(null);
 
   useEffect(() => {
     apiGet('/api/stocks/score')
       .then((d) => {
-        const list = (d.stocks || d || []).map((s) => ({
+        const raw = Array.isArray(d?.stocks) ? d.stocks : (Array.isArray(d) ? d : []);
+        const list = raw.map((s) => ({
           sym: s.sym || s.symbol,
           name: s.name || '',
           grp: s.grp || s.group || '',
@@ -26,15 +28,17 @@ export default function DeepAnalyzer() {
   }, []);
 
   useEffect(() => {
-    if (!universe || !query.trim()) { setSuggestions([]); return; }
+    if (!universe || !query.trim()) { setSuggestions([]); setHighlightIdx(-1); return; }
     const q = query.trim().toUpperCase();
+    const arr = Array.isArray(universe) ? universe : [];
     setSuggestions(
-      universe.filter((s) => s.sym?.toUpperCase().startsWith(q) || s.name?.toUpperCase().includes(q)).slice(0, 8)
+      arr.filter((s) => s.sym?.toUpperCase().startsWith(q) || s.name?.toUpperCase().includes(q)).slice(0, 8)
     );
+    setHighlightIdx(-1);
   }, [query, universe]);
 
-  const handleAnalyze = async () => {
-    const sym = (selected?.sym || query).trim().toUpperCase();
+  const runAnalyze = async (symRaw) => {
+    const sym = (symRaw || '').trim().toUpperCase().split(/\s+/)[0].replace(/[^A-Z0-9&]/g, '');
     if (!sym) return;
     setLoading(true); setError(null); setAnalysis(null);
     try {
@@ -46,10 +50,41 @@ export default function DeepAnalyzer() {
     }
   };
 
+  const handleAnalyze = () => {
+    const sym = selected?.sym || query;
+    runAnalyze(sym);
+  };
+
   const pickSuggestion = (s) => {
     setSelected(s);
     setQuery(`${s.sym} — ${s.name}`);
     setShowDropdown(false);
+    runAnalyze(s.sym);
+  };
+
+  const handleKeyDown = (e) => {
+    if (!showDropdown || suggestions.length === 0) {
+      if (e.key === 'Enter') { handleAnalyze(); }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (highlightIdx >= 0 && suggestions[highlightIdx]) {
+        pickSuggestion(suggestions[highlightIdx]);
+      } else if (suggestions[0]) {
+        pickSuggestion(suggestions[0]);
+      } else {
+        handleAnalyze();
+      }
+    } else if (e.key === 'Escape') {
+      setShowDropdown(false);
+    }
   };
 
   return (
@@ -103,7 +138,7 @@ export default function DeepAnalyzer() {
               onChange={(e) => { setQuery(e.target.value); setSelected(null); setShowDropdown(true); }}
               onFocus={() => setShowDropdown(true)}
               onBlur={() => setTimeout(() => setShowDropdown(false), 180)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { suggestions.length ? pickSuggestion(suggestions[0]) : handleAnalyze(); } }}
+              onKeyDown={handleKeyDown}
               placeholder="Search stock… e.g. RELIANCE, TCS, HDFCBANK"
               style={{
                 width: '100%', height: 50, padding: '0 18px 0 44px',
@@ -122,17 +157,18 @@ export default function DeepAnalyzer() {
                 borderRadius: 14, boxShadow: 'var(--shadow-lg)', zIndex: 1000, overflow: 'hidden',
                 maxHeight: 320, overflowY: 'auto',
               }}>
-                {suggestions.map((s) => (
+                {suggestions.map((s, i) => (
                   <button
                     key={s.sym}
                     onMouseDown={() => pickSuggestion(s)}
+                    onMouseEnter={() => setHighlightIdx(i)}
                     style={{
-                      display: 'flex', width: '100%', padding: '12px 18px', background: 'transparent',
+                      display: 'flex', width: '100%', padding: '12px 18px',
+                      background: i === highlightIdx ? 'rgba(99,102,241,0.12)' : 'transparent',
                       border: 'none', cursor: 'pointer', textAlign: 'left', gap: 14, alignItems: 'center',
                       transition: 'background 150ms ease',
+                      borderLeft: i === highlightIdx ? '3px solid var(--brand)' : '3px solid transparent',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.1)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
                     <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', minWidth: 100 }}>{s.sym}</span>
                     <span style={{ fontSize: 14, color: 'var(--text3)', flex: 1 }}>{s.name}</span>
@@ -206,7 +242,7 @@ export default function DeepAnalyzer() {
             {['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ITC'].map((sym) => (
               <button
                 key={sym}
-                onClick={() => { setQuery(sym); setSelected({ sym }); }}
+                onClick={() => { setQuery(sym); setSelected({ sym }); runAnalyze(sym); }}
                 className="btn btn-secondary"
                 style={{ height: 36, fontSize: 13, padding: '0 16px', borderRadius: 10 }}
               >
@@ -247,17 +283,37 @@ function AnalysisResult({ data }) {
   const tech = a.tech || {};
   const fund = a.fund || null;
   const checklist = a.checklist || {};
-  const analysis = a.analysis || [];
-  const targets = a.targets || [];
-  const whenToBuy = a.whenToBuy || [];
-  const supports = a.supports || [];
-  const resistances = a.resistances || [];
+  const analysis = Array.isArray(a.analysis) ? a.analysis : [];
+  const targets = Array.isArray(a.targets) ? a.targets : [];
+  const whenToBuy = Array.isArray(a.whenToBuy) ? a.whenToBuy : [];
+  const supports = Array.isArray(a.supports) ? a.supports : [];
+  const resistances = Array.isArray(a.resistances) ? a.resistances : [];
   const buyPlan = a.buyPlan || null;
-  const news = a.news || [];
+  const news = Array.isArray(a.news) ? a.news : [];
   const sentiment = a.sentiment || {};
   const fibs = a.fibs || null;
   const ichimoku = a.ichimoku || tech.ichimoku || null;
-  const patterns = a.patterns || [];
+  const patterns = Array.isArray(a.patterns) ? a.patterns : [];
+  const dataAvail = a.dataAvailable || {};
+  const currentPrice = a.price != null ? Number(a.price) : null;
+
+  // -- Score countup animation (ported from app.html ~line 7232) -----------
+  const [countupScore, setCountupScore] = useState(0);
+  useEffect(() => {
+    if (score == null) return;
+    const target = Math.round(score);
+    const step = Math.max(1, Math.round(target / 40));
+    let cur = 0;
+    const iv = setInterval(() => {
+      cur += step;
+      if (cur >= target) { cur = target; clearInterval(iv); }
+      setCountupScore(cur);
+    }, 25);
+    return () => clearInterval(iv);
+  }, [score]);
+
+  // -- Price-chart timeframe state (UI only; canvas chart skipped) ---------
+  const [chartTf, setChartTf] = useState('1Y');
 
   return (
     <div className="animate-fadeIn">
@@ -315,13 +371,95 @@ function AnalysisResult({ data }) {
               Varsity Score
             </div>
             <div className="tabular-nums gradient-fill" style={{ fontSize: 72, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px' }}>
-              {Math.round(score)}
+              {countupScore}
+            </div>
+            {/* Progress bar under the score */}
+            <div style={{ height: 6, width: 160, marginLeft: 'auto', marginTop: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${countupScore}%`, background: tierColor, borderRadius: 3, transition: 'width 200ms ease' }} />
             </div>
             <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 4, fontWeight: 500 }}>
               / 100 · {a.passCount || 0}/{a.totalChecks || 0} checks pass
             </div>
           </div>
         )}
+      </div>
+
+      {/* ═══ DATA AVAILABILITY CHIPS ═══ */}
+      {Object.keys(dataAvail).length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+          {[
+            ['Daily ' + (dataAvail.candlesUsed || dataAvail.kite1y ? (dataAvail.candlesUsed || 'Y') : ''), !!(dataAvail.candlesUsed || dataAvail.kite1y)],
+            ['1Y', !!dataAvail.kite1y],
+            ['3Y', !!dataAvail.kite3y],
+            ['10Y', !!dataAvail.kite10w],
+            ['MAX ' + (dataAvail.maxCandles ? dataAvail.maxCandles + 'mo' : ''), !!dataAvail.kiteMax],
+            ['Hourly', !!dataAvail.kite1h],
+            ['News', !!dataAvail.news],
+            ['Fundamentals ✓', !!dataAvail.fundamentals],
+          ].map(([label, ok], i) => (
+            <span key={i} className={ok ? 'chip chip-green' : 'chip'} style={{
+              height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600,
+              opacity: ok ? 1 : 0.5,
+            }}>
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* ═══ PRICE CHART (placeholder — canvas rendering deferred) ═══ */}
+      <div className="card" style={{ padding: 18, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px', margin: 0 }}>
+              Price Chart — Full History
+            </h3>
+            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, letterSpacing: '0.2px' }}>
+              Support · Resistance · Buy Zone · 50DMA · 200DMA · Fibonacci overlay
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {['3M', '1Y', '3Y', '10Y', 'MAX'].map((tf) => {
+              const active = tf === chartTf;
+              return (
+                <button
+                  key={tf}
+                  onClick={() => setChartTf(tf)}
+                  style={{
+                    padding: '4px 11px', borderRadius: 6,
+                    border: `1px solid ${active ? 'var(--brand)' : 'var(--border2)'}`,
+                    background: active ? 'var(--brand-bg)' : 'transparent',
+                    color: active ? 'var(--brand-text)' : 'var(--text3)',
+                    fontSize: 10, cursor: 'pointer', fontFamily: 'inherit',
+                    fontWeight: active ? 700 : 500, letterSpacing: '0.3px',
+                    transition: 'all 150ms ease',
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{
+          position: 'relative', height: 260, width: '100%',
+          background: 'linear-gradient(180deg, rgba(99,102,241,0.04) 0%, rgba(99,102,241,0.01) 100%)',
+          border: '1px dashed var(--border2)', borderRadius: 10,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8,
+        }}>
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.35 }}>
+            <path d="M3 17 L8 11 L12 14 L16 8 L21 12" stroke="var(--brand-text)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="8" cy="11" r="1.5" fill="var(--brand-text)" />
+            <circle cx="12" cy="14" r="1.5" fill="var(--brand-text)" />
+            <circle cx="16" cy="8" r="1.5" fill="var(--brand-text)" />
+          </svg>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
+            Price chart rendering — coming in next update
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', maxWidth: 400, lineHeight: 1.5 }}>
+            Viewing <b style={{ color: 'var(--brand-text)' }}>{chartTf}</b> timeframe · canvas chart with S/R lines, buy-zone box, DMA overlays & Fib retracements will be wired up in a follow-up pass.
+          </div>
+        </div>
       </div>
 
       {/* ═══ AT-A-GLANCE METRICS ═══ */}
@@ -422,13 +560,28 @@ function AnalysisResult({ data }) {
               <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--green-text)', marginBottom: 10, letterSpacing: '-0.1px' }}>
                 🛡 Support Zones
               </h3>
-              {supports.slice(0, 5).map((s, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12 }}>
-                  <span style={{ color: 'var(--text3)' }}>S{i + 1}</span>
-                  <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--text)' }}>₹{Number(s.price).toFixed(1)}</span>
-                  {s.strength != null && <span style={{ color: 'var(--text3)', fontSize: 10 }}>× {s.strength}</span>}
-                </div>
-              ))}
+              {supports.slice(0, 5).map((s, i) => {
+                const p = Number(s.price);
+                const dist = currentPrice && p ? ((currentPrice - p) / currentPrice * 100) : null;
+                const strong = (s.strength || 0) >= 4;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12, gap: 8 }}>
+                    <span style={{ color: 'var(--text3)', minWidth: 28 }}>S{i + 1}</span>
+                    <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--green-text)' }}>₹{p.toFixed(1)}</span>
+                    <span className="tabular-nums" style={{ color: 'var(--text3)', fontSize: 10, flex: 1, textAlign: 'right' }}>
+                      {dist != null && `${dist.toFixed(1)}% below`}
+                    </span>
+                    {s.strength != null && (
+                      <span style={{
+                        color: strong ? 'var(--green-text)' : 'var(--text3)', fontSize: 10,
+                        fontWeight: strong ? 700 : 500, letterSpacing: '0.4px',
+                      }}>
+                        {'×'.repeat(Math.min(5, Math.max(1, Math.round(s.strength))))}{strong && ' ◆'}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {resistances.length > 0 && (
@@ -436,13 +589,28 @@ function AnalysisResult({ data }) {
               <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-text)', marginBottom: 10, letterSpacing: '-0.1px' }}>
                 🚧 Resistance Zones
               </h3>
-              {resistances.slice(0, 5).map((r, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12 }}>
-                  <span style={{ color: 'var(--text3)' }}>R{i + 1}</span>
-                  <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--text)' }}>₹{Number(r.price).toFixed(1)}</span>
-                  {r.strength != null && <span style={{ color: 'var(--text3)', fontSize: 10 }}>× {r.strength}</span>}
-                </div>
-              ))}
+              {resistances.slice(0, 5).map((r, i) => {
+                const p = Number(r.price);
+                const dist = currentPrice && p ? ((p - currentPrice) / currentPrice * 100) : null;
+                const strong = (r.strength || 0) >= 4;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12, gap: 8 }}>
+                    <span style={{ color: 'var(--text3)', minWidth: 28 }}>R{i + 1}</span>
+                    <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--red-text)' }}>₹{p.toFixed(1)}</span>
+                    <span className="tabular-nums" style={{ color: 'var(--text3)', fontSize: 10, flex: 1, textAlign: 'right' }}>
+                      {dist != null && `+${dist.toFixed(1)}% above`}
+                    </span>
+                    {r.strength != null && (
+                      <span style={{
+                        color: strong ? 'var(--red-text)' : 'var(--text3)', fontSize: 10,
+                        fontWeight: strong ? 700 : 500, letterSpacing: '0.4px',
+                      }}>
+                        {'×'.repeat(Math.min(5, Math.max(1, Math.round(r.strength))))}{strong && ' ◆'}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {whenToBuy.length > 0 && (
@@ -473,13 +641,31 @@ function AnalysisResult({ data }) {
       {targets.length > 0 && (
         <Section title="Price Targets" subtitle="Upside to each resistance zone + 52W high">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {targets.map((t, i) => (
-              <div key={i} style={{ padding: 14, background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.18)', borderRadius: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{t.label}</div>
-                <div className="tabular-nums" style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(t.price).toFixed(1)}</div>
-                {t.upside != null && <div className="tabular-nums" style={{ fontSize: 12, color: t.upside > 0 ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 700, marginTop: 2 }}>{t.upside > 0 ? '+' : ''}{t.upside}%</div>}
-              </div>
-            ))}
+            {targets.map((t, i) => {
+              const u = t.upside != null ? Number(t.upside) : null;
+              // Highlight the single highest upside target
+              const maxUpside = Math.max(...targets.map((x) => x.upside != null ? Number(x.upside) : -Infinity));
+              const isBest = u != null && u === maxUpside && u > 0;
+              return (
+                <div key={i} style={{
+                  padding: 14,
+                  background: isBest ? 'rgba(52,211,153,0.14)' : 'rgba(52,211,153,0.06)',
+                  border: `1px solid ${isBest ? 'rgba(52,211,153,0.45)' : 'rgba(52,211,153,0.18)'}`,
+                  borderRadius: 10,
+                  boxShadow: isBest ? '0 0 0 3px rgba(52,211,153,0.08)' : 'none',
+                  position: 'relative',
+                }}>
+                  {isBest && (
+                    <span className="chip chip-green" style={{
+                      position: 'absolute', top: -8, right: 8, height: 18, fontSize: 9, padding: '0 7px', fontWeight: 800,
+                    }}>★ BEST</span>
+                  )}
+                  <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{t.label}</div>
+                  <div className="tabular-nums" style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(t.price).toFixed(1)}</div>
+                  {u != null && <div className="tabular-nums" style={{ fontSize: 12, color: u > 0 ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 700, marginTop: 2 }}>{u > 0 ? '+' : ''}{u}%</div>}
+                </div>
+              );
+            })}
           </div>
         </Section>
       )}
@@ -562,23 +748,28 @@ function AnalysisResult({ data }) {
               { l: '0%',    v: fibs.r0 },
               { l: '23.6%', v: fibs.r236 },
               { l: '38.2%', v: fibs.r382 },
-              { l: '50%',   v: fibs.r50 },
+              { l: '50%',   v: fibs.r50 ?? fibs.r500 },
               { l: '61.8%', v: fibs.r618, golden: true },
               { l: '78.6%', v: fibs.r786 },
-              { l: '100%',  v: fibs.r100 },
-            ].filter((x) => x.v != null).map((x, i) => (
-              <div key={i} style={{
-                padding: 12,
-                background: x.golden ? 'rgba(251,191,36,0.08)' : 'rgba(255,255,255,0.03)',
-                border: `1px solid ${x.golden ? 'rgba(251,191,36,0.3)' : 'var(--border)'}`,
-                borderRadius: 10,
-              }}>
-                <div style={{ fontSize: 10, color: x.golden ? 'var(--amber-text)' : 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>
-                  {x.l}{x.golden && ' ★'}
+              { l: '100%',  v: fibs.r100 ?? fibs.r1000 },
+            ].filter((x) => x.v != null).map((x, i) => {
+              const near = currentPrice && Math.abs(currentPrice - Number(x.v)) / currentPrice < 0.03;
+              return (
+                <div key={i} style={{
+                  padding: 12,
+                  background: near ? 'rgba(99,102,241,0.12)' : x.golden ? 'rgba(251,191,36,0.08)' : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${near ? 'var(--brand)' : x.golden ? 'rgba(251,191,36,0.3)' : 'var(--border)'}`,
+                  borderRadius: 10,
+                  position: 'relative',
+                }}>
+                  <div style={{ fontSize: 10, color: near ? 'var(--brand-text)' : x.golden ? 'var(--amber-text)' : 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>
+                    {x.l}{x.golden && ' ★'}
+                  </div>
+                  <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(x.v).toFixed(1)}</div>
+                  {near && <div style={{ fontSize: 9, color: 'var(--brand-text)', fontWeight: 700, marginTop: 2 }}>◆ NEAR PRICE</div>}
                 </div>
-                <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(x.v).toFixed(1)}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Section>
       )}
@@ -774,6 +965,48 @@ function TechnicalsGrid({ t }) {
 // ══════════════════════════════════════════════════════════════════════
 // AI Review — launches the 5-model Council + Judge via /ai endpoint
 // ══════════════════════════════════════════════════════════════════════
+// Compact per-lens vote bar — shows e.g. "Varsity lens: 3 BUY · 1 HOLD · 1 AVOID"
+function LensTallyBar({ label, tally, consensus, vStyle }) {
+  const order = ['BUY', 'ACCUMULATE', 'HOLD', 'AVOID', 'SELL'];
+  const colors = {
+    BUY: 'var(--green-text)', ACCUMULATE: 'var(--green-text)',
+    HOLD: 'var(--amber-text)', AVOID: 'var(--amber-text)', SELL: 'var(--red-text)',
+  };
+  const total = order.reduce((a, v) => a + (tally[v] || 0), 0);
+  const cStyle = vStyle(consensus);
+  return (
+    <div className="card" style={{ padding: '12px 14px', borderLeft: `3px solid ${cStyle.color}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 6 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text2)', letterSpacing: '0.3px' }}>{label}</div>
+        <span className="chip" style={{
+          height: 20, fontSize: 10, fontWeight: 800, padding: '0 8px',
+          background: cStyle.bg, color: cStyle.color,
+        }}>
+          {consensus || 'N/A'}
+        </span>
+      </div>
+      {total > 0 ? (
+        <>
+          <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', gap: 1, marginBottom: 6 }}>
+            {order.map((v) => tally[v] ? (
+              <div key={v} style={{ flex: tally[v], background: colors[v], borderRadius: 2 }} title={`${v}: ${tally[v]}`} />
+            ) : null)}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 9.5 }}>
+            {order.map((v) => tally[v] ? (
+              <span key={v} className="tabular-nums" style={{ color: colors[v], fontWeight: 700 }}>
+                {tally[v]} {v}
+              </span>
+            ) : null)}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 10, color: 'var(--text4)' }}>No votes</div>
+      )}
+    </div>
+  );
+}
+
 function AIReviewSection({ sym }) {
   const [state, setState] = useState('idle'); // 'idle' | 'running' | 'done' | 'error'
   const [result, setResult] = useState(null);
@@ -792,12 +1025,29 @@ function AIReviewSection({ sym }) {
     }
   };
 
-  const judge = result?.judge || result?.final || null;
-  const council = result?.council || result?.models || [];
-  const verdictColor = judge?.verdict === 'BUY' || judge?.verdict === 'STRONG_BUY' ? 'var(--green-text)'
-                     : judge?.verdict === 'HOLD' || judge?.verdict === 'ACCUMULATE' ? 'var(--amber-text)'
-                     : judge?.verdict === 'SELL' || judge?.verdict === 'AVOID' ? 'var(--red-text)'
-                     : 'var(--brand-text)';
+  const judge = result?.judge_verdict || result?.judge || result?.final || null;
+  const council = Array.isArray(result?.models)
+    ? result.models
+    : Array.isArray(result?.council) ? result.council : [];
+  const countsVarsity = result?.counts_varsity || {};
+  const countsPure = result?.counts_pure || {};
+  const varsityConsensus = result?.varsity_consensus || '';
+  const pureConsensus = result?.pure_consensus || '';
+  const respondedCount = result?.respondedCount ?? 0;
+  const totalModels = result?.totalModels ?? council.length ?? 5;
+  const avgConfidence = result?.avgConfidence ?? null;
+
+  const verdictStyle = (v) => {
+    const vv = String(v || '').toUpperCase();
+    if (vv === 'BUY' || vv === 'STRONG_BUY') return { color: 'var(--green-text)', bg: 'var(--green-bg)', icon: '🟢' };
+    if (vv === 'ACCUMULATE') return { color: 'var(--green-text)', bg: 'var(--green-bg)', icon: '📈' };
+    if (vv === 'HOLD') return { color: 'var(--amber-text)', bg: 'var(--amber-bg)', icon: '🟡' };
+    if (vv === 'AVOID') return { color: 'var(--amber-text)', bg: 'var(--amber-bg)', icon: '🟠' };
+    if (vv === 'SELL') return { color: 'var(--red-text)', bg: 'var(--red-bg)', icon: '🔴' };
+    return { color: 'var(--brand-text)', bg: 'var(--brand-bg)', icon: '⚪' };
+  };
+  const jStyle = verdictStyle(judge?.verdict);
+  const [showJudgeReasoning, setShowJudgeReasoning] = useState(false);
 
   return (
     <Section title="🧠 Deep AI Review" subtitle="5-model Council (Groq Llama 3.3 70B · GPT-4.1 · DeepSeek V3 · Gemini 2.5 Flash · Qwen 3 Max) + Claude Sonnet 4.6 Judge">
@@ -826,60 +1076,184 @@ function AIReviewSection({ sym }) {
       )}
       {state === 'done' && (
         <div>
-          {/* Judge verdict */}
-          {judge && (
+          {/* Judge verdict — hero card with action, score, target/stop, reasoning */}
+          {judge && judge.verdict && (
             <div style={{
-              padding: 18, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)',
-              borderRadius: 12, marginBottom: 14,
+              padding: '20px 22px',
+              background: 'linear-gradient(135deg, rgba(99,102,241,0.10) 0%, rgba(99,102,241,0.04) 100%)',
+              border: `2px solid ${jStyle.color}`,
+              borderRadius: 14, marginBottom: 14, textAlign: 'center',
+              boxShadow: `0 4px 20px rgba(99,102,241,0.12)`,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                <span className="chip" style={{ height: 22, fontSize: 10, fontWeight: 700, background: 'var(--brand-bg)', color: 'var(--brand-text)' }}>
-                  ⚖ JUDGE · Claude Sonnet 4.6
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+                <span className="chip chip-brand" style={{ height: 22, fontSize: 10, fontWeight: 700 }}>
+                  ⚖ JUDGE · CLAUDE SONNET 4.6
                 </span>
-                {judge.confidence != null && (
-                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>Confidence: <b style={{ color: 'var(--text)' }}>{judge.confidence}/10</b></span>
+                {judge.council_agreement && (
+                  <span className="chip" style={{
+                    height: 20, fontSize: 9, fontWeight: 700, padding: '0 8px',
+                    background: judge.council_agreement === 'UNANIMOUS' ? 'var(--green-bg)' :
+                               judge.council_agreement === 'MAJORITY' ? 'var(--amber-bg)' : 'var(--red-bg)',
+                    color: judge.council_agreement === 'UNANIMOUS' ? 'var(--green-text)' :
+                          judge.council_agreement === 'MAJORITY' ? 'var(--amber-text)' : 'var(--red-text)',
+                  }}>
+                    {String(judge.council_agreement).toUpperCase()}
+                  </span>
                 )}
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: verdictColor, marginBottom: 8, letterSpacing: '-0.4px' }}>
-                {judge.verdict || '—'}
+              <div style={{ fontSize: 32, marginBottom: 2 }}>{jStyle.icon}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: jStyle.color, letterSpacing: '-0.3px' }}>
+                {judge.verdict}
               </div>
-              {judge.why_choose && (
-                <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 6 }}>
+              {(judge.tagline || judge.final_reasoning) && (
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5, maxWidth: 540, margin: '6px auto 0' }}>
+                  {judge.tagline || judge.final_reasoning}
+                </div>
+              )}
+              {judge.score != null && (
+                <div className="tabular-nums" style={{ marginTop: 14 }}>
+                  <span style={{ fontSize: 40, fontWeight: 800, color: jStyle.color }}>{Math.round(judge.score)}</span>
+                  <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 600 }}>/100</span>
+                </div>
+              )}
+              {judge.criteria_total > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                  {judge.criteria_passed || 0}/{judge.criteria_total} criteria passed
+                </div>
+              )}
+              {judge.score != null && (
+                <div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden', marginTop: 10, maxWidth: 260, marginLeft: 'auto', marginRight: 'auto' }}>
+                  <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, judge.score))}%`, background: jStyle.color, borderRadius: 3, transition: 'width 400ms ease' }} />
+                </div>
+              )}
+              {judge.action_line && (
+                <div style={{
+                  marginTop: 12, display: 'inline-block', padding: '8px 18px',
+                  background: jStyle.bg, color: jStyle.color, borderRadius: 8,
+                  fontWeight: 800, fontSize: 12, letterSpacing: '0.3px',
+                  border: `1px solid ${jStyle.color}`,
+                }}>
+                  {judge.action_line}
+                </div>
+              )}
+              {/* Target / stop / timeframe */}
+              {(judge.target_price || judge.stop_loss || judge.timeframe) && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 14, marginTop: 12, fontSize: 10.5, flexWrap: 'wrap' }}>
+                  {judge.target_price && <span style={{ color: 'var(--green-text)', fontWeight: 700 }}>🎯 Target: ₹{judge.target_price}</span>}
+                  {judge.stop_loss && <span style={{ color: 'var(--red-text)', fontWeight: 700 }}>🛑 Stop: ₹{judge.stop_loss}</span>}
+                  {judge.timeframe && <span style={{ color: 'var(--text3)' }}>⏳ {judge.timeframe}</span>}
+                </div>
+              )}
+              {/* Legacy why_choose / why_not fallback */}
+              {!judge.final_reasoning && judge.why_choose && (
+                <div style={{ fontSize: 11.5, color: 'var(--text2)', lineHeight: 1.55, marginTop: 10, textAlign: 'left', maxWidth: 520, margin: '10px auto 0' }}>
                   <b style={{ color: 'var(--green-text)' }}>Why buy:</b> {judge.why_choose}
                 </div>
               )}
-              {judge.why_not && (
-                <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
+              {!judge.final_reasoning && judge.why_not && (
+                <div style={{ fontSize: 11.5, color: 'var(--text2)', lineHeight: 1.55, marginTop: 4, textAlign: 'left', maxWidth: 520, margin: '4px auto 0' }}>
                   <b style={{ color: 'var(--red-text)' }}>Why not:</b> {judge.why_not}
+                </div>
+              )}
+              {/* Expandable reasoning */}
+              {(judge.varsity_reasoning || judge.pure_reasoning || judge.risk_flag) && (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    onClick={() => setShowJudgeReasoning((v) => !v)}
+                    style={{
+                      background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                      color: 'var(--brand-text)', fontSize: 11, fontWeight: 700,
+                    }}
+                  >
+                    {showJudgeReasoning ? '▼' : '▶'} Judge reasoning
+                  </button>
+                  {showJudgeReasoning && (
+                    <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.6, textAlign: 'left', maxWidth: 540, margin: '8px auto 0' }}>
+                      {judge.varsity_reasoning && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ color: 'var(--brand-text)', fontWeight: 700, marginBottom: 2 }}>📚 Varsity lens:</div>
+                          <div style={{ color: 'var(--text3)' }}>{judge.varsity_reasoning}</div>
+                        </div>
+                      )}
+                      {judge.pure_reasoning && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ color: 'var(--brand-text)', fontWeight: 700, marginBottom: 2 }}>🧭 Pure first-principles:</div>
+                          <div style={{ color: 'var(--text3)' }}>{judge.pure_reasoning}</div>
+                        </div>
+                      )}
+                      {judge.risk_flag && (
+                        <div style={{ color: 'var(--red-text)', fontWeight: 700, marginTop: 6 }}>
+                          ⚠ Risk flag: <span style={{ color: 'var(--text3)', fontWeight: 500 }}>{judge.risk_flag}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
+
+          {/* Dual-lens tally bars (Varsity vs Pure consensus) */}
+          {(Object.keys(countsVarsity).length > 0 || Object.keys(countsPure).length > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10, marginBottom: 12 }}>
+              <LensTallyBar label="📚 Varsity-grounded lens" tally={countsVarsity} consensus={varsityConsensus} vStyle={verdictStyle} />
+              <LensTallyBar label="🧭 Pure first-principles lens" tally={countsPure} consensus={pureConsensus} vStyle={verdictStyle} />
+            </div>
+          )}
+
+          {/* Response summary */}
+          <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', marginBottom: 10 }}>
+            {respondedCount}/{totalModels} council models responded
+            {avgConfidence != null && <> · Avg confidence: <b style={{ color: 'var(--text)' }}>{avgConfidence}%</b></>}
+          </div>
+
           {/* Council breakdown */}
           {council.length > 0 && (
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 10 }}>
-                Council · {council.length} models
+              <div className="label-xs" style={{ marginBottom: 8 }}>
+                🧠 Per-Model Dual Opinions · {council.length} models
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
                 {council.map((m, i) => {
-                  const v = m.verdict || m.recommendation;
-                  const vCol = v === 'BUY' || v === 'STRONG_BUY' ? 'var(--green-text)'
-                             : v === 'HOLD' || v === 'ACCUMULATE' ? 'var(--amber-text)'
-                             : v === 'SELL' || v === 'AVOID' ? 'var(--red-text)' : 'var(--text2)';
+                  if (m.error || m.skipped) {
+                    return (
+                      <div key={i} style={{ padding: 12, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 10, opacity: 0.55 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)' }}>{m.name || m.id || `Model ${i + 1}`}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text4)' }}>⏭ {m.error || 'Skipped'}</div>
+                      </div>
+                    );
+                  }
+                  const v = m.verdict || m.recommendation || m.varsity_verdict;
+                  const vStyle = verdictStyle(v);
+                  const pv = m.pure_verdict;
+                  const pStyle = pv ? verdictStyle(pv) : null;
                   return (
                     <div key={i} style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 6 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                           {m.name || m.id || `Model ${i + 1}`}
                         </div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: vCol, whiteSpace: 'nowrap', marginLeft: 6 }}>{v || '—'}</span>
+                        {m.confidence != null && (
+                          <span style={{ fontSize: 9, color: 'var(--text3)' }}>{m.confidence}/10</span>
+                        )}
                       </div>
-                      {m.confidence != null && (
-                        <div style={{ fontSize: 10, color: 'var(--text3)' }}>Confidence: {m.confidence}/10</div>
-                      )}
+                      {/* Dual verdict badges */}
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                        {v && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                            background: vStyle.bg, color: vStyle.color, letterSpacing: '0.3px',
+                          }}>📚 {v}</span>
+                        )}
+                        {pv && pStyle && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                            background: pStyle.bg, color: pStyle.color, letterSpacing: '0.3px',
+                          }}>🧭 {pv}</span>
+                        )}
+                      </div>
                       {m.reasoning && (
-                        <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.45, marginTop: 6, maxHeight: 64, overflow: 'hidden' }}>
+                        <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.45, maxHeight: 64, overflow: 'hidden' }}>
                           {m.reasoning}
                         </div>
                       )}
