@@ -15,15 +15,25 @@ const CONFIG_VERSION = '1.0.0-phase1';
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // off     — agent does nothing (DEFAULT — safe)
-// dry_run — propose + validate + log, never touch Kite
 // paper   — simulate fills against live quotes, write to agent_trades
 // live    — place real MIS orders (Phase 3, NOT built in Phase 1)
+//
+// (dry_run was removed 2026-04-17 — paper already logs the same decision
+// audit trail, so there was no remaining benefit to a propose-only mode.)
 //
 // Mode is mutable at runtime: getMode() / setMode(m) allow the UI to flip it
 // without a redeploy. setMode DOES NOT persist by itself — the caller is
 // responsible for writing to app_config so the change survives restarts.
-const VALID_MODES = new Set(['off', 'dry_run', 'paper', 'live']);
-const _INITIAL_MODE = (process.env.AGENT_MODE || 'off').toLowerCase();
+const VALID_MODES = new Set(['off', 'paper', 'live']);
+// Legacy modes that may appear in env or DB — coerce silently to 'off' rather
+// than blowing up on boot. Persisted value will be overwritten the next time
+// the user presses a mode button in the UI.
+const _LEGACY_MODES = new Set(['dry_run']);
+let _INITIAL_MODE = (process.env.AGENT_MODE || 'off').toLowerCase();
+if (_LEGACY_MODES.has(_INITIAL_MODE)) {
+  console.warn(`agent-config: AGENT_MODE="${_INITIAL_MODE}" is deprecated, coercing to "off"`);
+  _INITIAL_MODE = 'off';
+}
 if (!VALID_MODES.has(_INITIAL_MODE)) {
   throw new Error(`agent-config: invalid AGENT_MODE="${_INITIAL_MODE}", expected one of ${[...VALID_MODES].join(',')}`);
 }
@@ -31,7 +41,11 @@ let _currentMode = _INITIAL_MODE;
 
 function getMode() { return _currentMode; }
 function setMode(m) {
-  const v = String(m || '').toLowerCase();
+  let v = String(m || '').toLowerCase();
+  if (_LEGACY_MODES.has(v)) {
+    console.warn(`agent-config.setMode: legacy mode "${m}" coerced to "off"`);
+    v = 'off';
+  }
   if (!VALID_MODES.has(v)) {
     throw new Error(`agent-config.setMode: invalid mode "${m}"`);
   }
@@ -45,9 +59,9 @@ function listValidModes() { return [...VALID_MODES]; }
 // When enabled, the agent auto-flips to `targetMode` at market open (9:15 IST)
 // and auto-flips back to 'off' at market close (15:30 IST) on trading days.
 // Persistence handled by kite-server via app_config — this module just holds
-// the runtime state. Target mode can be 'paper' or 'dry_run' (never 'live'
-// until Phase 3 is explicitly unlocked).
-const AUTO_VALID_TARGETS = new Set(['paper', 'dry_run']);
+// the runtime state. Target mode is always 'paper' for now; live will be
+// added in Phase 3 behind an explicit unlock.
+const AUTO_VALID_TARGETS = new Set(['paper']);
 let _autoEnabled = false;
 let _autoTargetMode = 'paper';
 
@@ -56,7 +70,13 @@ function getAutoSchedule() {
 }
 function setAutoSchedule({ enabled, targetMode }) {
   const e = Boolean(enabled);
-  const t = targetMode ? String(targetMode).toLowerCase() : _autoTargetMode;
+  let t = targetMode ? String(targetMode).toLowerCase() : _autoTargetMode;
+  // Legacy: silently coerce dry_run → paper rather than erroring on persisted
+  // values from before dry_run was removed.
+  if (t === 'dry_run') {
+    console.warn(`agent-config.setAutoSchedule: legacy targetMode "dry_run" coerced to "paper"`);
+    t = 'paper';
+  }
   if (!AUTO_VALID_TARGETS.has(t)) {
     throw new Error(`agent-config.setAutoSchedule: targetMode must be one of ${[...AUTO_VALID_TARGETS].join(',')}`);
   }

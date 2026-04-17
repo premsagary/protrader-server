@@ -15,10 +15,9 @@ import { apiGet, apiPost } from '../../api/client';
 // ══════════════════════════════════════════════════════════════════════
 
 const MODE_COLORS = {
-  off:     { c: '#64748b', bg: 'rgba(100,116,139,0.12)', bd: 'rgba(100,116,139,0.4)' },
-  dry_run: { c: '#60a5fa', bg: 'rgba(96,165,250,0.12)',  bd: 'rgba(96,165,250,0.4)' },
-  paper:   { c: '#eab308', bg: 'rgba(234,179,8,0.14)',   bd: 'rgba(234,179,8,0.42)' },
-  live:    { c: '#ef4444', bg: 'rgba(239,68,68,0.14)',   bd: 'rgba(239,68,68,0.42)' },
+  off:   { c: '#64748b', bg: 'rgba(100,116,139,0.12)', bd: 'rgba(100,116,139,0.4)' },
+  paper: { c: '#eab308', bg: 'rgba(234,179,8,0.14)',   bd: 'rgba(234,179,8,0.42)' },
+  live:  { c: '#ef4444', bg: 'rgba(239,68,68,0.14)',   bd: 'rgba(239,68,68,0.42)' },
 };
 
 function ModeBadge({ mode }) {
@@ -150,7 +149,7 @@ export default function Agent() {
   const d = status || {};
   const stats = d.stats || { total: 0, approved: 0, rejected: 0, rejection_breakdown: {} };
   const recent = Array.isArray(d.recent) ? d.recent : [];
-  const validModes = Array.isArray(d.validModes) ? d.validModes : ['off', 'dry_run', 'paper', 'live'];
+  const validModes = Array.isArray(d.validModes) ? d.validModes : ['off', 'paper', 'live'];
   const tablesMissing = !!stats.tablesMissing;
   const paper = d.paper || { total: 0, open_count: 0, closed_count: 0, wins: 0, losses: 0, realized_pnl: 0, best_trade: 0, worst_trade: 0 };
   const armed = Array.isArray(d.armed) ? d.armed : [];
@@ -260,10 +259,9 @@ export default function Agent() {
             Switch agent to <ModeBadge mode={pendingMode} /> ?
           </div>
           <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.55, marginBottom: 12 }}>
-            {pendingMode === 'off'     && 'Agent will do nothing. Cron continues to tick but bails immediately.'}
-            {pendingMode === 'dry_run' && 'Agent will propose + validate + log every minute. No orders will be placed.'}
-            {pendingMode === 'paper'   && 'Agent will simulate fills against live quotes. Paper PnL will be tracked in agent_paper_trades.'}
-            {pendingMode === 'live'    && '⚠ LIVE mode places REAL Zerodha MIS orders. Not built in Phase 1 — proceed only if explicitly implemented.'}
+            {pendingMode === 'off'   && 'Agent will do nothing. Cron continues to tick but bails immediately.'}
+            {pendingMode === 'paper' && 'Agent will read picks from the DayTrade scanner every minute and simulate fills against live Kite quotes. Paper PnL will be tracked in agent_trades.'}
+            {pendingMode === 'live'  && '⚠ LIVE mode places REAL Zerodha MIS orders. Not built in Phase 1 — proceed only if explicitly implemented.'}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-primary" style={{ height: 34 }} onClick={() => setMode(pendingMode)}>
@@ -467,7 +465,7 @@ export default function Agent() {
 // Auto-schedule bar
 // ─────────────────────────────────────────────────────────────────────────────
 function AutoScheduleBar({ schedule, onChange }) {
-  const a = schedule || { enabled: false, targetMode: 'paper', validTargets: ['paper', 'dry_run'] };
+  const a = schedule || { enabled: false, targetMode: 'paper', validTargets: ['paper'] };
   const targetColor = (MODE_COLORS[a.targetMode] || MODE_COLORS.paper).c;
 
   // Tri-state: "what will happen next"
@@ -504,7 +502,7 @@ function AutoScheduleBar({ schedule, onChange }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{ fontSize: 10, color: 'var(--text3)', marginRight: 6, letterSpacing: 0.4, textTransform: 'uppercase' }}>Target</span>
-        {(Array.isArray(a.validTargets) ? a.validTargets : ['paper', 'dry_run']).map((t) => {
+        {(Array.isArray(a.validTargets) ? a.validTargets : ['paper']).map((t) => {
           const sel = a.targetMode === t;
           const col = (MODE_COLORS[t] || MODE_COLORS.paper).c;
           return (

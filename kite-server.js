@@ -24115,7 +24115,6 @@ app.get('/api/ai/validation', async (req, res) => {
 // Reads picks from _dayTradeCache every minute during market hours, applies
 // Varsity filters + hard constraints, writes every decision to agent_decisions.
 //
-// Phase 1 (AGENT_MODE=dry_run): logs decisions only, no fills.
 // Phase 2 (AGENT_MODE=paper):   arms candidates; fills when trigger hit;
 //                               trade-manager poller (every 15s) applies
 //                               SL/TGT/time-exit/trailing.

@@ -58,10 +58,11 @@ tcase('enable + set target paper', () => {
   assert.strictEqual(cfg.getAutoSchedule().enabled, true);
 });
 
-tcase('switch target to dry_run', () => {
+tcase('legacy dry_run targetMode coerces to paper', () => {
+  // dry_run was removed 2026-04-17 but may still live in persisted config
   resetAuto();
   cfg.setAutoSchedule({ enabled: true, targetMode: 'dry_run' });
-  assert.strictEqual(cfg.getAutoSchedule().targetMode, 'dry_run');
+  assert.strictEqual(cfg.getAutoSchedule().targetMode, 'paper');
 });
 
 tcase('invalid target (off) rejected', () => {
@@ -85,15 +86,15 @@ tcase('invalid target (gibberish) rejected', () => {
 
 tcase('setAutoSchedule without targetMode preserves previous target', () => {
   resetAuto();
-  cfg.setAutoSchedule({ enabled: true, targetMode: 'dry_run' });
+  cfg.setAutoSchedule({ enabled: true, targetMode: 'paper' });
   cfg.setAutoSchedule({ enabled: false });  // no targetMode
-  assert.strictEqual(cfg.getAutoSchedule().targetMode, 'dry_run');
+  assert.strictEqual(cfg.getAutoSchedule().targetMode, 'paper');
   assert.strictEqual(cfg.getAutoSchedule().enabled, false);
 });
 
-tcase('listAutoTargets returns paper + dry_run only', () => {
+tcase('listAutoTargets returns paper only (dry_run removed)', () => {
   const t = cfg.listAutoTargets();
-  assert.deepStrictEqual(t.sort(), ['dry_run', 'paper']);
+  assert.deepStrictEqual(t, ['paper']);
 });
 
 tcase('enable=truthy coerces to bool', () => {
@@ -107,11 +108,11 @@ tcase('enable=truthy coerces to bool', () => {
 tcase('previous snapshot returned correctly', () => {
   resetAuto();
   cfg.setAutoSchedule({ enabled: true, targetMode: 'paper' });
-  const r = cfg.setAutoSchedule({ enabled: false, targetMode: 'dry_run' });
+  const r = cfg.setAutoSchedule({ enabled: false, targetMode: 'paper' });
   assert.strictEqual(r.prev.enabled, true);
   assert.strictEqual(r.prev.targetMode, 'paper');
   assert.strictEqual(r.current.enabled, false);
-  assert.strictEqual(r.current.targetMode, 'dry_run');
+  assert.strictEqual(r.current.targetMode, 'paper');
 });
 
 runAll();

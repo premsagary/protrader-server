@@ -121,7 +121,7 @@ async function runAll() {
   process.exit(failed ? 1 : 0);
 }
 
-// ── Load modules AFTER path set up; dry_run default is fine for unit tests ──
+// ── Load modules AFTER path set up; `off` default is fine for unit tests ──
 const paper = require('../agent/paper-fill-engine');
 const tradeManager = require('../agent/trade-manager');
 const { _internal: paperInt } = paper;

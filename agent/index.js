@@ -109,19 +109,15 @@ async function runCycle(deps = _deps) {
       state,
     });
 
-    // 7. Execute — dry_run does nothing; paper arms candidates; live errors.
+    // 7. Execute — paper arms candidates; live errors until Phase 3.
     //    ids.approved is aligned with approved[] in insertion order, so we can
     //    zip them to get the decisionId for each proposal.
     const placed = [];
-    if (mode === 'dry_run') {
-      for (const p of approved) placed.push({ sym: p.sym, ok: true, mode: 'dry_run' });
-    } else {
-      for (let i = 0; i < approved.length; i++) {
-        const p = approved[i];
-        const decisionId = ids.approved[i] && ids.approved[i].id;
-        const res = await execution.place(p, { ...deps, decisionId, runId });
-        placed.push({ sym: p.sym, decisionId, ...res });
-      }
+    for (let i = 0; i < approved.length; i++) {
+      const p = approved[i];
+      const decisionId = ids.approved[i] && ids.approved[i].id;
+      const res = await execution.place(p, { ...deps, decisionId, runId });
+      placed.push({ sym: p.sym, decisionId, ...res });
     }
 
     // 8. Evaluate armed candidates (paper mode only). This is what actually
@@ -480,7 +476,7 @@ function mountRoutes(app, opts = {}) {
     res.json({ ok: true, ...paper.clearArmed() });
   });
 
-  // Auto-schedule: { enabled: bool, targetMode?: 'paper'|'dry_run' }
+  // Auto-schedule: { enabled: bool, targetMode?: 'paper' }
   // Persists to app_config under two keys so a Railway restart restores both.
   app.post('/api/agent/auto-schedule', gate, async (req, res) => {
     try {

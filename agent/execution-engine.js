@@ -7,9 +7,11 @@
  * makes paper trading honest — it respects the "wait for candle confirmation
  * above the breakout" contract that trade-agent builds into trigger_price.
  *
- * dry_run  — synthetic ids, no fill, no DB side-effects beyond audit.
- * paper    — arm candidate via paper-fill-engine. Fill is emitted later.
- * live     — hard refusal (Phase 3, not built).
+ * paper — arm candidate via paper-fill-engine. Fill is emitted later.
+ * live  — hard refusal (Phase 3, not built).
+ *
+ * (dry_run was removed 2026-04-17 — paper already produces the same audit
+ * trail without adding a second mode to think about.)
  *
  * Dependencies required by paper mode:
  *   deps.decisionId — agent_decisions.id for this proposal (injected by
@@ -19,27 +21,8 @@
 
 'use strict';
 
-const crypto = require('crypto');
 const { getMode } = require('./agent-config');
 const paper = require('./paper-fill-engine');
-
-function _syntheticId(prefix) {
-  return `${prefix}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Dry-run adapter — no broker touch, no DB write beyond what audit already did
-// ────────────────────────────────────────────────────────────────────────────
-async function placeDryRun(proposal) {
-  return {
-    ok: true,
-    mode: 'dry_run',
-    entryOrderId:  _syntheticId('dry-entry'),
-    slOrderId:     _syntheticId('dry-sl'),
-    targetOrderId: _syntheticId('dry-tgt'),
-    note: 'dry_run: no order was placed',
-  };
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Paper adapter — arm the candidate; evaluateArmed() in the next cycle will
@@ -73,10 +56,9 @@ async function placeLive(proposal, deps) {
 async function place(proposal, deps) {
   const mode = getMode();
   switch (mode) {
-    case 'dry_run': return placeDryRun(proposal);
-    case 'paper':   return placePaper(proposal, deps);
-    case 'live':    return placeLive(proposal, deps);
-    default:        return { ok: false, error: `disabled:mode=${mode}` };
+    case 'paper': return placePaper(proposal, deps);
+    case 'live':  return placeLive(proposal, deps);
+    default:      return { ok: false, error: `disabled:mode=${mode}` };
   }
 }
 
