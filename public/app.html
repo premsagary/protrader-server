@@ -9691,6 +9691,8 @@ function buildStockCard(s, medal){
                    : fl.code==='ANALYST_SELL' ? '👎 Analyst SELL'
                    : fl.code==='ANALYST_TP_BELOW' ? '👎 TP Below Spot'
                    : fl.code==='ANALYST_CAUTIOUS' ? '👎 Analysts Cautious'
+                   : fl.code==='MOMENTUM_CONSENSUS_CONFLICT' ? '⚡ High Score, TP Below'
+                   : fl.code==='MOMENTUM_CONSENSUS_CAUTIOUS' ? '⚡ Weak Consensus'
                    : fl.code;
       var tt = (fl.label || '').replace(/"/g,'&quot;');
       h+='<span title="'+tt+'" style="background:'+bg+';color:'+col+';border:1px solid '+col+'40;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:600">'+shortLbl+'</span>';

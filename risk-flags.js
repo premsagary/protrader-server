@@ -588,6 +588,59 @@ function detectAnalystDowngrade(f) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// 12. Consensus-blindness (momentum flying / analysts skeptical)
+// ────────────────────────────────────────────────────────────────────────────
+// External review (2026-04-17) found NATCOPHARM (composite 92.4), NATIONALUM
+// (83.6), TORNTPOWER (82.6), ADANIPORTS (82.6) all had analyst consensus
+// target prices BELOW current market price. The plain `detectAnalystDowngrade`
+// only fires on SELL rating or ≤-15% TP gap — so a HOLD with -5% to -10% TP
+// gap slipped through, giving 80+ momentum scores to stocks brokers don't
+// endorse. This detector closes the gap: if momentum/composite is high AND
+// analyst TP implies downside (even modest), penalize.
+//
+// Reads f.composite OR f.scoreV2 (whichever is present) — fires when the
+// headline score is ≥70 but analysts' aggregate target is below spot.
+function detectMomentumConsensusConflict(f) {
+  if (!f || !f._analystConsensus) return null;
+  const a = f._analystConsensus;
+  if (!Number.isFinite(a.impliedReturn)) return null;
+
+  // Use whichever headline score is highest — this is the "momentum" we're
+  // comparing against the consensus. If composite is 85 and scoreV2 is 60,
+  // the stock is in momentum picks at high score, which is the context where
+  // consensus-blindness matters most.
+  const topScore = Math.max(
+    Number(f.composite) || 0,
+    Number(f.scoreV2)   || 0,
+    Number(f.fallenScore) || 0
+  );
+  if (topScore < 70) return null;            // Only apply to top-tier picks
+  if (a.impliedReturn >= 0) return null;     // Analysts not negative
+
+  // Already caught by the other detectors — avoid double-penalty
+  if (a.rating === 'SELL' || a.rating === 'REDUCE') return null;
+  if (a.impliedReturn <= -15) return null;
+
+  // Sweet spot: headline score ≥70 AND TP implies -1% to -15% downside
+  // AND rating isn't already SELL. Penalty scales with the disagreement.
+  const gap = Math.abs(a.impliedReturn);
+  if (gap >= 5) {
+    return {
+      code: 'MOMENTUM_CONSENSUS_CONFLICT',
+      severity: 'MEDIUM',
+      label: `High score ${topScore.toFixed(0)} but analyst TP ${a.impliedReturn.toFixed(0)}% below spot`,
+      penalty: 5,
+    };
+  }
+  return {
+    code: 'MOMENTUM_CONSENSUS_CAUTIOUS',
+    severity: 'LOW',
+    label: `Analyst TP ${a.impliedReturn.toFixed(0)}% below spot — weak consensus`,
+    penalty: 2,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Public entry point — returns an array of flags (0-10 items typical)
 // ────────────────────────────────────────────────────────────────────────────
 function computeRiskFlags(f, now) {
@@ -603,6 +656,7 @@ function computeRiskFlags(f, now) {
   const j = detectBSEEventImminent(f);              if (j) out.push(j);
   const k = detectNewsNegative(f);                  if (k) out.push(k);
   const l = detectAnalystDowngrade(f);              if (l) out.push(l);
+  const m = detectMomentumConsensusConflict(f);     if (m) out.push(m);
   return out;
 }
 

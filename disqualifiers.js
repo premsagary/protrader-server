@@ -21,8 +21,45 @@
 
 'use strict';
 
+// Hard-coded corporate-action calendar for M&A / amalgamation cases the
+// research agent or user has manually surfaced. Stocks under an announced
+// merger/absorption have a finite standalone life — their prices become
+// tied to the acquirer's stock or a fixed exchange ratio, so trailing
+// fundamentals no longer drive returns.
+// Format: { sym, note } — note surfaces in the disqualification reason.
+// Research 2026-04-17 identified ACC as amalgamated into Ambuja Cements.
+const CORPORATE_ACTION_DISQUALIFIERS = Object.freeze([
+  { sym: 'ACC', note: 'amalgamation into Ambuja Cements announced — standalone thesis invalid' },
+]);
+
+function _isUnderCorporateAction(sym) {
+  if (!sym) return null;
+  const up = String(sym).toUpperCase();
+  return CORPORATE_ACTION_DISQUALIFIERS.find(r => r.sym === up) || null;
+}
+
 function checkDisqualifiers(f) {
   if (!f) return null;
+
+  // 0. Corporate action — stock under announced merger/amalgamation.
+  // Standalone thesis is invalidated: price will track acquirer or fixed
+  // exchange ratio, not the underlying trailing fundamentals we score on.
+  // Supports both a dynamic flag (f.corporateAction) and a hardcoded list.
+  if (f.corporateAction === true || f.mergedInto || f.amalgamationAnnounced === true) {
+    return {
+      code: 'CORPORATE_ACTION',
+      reason: `Merger / amalgamation announced — standalone fundamentals no longer drive returns${f.mergedInto ? ` (absorbed by ${f.mergedInto})` : ''}`,
+      severity: 'DISQUALIFY',
+    };
+  }
+  const _ca = _isUnderCorporateAction(f.sym || f.symbol);
+  if (_ca) {
+    return {
+      code: 'CORPORATE_ACTION',
+      reason: _ca.note,
+      severity: 'DISQUALIFY',
+    };
+  }
 
   // 1. Extreme promoter pledge — margin-call cascade risk that no
   // operational quality can offset. 75% is a five-sigma event.

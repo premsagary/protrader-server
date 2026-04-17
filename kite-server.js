@@ -15888,6 +15888,79 @@ app.post('/api/admin/refresh-external-signals', async (req, res) => {
   }
 });
 
+// ── Debug endpoint — inspect a single stock's flag pipeline state (Apr-2026)
+// Supports the external-review loop: after spotting a suspicious pick (e.g.
+// NATCOPHARM 92.4 with analyst downside), hit this endpoint to see:
+//   - current fundamentals + freshness (fetchedAt age)
+//   - which risk flags fire + penalty breakdown
+//   - disqualifier status + reason if any
+//   - external-signals cache state (BSE events, news, analyst consensus)
+// Usage: GET /api/admin/debug-stock/NATCOPHARM
+app.get('/api/admin/debug-stock/:sym', (req, res) => {
+  try {
+    const sym = String(req.params.sym || '').toUpperCase();
+    const f = stockFundamentals[sym];
+    if (!f) {
+      return res.status(404).json({ ok: false, error: `Symbol ${sym} not in stockFundamentals` });
+    }
+    // Attach ext-signals if present so the detectors see the full picture
+    const ext = _externalSignalsCache[sym] || {};
+    const fWithExt = {
+      ...f,
+      _bseEvents:        ext.bseEvents || null,
+      _newsNegative:     ext.newsNegative || null,
+      _analystConsensus: ext.analystConsensus || null,
+    };
+    const flags        = computeRiskFlags(fWithExt, Date.now());
+    const disqualifier = checkDisqualifiers(fWithExt);
+    const totalPenalty = flags.reduce((s, fl) => s + (fl.penalty || 0), 0);
+
+    res.json({
+      ok: true,
+      sym,
+      price: f.price || livePrices[sym]?.price || null,
+      sector: f.sector || null,
+      grp: f.grp || null,
+      fundamentals_fetchedAt: f.fetchedAt ? new Date(f.fetchedAt).toISOString() : null,
+      fundamentals_age_hours: f.fetchedAt ? +((Date.now() - f.fetchedAt) / 3600000).toFixed(1) : null,
+      scores: {
+        scoreV2:      f.scoreV2      ?? null,
+        scoreV2Raw:   f.scoreV2Raw   ?? null,
+        composite:    f.composite    ?? null,
+        compositeRaw: f.compositeRaw ?? null,
+        fallenScore:  f.fallenScore  ?? null,
+        fallenScoreRaw: f.fallenScoreRaw ?? null,
+      },
+      flags,
+      totalPenalty,
+      disqualifier,
+      externalSignals: {
+        bseEvents:        ext.bseEvents || null,
+        newsNegative:     ext.newsNegative || null,
+        analystConsensus: ext.analystConsensus || null,
+        cachedAt:         ext.asOf || null,
+      },
+      key_fundamentals: {
+        roe:                    f.roe ?? null,
+        roe5yAvg:               f.roe5yAvg ?? null,
+        debtToEq:               f.debtToEq ?? null,
+        pledged:                f.pledged ?? null,
+        operatingMargin:        f.operatingMargin ?? null,
+        operatingMargin5yAvg:   f.operatingMargin5yAvg ?? null,
+        epsGr1y:                f.epsGr1y ?? null,
+        epsGr5y:                f.epsGr5y ?? null,
+        patQtrYoy:              f.patQtrYoy ?? null,
+        pctFromHigh:            f.pctFromHigh ?? null,
+        change3m:               f.change3m ?? null,
+        change52w:              f.change52w ?? null,
+        dataCompleteness:       f.dataCompleteness ?? null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // 8AM IST — refresh stock universe from NSE CSVs → stock_universe DB
 cron.schedule('0 8 * * *', async () => {
   console.log('📋 8AM: Refreshing universe from NSE...');
