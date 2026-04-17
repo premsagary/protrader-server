@@ -13079,7 +13079,12 @@ function scoreFallenAngel(f) {
   // ==========================================================================
   // FINAL SCORE + VERDICT
   // ==========================================================================
-  const finalScore = Math.min(100, Math.max(0, Math.round(s)));
+  const rawScore   = Math.min(100, Math.max(0, Math.round(s)));
+  // Forward-looking risk flags also demote Rebound picks (Apr-2026 follow-up).
+  // A fallen-angel setup with an imminent lock-in unlock or a post-IPO
+  // earnings cliff is NOT a quality-on-sale pullback — it's a falling knife.
+  const faRiskFlags = computeRiskFlags(f, Date.now());
+  const finalScore  = applyRiskFlagPenalty(rawScore, faRiskFlags);
 
   // Verdicts aligned with Varsity conviction levels
   let verdict, verdictColor, verdictIcon;
@@ -13089,7 +13094,15 @@ function scoreFallenAngel(f) {
   else if (finalScore >= 37) { verdict = 'Watch & Wait';      verdictColor = '#f97316'; verdictIcon = '⏳'; }
   else                       { verdict = 'Likely Value Trap'; verdictColor = '#ef4444'; verdictIcon = '⚠️'; }
 
-  return { fallenScore: finalScore, fallenHits: hits, fallenVerdict: verdict, fallenColor: verdictColor, fallenIcon: verdictIcon };
+  return {
+    fallenScore: finalScore,
+    fallenScoreRaw: rawScore,
+    fallenRiskFlags: faRiskFlags,
+    fallenHits: hits,
+    fallenVerdict: verdict,
+    fallenColor: verdictColor,
+    fallenIcon: verdictIcon,
+  };
 }
 
 
@@ -13733,13 +13746,20 @@ function scoreStockForPortfolio(f) {
 
   // === COMPOSITE SCORE (Varsity-aligned: FA-heavy for long-term investing) ===
   // Rebalanced: FA 35% (was 30%), TA 20% (was 25%) — Varsity emphasizes fundamentals for investing
-  const composite = +(
+  const compositeRaw = +(
     faRawScore * 0.35 +      // Fundamental quality (35%) — Varsity M3: investing = fundamentals first
     valScore   * 0.15 +      // Valuation (15%)
     taScore    * 0.20 +      // Technical health (20%) — entry timing, not primary driver
     momScore   * 0.15 +      // Momentum (15%)
     riskScore  * 0.15         // Risk/Safety (15%)
   ).toFixed(1);
+
+  // Apr-2026: Momentum composite also gets the forward-looking risk-flag
+  // demotion (same computeRiskFlags used by scoreV2 + fallenScore). A
+  // blow-off top (price/PAT divergence) or an imminent IPO lock-in unlock
+  // should drop the composite below the 55 buy-conviction floor.
+  const compositeRiskFlags = computeRiskFlags(f, Date.now());
+  const composite = applyRiskFlagPenalty(compositeRaw, compositeRiskFlags);
 
   // === CONVICTION TIER (Varsity checklist approach) ===
   let checkCount = 0;
@@ -13782,7 +13802,8 @@ function scoreStockForPortfolio(f) {
   return {
     sym: f.sym, name: f.name, grp: f.grp, sector: f.sector,
     price: px, faScore: faRawScore, valScore, taScore, momScore, riskScore,
-    composite, conviction, convColor, checkCount: +checkCount.toFixed(1),
+    composite, compositeRaw, compositeRiskFlags,
+    conviction, convColor, checkCount: +checkCount.toFixed(1),
     ...faData, isFallenAngel: isFa,
     stopLoss: stopData?.stopLoss, target: stopData?.target,
     rrRatio: stopData?.rrRatio, goodRR: stopData?.acceptable,
