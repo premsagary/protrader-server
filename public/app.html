@@ -9629,6 +9629,34 @@ function buildStockCard(s, medal){
   if(s.bullishDiv) h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:1px 7px;font-size:10px">RSI Div ⬆</span>';
   if(isFallenAngel&&(s.rsi||50)<=35) h+='<span style="background:rgba(34,197,94,.15);color:var(--green);border-radius:4px;padding:1px 7px;font-size:10px">RSI Oversold</span>';
   if(s.alreadyOwn) h+='<span style="background:rgba(99,102,241,.15);color:var(--shiva-blue);border-radius:4px;padding:1px 7px;font-size:10px">✓ You own this</span>';
+
+  // -- FORWARD-LOOKING RISK FLAGS (Apr-2026) ------------------------
+  // Server attaches riskFlags[] from risk-flags.js. Badge colors match
+  // severity: HIGH = red, MEDIUM = amber, LOW = yellow. Label is tooltip.
+  if(Array.isArray(s.riskFlags) && s.riskFlags.length){
+    s.riskFlags.forEach(function(fl){
+      var col = fl.severity==='HIGH' ? 'var(--red)'
+              : fl.severity==='MEDIUM' ? 'var(--shiva-gold)'
+              : '#fbbf24';
+      var bg = fl.severity==='HIGH' ? 'rgba(239,68,68,.15)'
+             : fl.severity==='MEDIUM' ? 'rgba(245,158,11,.15)'
+             : 'rgba(251,191,36,.10)';
+      var shortLbl = fl.code==='EARNINGS_CLIFF' ? '⚠ Earnings Cliff'
+                   : fl.code==='EARNINGS_DROP_SEVERE' ? '⚠ PAT Drop'
+                   : fl.code==='EARNINGS_DECELERATING' ? '↓ Earnings Turn'
+                   : fl.code==='EARNINGS_SLOWING' ? '→ Earnings Slowing'
+                   : fl.code==='PRICE_PAT_DIVERGENCE_BEARISH' ? '⚡ Price/PAT Divergent'
+                   : fl.code==='PRICE_EARNINGS_EXTENDED' ? '↑ Price Extended'
+                   : fl.code==='MOMENTUM_CYCLICAL_PEAK' ? '📈 Cyclical Peak'
+                   : fl.code==='LOCKIN_IMMINENT' ? '🔓 Lock-in Imminent'
+                   : fl.code==='LOCKIN_RECENT' ? '🔓 Lock-in Recent'
+                   : fl.code==='LOCKIN_UPCOMING' ? '🔓 Lock-in Upcoming'
+                   : fl.code;
+      var tt = (fl.label || '').replace(/"/g,'&quot;');
+      h+='<span title="'+tt+'" style="background:'+bg+';color:'+col+';border:1px solid '+col+'40;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:600">'+shortLbl+'</span>';
+    });
+  }
+
   h+='</div>';
 
   // -- FALLEN ANGEL SCORECARD ---------------------------------------
@@ -13724,6 +13752,8 @@ function renderArchitecturePage(){
     + _archPillar('Rebound Picks (orange)', 'fallenScore', 'Filter: <code>s.isFallenAngel === true</code>. Sorted by <code>fallenScore</code> desc. Quality-on-sale setups only — see the Rebound Picks card below for the full gate + scoring formula.')
     + _archPillar('Momentum Picks (green)', 'composite', 'Filter: <code>s.composite &gt;= 55</code> (Buy conviction floor). Sorted by <code>composite</code> desc. Uses the SAME <code>scoreStockForPortfolio()</code> that builds the PM Momentum Picks portfolio — so the MOMENTUM SCORE here is identical to the one in PM Momentum Picks and in the Stock Data → Overview MOMENTUM SCORE column. Single source of truth: <code>scoreStockForPortfolio()</code> in kite-server.js (~line 10384), invoked server-side in the <code>/api/stocks/score</code> handler so every screen sees the same number.')
     + _archPillar('Long-Term Investments (blue)', 'scoreV2', 'Filter: <code>s.scoreV2 &gt;= 60</code>. Sorted by <code>scoreV2</code> desc. Varsity 4-pillar fundamentals-only (Quality 40 + Growth 25 + Valuation 20 + Business 15) — see the Long-Term Investments card below.')
+    + _archPillar('Forward-looking risk-flag demotion (Apr-2026)', 'scoreV2 adjusted', 'On top of the trailing-ratio scorer, <code>risk-flags.js</code> runs three forward-looking detectors and subtracts penalties from <code>scoreV2</code>: (1) <b>Earnings cliff</b> — latest-quarter PAT YoY ≤ −20% while 5Y EPS CAGR ≥ 10% = structural decline hidden by trailing averages (−15 HIGH). (2) <b>Price/PAT divergence</b> — 1Y price return &gt; 40% while 1Y EPS growth &lt; 0 = pure multiple expansion / speculation (−12 HIGH). (3) <b>IPO lock-in expiry</b> — hardcoded calendar (HYUNDAI / WAAREEENER / PREMIERENE / INDGN / TRAVELFOOD) surfaces unlocks within ±21 days as supply-shock risk (−12 HIGH if imminent). Badges render per-pick in the Stock Picks card row (red HIGH / amber MEDIUM / yellow LOW). The raw pre-penalty score is preserved on <code>scoreV2Raw</code>.')
+    + _archPillar('Sector concentration cap (Apr-2026)', 'max 2 per sector', 'All three picks lists now pass through <code>applySectorCap(list, 2)</code> before the top-10 slice — same function DayTrade uses (kite-server.js:8672). Prevents the Rebound / Momentum / Long-Term top-10 from being 6 banks or 5 IT names on days when one sector is universally outperforming. Cap preserves the existing sort order; stocks above the cap are still in the full <code>stocks</code> list, they just do not take slots in the top-10.')
     + '<div style="margin-top:12px">The pills row across the top shows <code>Total</code>, <code>Rebound Picks</code>, <code>Momentum Picks</code>, and <code>Long-Term</code> counts in their respective colors. Each column header shows a colored badge with its score name (REBOUND SCORE / MOMENTUM SCORE / INVESTMENT SCORE), and the top 25 rows of each list are rendered to keep the page light.</div>'
     + _archNote('A stock can appear in more than one column — a quality pullback with a healthy composite can legitimately be in both Rebound and Momentum lists. The three columns are orthogonal filters, not mutually exclusive buckets.')
   );

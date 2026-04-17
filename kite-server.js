@@ -29,6 +29,11 @@ const mlLogger  = require("./ml-logger");
 // construction (only processes snapshots older than 31 minutes).
 const outcomeEngine = require("./outcome-engine");
 
+// ── Risk flags (forward-looking demotions on top of trailing-ratio scorers) ──
+// Three detectors: earnings-cliff, price/PAT divergence, IPO lock-in expiry.
+// Pure functions operating on stockFundamentals — no IO, no new data sources.
+const { computeRiskFlags, applyRiskFlagPenalty, summarizeSeverity } = require("./risk-flags");
+
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
 const _origLog = console.log.bind(console);
@@ -12469,8 +12474,26 @@ function scoreOneStockV2(f, peers) {
   if (spikePenalty > 0) risks.push('Growth is a 1Y spike, not structural');
   const whyRisks = risks.slice(0, 2);
 
+  // ── Forward-looking risk flags (Apr-2026) ──
+  // Demote picks that trailing-ratio scorers cannot see: earnings-cliff
+  // (latest Q collapsing against healthy 5Y), price/PAT divergence (momentum
+  // trap), IPO lock-in expiry (supply shock). Each flag subtracts from scoreV2.
+  // Does NOT hide the pick — just lowers it in the ranking.
+  const riskFlags   = computeRiskFlags(f, Date.now());
+  const scoreV2Raw  = scoreV2;
+  const scoreV2Adj  = applyRiskFlagPenalty(scoreV2Raw, riskFlags);
+  const riskSeverity = summarizeSeverity(riskFlags);
+  // Fold flag labels into whyRisks so the "Why this stock?" explainer
+  // surfaces them alongside existing risks.
+  for (const fl of (riskFlags || [])) {
+    if (whyRisks.length < 4) whyRisks.push(`${fl.severity}: ${fl.label}`);
+  }
+
   return {
-    scoreV2,
+    scoreV2: scoreV2Adj,
+    scoreV2Raw,
+    riskFlags,
+    riskSeverity,
     subScores: {
       quality:   +qualityScore.toFixed(1),
       growth:    +growthScore.toFixed(1),
@@ -13374,8 +13397,38 @@ app.get('/api/stocks/score', async(req,res)=>{
     // Fire Telegram alerts for new Fallen Angels (async, non-blocking)
     checkAndSendAlerts(scored).catch(e=>console.log('Alert error:',e.message));
 
+    // ── Sector-capped top-10 per picks category (Apr-2026) ────────────────
+    // Build once server-side so all three Picks tabs — Rebound/Momentum/Long-
+    // Term — share one sector cap (max 2 per sector) and risk-flag demotion.
+    // Client still receives the full `stocks` list for ad-hoc screening, but
+    // the picks tabs can read these pre-built lists directly.
+    let picksRebound = [], picksMomentum = [], picksLongTerm = [];
+    if (scoreVersion === 2) {
+      picksRebound = applySectorCap(
+        scored.filter(s => s.isFallenAngel)
+              .sort((a,b)=>(b.fallenScore||0)-(a.fallenScore||0)),
+        2
+      ).slice(0,10);
+      picksMomentum = applySectorCap(
+        scored.filter(s => s.composite != null && s.composite >= 55)
+              .sort((a,b)=>(b.composite||0)-(a.composite||0)),
+        2
+      ).slice(0,10);
+      picksLongTerm = applySectorCap(
+        scored.filter(s => {
+          const roeOk = s.roe == null || s.roe >= 12;
+          const deOk  = s.debtToEq == null || s.debtToEq <= 2;
+          const grOk  = s.earGrowth == null || s.earGrowth >= 0;
+          const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
+          return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
+        }).sort((a,b)=>(b.scoreV2||0)-(a.scoreV2||0)),
+        2
+      ).slice(0,10);
+    }
+
     res.json({
       stocks:scored, total:scored.length,
+      picksRebound, picksMomentum, picksLongTerm,
       score_version: scoreVersion,
       loading:stockFundLoading,
       loadingMsg:stockFundLoading?'Refreshing in background...':null,
@@ -21881,7 +21934,11 @@ function _getTop10ForCategory(category) {
   } else {
     return [];
   }
-  return filtered.slice(0, 10);
+  // Sector concentration cap (max 2 per sector). Prevents all-banking or
+  // all-IT picks. `applySectorCap` preserves the existing sort order while
+  // greedily admitting picks until per-sector limit is hit. See 8672.
+  const capped = applySectorCap(filtered, 2);
+  return capped.slice(0, 10);
 }
 
 async function runPicksAIReview(category) {
