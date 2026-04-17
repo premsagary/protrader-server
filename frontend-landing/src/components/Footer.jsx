@@ -3,7 +3,7 @@ import React from 'react';
 export default function Footer() {
   const showAdminLogin = () => {
     // Navigate to app.html and trigger admin login there
-    window.location.href = '/dashboard.html#admin';
+    window.location.href = '/app.html#admin-login';
   };
 
   return (
