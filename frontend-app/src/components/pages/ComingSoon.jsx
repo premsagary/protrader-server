@@ -38,10 +38,6 @@ const TAB_INFO = {
     title: 'Admin',
     desc: 'Pipeline monitoring, manual sync triggers, user management, live server logs.',
   },
-  agent: {
-    title: 'Agent — Auto-Trader',
-    desc: 'Rule-based automated trading agent (Phase 1 dry-run). Server API live at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}. v1 UI still fully functional — click below.',
-  },
 };
 
 export default function ComingSoon({ tab }) {

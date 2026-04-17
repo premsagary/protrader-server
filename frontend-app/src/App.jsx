@@ -12,6 +12,7 @@ import CryptoRoboTrade from './components/pages/CryptoRoboTrade';
 import DayTrade from './components/pages/DayTrade';
 import MiroFishLab from './components/pages/MiroFishLab';
 import Admin from './components/pages/Admin';
+import Agent from './components/pages/Agent';
 import ComingSoon from './components/pages/ComingSoon';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -88,6 +89,7 @@ export default function App() {
     if (currentTab === 'daytrade') return <DayTrade />;
     if (currentTab === 'mirofish') return <MiroFishLab />;
     if (currentTab === 'admin') return <Admin />;
+    if (currentTab === 'agent') return <Agent />;
     return <ComingSoon tab={currentTab} />;
   };
 
