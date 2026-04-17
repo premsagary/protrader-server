@@ -10,7 +10,9 @@ const TABS = [
   { id: 'mirofish', label: 'MiroFish Lab', migrated: true, admin: true },
   { id: 'stockdata', label: 'Stock Data', migrated: true },
   { id: 'daytrade', label: 'DayTrade', migrated: true, admin: true, accent: 'red' },
+  { id: 'agent', label: 'Agent', migrated: true, admin: true, accent: 'purple' },
   { id: 'architecture', label: 'Architecture', migrated: true, admin: true },
+  { id: 'admin', label: 'Admin', migrated: true, admin: true },
 ];
 
 function getHashTab() {
