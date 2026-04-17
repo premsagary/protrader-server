@@ -533,8 +533,59 @@ function detectBSEEventImminent(f) {
 function detectNewsNegative(f) {
   if (!f || !f._newsNegative) return null;
   const n = f._newsNegative;
-  // n = { count, score, headlines[], asOf }
-  // score: bigger = more negative
+  // n = { count, score, headlines[], maxSeverity?, disqualify?, demoteTotal?,
+  //       classifications?[], asOf }
+  // LLM-classifier fields (maxSeverity / disqualify / demoteTotal) take
+  // precedence when present; otherwise fall back to score-based logic.
+
+  // LLM-classified disqualify signal → highest-severity flag. Stock gets
+  // effectively excluded from picks (max penalty 20, caps with flag system
+  // top-end, in addition to any disqualifier fired by disqualifiers.js).
+  if (n.disqualify === true) {
+    const first = (n.classifications || [])[0];
+    return {
+      code: 'NEWS_DISQUALIFY',
+      severity: 'HIGH',
+      label: `[LLM] ${first?.reason || 'Active severe news event — see classifications'}`,
+      penalty: 20,
+    };
+  }
+
+  // LLM-classified HIGH severity (should_disqualify=false but still serious)
+  if (n.maxSeverity === 'HIGH') {
+    const first = (n.classifications || [])[0];
+    return {
+      code: 'NEWS_NEGATIVE_HIGH',
+      severity: 'HIGH',
+      label: `[LLM] ${first?.reason || (n.headlines||[])[0] || 'High-severity news'}`,
+      penalty: Math.max(10, Math.min(18, n.demoteTotal || 10)),
+    };
+  }
+
+  // LLM-classified MEDIUM severity
+  if (n.maxSeverity === 'MEDIUM') {
+    const first = (n.classifications || [])[0];
+    return {
+      code: 'NEWS_NEGATIVE_MEDIUM',
+      severity: 'MEDIUM',
+      label: `[LLM] ${first?.reason || 'Moderate negative news'}`,
+      penalty: Math.max(5, Math.min(10, n.demoteTotal || 5)),
+    };
+  }
+
+  // LLM-classified LOW severity
+  if (n.maxSeverity === 'LOW') {
+    const first = (n.classifications || [])[0];
+    return {
+      code: 'NEWS_NEGATIVE_LOW',
+      severity: 'LOW',
+      label: `[LLM] ${first?.reason || 'Minor negative signal'}`,
+      penalty: Math.max(2, Math.min(5, n.demoteTotal || 2)),
+    };
+  }
+
+  // Keyword-fallback path — preserves original score-based behavior when
+  // LLM classifications are absent (budget exhausted, module not wired).
   if (n.score >= 3) {
     return {
       code: 'NEWS_NEGATIVE_RECENT',

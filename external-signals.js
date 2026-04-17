@@ -25,6 +25,13 @@
 const https = require('https');
 const { URL } = require('url');
 
+// LLM news classifier — injected by caller if available. When present,
+// replaces the NEGATIVE_KEYWORDS regex matcher with per-headline LLM
+// classification (Claude Haiku 4.5 by default). Caller (kite-server.js)
+// wires this by passing the module via setNewsClassifier().
+let _newsClassifier = null;
+function setNewsClassifier(mod) { _newsClassifier = mod; }
+
 // ── Shared HTTP helper with timeout + error tolerance ──────────────────────
 function safeHttpGet(url, opts = {}) {
   return new Promise((resolve) => {
@@ -202,26 +209,81 @@ async function fetchNewsSignalsForSymbol(symbol, companyName) {
     }
   }
 
-  // Match negative keywords — each match counts 1, cap headlines returned.
+  // ── Hybrid LLM + keyword classification (Apr-2026) ─────────────────────
+  // If the LLM classifier module has been injected, use it to classify
+  // each headline with nuance (returns severity HIGH/MEDIUM/LOW/NONE,
+  // category, demote_score, should_disqualify). Falls back to the
+  // keyword-regex matcher when no classifier is available or budget
+  // exhausted (_newsClassifier module handles this internally).
+  //
+  // The resulting payload preserves backward compat (count, score,
+  // headlines, keywords) AND adds new fields (classifications[],
+  // max_severity, should_disqualify, demote_total) that the updated
+  // risk-flags.detectNewsNegative consumes.
   const hits = [];
-  for (const item of parsed) {
-    const t = item.title.toLowerCase();
-    for (const kw of NEGATIVE_KEYWORDS) {
-      if (t.includes(kw)) {
-        hits.push({ title: item.title, keyword: kw, pubDate: item.pubDate, link: item.link });
-        break; // one keyword per headline
+  const classifications = [];
+  let maxSeverity = 'NONE';
+  let disqualify = false;
+  let demoteTotal = 0;
+
+  if (_newsClassifier) {
+    // LLM path — classify each headline
+    for (const item of parsed) {
+      try {
+        const verdict = await _newsClassifier.classifyHeadline(item.title, {
+          stockSym: symbol, stockSector: null,
+        });
+        if (!verdict) continue;
+        if (verdict.severity === 'NONE') continue;
+        hits.push({
+          title: item.title,
+          keyword: verdict.category,
+          pubDate: item.pubDate,
+          link: item.link,
+          severity: verdict.severity,
+          reason: verdict.reason,
+          demote: verdict.demote_score,
+          source: verdict._source,
+        });
+        classifications.push({
+          title: item.title,
+          severity: verdict.severity,
+          category: verdict.category,
+          reason: verdict.reason,
+          demote: verdict.demote_score,
+          disqualify: verdict.should_disqualify,
+        });
+        const rank = { HIGH: 3, MEDIUM: 2, LOW: 1, NONE: 0 };
+        if ((rank[verdict.severity] || 0) > (rank[maxSeverity] || 0)) maxSeverity = verdict.severity;
+        if (verdict.should_disqualify) disqualify = true;
+        demoteTotal += Number(verdict.demote_score) || 0;
+      } catch (_) { /* per-headline classify errors degrade silently */ }
+    }
+  } else {
+    // Keyword-regex fallback path (original behavior, kept for safety)
+    for (const item of parsed) {
+      const t = item.title.toLowerCase();
+      for (const kw of NEGATIVE_KEYWORDS) {
+        if (t.includes(kw)) {
+          hits.push({ title: item.title, keyword: kw, pubDate: item.pubDate, link: item.link });
+          break;
+        }
       }
     }
   }
 
   if (!hits.length) return { count: 0, score: 0, headlines: [], asOf: new Date().toISOString() };
 
-  // Score = number of hits; cap at 5 for signal strength
   return {
     count: hits.length,
-    score: Math.min(5, hits.length),
+    score: Math.min(5, hits.length),              // backward-compat score
     headlines: hits.slice(0, 5).map(h => h.title),
     keywords: [...new Set(hits.map(h => h.keyword))],
+    // LLM-powered fields (only populated when _newsClassifier present)
+    classifications: classifications.slice(0, 5),
+    maxSeverity,
+    disqualify,
+    demoteTotal: Math.min(20, demoteTotal),        // cap compound penalty
     asOf: new Date().toISOString(),
   };
 }
@@ -342,6 +404,7 @@ module.exports = {
   fetchNewsSignalsForSymbol,
   fetchAnalystConsensusForSymbol,
   refreshExternalSignals,
+  setNewsClassifier,
   _internal: {
     NEGATIVE_KEYWORDS,
     _classifyBSEEvent,

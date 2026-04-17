@@ -40,6 +40,12 @@ const { computeRiskFlags, applyRiskFlagPenalty, summarizeSeverity } = require(".
 // losses, data-completeness <30%. Returns {code, reason, severity} or null.
 const { checkDisqualifiers } = require("./disqualifiers");
 
+// ── LLM news classifier (Apr-2026) ────────────────────────────────────────
+// Replaces the keyword-regex NEGATIVE_KEYWORDS blacklist with an
+// LLM classification per unique headline. Default model: Claude Haiku 4.5
+// via OpenRouter. Pool injected after init. $1/day budget cap, cached in DB.
+const newsClassifier = require("./news-classifier");
+
 // ── External signals (BSE corp events / news / analyst consensus) ────────
 // Fetched by a cron job (see refreshExternalSignalsCron below) and cached
 // in the external_signals_cache PG table. At scoring time, lookups are
@@ -977,7 +983,31 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_candles_5m_ts ON candles_5m(ts)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m tables included)");
+    // ── LLM news classifier cache + budget (Apr-2026) ────────────────────
+    // Replaces the hand-maintained 83-entry NEGATIVE_KEYWORDS blacklist.
+    // news_classification_cache keyed by sha256(headline) so identical
+    // headlines across cron runs never re-classify. llm_budget_daily caps
+    // spend at $1/day (configurable via NEWS_CLASSIFIER_DAILY_BUDGET_USD).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS news_classification_cache (
+        headline_hash  VARCHAR(64) PRIMARY KEY,
+        title          TEXT,
+        verdict        JSONB NOT NULL,
+        cost_usd       DOUBLE PRECISION DEFAULT 0,
+        classified_at  TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_news_class_time ON news_classification_cache(classified_at)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS llm_budget_daily (
+        day         DATE PRIMARY KEY,
+        spent_usd   DOUBLE PRECISION DEFAULT 0,
+        classified  INTEGER DEFAULT 0,
+        fallbacks   INTEGER DEFAULT 0
+      )
+    `);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -16010,11 +16040,28 @@ async function loadExternalSignalsCache() {
 }
 loadExternalSignalsCache();
 
+// Inject the shared pg pool into news-classifier so it can read/write its
+// own cache tables (news_classification_cache + llm_budget_daily) using
+// the same connection pool as the rest of the server.
+newsClassifier.setPool(pool);
+// Wire the classifier into external-signals so the news cron uses LLM
+// classification per headline instead of the NEGATIVE_KEYWORDS regex.
+externalSignals.setNewsClassifier(newsClassifier);
+
 // Expose an admin endpoint to trigger a manual refresh (debug / post-deploy)
 app.post('/api/admin/refresh-external-signals', async (req, res) => {
   try {
     await refreshExternalSignalsCron({ limit: Number(req.body?.limit) || 150, reason: 'manual' });
     res.json({ ok: true, count: Object.keys(_externalSignalsCache).length, refreshedAt: new Date(_externalSignalsTs).toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Admin endpoint: inspect LLM news classifier budget state
+app.get('/api/admin/llm-budget', async (req, res) => {
+  try {
+    res.json({ ok: true, ...(await newsClassifier.getBudgetStatus()) });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
