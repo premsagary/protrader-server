@@ -15901,9 +15901,12 @@ cron.schedule('*/30 8-16 * * 1-5',
 // 30-min refresh if fetchKiteDaily timed out or the symbol-to-token map is
 // broken. This cron hunts for them every 15 min during market hours and
 // priority-refetches the stalest.
-async function staleDataHealthcheck() {
+async function staleDataHealthcheck(opts = {}) {
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
-  if (!isMarketOpen()) return;
+  // Market-hours guard for the cron path only — manual admin triggers
+  // (opts.force=true) bypass so off-hours validation works without waiting
+  // for Monday's market open.
+  if (!opts.force && !isMarketOpen()) return;
   try {
     const MAX_AGE_MS = 90 * 60 * 1000;  // 90 min = 3x the 30-min refresh cron
     const now = Date.now();
@@ -15965,9 +15968,10 @@ cron.schedule('7,22,37,52 8-16 * * 1-5',
 
 // Admin endpoint to trigger healthcheck on demand — useful when the external
 // review flags a specific stale stock and you want to force-retry immediately.
+// Passes force=true so the market-hours guard is bypassed for manual runs.
 app.post('/api/admin/stale-healthcheck', async (req, res) => {
   try {
-    await staleDataHealthcheck();
+    await staleDataHealthcheck({ force: true });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
