@@ -3812,7 +3812,8 @@ function _readHash(){
 
 function setMode(mode){
   /* Block public users from accessing admin-only modes */
-  var _publicModes = ['stockanalyzer','stockrec','mf','stockdata'];
+  /* DayTrade is public (read-only) — picks API is in PUBLIC_ROUTE_PREFIXES */
+  var _publicModes = ['stockanalyzer','stockrec','mf','stockdata','daytrade'];
   if(_isPublicUser() && _publicModes.indexOf(mode) < 0){
     mode = 'stockanalyzer'; /* fallback to Deep Analyzer */
   }
