@@ -2,12 +2,13 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { apiGet } from '../../api/client';
 
 const FILTERS = ['ALL', 'NIFTY50', 'NEXT50', 'MIDCAP', 'SMALLCAP'];
+// Server field names: scoreV2 / composite / fallenScore (NOT investment_score etc.)
 const COLS = [
   { k: 'sym', l: 'Stock', w: 120, sticky: true },
   { k: 'grp', l: 'Grp', w: 90 },
-  { k: 'investment_score', l: 'Inv Score', w: 90, num: true, color: 'var(--brand-text)' },
-  { k: 'momentum_score', l: 'Mom Score', w: 90, num: true, color: 'var(--green-text)' },
-  { k: 'rebound_score', l: 'Reb Score', w: 90, num: true, color: 'var(--amber-text)' },
+  { k: 'scoreV2',     l: 'Inv Score', w: 90, num: true, color: 'var(--brand-text)' },
+  { k: 'composite',   l: 'Mom Score', w: 90, num: true, color: 'var(--green-text)' },
+  { k: 'fallenScore', l: 'Reb Score', w: 90, num: true, color: 'var(--amber-text)' },
   { k: 'price', l: 'Price', w: 90, num: true, fmt: (v) => v ? `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 1 })}` : '—' },
   { k: 'roe', l: 'ROE%', w: 70, num: true },
   { k: 'debtToEq', l: 'D/E', w: 70, num: true },
@@ -23,12 +24,13 @@ export default function StockData() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('ALL');
-  const [sortKey, setSortKey] = useState('investment_score');
+  const [sortKey, setSortKey] = useState('scoreV2');
   const [sortDir, setSortDir] = useState('desc');
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    apiGet('/api/stocks/score')
+    // scoreVersion=2 enables scoreV2 field; without it Long-Term column stays empty
+    apiGet('/api/stocks/score?scoreVersion=2')
       .then((d) => { setStocks(d.stocks || d || []); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
   }, []);

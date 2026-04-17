@@ -6,11 +6,12 @@ export default function MiroFishLab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    apiGet('/api/stocks/score')
+    // Server returns scoreV2 (not investment_score). Requires ?scoreVersion=2.
+    apiGet('/api/stocks/score?scoreVersion=2')
       .then((d) => {
         const all = (d.stocks || d || [])
-          .filter((s) => (s.investment_score || 0) >= 60)
-          .sort((a, b) => (b.investment_score || 0) - (a.investment_score || 0))
+          .filter((s) => (s.scoreV2 || 0) >= 60 && !s.disqualified)
+          .sort((a, b) => (b.scoreV2 || 0) - (a.scoreV2 || 0))
           .slice(0, 25);
         setStocks(all);
         setLoading(false);
@@ -73,7 +74,7 @@ export default function MiroFishLab() {
                       <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.name} · {s.grp}</div>
                     </td>
                     <td className="tabular-nums" style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)', textAlign: 'center', fontWeight: 700, color: 'var(--brand-text)', fontSize: 16 }}>
-                      {Math.round(s.investment_score || 0)}
+                      {Math.round(s.scoreV2 || 0)}
                     </td>
                     <td className="tabular-nums" style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)', textAlign: 'center', color: 'var(--text2)' }}>
                       {s.price ? `₹${Number(s.price).toLocaleString('en-IN', { maximumFractionDigits: 1 })}` : '—'}
