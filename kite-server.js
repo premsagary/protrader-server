@@ -15387,13 +15387,20 @@ cron.schedule('*/30 8-16 * * 1-5', async () => {
   await refreshAllFundamentals();
 }, { timezone: 'Asia/Kolkata' });
 
-// ── External signals refresher (Apr-2026) ─────────────────────────────────
-// Every 6 hours: refresh BSE corporate events, negative-news signals, and
-// analyst consensus for the top ~150 symbols (anything currently appearing
-// in picks lists). Persisted to external_signals_cache. Per-fetch errors
-// degrade gracefully — main pipeline never blocks on an external source.
+// ── External signals refresher (Apr-2026, split-cadence Apr-2026) ─────────
+// Split into three cadences to match where each source actually changes:
+//   - News:    every 30 min during market hours (8-16 IST, Mon-Fri)
+//              Rationale: breaking news can hit anytime. Google News RSS
+//              handles this volume fine.
+//   - BSE:     hourly during market hours (8-16 IST, Mon-Fri)
+//              Rationale: corp actions are scheduled days/weeks ahead;
+//              hourly is plenty, and avoids hammering api.bseindia.com.
+//   - Analyst: once daily at 19:30 IST after market close.
+//              Rationale: broker reports come out daily at most; more
+//              frequent scrapes risk Screener.in rate-limiting our
+//              Premium session cookie (which also drives fundamentals).
 async function refreshExternalSignalsCron(opts = {}) {
-  const { limit = 150, reason = 'cron' } = opts;
+  const { limit = 150, reason = 'cron', sources } = opts;
   if (!pool) return;
   try {
     const t0 = Date.now();
@@ -15412,32 +15419,58 @@ async function refreshExternalSignalsCron(opts = {}) {
 
     if (!targets.length) { console.log('[ext-signals] no targets to refresh'); return; }
 
-    console.log(`[ext-signals] refreshing ${targets.length} symbols (${reason})...`);
-    const results = await externalSignals.refreshExternalSignals(targets, { concurrency: 3 });
+    const srcLabel = sources ? sources.join('+') : 'all';
+    console.log(`[ext-signals] refreshing ${targets.length} symbols (${reason}, src=${srcLabel})...`);
+    const results = await externalSignals.refreshExternalSignals(targets, { concurrency: 3, sources });
 
-    // Persist + repopulate in-memory cache
+    // Partial updates: merge new source-fields onto the existing row instead
+    // of overwriting. This lets the three crons run independently without
+    // clobbering each other's fields.
     let saved = 0;
     for (const sym of Object.keys(results)) {
       try {
+        const prev = _externalSignalsCache[sym] || {};
+        const incoming = results[sym] || {};
+        const merged = {
+          ...prev,
+          ...(incoming.bseEvents         !== undefined ? { bseEvents: incoming.bseEvents }               : {}),
+          ...(incoming.newsNegative      !== undefined ? { newsNegative: incoming.newsNegative }         : {}),
+          ...(incoming.analystConsensus  !== undefined ? { analystConsensus: incoming.analystConsensus } : {}),
+          asOf: incoming.asOf || new Date().toISOString(),
+        };
         await pool.query(
           `INSERT INTO external_signals_cache (symbol, payload, refreshed_at)
            VALUES ($1, $2, NOW())
            ON CONFLICT (symbol) DO UPDATE SET payload = EXCLUDED.payload, refreshed_at = NOW()`,
-          [sym, results[sym]]
+          [sym, merged]
         );
-        _externalSignalsCache[sym] = results[sym];
+        _externalSignalsCache[sym] = merged;
         saved++;
       } catch (e) { /* per-row failures shouldn't abort the batch */ }
     }
     _externalSignalsTs = Date.now();
-    console.log(`[ext-signals] done — ${saved} rows persisted, ${Date.now() - t0}ms`);
+    console.log(`[ext-signals] done — ${saved} rows persisted (${srcLabel}), ${Date.now() - t0}ms`);
   } catch (e) {
     console.warn('[ext-signals] refresh error:', e.message);
   }
 }
 
-// Run every 6 hours — aligned to UTC 0/6/12/18, so IST 5:30/11:30/17:30/23:30
-cron.schedule('0 */6 * * *', () => refreshExternalSignalsCron({ reason: '6h-cron' }));
+// News: every 30 min during IST market hours, Mon-Fri
+cron.schedule('*/30 8-16 * * 1-5',
+  () => refreshExternalSignalsCron({ reason: '30m-news', sources: ['news'] }),
+  { timezone: 'Asia/Kolkata' });
+
+// BSE: hourly during IST market hours, Mon-Fri (at 5 past the hour so it
+// doesn't overlap with the fundamentals cron at :00/:30 and news at :00/:30)
+cron.schedule('5 8-16 * * 1-5',
+  () => refreshExternalSignalsCron({ reason: '1h-bse', sources: ['bse'] }),
+  { timezone: 'Asia/Kolkata' });
+
+// Analyst consensus: once daily at 19:30 IST (after market close, captures
+// post-market broker reports that typically publish in the evening)
+cron.schedule('30 19 * * 1-5',
+  () => refreshExternalSignalsCron({ reason: 'daily-analyst', sources: ['analyst'] }),
+  { timezone: 'Asia/Kolkata' });
 
 // Startup: load cached external signals into memory so the first request
 // after a deploy gets them, even before the cron fires.

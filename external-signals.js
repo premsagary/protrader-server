@@ -249,9 +249,20 @@ async function fetchAnalystConsensusForSymbol(symbol, currentPrice) {
  * Refresh external signals for a list of symbols, with concurrency limit.
  * Returns { symbol: { bseEvents, newsNegative, analystConsensus } }.
  * Never throws — per-symbol failures just produce null fields.
+ *
+ * `sources` controls which fetchers run. Pass a subset to avoid hammering
+ * any one provider:
+ *   - ['news']    — Google News RSS only  (30-min cron during market hours)
+ *   - ['bse']     — BSE corp actions only (hourly cron during market hours)
+ *   - ['analyst'] — Screener scrape only  (daily @ 19:30 IST after close)
+ *   - undefined   — all three (default, for manual refresh endpoint)
  */
 async function refreshExternalSignals(stocks, opts = {}) {
-  const { concurrency = 3, perFetchTimeoutMs = 8000 } = opts;
+  const { concurrency = 3, sources } = opts;
+  const wantNews    = !sources || sources.includes('news');
+  const wantBse     = !sources || sources.includes('bse');
+  const wantAnalyst = !sources || sources.includes('analyst');
+
   const out = {};
   const queue = [...stocks];
 
@@ -261,18 +272,21 @@ async function refreshExternalSignals(stocks, opts = {}) {
       if (!s) break;
       try {
         const [bse, news, analyst] = await Promise.all([
-          s.bseCode ? fetchBSEEventsForSymbol(s.bseCode) : Promise.resolve(null),
-          fetchNewsSignalsForSymbol(s.symbol, s.companyName),
-          fetchAnalystConsensusForSymbol(s.symbol, s.price),
+          wantBse && s.bseCode ? fetchBSEEventsForSymbol(s.bseCode) : Promise.resolve(undefined),
+          wantNews ? fetchNewsSignalsForSymbol(s.symbol, s.companyName) : Promise.resolve(undefined),
+          wantAnalyst ? fetchAnalystConsensusForSymbol(s.symbol, s.price) : Promise.resolve(undefined),
         ]);
+        // `undefined` = skipped (not fetched), preserve prior cache.
+        // `null`      = attempted but failed/empty, overwrite.
         out[s.symbol] = {
-          bseEvents: bse,
-          newsNegative: news,
-          analystConsensus: analyst,
+          _sources: { news: wantNews, bse: wantBse, analyst: wantAnalyst },
+          ...(bse !== undefined     ? { bseEvents: bse }             : {}),
+          ...(news !== undefined    ? { newsNegative: news }         : {}),
+          ...(analyst !== undefined ? { analystConsensus: analyst }  : {}),
           asOf: new Date().toISOString(),
         };
       } catch (e) {
-        out[s.symbol] = { bseEvents: null, newsNegative: null, analystConsensus: null, asOf: new Date().toISOString(), error: String(e.message || e) };
+        out[s.symbol] = { asOf: new Date().toISOString(), error: String(e.message || e) };
       }
     }
   }
