@@ -9072,13 +9072,62 @@ function computeCPR(prevDayCandles, refPrice) {
 // the cap are demoted (not dropped) to positions 11+ so the admin can still
 // see them if they scroll.
 
+// ── Sector label canonicalization (Apr-2026) ──────────────────────────────
+// Observed in live Stock Picks: "FMCG" and "Fast Moving Consumer Goods"
+// were being treated as different sectors by the cap, letting 4 consumer-
+// goods stocks into a single tab's top-15. Same for "Auto" vs "Automobile
+// and Auto Components", and likely for IT / Pharma / Metals variants.
+// This canonicalization maps each variant to one bucket so the cap actually
+// prevents concentration.
+function canonicalSector(raw) {
+  if (!raw) return 'Other';
+  const s = String(raw).toLowerCase().trim();
+  // FMCG family — merge common variants
+  if (/fast moving consumer goods|^fmcg$|consumer staples|packaged foods/i.test(s)) return 'FMCG';
+  // Auto family — MARUTI uses "Auto", JKTYRE/ENDURANCE use "Automobile and Auto Components"
+  if (/^auto$|^autos$|automobile|automotive|auto components|tyres/i.test(s)) return 'Auto';
+  // IT / software family
+  if (/^it$|information technology|software|tech services|it services/i.test(s)) return 'IT';
+  // Pharma (keep separate from Healthcare — different business models)
+  if (/^pharma$|pharmaceutical/i.test(s)) return 'Pharma';
+  // Healthcare (hospitals, diagnostics) — exclude pharma by checking first above
+  if (/healthcare|hospital|diagnostic/i.test(s)) return 'Healthcare';
+  // Banking family
+  if (/^bank$|^banks$|private bank|public sector bank|banking/i.test(s)) return 'Banking';
+  // NBFC / financial services (non-bank)
+  if (/nbfc|non.banking financ|financial services|financials/i.test(s)) return 'Financial Services';
+  // Metals family
+  if (/^metal$|^metals$|metals.*mining|mining|aluminium|steel|iron.*ore|ferrous|non.?ferrous/i.test(s)) return 'Metals';
+  // Oil & Gas family
+  if (/oil.*gas|petroleum|refineries|refinery|natural gas/i.test(s)) return 'Oil & Gas';
+  // Power family
+  if (/^power$|^electricity$|utilities|power generation|power distribution/i.test(s)) return 'Power';
+  // Cement family
+  if (/cement|building products/i.test(s)) return 'Cement';
+  // Chemicals family
+  if (/^chemicals?$|specialty chem|commodity chem|fertili[sz]er/i.test(s)) return 'Chemicals';
+  // Capital goods / industrials
+  if (/capital goods|industrials|electrical equipment|construction/i.test(s)) return 'Capital Goods';
+  // Consumer services (travel, QSR, retail, education)
+  if (/consumer services|retail|travel|leisure|education|hotels/i.test(s)) return 'Consumer Services';
+  // Infra
+  if (/infra|ports|airports|logistics|shipping|railways/i.test(s)) return 'Infrastructure';
+  // Realty
+  if (/realty|real estate/i.test(s)) return 'Realty';
+  // Insurance
+  if (/insurance|reinsurance/i.test(s)) return 'Insurance';
+  // Fallback — return the raw string (title-cased) so unknown sectors still
+  // get grouped by their exact string (same behavior as before).
+  return String(raw).trim();
+}
+
 function applySectorCap(sortedPicks, maxPerSector = 2) {
   if (!Array.isArray(sortedPicks) || sortedPicks.length <= maxPerSector) return sortedPicks;
   const topCandidate = [];
   const tail = [];
   const sectorCount = Object.create(null);
   for (const p of sortedPicks) {
-    const sect = (p.sector || 'Other').toString();
+    const sect = canonicalSector(p.sector);
     if (topCandidate.length < 10 && (sectorCount[sect] || 0) < maxPerSector) {
       topCandidate.push(p);
       sectorCount[sect] = (sectorCount[sect] || 0) + 1;

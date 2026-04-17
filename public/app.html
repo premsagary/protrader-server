@@ -8042,16 +8042,40 @@ function renderStockRecPage(){
   }
 
   // ── Client-side sector cap + disqualifier filter (Apr-2026) ──────────
-  // Mirrors server-side applySectorCap (kite-server.js:8672). Run client-
-  // side so the user's market-cap filter (NIFTY50 / MIDCAP / SMALLCAP /
-  // All) is respected — server-side capped arrays would lose that context.
-  // Max 2 per sector preserves the existing sort order.
+  // Mirrors server-side applySectorCap + canonicalSector (kite-server.js
+  // ~8672). Run client-side so the user's market-cap filter (NIFTY50 /
+  // MIDCAP / SMALLCAP / All) is respected.
+  // Canonicalization collapses sector-label variants ("FMCG" vs "Fast
+  // Moving Consumer Goods" vs "Auto" vs "Automobile and Auto Components")
+  // into canonical buckets so the cap actually prevents concentration.
+  function _canonicalSector(raw){
+    if (!raw) return 'Other';
+    var s = String(raw).toLowerCase().trim();
+    if (/fast moving consumer goods|^fmcg$|consumer staples|packaged foods/i.test(s)) return 'FMCG';
+    if (/^auto$|^autos$|automobile|automotive|auto components|tyres/i.test(s)) return 'Auto';
+    if (/^it$|information technology|software|tech services|it services/i.test(s)) return 'IT';
+    if (/^pharma$|pharmaceutical/i.test(s)) return 'Pharma';
+    if (/healthcare|hospital|diagnostic/i.test(s)) return 'Healthcare';
+    if (/^bank$|^banks$|private bank|public sector bank|banking/i.test(s)) return 'Banking';
+    if (/nbfc|non.banking financ|financial services|financials/i.test(s)) return 'Financial Services';
+    if (/^metal$|^metals$|metals.*mining|mining|aluminium|steel|iron.*ore|ferrous|non.?ferrous/i.test(s)) return 'Metals';
+    if (/oil.*gas|petroleum|refineries|refinery|natural gas/i.test(s)) return 'Oil & Gas';
+    if (/^power$|^electricity$|utilities|power generation|power distribution/i.test(s)) return 'Power';
+    if (/cement|building products/i.test(s)) return 'Cement';
+    if (/^chemicals?$|specialty chem|commodity chem|fertili[sz]er/i.test(s)) return 'Chemicals';
+    if (/capital goods|industrials|electrical equipment|construction/i.test(s)) return 'Capital Goods';
+    if (/consumer services|retail|travel|leisure|education|hotels/i.test(s)) return 'Consumer Services';
+    if (/infra|ports|airports|logistics|shipping|railways/i.test(s)) return 'Infrastructure';
+    if (/realty|real estate/i.test(s)) return 'Realty';
+    if (/insurance|reinsurance/i.test(s)) return 'Insurance';
+    return String(raw).trim();
+  }
   function _applySectorCap(sortedList, maxPerSector){
     var out = [];
     var counts = {};
     for (var i = 0; i < sortedList.length; i++) {
       var s = sortedList[i];
-      var sec = s.sector || 'Other';
+      var sec = _canonicalSector(s.sector);
       if ((counts[sec] || 0) >= maxPerSector) continue;
       counts[sec] = (counts[sec] || 0) + 1;
       out.push(s);
