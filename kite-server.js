@@ -765,7 +765,150 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ext_signals_refreshed ON external_signals_cache(refreshed_at)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache tables included)");
+    // ── ML logger tables (Apr-2026 fix) ──────────────────────────────────
+    // ml-logger.js and outcome-engine.js expect these two tables. They were
+    // missing from the init, causing repeated "relation does not exist"
+    // errors in production logs on every drainDeadLetters / cron tick.
+    //
+    // features_snapshot: per-scan row of all ML features, used by the
+    // outcome-engine to compute forward returns once the scan row is
+    // >= 31 minutes old. PK (sym, ts, scan_source) = natural dedup key.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS features_snapshot (
+        snapshot_id        BIGSERIAL PRIMARY KEY,
+        sym                VARCHAR(40) NOT NULL,
+        ts                 TIMESTAMP NOT NULL,
+        scan_source        VARCHAR(40) NOT NULL,
+        price              DOUBLE PRECISION,
+        sector             VARCHAR(100),
+        grp                VARCHAR(40),
+        best_setup         VARCHAR(80),
+        best_setup_score   DOUBLE PRECISION,
+        day_trade_score    DOUBLE PRECISION,
+        ch19_pass_count    INTEGER,
+        vwap_score         DOUBLE PRECISION,
+        gap_score          DOUBLE PRECISION,
+        breakout_score     DOUBLE PRECISION,
+        bounce_score       DOUBLE PRECISION,
+        rsi_5m             DOUBLE PRECISION,
+        stoch_k            DOUBLE PRECISION,
+        adx                DOUBLE PRECISION,
+        macd_hist          DOUBLE PRECISION,
+        macd_bull          BOOLEAN,
+        macd_cross         VARCHAR(20),
+        macd_hist_rising   BOOLEAN,
+        macd_hist_zero_up  BOOLEAN,
+        ema_9              DOUBLE PRECISION,
+        ema_20             DOUBLE PRECISION,
+        vwap               DOUBLE PRECISION,
+        vwap_dist_pct      DOUBLE PRECISION,
+        vwap_sigma         DOUBLE PRECISION,
+        vwap_upper_1       DOUBLE PRECISION,
+        vwap_lower_1       DOUBLE PRECISION,
+        vwap_upper_2       DOUBLE PRECISION,
+        vwap_lower_2       DOUBLE PRECISION,
+        below_1sigma       BOOLEAN,
+        below_2sigma       BOOLEAN,
+        above_2sigma       BOOLEAN,
+        bb_pct             DOUBLE PRECISION,
+        bb_squeeze         BOOLEAN,
+        bb_squeeze_release_up BOOLEAN,
+        supertrend_bull    BOOLEAN,
+        rsi_bull_div       BOOLEAN,
+        rsi_bear_div       BOOLEAN,
+        macd_bull_div      BOOLEAN,
+        macd_bear_div      BOOLEAN,
+        obv                DOUBLE PRECISION,
+        obv_bull_div       BOOLEAN,
+        obv_bear_div       BOOLEAN,
+        vol_ratio          DOUBLE PRECISION,
+        vol_expanding      BOOLEAN,
+        vol_contracting    BOOLEAN,
+        vpa_confirm_bull   BOOLEAN,
+        vpa_confirm_bear   BOOLEAN,
+        vpa_weak_rally     BOOLEAN,
+        vpa_weak_decline   BOOLEAN,
+        day_high           DOUBLE PRECISION,
+        day_low            DOUBLE PRECISION,
+        pd_high            DOUBLE PRECISION,
+        pd_low             DOUBLE PRECISION,
+        or_high            DOUBLE PRECISION,
+        or_low             DOUBLE PRECISION,
+        or_range           DOUBLE PRECISION,
+        day_high_touches   INTEGER,
+        or_high_touches    INTEGER,
+        pd_high_touches    INTEGER,
+        pd_low_touches     INTEGER,
+        equal_highs_count  INTEGER,
+        equal_lows_count   INTEGER,
+        pdh_role_support   BOOLEAN,
+        or_high_role_support BOOLEAN,
+        or_failed_break    BOOLEAN,
+        pdh_failed_break   BOOLEAN,
+        round_number       DOUBLE PRECISION,
+        at_round_number    BOOLEAN,
+        cpr_pp             DOUBLE PRECISION,
+        cpr_bc             DOUBLE PRECISION,
+        cpr_tc             DOUBLE PRECISION,
+        cpr_r1             DOUBLE PRECISION,
+        cpr_r2             DOUBLE PRECISION,
+        cpr_r3             DOUBLE PRECISION,
+        cpr_s1             DOUBLE PRECISION,
+        cpr_s2             DOUBLE PRECISION,
+        cpr_s3             DOUBLE PRECISION,
+        cpr_width_pct      DOUBLE PRECISION,
+        cpr_type           VARCHAR(30),
+        cpr_virgin         BOOLEAN,
+        fib_level          DOUBLE PRECISION,
+        fib_strength       DOUBLE PRECISION,
+        gap_pct            DOUBLE PRECISION,
+        gap_unfilled       BOOLEAN,
+        gap_class          VARCHAR(30),
+        candle_pattern     VARCHAR(50),
+        candle_pattern_bull BOOLEAN,
+        pattern_confirmed  BOOLEAN,
+        session_trend      VARCHAR(20),
+        rsi_above_midline  BOOLEAN,
+        rsi_crossed_midline_up BOOLEAN,
+        nifty_daily_change DOUBLE PRECISION,
+        rel_strength       DOUBLE PRECISION,
+        adr_avg            DOUBLE PRECISION,
+        adr_used_pct       DOUBLE PRECISION,
+        atr_pct            DOUBLE PRECISION,
+        session_phase      VARCHAR(20),
+        kelly_fraction_pct DOUBLE PRECISION,
+        vol_scale          DOUBLE PRECISION,
+        entry_price        DOUBLE PRECISION,
+        sl_price           DOUBLE PRECISION,
+        tgt_price          DOUBLE PRECISION,
+        rr_ratio           DOUBLE PRECISION,
+        created_at         TIMESTAMP DEFAULT NOW(),
+        UNIQUE (sym, ts, scan_source)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_features_snapshot_sym_ts ON features_snapshot(sym, ts)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_features_snapshot_ts ON features_snapshot(ts)`);
+
+    // writer_dead_letter: durable DLQ for rows that failed to insert into
+    // features_snapshot / candles_1m / candles_5m / trade_log_* during a
+    // transient DB outage. drainDeadLetters cron picks these up and retries
+    // with exponential backoff.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS writer_dead_letter (
+        id           BIGSERIAL PRIMARY KEY,
+        target       VARCHAR(40) NOT NULL,
+        payload      JSONB NOT NULL,
+        error_msg    TEXT,
+        retries      INTEGER DEFAULT 0,
+        next_retry   TIMESTAMP NOT NULL DEFAULT NOW(),
+        last_retry   TIMESTAMP,
+        resolved     BOOLEAN DEFAULT FALSE,
+        created_at   TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_dlq_unresolved ON writer_dead_letter(resolved, next_retry) WHERE resolved = FALSE`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -8420,32 +8563,77 @@ let FUND = {
 };
 
 // -- Fetch MAX daily candles from Kite (full history) --------------------------
+// ── Kite historical-API rate limiter (Apr-2026) ─────────────────────────
+// Kite Connect documents a 3 req/sec limit on the historical-data endpoint.
+// Before this change, the Unified Pipeline fired all 568 symbols in
+// parallel and most got bounced with "Too many requests". The serial queue
+// below enforces 340ms minimum spacing between calls (2.94 req/sec — safely
+// under the ceiling) and transparently retries 429-style errors with
+// exponential backoff up to 2 retries.
+let _kiteHistQueue = Promise.resolve();
+const KITE_HIST_MIN_SPACING_MS = 340;  // 1000/2.94 ≈ 340ms
+
+async function _withKiteHistoricalLimit(fn) {
+  const prev = _kiteHistQueue;
+  const runner = (async () => {
+    try { await prev; } catch (_) { /* previous call errored, that's fine */ }
+    const start = Date.now();
+    try {
+      return await fn();
+    } finally {
+      const elapsed = Date.now() - start;
+      if (elapsed < KITE_HIST_MIN_SPACING_MS) {
+        await new Promise(r => setTimeout(r, KITE_HIST_MIN_SPACING_MS - elapsed));
+      }
+    }
+  })();
+  // Chain the queue onto the runner, swallowing errors so one bad call
+  // doesn't break the chain for everyone queued after it.
+  _kiteHistQueue = runner.then(() => {}, () => {});
+  return runner;
+}
+
 async function fetchKiteDaily(sym) {
   if (!kite || !process.env.KITE_ACCESS_TOKEN) { return null; }
   const token = validTokens[sym] || INSTRUMENTS[sym];
   if (!token) { return null; }
-  try {
-    const to   = new Date();
-    const from = new Date(Date.now() - 5*365*24*60*60*1000); // 5 years back (safe range)
-    const toStr = to.toISOString().split('T')[0];
-    const fromStr = from.toISOString().split('T')[0];
-    const candles = await Promise.race([
-      kite.getHistoricalData(token,'day',fromStr,toStr),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),15000))
-    ]);
-    if (sym === 'RELIANCE' || sym === 'TCS' || sym === 'HDFCBANK') {
-      console.log(`📈 fetchKiteDaily(${sym}): token=${token}, range=${fromStr}→${toStr}, got ${candles?.length||0} candles`);
+  const to   = new Date();
+  const from = new Date(Date.now() - 5*365*24*60*60*1000); // 5 years back (safe range)
+  const toStr = to.toISOString().split('T')[0];
+  const fromStr = from.toISOString().split('T')[0];
+
+  // Up to 3 attempts on 429-style errors (rate limit). Exponential backoff:
+  // 0ms (initial) → 2s → 4s. After 3 failures, give up and return null.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const candles = await _withKiteHistoricalLimit(() =>
+        Promise.race([
+          kite.getHistoricalData(token, 'day', fromStr, toStr),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+        ])
+      );
+      if (sym === 'RELIANCE' || sym === 'TCS' || sym === 'HDFCBANK') {
+        console.log(`📈 fetchKiteDaily(${sym}): token=${token}, range=${fromStr}→${toStr}, got ${candles?.length||0} candles`);
+      }
+      return (candles && candles.length >= 50) ? candles : null;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      const is429 = /too many requests|429|rate.?limit|network/i.test(msg);
+      if (is429 && attempt < MAX_ATTEMPTS) {
+        const backoff = 1000 * Math.pow(2, attempt); // 2s, 4s
+        await new Promise(r => setTimeout(r, backoff));
+        continue;
+      }
+      if (!fetchKiteDaily._logCount) fetchKiteDaily._logCount = 0;
+      if (fetchKiteDaily._logCount < 5) {
+        console.error(`❌ fetchKiteDaily(${sym}) FAILED after ${attempt} attempt(s): ${msg}`);
+        fetchKiteDaily._logCount++;
+      }
+      return null;
     }
-    return (candles && candles.length >= 50) ? candles : null;
-  } catch(e) {
-    // Log first few failures to diagnose
-    if (!fetchKiteDaily._logCount) fetchKiteDaily._logCount = 0;
-    if (fetchKiteDaily._logCount < 5) {
-      console.error(`❌ fetchKiteDaily(${sym}) FAILED: ${e.message}`);
-      fetchKiteDaily._logCount++;
-    }
-    return null;
   }
+  return null;
 }
 
 // -- NIFTY50 1-min candle ingest (for ML outcome calculation) -----------------
