@@ -12628,10 +12628,30 @@ function _dayTradeSmartUpdate(){
     pills.forEach(function(el){ var k=el.getAttribute('data-dt-pill'); if(counts[k]!=null) el.textContent=counts[k]; });
   }
 
-  // Update individual row cells by symbol
+  // Check up-front: did any new stocks appear that aren't in the DOM?
+  // If yes, do ONE full re-render — not N (once per missing stock) like before.
+  // Also detect stocks that disappeared from the cache — DOM has them but data
+  // doesn't anymore. Either case = full re-render, once, debounced via rAF.
+  var needsRebuild = false;
+  for(var i=0; i<all.length; i++){
+    if(!document.querySelector('[data-dt-sym="'+all[i].sym+'"]')){ needsRebuild = true; break; }
+  }
+  if(!needsRebuild){
+    var domSyms = document.querySelectorAll('[data-dt-sym]');
+    if(domSyms.length !== all.length) needsRebuild = true;
+  }
+  if(needsRebuild){
+    // Use rAF so the swap happens at the browser's natural paint cycle,
+    // eliminating the visible flash that happened when innerHTML was reset
+    // mid-JS-tick and the browser had to repaint before continuing.
+    requestAnimationFrame(function(){ if(S.mode==='daytrade') renderDayTradePage(); });
+    return;
+  }
+
+  // Update individual row cells by symbol (all existing — no DOM change needed)
   all.forEach(function(s){
     var row = document.querySelector('[data-dt-sym="'+s.sym+'"]');
-    if(!row) { renderDayTradePage(); return; } // new stock appeared — full re-render needed once
+    if(!row) return;   // defensive; already handled above
     var cells = row.querySelectorAll('[data-dt-field]');
     cells.forEach(function(cell){
       var f = cell.getAttribute('data-dt-field');
