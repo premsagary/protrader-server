@@ -15400,15 +15400,25 @@ cron.schedule('*/30 8-16 * * 1-5', async () => {
 //              frequent scrapes risk Screener.in rate-limiting our
 //              Premium session cookie (which also drives fundamentals).
 async function refreshExternalSignalsCron(opts = {}) {
-  const { limit = 150, reason = 'cron', sources } = opts;
+  // limit: optional cap on symbol count. Default undefined = full universe.
+  //   Main fundamentals pipeline already hits Screener for the whole
+  //   universe multiple times/day — adding N more requests at the split
+  //   cadences below is negligible incremental load. The cap only exists
+  //   for the manual admin endpoint (testing) and emergency back-off.
+  // concurrency: per-source sensible defaults.
+  //   News    (Google RSS, unthrottled)   → 6 workers
+  //   BSE     (public but undocumented)   → 4 workers
+  //   Analyst (Screener Premium, shared)  → 3 workers  (gentle)
+  const { limit, reason = 'cron', sources } = opts;
   if (!pool) return;
   try {
     const t0 = Date.now();
-    // Pick the top-N scored symbols to keep fetch count bounded. If no
-    // scoring has happened yet, fall back to the full universe.
-    const src = Array.isArray(_lastScoredV2) && _lastScoredV2.length
-      ? _lastScoredV2.slice(0, limit)
-      : Object.values(stockFundamentals).slice(0, limit);
+    // Full universe by default. Prefer the scored list (has price + names
+    // pre-filled) if scoring has happened; otherwise use stockFundamentals.
+    const base = Array.isArray(_lastScoredV2) && _lastScoredV2.length
+      ? _lastScoredV2
+      : Object.values(stockFundamentals);
+    const src = (Number.isFinite(limit) && limit > 0) ? base.slice(0, limit) : base;
 
     const targets = src.map(s => ({
       symbol: s.sym || s.symbol,
@@ -15419,9 +15429,14 @@ async function refreshExternalSignalsCron(opts = {}) {
 
     if (!targets.length) { console.log('[ext-signals] no targets to refresh'); return; }
 
+    // Per-source concurrency — keep each fetcher within its comfort zone.
+    const concurrency = (sources && sources.length === 1)
+      ? (sources[0] === 'news' ? 6 : sources[0] === 'bse' ? 4 : 3)
+      : 4;  // mixed mode (manual refresh) uses middle ground
+
     const srcLabel = sources ? sources.join('+') : 'all';
-    console.log(`[ext-signals] refreshing ${targets.length} symbols (${reason}, src=${srcLabel})...`);
-    const results = await externalSignals.refreshExternalSignals(targets, { concurrency: 3, sources });
+    console.log(`[ext-signals] refreshing ${targets.length} symbols (${reason}, src=${srcLabel}, concurrency=${concurrency})...`);
+    const results = await externalSignals.refreshExternalSignals(targets, { concurrency, sources });
 
     // Partial updates: merge new source-fields onto the existing row instead
     // of overwriting. This lets the three crons run independently without
