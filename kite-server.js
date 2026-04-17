@@ -965,6 +965,7 @@ function initKite(token) {
       return _withKiteHistoricalLimit(() => _origGetHistoricalData(...args));
     };
     kite.getHistoricalData._rateLimited = true;
+    console.log(`🛡 Kite historical-API rate-limit wrapper active (${KITE_HIST_MIN_SPACING_MS}ms spacing, 1-retry on 429)`);
   }
   return kite;
 }
@@ -8631,19 +8632,38 @@ let FUND = {
 // Kite Connect documents a 3 req/sec limit on the historical-data endpoint.
 // Before this change, the Unified Pipeline fired all 568 symbols in
 // parallel and most got bounced with "Too many requests". The serial queue
-// below enforces 340ms minimum spacing between calls (2.94 req/sec — safely
-// under the ceiling) and transparently retries 429-style errors with
-// exponential backoff up to 2 retries.
+// below enforces 420ms minimum spacing (2.38 req/sec = 20% under ceiling
+// — buffer for network jitter + Kite server variance). With 2.94 req/sec
+// (340ms) we were within 2% of the ceiling and occasionally still tripped
+// 429s during overlap of multiple pipelines.
+//
+// The wrapper also retries 429s once at the queue level, so ALL callers
+// (Smart Scan, day-trade, fetchKiteDaily, chart APIs) get retry behavior
+// without per-caller code changes.
 let _kiteHistQueue = Promise.resolve();
-const KITE_HIST_MIN_SPACING_MS = 340;  // 1000/2.94 ≈ 340ms
+const KITE_HIST_MIN_SPACING_MS = 420;  // 1000/2.38 ≈ 420ms (20% under 3 req/sec)
 
 async function _withKiteHistoricalLimit(fn) {
   const prev = _kiteHistQueue;
   const runner = (async () => {
     try { await prev; } catch (_) { /* previous call errored, that's fine */ }
     const start = Date.now();
+    let result;
     try {
-      return await fn();
+      try {
+        result = await fn();
+      } catch (e) {
+        // Queue-level retry ONCE on Kite 429. Waits 1s (spanning ~2.4 slots)
+        // which lets the bucket reset. Second failure propagates to caller.
+        const msg = String(e?.message || e);
+        if (/too many requests|429|rate.?limit/i.test(msg)) {
+          await new Promise(r => setTimeout(r, 1000));
+          result = await fn();
+        } else {
+          throw e;
+        }
+      }
+      return result;
     } finally {
       const elapsed = Date.now() - start;
       if (elapsed < KITE_HIST_MIN_SPACING_MS) {
