@@ -232,8 +232,8 @@ export default function MFPicks() {
               </span>
             </div>
 
-            {/* Fund cards (top 5) */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14, marginBottom: 20 }}>
+            {/* Fund cards (top 5) — always 5 across on one line */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 10, marginBottom: 20 }}>
               {top5.map((f, i) => (
                 <FundCard key={f.name} fund={f} rank={i + 1} cfg={cfg} featured={i === 0} />
               ))}
@@ -753,47 +753,50 @@ function FundCard({ fund, rank, cfg, featured }) {
   const sebi = sebiIcon(f.amc_sebi);
 
   return (
-    <div className={`card ${featured ? 'card-premium' : ''}`} style={{ padding: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+    <div className={`card ${featured ? 'card-premium' : ''}`} style={{ padding: 12, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
         <span style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-          borderRadius: 9999, fontSize: 12, fontWeight: 700,
+          display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px',
+          borderRadius: 9999, fontSize: 10, fontWeight: 700,
           background: featured ? 'var(--gradient)' : 'var(--brand-bg)',
           color: featured ? '#fff' : 'var(--brand-text)',
+          whiteSpace: 'nowrap',
         }}>
-          #{rank} · {rankLabel}
+          #{rank}
         </span>
         <span title={`SEBI: ${sebi.label}`} style={{
-          marginLeft: 'auto', fontSize: 11, fontWeight: 600,
+          marginLeft: 'auto', fontSize: 9, fontWeight: 600,
           color: f.amc_sebi === 'probe' ? 'var(--red-text)' : f.amc_sebi === 'action' ? 'var(--amber-text)' : 'var(--green-text)',
           background: f.amc_sebi === 'probe' ? 'var(--red-bg)' : f.amc_sebi === 'action' ? 'var(--amber-bg)' : 'var(--green-bg)',
-          padding: '3px 8px', borderRadius: 6,
+          padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap',
         }}>
-          {sebi.icon} SEBI {sebi.label}
+          {sebi.icon} {sebi.label}
         </span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1.25, marginBottom: 4 }}>{f.name}</div>
-          <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-            {f.amc || ''}{f.aum_cr ? ` · ₹${Math.round(f.aum_cr)} Cr` : ''}
+          <div title={f.name} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', lineHeight: 1.25, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+            {f.name}
+          </div>
+          <div title={f.amc || ''} style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {f.amc || ''}{f.aum_cr ? ` · ₹${Math.round(f.aum_cr)}Cr` : ''}
           </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div className="tabular-nums gradient-fill" style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.8px' }}>{score}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 3 }}>/ 100</div>
+          <div className="tabular-nums gradient-fill" style={{ fontSize: 22, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.5px' }}>{score}</div>
+          <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 2 }}>/ 100</div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 6 }}>
         {[['1Y', f.ret_1y], ['3Y', f.cagr_3y], ['5Y', f.cagr_5y], ['10Y', f.cagr_10y]].map(([label, val]) => {
           const n = parseFloat(val);
           const ok = val != null && !isNaN(n);
           return (
-            <div key={label} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '7px 4px', textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 2, fontWeight: 600 }}>{label}</div>
-              <div className="tabular-nums" style={{ fontSize: 13, fontWeight: 700, color: ok ? (n >= 0 ? 'var(--green-text)' : 'var(--red-text)') : 'var(--text4)' }}>
+            <div key={label} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 6, padding: '5px 2px', textAlign: 'center' }}>
+              <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 1, fontWeight: 600 }}>{label}</div>
+              <div className="tabular-nums" style={{ fontSize: 11, fontWeight: 700, color: ok ? (n >= 0 ? 'var(--green-text)' : 'var(--red-text)') : 'var(--text4)' }}>
                 {ok ? `${n >= 0 ? '+' : ''}${n.toFixed(1)}%` : '—'}
               </div>
             </div>
@@ -801,19 +804,19 @@ function FundCard({ fund, rank, cfg, featured }) {
         })}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
         {[
           ['Sharpe', f.sharpe, (v) => v > 0 ? 'var(--green-text)' : 'var(--red-text)'],
-          ['Expense', f.expense_ratio, (v) => v < 0.5 ? 'var(--green-text)' : v > 1 ? 'var(--red-text)' : 'var(--text)'],
-          ['Max DD', f.maxDD || f.max_drawdown || f.pct_from_ath, () => 'var(--red-text)'],
+          ['Exp', f.expense_ratio, (v) => v < 0.5 ? 'var(--green-text)' : v > 1 ? 'var(--red-text)' : 'var(--text)'],
+          ['DD', f.maxDD || f.max_drawdown || f.pct_from_ath, () => 'var(--red-text)'],
         ].map(([label, val, colorFn]) => {
           const n = parseFloat(val);
           const ok = !isNaN(n);
           return (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 11 }}>
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 6px', background: 'rgba(255,255,255,0.03)', borderRadius: 5, fontSize: 10 }}>
               <span style={{ color: 'var(--text3)', fontWeight: 500 }}>{label}</span>
               <span className="tabular-nums" style={{ fontWeight: 700, color: ok ? colorFn(n) : 'var(--text4)' }}>
-                {ok ? (label === 'Expense' ? `${n.toFixed(2)}%` : n.toFixed(2)) : '—'}
+                {ok ? (label === 'Exp' ? `${n.toFixed(2)}` : n.toFixed(2)) : '—'}
               </span>
             </div>
           );
