@@ -3,14 +3,14 @@ import { create } from 'zustand';
 const TABS = [
   { id: 'stockanalyzer', label: 'Deep Analyzer', migrated: true },
   { id: 'stockrec', label: 'Stock Picks', migrated: true },
-  { id: 'mf', label: 'MF Picks', migrated: false },
+  { id: 'mf', label: 'MF Picks', migrated: true },
   { id: 'stocks/overview', label: 'Stocks RoboTrade', migrated: false, admin: true },
   { id: 'crypto/overview', label: 'Crypto RoboTrade', migrated: false, admin: true },
   { id: 'holdings', label: 'Holdings', migrated: true, admin: true },
   { id: 'mirofish', label: 'MiroFish Lab', migrated: false, admin: true },
   { id: 'stockdata', label: 'Stock Data', migrated: true },
   { id: 'daytrade', label: 'DayTrade', migrated: false, admin: true, accent: 'red' },
-  { id: 'architecture', label: 'Architecture', migrated: false, admin: true },
+  { id: 'architecture', label: 'Architecture', migrated: true, admin: true },
 ];
 
 function getHashTab() {

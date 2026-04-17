@@ -5,6 +5,8 @@ import DeepAnalyzer from './components/pages/DeepAnalyzer';
 import StockPicks from './components/pages/StockPicks';
 import StockData from './components/pages/StockData';
 import Holdings from './components/pages/Holdings';
+import MFPicks from './components/pages/MFPicks';
+import Architecture from './components/pages/Architecture';
 import ComingSoon from './components/pages/ComingSoon';
 
 export default function App() {
@@ -20,6 +22,8 @@ export default function App() {
     if (currentTab === 'stockrec') return <StockPicks />;
     if (currentTab === 'stockdata') return <StockData />;
     if (currentTab === 'holdings') return <Holdings />;
+    if (currentTab === 'mf') return <MFPicks />;
+    if (currentTab === 'architecture') return <Architecture />;
     return <ComingSoon tab={currentTab} />;
   };
 
