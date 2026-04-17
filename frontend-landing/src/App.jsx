@@ -46,5 +46,5 @@ export default function App() {
 }
 
 export const goToApp = () => {
-  window.location.href = '/app.html';
+  window.location.href = '/dashboard.html';
 };
