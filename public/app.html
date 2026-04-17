@@ -13952,7 +13952,7 @@ async function renderAdmin() {
 
   cont.innerHTML = `
   <div style="padding:20px;max-width:900px;margin:0 auto">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div>
         <div style="font-weight:700;font-size:18px">⚙ ProTrader Admin</div>
         <div style="font-size:11px;color:var(--text3);margin-top:2px">Real-time data pipeline · Monitoring · User management</div>
@@ -13961,6 +13961,26 @@ async function renderAdmin() {
         <span id="pipeline-uptime" style="font-size:10px;color:var(--text4)"></span>
         <button onclick="adminForceRefresh('all')" style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;border-radius:6px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer">🔄 Force Refresh All</button>
       </div>
+    </div>
+
+    <!-- Force-run Unified Pipeline (bypass market-hours gate) -->
+    <div style="background:linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.08));border:1px solid rgba(139,92,246,0.35);border-radius:12px;padding:14px 16px;margin-bottom:18px">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:260px">
+          <div style="font-weight:800;font-size:13px;color:#C4B5FD;margin-bottom:4px;letter-spacing:0.3px">🚀 Force-run Unified Kite Pipeline</div>
+          <div style="font-size:11px;color:var(--text3);line-height:1.5">
+            Fetches fresh daily + 5-min candles from Kite and rescores all 568 stocks (RSI, MACD, VWAP, DMAs, ADX, DayTrade setups). Bypasses the market-hours gate — useful for verifying Kite re-auth worked or warming the cache before open.
+          </div>
+          <div style="font-size:10px;color:var(--text4);margin-top:4px">Expected runtime: 3-5 minutes for full universe. Safe to run anytime.</div>
+        </div>
+        <button id="admin-force-pipeline-btn" onclick="adminRunUnifiedPipeline()"
+          style="background:linear-gradient(135deg,#6366F1,#8B5CF6);color:white;border:none;border-radius:10px;padding:12px 22px;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:0.4px;box-shadow:0 4px 12px rgba(99,102,241,0.4);transition:all 0.18s;white-space:nowrap"
+          onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 16px rgba(99,102,241,0.5)'"
+          onmouseout="this.style.transform='';this.style.boxShadow='0 4px 12px rgba(99,102,241,0.4)'">
+          ▶ RUN NOW
+        </button>
+      </div>
+      <div id="admin-force-pipeline-status" style="font-size:11px;color:var(--text3);margin-top:10px;display:none;font-family:var(--mono),monospace"></div>
     </div>
 
     <!-- Real-time Pipeline Status -->
@@ -14255,6 +14275,72 @@ async function adminForceRefresh(what) {
     setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 8000);
   } catch(e) {
     if (msgEl) { msgEl.textContent = '❌ ' + e.message; msgEl.style.color = '#ef4444'; }
+  }
+}
+
+// ── Force-run the Unified Kite Pipeline outside market hours ────────────────
+// Triggers /api/admin/unified-pipeline?force=1 which bypasses the isMarketOpen
+// gate. Polls /api/admin/pipeline-status every 3s to show live progress until
+// _unifiedPipelineRunning flips back to false.
+var _forcePipelinePoll = null;
+async function adminRunUnifiedPipeline() {
+  var btn = document.getElementById('admin-force-pipeline-btn');
+  var statusEl = document.getElementById('admin-force-pipeline-status');
+  if (!btn || !statusEl) return;
+
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.style.cursor = 'wait';
+  btn.textContent = '⏳ STARTING…';
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--shiva-gold)';
+  statusEl.textContent = 'Triggering pipeline with force=1 (bypassing market-hours gate)…';
+
+  try {
+    var r = await fetch('/api/admin/unified-pipeline?force=1', { method: 'POST' });
+    var d = await r.json();
+    if (d.status === 'already_running') {
+      statusEl.textContent = '⚠ Pipeline already running — watching progress…';
+    } else {
+      statusEl.textContent = '✅ ' + (d.message || 'Pipeline triggered') + ' — polling status…';
+    }
+    btn.textContent = '⏳ RUNNING…';
+
+    // Poll pipeline-status until it finishes
+    var started = Date.now();
+    if (_forcePipelinePoll) { clearInterval(_forcePipelinePoll); _forcePipelinePoll = null; }
+    _forcePipelinePoll = setInterval(async function() {
+      try {
+        var sr = await fetch('/api/admin/pipeline-status');
+        var s = await sr.json();
+        var elapsed = Math.round((Date.now() - started) / 1000);
+        if (s.pipelineRunning) {
+          statusEl.textContent = '⚙ Running… ' + elapsed + 's elapsed · stockFundamentals=' + (s.stockFundamentalsCount || 0) + ' · DayTrade cache=' + (s.dayTradeCacheCount || 0);
+        } else {
+          clearInterval(_forcePipelinePoll); _forcePipelinePoll = null;
+          var lastRun = s.lastRun || {};
+          var completedMsg = '✅ Complete in ' + elapsed + 's · '
+            + 'stockFundamentals=' + (s.stockFundamentalsCount || 0)
+            + ' · DayTrade cache=' + (s.dayTradeCacheCount || 0)
+            + (lastRun.status ? ' · last: ' + lastRun.status : '');
+          statusEl.textContent = completedMsg;
+          statusEl.style.color = '#10b981';
+          btn.disabled = false;
+          btn.style.opacity = '';
+          btn.style.cursor = 'pointer';
+          btn.textContent = '▶ RUN NOW';
+        }
+      } catch(e) {
+        // transient — keep polling
+      }
+    }, 3000);
+  } catch(e) {
+    statusEl.textContent = '❌ Failed to trigger: ' + e.message;
+    statusEl.style.color = '#ef4444';
+    btn.disabled = false;
+    btn.style.opacity = '';
+    btn.style.cursor = 'pointer';
+    btn.textContent = '▶ RUN NOW';
   }
 }
 
