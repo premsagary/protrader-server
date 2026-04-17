@@ -85,9 +85,15 @@ export default function DayTrade() {
   const fetchPicks = () => {
     apiGet('/api/stocks/picks/daytrade')
       .then((d) => {
-        setPicks(d.picks || d.results || d || []);
-        setScannedAt(d.scannedAt || null);
-        setMarketOpen(d.marketOpen ?? null);
+        // Server returns { stocks, total, lastScannedAt, marketOpen }
+        // Be defensive — array in any of stocks/picks/results/d itself, else [].
+        const arr = Array.isArray(d?.stocks) ? d.stocks
+                  : Array.isArray(d?.picks) ? d.picks
+                  : Array.isArray(d?.results) ? d.results
+                  : Array.isArray(d) ? d : [];
+        setPicks(arr);
+        setScannedAt(d?.lastScannedAt || d?.scannedAt || null);
+        setMarketOpen(d?.marketOpen ?? null);
         setLoading(false);
       })
       .catch((e) => { setError(e.message || 'Failed'); setLoading(false); });

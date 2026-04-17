@@ -154,8 +154,9 @@ export default function Holdings() {
         )}
       </div>
 
-      {/* Add holding form */}
-      <div className="card card-premium" style={{ padding: '18px 22px', marginBottom: 24 }}>
+      {/* Add holding form — overflow:visible so autocomplete dropdown is
+          not clipped by card's default overflow:hidden */}
+      <div className="card card-premium" style={{ padding: '18px 22px', marginBottom: 24, overflow: 'visible', position: 'relative', zIndex: 100 }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 12 }}>
           Add / Update Holding
         </div>

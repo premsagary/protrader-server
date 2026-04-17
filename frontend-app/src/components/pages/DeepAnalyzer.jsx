@@ -84,9 +84,11 @@ export default function DeepAnalyzer() {
       </div>
 
       {/* ═══ SEARCH CARD — glass + premium border ═══ */}
+      {/* overflow:visible required so autocomplete dropdown is not clipped
+          by card's default overflow:hidden (which is needed for ::before glow) */}
       <div
         className="card card-premium"
-        style={{ padding: '20px 24px', marginBottom: 28 }}
+        style={{ padding: '20px 24px', marginBottom: 28, overflow: 'visible', position: 'relative', zIndex: 100 }}
       >
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 280 }}>
@@ -117,7 +119,8 @@ export default function DeepAnalyzer() {
               <div style={{
                 position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0,
                 background: 'linear-gradient(145deg, #1E1E28, #161620)', border: '1px solid var(--border2)',
-                borderRadius: 14, boxShadow: 'var(--shadow-lg)', zIndex: 10, overflow: 'hidden',
+                borderRadius: 14, boxShadow: 'var(--shadow-lg)', zIndex: 1000, overflow: 'hidden',
+                maxHeight: 320, overflowY: 'auto',
               }}>
                 {suggestions.map((s) => (
                   <button
