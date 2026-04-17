@@ -268,13 +268,194 @@ function detectLockInExpiry(f, now) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Public entry point — returns an array of flags (0-3 items typical)
+// 4. Earnings-quality divergence (PAT grows, FCF doesn't)
+// ────────────────────────────────────────────────────────────────────────────
+// Classic accrual-accounting red flag: reported PAT is up but cash flow
+// from operations isn't. Usually means receivables buildup, channel stuffing,
+// or one-time accounting gains. Varsity M3 Ch10: "cash flow > earnings".
+function detectEarningsQualityDivergence(f) {
+  if (!f) return null;
+  const epsGr = Number(f.epsGr1y);
+  // FCF growth isn't always present. Use multiple fallbacks:
+  // f.fcfGr1y if available; else infer from f.fcf / f.fcfLastYear / salesGr1y trend
+  let fcfGr = Number(f.fcfGr1y);
+  if (!Number.isFinite(fcfGr) && Number.isFinite(f.fcf) && Number.isFinite(f.fcfPrev)) {
+    fcfGr = f.fcfPrev !== 0 ? ((f.fcf - f.fcfPrev) / Math.abs(f.fcfPrev)) * 100 : null;
+  }
+  // Without FCF growth data, we cannot diverge-check.
+  if (!Number.isFinite(epsGr) || !Number.isFinite(fcfGr)) return null;
+
+  // HIGH: PAT up >20% while FCF shrinking — strong accrual smell
+  if (epsGr >= 20 && fcfGr <= 0) {
+    return {
+      code: 'EARNINGS_QUALITY_DIVERGENT',
+      severity: 'HIGH',
+      label: `EPS +${epsGr.toFixed(0)}% but FCF ${fcfGr.toFixed(0)}% — accrual quality concern`,
+      penalty: 10,
+    };
+  }
+  // MEDIUM: PAT >15% but FCF <5% (growing slower than earnings)
+  if (epsGr >= 15 && fcfGr < 5 && fcfGr > 0) {
+    return {
+      code: 'EARNINGS_QUALITY_WEAK',
+      severity: 'MEDIUM',
+      label: `EPS +${epsGr.toFixed(0)}% vs FCF +${fcfGr.toFixed(0)}% — earnings not cash-backed`,
+      penalty: 5,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 5. Cyclical-peak detection (Long-Term trap)
+// ────────────────────────────────────────────────────────────────────────────
+// Commodities / cyclicals look most attractive at the TOP of their cycle
+// (high ROE, fat margins, record earnings) — exactly when you should NOT buy
+// them for long-term. Varsity M3 Ch8 warning. Detect via:
+//   - sector in the cyclical set
+//   - current ROE or margin > 1.5x the 5Y average = we're at a peak
+const CYCLICAL_SECTORS = new Set([
+  'Metals', 'Metal', 'Metals & Mining', 'Mining', 'Mining & Minerals',
+  'Commodity Chemicals', 'Specialty Chemicals', 'Chemicals',
+  'Oil & Gas', 'Energy', 'Oil Exploration', 'Refineries',
+  'Cement', 'Cement & Cement Products',
+  'Fertilizers', 'Sugar', 'Paper', 'Textiles',
+  'Realty', 'Real Estate',
+  'Auto', 'Automobile', 'Automobiles', 'Tyres',
+  'Shipping', 'Airlines',
+]);
+function _isCyclical(sector) {
+  if (!sector) return false;
+  if (CYCLICAL_SECTORS.has(sector)) return true;
+  const s = String(sector).toLowerCase();
+  return ['metal','mining','chemical','oil','gas','cement','fertili',
+          'sugar','paper','textile','realty','auto','tyre','shipping','airline']
+    .some(k => s.includes(k));
+}
+function detectCyclicalPeak(f) {
+  if (!f) return null;
+  if (!_isCyclical(f.sector)) return null;
+
+  const roeNow = Number(f.roe);
+  const roe5y  = Number(f.roe5yAvg);
+  const marNow = Number(f.operatingMargin);
+  const mar5y  = Number(f.operatingMargin5yAvg);
+
+  // Either ROE or margin peaking >1.5x 5Y = late-cycle
+  const roeRatio = (Number.isFinite(roeNow) && Number.isFinite(roe5y) && roe5y > 0)
+    ? roeNow / roe5y : null;
+  const marRatio = (Number.isFinite(marNow) && Number.isFinite(mar5y) && mar5y > 0)
+    ? marNow / mar5y : null;
+  const peakRatio = Math.max(roeRatio || 0, marRatio || 0);
+
+  if (peakRatio >= 1.75) {
+    return {
+      code: 'CYCLICAL_PEAK_PROFITABILITY',
+      severity: 'HIGH',
+      label: `Cyclical at peak profitability (${peakRatio.toFixed(1)}x 5Y avg) — reverts with cycle`,
+      penalty: 10,
+    };
+  }
+  if (peakRatio >= 1.5) {
+    return {
+      code: 'CYCLICAL_ELEVATED_MARGINS',
+      severity: 'MEDIUM',
+      label: `Cyclical margins ${peakRatio.toFixed(1)}x 5Y avg — late-cycle risk`,
+      penalty: 6,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 6. Drawdown immaturity (Rebound falling-knife filter)
+// ────────────────────────────────────────────────────────────────────────────
+// A stock at -20% from high that was still -15% in the last 3 months is
+// probably in Phase 1/2 of the decline (Varsity M2 Ch3 Dow Theory). A stock
+// at -20% from high that is +5% in the last 3 months is already bottoming.
+// Only the second is a real rebound setup.
+function detectDrawdownImmaturity(f) {
+  if (!f) return null;
+  const pfh = Number(f.pctFromHigh);
+  const c3m = Number(f.change3m);
+  const c1m = Number(f.change1m);
+  if (!Number.isFinite(pfh) || pfh > -15) return null; // Only relevant for fallen setups
+
+  // HIGH: still falling hard — pctFromHigh <= -20 AND 3M still < -10%
+  if (pfh <= -20 && Number.isFinite(c3m) && c3m <= -10) {
+    return {
+      code: 'DRAWDOWN_STILL_FALLING',
+      severity: 'HIGH',
+      label: `Down ${pfh.toFixed(0)}% from high AND ${c3m.toFixed(0)}% in 3M — falling knife`,
+      penalty: 12,
+    };
+  }
+  // MEDIUM: stabilising but not yet rebounding — 3M flat-to-negative
+  if (pfh <= -20 && Number.isFinite(c3m) && c3m < 0) {
+    return {
+      code: 'DRAWDOWN_IMMATURE',
+      severity: 'MEDIUM',
+      label: `Down ${pfh.toFixed(0)}% from high, 3M still ${c3m.toFixed(0)}% — no recovery yet`,
+      penalty: 5,
+    };
+  }
+  // LOW: recent weakness adding to older drawdown
+  if (pfh <= -25 && Number.isFinite(c1m) && c1m < -5) {
+    return {
+      code: 'DRAWDOWN_ACCELERATING',
+      severity: 'LOW',
+      label: `Fall deepening — ${c1m.toFixed(0)}% in last month`,
+      penalty: 3,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 7. Sector laggard (Momentum quality filter)
+// ────────────────────────────────────────────────────────────────────────────
+// A stock up 40% when its sector is up 55% is UNDERPERFORMING, not
+// outperforming. Requires caller to set f._sectorMedian52w upstream (done in
+// /api/stocks/score preprocessing — see kite-server.js).
+function detectSectorLaggard(f) {
+  if (!f) return null;
+  const stock52 = Number(f.change52w);
+  const sec52   = Number(f._sectorMedian52w);
+  if (!Number.isFinite(stock52) || !Number.isFinite(sec52)) return null;
+
+  const rs = stock52 - sec52; // positive = outperforming sector
+  // Only flag when stock appears momentum-strong absolutely but lags sector
+  if (stock52 >= 20 && rs <= -10) {
+    return {
+      code: 'SECTOR_LAGGARD',
+      severity: 'MEDIUM',
+      label: `+${stock52.toFixed(0)}% 1Y but sector +${sec52.toFixed(0)}% — relative laggard`,
+      penalty: 6,
+    };
+  }
+  if (stock52 >= 10 && rs <= -15) {
+    return {
+      code: 'SECTOR_UNDERPERFORMER',
+      severity: 'LOW',
+      label: `Underperforming sector by ${Math.abs(rs).toFixed(0)}%`,
+      penalty: 3,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Public entry point — returns an array of flags (0-6 items typical)
 // ────────────────────────────────────────────────────────────────────────────
 function computeRiskFlags(f, now) {
   const out = [];
   const a = detectEarningsDeceleration(f);         if (a) out.push(a);
   const b = detectPriceEarningsDivergence(f);       if (b) out.push(b);
   const c = detectLockInExpiry(f, now);             if (c) out.push(c);
+  const d = detectEarningsQualityDivergence(f);     if (d) out.push(d);
+  const e = detectCyclicalPeak(f);                  if (e) out.push(e);
+  const g = detectDrawdownImmaturity(f);            if (g) out.push(g);
+  const h = detectSectorLaggard(f);                 if (h) out.push(h);
   return out;
 }
 

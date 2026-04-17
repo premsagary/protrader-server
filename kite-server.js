@@ -30,9 +30,15 @@ const mlLogger  = require("./ml-logger");
 const outcomeEngine = require("./outcome-engine");
 
 // ── Risk flags (forward-looking demotions on top of trailing-ratio scorers) ──
-// Three detectors: earnings-cliff, price/PAT divergence, IPO lock-in expiry.
-// Pure functions operating on stockFundamentals — no IO, no new data sources.
+// Seven detectors: earnings-cliff, price/PAT divergence, IPO lock-in expiry,
+// earnings-quality (PAT vs FCF), cyclical-peak, drawdown-immaturity,
+// sector-laggard. Pure functions operating on stockFundamentals — no IO.
 const { computeRiskFlags, applyRiskFlagPenalty, summarizeSeverity } = require("./risk-flags");
+
+// ── Hard-reject disqualifiers — pull stock out of picks entirely ──────────
+// Pledge >75%, D/E >5 (non-financial), auditor flags, SEBI action, persistent
+// losses, data-completeness <30%. Returns {code, reason, severity} or null.
+const { checkDisqualifiers } = require("./disqualifiers");
 
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
@@ -13147,6 +13153,23 @@ app.get('/api/stocks/score', async(req,res)=>{
     const bySector={};
     all.forEach(f=>{ const s=f.sector||'Other'; bySector[s]=bySector[s]||[]; bySector[s].push(f); });
 
+    // ── Sector-median 1Y return (Apr-2026) ───────────────────────────────
+    // Attached to each stock as f._sectorMedian52w so detectSectorLaggard
+    // (risk-flags.js) can tell if a +40% stock is actually underperforming
+    // its +55% sector. Computed from the universe — zero external calls.
+    const _median = arr => {
+      const clean = arr.filter(v => Number.isFinite(v)).sort((a,b)=>a-b);
+      if (!clean.length) return null;
+      const mid = Math.floor(clean.length / 2);
+      return clean.length % 2 ? clean[mid] : (clean[mid-1] + clean[mid]) / 2;
+    };
+    Object.keys(bySector).forEach(sec => {
+      const arr = bySector[sec];
+      if (arr.length < 3) return;  // Skip tiny sectors — median not meaningful
+      const med52 = _median(arr.map(r => Number(r.change52w)));
+      arr.forEach(r => { r._sectorMedian52w = med52; });
+    });
+
     const scored = all.map(f=>{
       const peers = bySector[f.sector||'Other'] || all;
       const {score,hits} = scoreOneStock(f, peers);
@@ -13410,25 +13433,40 @@ app.get('/api/stocks/score', async(req,res)=>{
     // Fire Telegram alerts for new Fallen Angels (async, non-blocking)
     checkAndSendAlerts(scored).catch(e=>console.log('Alert error:',e.message));
 
+    // ── Hard-reject disqualifier tagging (Apr-2026) ───────────────────────
+    // Tag each row with disqualifier info (if any), so the UI can show a
+    // banner. Picks lists below filter disqualified rows out entirely.
+    scored.forEach(row => {
+      const src = stockFundamentals[row.sym] || row;
+      const dq  = checkDisqualifiers(src);
+      if (dq) {
+        row.disqualified = true;
+        row.disqualifier = dq;
+      }
+    });
+
     // ── Sector-capped top-10 per picks category (Apr-2026) ────────────────
     // Build once server-side so all three Picks tabs — Rebound/Momentum/Long-
     // Term — share one sector cap (max 2 per sector) and risk-flag demotion.
-    // Client still receives the full `stocks` list for ad-hoc screening, but
-    // the picks tabs can read these pre-built lists directly.
+    // Disqualified stocks (pledge>75%, D/E>5 non-fin, auditor/SEBI flags,
+    // persistent losses, data<30%) are filtered out before rank.
+    // Client still receives the full `stocks` list for ad-hoc screening.
     let picksRebound = [], picksMomentum = [], picksLongTerm = [];
     if (scoreVersion === 2) {
+      const notDQ = s => !s.disqualified;
       picksRebound = applySectorCap(
-        scored.filter(s => s.isFallenAngel)
+        scored.filter(s => s.isFallenAngel && notDQ(s))
               .sort((a,b)=>(b.fallenScore||0)-(a.fallenScore||0)),
         2
       ).slice(0,10);
       picksMomentum = applySectorCap(
-        scored.filter(s => s.composite != null && s.composite >= 55)
+        scored.filter(s => s.composite != null && s.composite >= 55 && notDQ(s))
               .sort((a,b)=>(b.composite||0)-(a.composite||0)),
         2
       ).slice(0,10);
       picksLongTerm = applySectorCap(
         scored.filter(s => {
+          if (!notDQ(s)) return false;
           const roeOk = s.roe == null || s.roe >= 12;
           const deOk  = s.debtToEq == null || s.debtToEq <= 2;
           const grOk  = s.earGrowth == null || s.earGrowth >= 0;
@@ -21930,21 +21968,25 @@ What the user is asking from you: agree or disagree that these are VALID long-te
 function _getTop10ForCategory(category) {
   const src = Array.isArray(_lastScoredV2) ? _lastScoredV2 : [];
   if (!src.length) return [];
+  // Apr-2026: Disqualified stocks (pledge>75%, D/E>5 non-fin, auditor/SEBI
+  // flags, persistent losses, data<30%) never appear in Deep Review either.
+  const notDQ = s => !s.disqualified;
   let filtered;
   if (category === 'rebound') {
     // Matches client: filtered.filter(s => s.isFallenAngel), sorted by fallenScore desc
     filtered = src
-      .filter(s => s.isFallenAngel)
+      .filter(s => s.isFallenAngel && notDQ(s))
       .sort((a, b) => (b.fallenScore || 0) - (a.fallenScore || 0));
   } else if (category === 'momentum') {
     // Matches client: composite != null && composite >= 55, sorted by composite desc
     filtered = src
-      .filter(s => s.composite != null && s.composite >= 55)
+      .filter(s => s.composite != null && s.composite >= 55 && notDQ(s))
       .sort((a, b) => (b.composite || 0) - (a.composite || 0));
   } else if (category === 'longterm') {
     // Matches client: scoreV2 >= 60 + roe/de/growth/notCollapsing gates, sorted by scoreV2 desc
     filtered = src
       .filter(s => {
+        if (!notDQ(s)) return false;
         const roeOk = s.roe == null || s.roe >= 12;
         const deOk = s.debtToEq == null || s.debtToEq <= 2;
         const grOk = s.earGrowth == null || s.earGrowth >= 0;
