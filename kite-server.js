@@ -944,7 +944,40 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_outcome_snapshot ON outcome_metrics(snapshot_id)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics tables included)");
+    // ── Candle tables (Apr-2026 fix) ─────────────────────────────────────
+    // Needed by outcome-engine.js which queries candles_1m to compute MFE/MAE
+    // and horizon returns from features_snapshot rows. Also written to by
+    // ml-logger.js logCandlesBatch() on every Unified Pipeline cycle.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS candles_1m (
+        sym    VARCHAR(40) NOT NULL,
+        ts     TIMESTAMP NOT NULL,
+        open   DOUBLE PRECISION,
+        high   DOUBLE PRECISION,
+        low    DOUBLE PRECISION,
+        close  DOUBLE PRECISION,
+        volume BIGINT,
+        PRIMARY KEY (sym, ts)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_candles_1m_ts ON candles_1m(ts)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS candles_5m (
+        sym    VARCHAR(40) NOT NULL,
+        ts     TIMESTAMP NOT NULL,
+        open   DOUBLE PRECISION,
+        high   DOUBLE PRECISION,
+        low    DOUBLE PRECISION,
+        close  DOUBLE PRECISION,
+        volume BIGINT,
+        vwap   DOUBLE PRECISION,
+        PRIMARY KEY (sym, ts)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_candles_5m_ts ON candles_5m(ts)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -3716,9 +3749,31 @@ function applyFinalCandidateDecision(candidate) {
   return candidate;
 }
 
+let _scanAndTradeRunning = false;
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
+
+  // ── Concurrency guard (Apr-2026) ─────────────────────────────────────
+  // Without this guard, overlapping Smart Scan runs pile their Kite calls
+  // into the shared rate-limit queue, causing observed 5+ hour scan times
+  // (68+ scans competing for 2.38 req/sec throughput). With 568 stocks at
+  // 420ms spacing, each scan legitimately needs ~4 min — if the previous
+  // scan hasn't finished by the next cron tick, skip this one.
+  if (_scanAndTradeRunning) {
+    console.log('⟳ Smart scan skipped — previous run still in progress');
+    return;
+  }
+  _scanAndTradeRunning = true;
+  // Watchdog: scanAndTrade has multiple early-return paths (drawdown HALT,
+  // trade cap, etc.) — force-release the flag after 10 min so a buggy
+  // early return can never permanently wedge the scanner.
+  const _scanWatchdog = setTimeout(() => {
+    if (_scanAndTradeRunning) {
+      console.warn('⚠ Scan watchdog: force-releasing scan lock after 10 min');
+      _scanAndTradeRunning = false;
+    }
+  }, 10 * 60 * 1000);
 
   // Phase 3 · Part 8 — scan latency monitoring
   const _scanStartedAt = Date.now();
@@ -4400,6 +4455,8 @@ async function scanAndTrade() {
   const _total5m = _fiveMinCacheHits + _fiveMinCacheMisses;
   const _hitPct = _total5m > 0 ? Math.round(100 * _fiveMinCacheHits / _total5m) : 0;
   console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals | ${_scanDurationSec}s | 5m cache: ${_fiveMinCacheHits}/${_total5m} hits (${_hitPct}%) — saved ${_fiveMinCacheHits} Kite calls\n`);
+  clearTimeout(_scanWatchdog);
+  _scanAndTradeRunning = false;
 }
 
 // -- REST API ------------------------------------------------------------------
