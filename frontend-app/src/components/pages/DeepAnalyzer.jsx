@@ -312,8 +312,17 @@ function AnalysisResult({ data }) {
     return () => clearInterval(iv);
   }, [score]);
 
-  // -- Price-chart timeframe state (UI only; canvas chart skipped) ---------
-  const [chartTf, setChartTf] = useState('1Y');
+  // -- Price-chart timeframe state ----------------------------------------
+  // Default timeframe picks the richest dataset available, matching the old
+  // vanilla analyzer (app.html ~7226): prefer MAX → 10Y → 3Y → 1Y.
+  const charts = a.charts || {};
+  const initialTf = (() => {
+    if (dataAvail.kiteMax && charts.MAX && charts.MAX.length > 24) return 'MAX';
+    if (dataAvail.kite10w && charts['10Y'] && charts['10Y'].length > 50) return '10Y';
+    if (dataAvail.kite3y && charts['3Y'] && charts['3Y'].length > 50) return '3Y';
+    return '1Y';
+  })();
+  const [chartTf, setChartTf] = useState(initialTf);
 
   return (
     <div className="animate-fadeIn">
@@ -407,60 +416,22 @@ function AnalysisResult({ data }) {
         </div>
       )}
 
-      {/* ═══ PRICE CHART (placeholder — canvas rendering deferred) ═══ */}
-      <div className="card" style={{ padding: 18, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-          <div>
-            <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px', margin: 0 }}>
-              Price Chart — Full History
-            </h3>
-            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, letterSpacing: '0.2px' }}>
-              Support · Resistance · Buy Zone · 50DMA · 200DMA · Fibonacci overlay
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {['3M', '1Y', '3Y', '10Y', 'MAX'].map((tf) => {
-              const active = tf === chartTf;
-              return (
-                <button
-                  key={tf}
-                  onClick={() => setChartTf(tf)}
-                  style={{
-                    padding: '4px 11px', borderRadius: 6,
-                    border: `1px solid ${active ? 'var(--brand)' : 'var(--border2)'}`,
-                    background: active ? 'var(--brand-bg)' : 'transparent',
-                    color: active ? 'var(--brand-text)' : 'var(--text3)',
-                    fontSize: 10, cursor: 'pointer', fontFamily: 'inherit',
-                    fontWeight: active ? 700 : 500, letterSpacing: '0.3px',
-                    transition: 'all 150ms ease',
-                  }}
-                >
-                  {tf}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div style={{
-          position: 'relative', height: 260, width: '100%',
-          background: 'linear-gradient(180deg, rgba(99,102,241,0.04) 0%, rgba(99,102,241,0.01) 100%)',
-          border: '1px dashed var(--border2)', borderRadius: 10,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8,
-        }}>
-          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.35 }}>
-            <path d="M3 17 L8 11 L12 14 L16 8 L21 12" stroke="var(--brand-text)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx="8" cy="11" r="1.5" fill="var(--brand-text)" />
-            <circle cx="12" cy="14" r="1.5" fill="var(--brand-text)" />
-            <circle cx="16" cy="8" r="1.5" fill="var(--brand-text)" />
-          </svg>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
-            Price chart rendering — coming in next update
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', maxWidth: 400, lineHeight: 1.5 }}>
-            Viewing <b style={{ color: 'var(--brand-text)' }}>{chartTf}</b> timeframe · canvas chart with S/R lines, buy-zone box, DMA overlays & Fib retracements will be wired up in a follow-up pass.
-          </div>
-        </div>
-      </div>
+      {/* ═══ AI SECOND OPINION — top of analyzer (matches 7e1e050 layout) ═══ */}
+      <AIReviewSection sym={a.sym} />
+
+      {/* ═══ PRICE CHART (canvas — S/R + DMA + Buy Zone + Fibs) ═══ */}
+      <PriceChart
+        charts={charts}
+        tf={chartTf}
+        setTf={setChartTf}
+        supports={supports}
+        resistances={resistances}
+        buyZone={a.buyZone}
+        tech={tech}
+        fibs={fibs}
+        currentPrice={currentPrice}
+        dataAvail={dataAvail}
+      />
 
       {/* ═══ AT-A-GLANCE METRICS ═══ */}
       <div style={{
@@ -733,6 +704,60 @@ function AnalysisResult({ data }) {
         </Section>
       )}
 
+      {/* ═══ PRICE PERFORMANCE · 52W HI/LO · RETURNS ═══ */}
+      {(tech.ret1m != null || tech.ret3m != null || tech.ret6m != null || tech.ret1y != null
+        || tech.ret3y != null || tech.wk52Hi != null || tech.wk52Lo != null || tech.weeklyTrend) && (
+        <Section title="Price Performance" subtitle="Rolling returns + 52-week high/low + weekly trend">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+            {[
+              { l: '1M Return', v: tech.ret1m, s: '%', signed: true },
+              { l: '3M Return', v: tech.ret3m, s: '%', signed: true },
+              { l: '6M Return', v: tech.ret6m, s: '%', signed: true },
+              { l: '1Y Return', v: tech.ret1y, s: '%', signed: true },
+              { l: '3Y Return', v: tech.ret3y, s: '%', signed: true },
+              { l: '52W High', v: tech.wk52Hi, s: '₹', rupee: true,
+                sub: tech.pctFromHigh != null ? `${tech.pctFromHigh}% away` : null },
+              { l: '52W Low',  v: tech.wk52Lo, s: '₹', rupee: true,
+                sub: tech.pctFromLow != null ? `+${tech.pctFromLow}% above` : null },
+            ].filter((x) => x.v != null).map((x, i) => {
+              const n = Number(x.v);
+              const col = x.signed
+                ? (n > 0 ? 'var(--green-text)' : n < 0 ? 'var(--red-text)' : 'var(--text)')
+                : 'var(--text)';
+              const display = x.rupee
+                ? `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 1 })}`
+                : `${n > 0 && x.signed ? '+' : ''}${n.toFixed(1)}${x.s}`;
+              return (
+                <div key={i} style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{x.l}</div>
+                  <div className="tabular-nums" style={{ fontSize: 16, fontWeight: 800, color: col, marginTop: 4 }}>
+                    {display}
+                  </div>
+                  {x.sub && <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 3 }}>{x.sub}</div>}
+                </div>
+              );
+            })}
+            {tech.weeklyTrend && (
+              <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+                <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>Weekly Trend</div>
+                <div style={{
+                  fontSize: 14, fontWeight: 800, marginTop: 4,
+                  color: tech.weeklyTrend === 'uptrend' ? 'var(--green-text)'
+                       : tech.weeklyTrend === 'downtrend' ? 'var(--red-text)'
+                       : 'var(--amber-text)',
+                  textTransform: 'capitalize',
+                }}>
+                  {tech.weeklyTrend === 'uptrend' ? '▲ Uptrend'
+                    : tech.weeklyTrend === 'downtrend' ? '▼ Downtrend'
+                    : '◇ Sideways'}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 3 }}>Higher highs/lows check</div>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       {/* ═══ TECHNICAL INDICATORS ═══ */}
       {Object.keys(tech).length > 0 && (
         <Section title="Technical Indicators" subtitle="30+ indicators across moving averages, oscillators, trend, volume">
@@ -847,9 +872,6 @@ function AnalysisResult({ data }) {
         </Section>
       )}
 
-      {/* ═══ AI REVIEW LAUNCHER ═══ */}
-      <AIReviewSection sym={a.sym} />
-
       {/* Disclaimer */}
       <div style={{ marginTop: 28, padding: 16, background: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 10, fontSize: 11, color: 'var(--text3)', lineHeight: 1.55 }}>
         ⚠ <b>Disclaimer:</b> ProTrader is not SEBI-registered and does not provide financial advice. All data, scores, and AI outputs are for educational purposes only. Data may be delayed. You are responsible for your own investment decisions.
@@ -886,6 +908,413 @@ function MetricPill({ label, value, fmt, color, sub }) {
       </div>
       {sub && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// PriceChart — canvas-based price chart with S/R + Buy Zone + DMA + Fibs
+// Ported from drawChart() in public/app.html ~line 7945, formerly Chart.js.
+// We draw directly to <canvas> via useEffect + getContext('2d') so we
+// don't have to ship a chart library.
+// ══════════════════════════════════════════════════════════════════════
+function PriceChart({ charts, tf, setTf, supports, resistances, buyZone, tech, fibs, currentPrice, dataAvail }) {
+  const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [hover, setHover] = useState(null); // { x, y, price, date } | null
+
+  const data = Array.isArray(charts?.[tf]) ? charts[tf] : [];
+
+  // Which timeframes actually have data — disable others so clicks don't dead-end.
+  const tfAvail = {
+    '3M':  !!dataAvail?.kite3m  || (Array.isArray(charts['3M'])  && charts['3M'].length > 0),
+    '1Y':  !!dataAvail?.kite1y  || (Array.isArray(charts['1Y'])  && charts['1Y'].length > 0),
+    '3Y':  !!dataAvail?.kite3y  || (Array.isArray(charts['3Y'])  && charts['3Y'].length > 0),
+    '10Y': !!dataAvail?.kite10w || (Array.isArray(charts['10Y']) && charts['10Y'].length > 0),
+    'MAX': !!dataAvail?.kiteMax || (Array.isArray(charts['MAX']) && charts['MAX'].length > 0),
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap || data.length === 0) return;
+
+    // Support DPR so the chart looks crisp on Retina/Hi-DPI displays.
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = wrap.clientWidth;
+    const cssH = 300;
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    // Padding so labels/axis don't overlap the line
+    const padL = 8, padR = 48, padT = 12, padB = 24;
+    const plotW = cssW - padL - padR;
+    const plotH = cssH - padT - padB;
+
+    // Price range — include overlay values so they fit on screen.
+    const closes = data.map((p) => p.c);
+    let pMin = Math.min(...closes);
+    let pMax = Math.max(...closes);
+    const includeVals = [];
+    (Array.isArray(supports) ? supports : []).slice(0, 4).forEach((s) => s?.price != null && includeVals.push(Number(s.price)));
+    (Array.isArray(resistances) ? resistances : []).slice(0, 4).forEach((r) => r?.price != null && includeVals.push(Number(r.price)));
+    if (buyZone?.low)  includeVals.push(Number(buyZone.low));
+    if (buyZone?.high) includeVals.push(Number(buyZone.high));
+    if (tech?.dma50  && (tf === '1Y' || tf === '3Y')) includeVals.push(Number(tech.dma50));
+    if (tech?.dma200 && tf !== '3M')                  includeVals.push(Number(tech.dma200));
+    if (fibs && (tf === '1Y' || tf === '3Y')) {
+      if (fibs.r618) includeVals.push(Number(fibs.r618));
+      if (fibs.r382) includeVals.push(Number(fibs.r382));
+    }
+    includeVals.filter((v) => Number.isFinite(v)).forEach((v) => {
+      if (v < pMin) pMin = v;
+      if (v > pMax) pMax = v;
+    });
+    // 3% padding top/bottom like the old Chart.js config
+    const pad = Math.max(1, (pMax - pMin) * 0.03);
+    pMin -= pad;
+    pMax += pad;
+    const pRange = pMax - pMin || 1;
+
+    const xOf = (i) => padL + (data.length === 1 ? plotW / 2 : (i / (data.length - 1)) * plotW);
+    const yOf = (p) => padT + plotH - ((p - pMin) / pRange) * plotH;
+
+    // Grid lines — 4 horizontal bands, 5 vertical bands
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) {
+      const y = padT + (plotH / 5) * i;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+    }
+    for (let i = 1; i <= 4; i++) {
+      const x = padL + (plotW / 5) * i;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    }
+
+    // Buy-zone box (drawn behind the price line)
+    if (buyZone?.low && buyZone?.high && Number.isFinite(+buyZone.low) && Number.isFinite(+buyZone.high)) {
+      const yHi = yOf(Number(buyZone.high));
+      const yLo = yOf(Number(buyZone.low));
+      ctx.fillStyle = 'rgba(99,102,241,0.10)';
+      ctx.strokeStyle = 'rgba(99,102,241,0.35)';
+      ctx.lineWidth = 1;
+      ctx.fillRect(padL, yHi, plotW, yLo - yHi);
+      ctx.strokeRect(padL, yHi, plotW, yLo - yHi);
+      ctx.fillStyle = 'rgba(99,102,241,0.85)';
+      ctx.font = '600 10px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('BUY ZONE', padL + 6, yHi + 12);
+    }
+
+    // Support levels (up to 4)
+    (Array.isArray(supports) ? supports : []).slice(0, 4).forEach((s) => {
+      if (s?.price == null) return;
+      const y = yOf(Number(s.price));
+      ctx.strokeStyle = 'rgba(52,211,153,0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(52,211,153,0.9)';
+      ctx.font = '600 9px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(`S ₹${Number(s.price).toFixed(0)}`, padL + 4, y - 3);
+    });
+
+    // Resistance levels (up to 4)
+    (Array.isArray(resistances) ? resistances : []).slice(0, 4).forEach((r) => {
+      if (r?.price == null) return;
+      const y = yOf(Number(r.price));
+      ctx.strokeStyle = 'rgba(248,113,113,0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(248,113,113,0.9)';
+      ctx.font = '600 9px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`R ₹${Number(r.price).toFixed(0)}`, padL + plotW - 4, y - 3);
+    });
+
+    // 50-DMA (shown on 1Y / 3Y)
+    if (tech?.dma50 && (tf === '1Y' || tf === '3Y') && Number.isFinite(+tech.dma50)) {
+      const y = yOf(Number(tech.dma50));
+      ctx.strokeStyle = 'rgba(251,191,36,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillStyle = 'rgba(251,191,36,1)';
+      ctx.font = '600 9px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('50DMA', padL + 4, y + 10);
+    }
+
+    // 200-DMA (shown on all timeframes except 3M)
+    if (tech?.dma200 && tf !== '3M' && Number.isFinite(+tech.dma200)) {
+      const y = yOf(Number(tech.dma200));
+      ctx.strokeStyle = 'rgba(99,102,241,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillStyle = 'rgba(99,102,241,1)';
+      ctx.font = '600 9px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('200DMA', padL + 4, y + 10);
+    }
+
+    // Fibonacci 38.2% / 61.8% (on 1Y / 3Y)
+    if (fibs && (tf === '1Y' || tf === '3Y')) {
+      [['61.8%', fibs.r618], ['38.2%', fibs.r382]].forEach(([lbl, v]) => {
+        if (v == null || !Number.isFinite(+v)) return;
+        const y = yOf(Number(v));
+        ctx.strokeStyle = 'rgba(99,102,241,0.45)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(99,102,241,0.9)';
+        ctx.font = '600 9px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(`Fib ${lbl}`, padL + plotW - 4, y + 10);
+      });
+    }
+
+    // Price line (green if up on the window, red if down) — matches old behaviour
+    const up = closes[closes.length - 1] >= closes[0];
+    const lineCol = up ? '#22c55e' : '#ef4444';
+    // Gradient fill under the line
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, up ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    data.forEach((p, i) => {
+      const x = xOf(i), y = yOf(p.c);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    // Close the path for fill
+    ctx.lineTo(xOf(data.length - 1), padT + plotH);
+    ctx.lineTo(xOf(0), padT + plotH);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Stroke the price line cleanly (re-trace without the fill-closing segments)
+    ctx.beginPath();
+    data.forEach((p, i) => {
+      const x = xOf(i), y = yOf(p.c);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = lineCol;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Y-axis price labels (right gutter) — 5 ticks
+    ctx.fillStyle = 'rgba(155,163,176,0.85)';
+    ctx.font = '500 9px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= 5; i++) {
+      const price = pMin + (pRange * (5 - i)) / 5;
+      const y = padT + (plotH / 5) * i;
+      ctx.fillText(`₹${price.toFixed(0)}`, padL + plotW + 4, y + 3);
+    }
+
+    // X-axis date labels — ~5 evenly spaced ticks
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(155,163,176,0.75)';
+    const tickCount = Math.min(5, data.length);
+    for (let i = 0; i < tickCount; i++) {
+      const idx = Math.floor(((data.length - 1) * i) / (tickCount - 1 || 1));
+      const t = data[idx]?.t;
+      if (!t) continue;
+      const d2 = new Date(t);
+      const lbl = (tf === 'MAX' || tf === '10Y')
+        ? String(d2.getFullYear())
+        : tf === '3Y'
+          ? d2.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
+          : d2.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+      ctx.fillText(lbl, xOf(idx), cssH - 6);
+    }
+
+    // Hover crosshair + tooltip
+    if (hover) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(hover.x, padT); ctx.lineTo(hover.x, padT + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+      // Dot
+      ctx.fillStyle = lineCol;
+      ctx.beginPath(); ctx.arc(hover.x, hover.y, 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }, [data, tf, supports, resistances, buyZone, tech, fibs, hover]);
+
+  const onMouseMove = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas || data.length === 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const padL = 8, padR = 48, padT = 12, padB = 24;
+    const plotW = rect.width - padL - padR;
+    const plotH = 300 - padT - padB;
+    const closes = data.map((p) => p.c);
+    let pMin = Math.min(...closes), pMax = Math.max(...closes);
+    const includeVals = [];
+    (Array.isArray(supports) ? supports : []).slice(0, 4).forEach((s) => s?.price != null && includeVals.push(Number(s.price)));
+    (Array.isArray(resistances) ? resistances : []).slice(0, 4).forEach((r) => r?.price != null && includeVals.push(Number(r.price)));
+    if (buyZone?.low)  includeVals.push(Number(buyZone.low));
+    if (buyZone?.high) includeVals.push(Number(buyZone.high));
+    includeVals.filter(Number.isFinite).forEach((v) => {
+      if (v < pMin) pMin = v;
+      if (v > pMax) pMax = v;
+    });
+    const pad = Math.max(1, (pMax - pMin) * 0.03);
+    pMin -= pad; pMax += pad;
+    const pRange = pMax - pMin || 1;
+
+    // Find nearest candle
+    const frac = Math.max(0, Math.min(1, (x - padL) / plotW));
+    const idx = Math.round(frac * (data.length - 1));
+    const pt = data[idx];
+    if (!pt) { setHover(null); return; }
+    const px = padL + (data.length === 1 ? plotW / 2 : (idx / (data.length - 1)) * plotW);
+    const py = padT + plotH - ((pt.c - pMin) / pRange) * plotH;
+    setHover({ x: px, y: py, price: pt.c, date: pt.t, o: pt.o, h: pt.h, l: pt.l, v: pt.v });
+  };
+
+  const onMouseLeave = () => setHover(null);
+
+  const hoverDateStr = hover?.date
+    ? new Date(hover.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '';
+
+  return (
+    <div className="card" style={{ padding: 18, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px', margin: 0 }}>
+            Price Chart — Full History
+          </h3>
+          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, letterSpacing: '0.2px' }}>
+            Support · Resistance · Buy Zone · 50DMA · 200DMA · Fibonacci overlay
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {['3M', '1Y', '3Y', '10Y', 'MAX'].map((t) => {
+            const active = t === tf;
+            const disabled = !tfAvail[t];
+            return (
+              <button
+                key={t}
+                onClick={() => !disabled && setTf(t)}
+                disabled={disabled}
+                title={disabled ? `${t} data not available` : `Show ${t} chart`}
+                style={{
+                  padding: '4px 11px', borderRadius: 6,
+                  border: `1px solid ${active ? 'var(--brand)' : 'var(--border2)'}`,
+                  background: active ? 'var(--brand-bg)' : 'transparent',
+                  color: active ? 'var(--brand-text)' : disabled ? 'var(--text4)' : 'var(--text3)',
+                  fontSize: 10, cursor: disabled ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                  fontWeight: active ? 700 : 500, letterSpacing: '0.3px',
+                  opacity: disabled ? 0.4 : 1,
+                  transition: 'all 150ms ease',
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div ref={wrapRef} style={{ position: 'relative', height: 300, width: '100%' }}>
+        {data.length === 0 ? (
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'linear-gradient(180deg, rgba(99,102,241,0.04) 0%, rgba(99,102,241,0.01) 100%)',
+            border: '1px dashed var(--border2)', borderRadius: 10,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)' }}>
+              No {tf} candles available for this stock
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+              Try a shorter timeframe or another symbol.
+            </div>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            onMouseMove={onMouseMove}
+            onMouseLeave={onMouseLeave}
+            style={{ display: 'block', width: '100%', height: 300 }}
+          />
+        )}
+
+        {hover && (
+          <div style={{
+            position: 'absolute',
+            top: 8,
+            left: Math.min(Math.max(hover.x + 10, 8), (wrapRef.current?.clientWidth || 500) - 180),
+            pointerEvents: 'none',
+            background: 'rgba(14,16,22,0.95)',
+            border: '1px solid var(--border2)',
+            borderRadius: 8,
+            padding: '8px 10px',
+            fontSize: 11,
+            color: 'var(--text)',
+            minWidth: 140,
+            boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
+            zIndex: 2,
+          }}>
+            <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 4 }}>{hoverDateStr}</div>
+            <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 700 }}>
+              ₹{Number(hover.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </div>
+            {hover.o != null && (
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 3, display: 'grid', gridTemplateColumns: 'auto auto', gap: '1px 10px' }}>
+                <span>O</span><span className="tabular-nums">₹{Number(hover.o).toFixed(2)}</span>
+                <span>H</span><span className="tabular-nums" style={{ color: 'var(--green-text)' }}>₹{Number(hover.h).toFixed(2)}</span>
+                <span>L</span><span className="tabular-nums" style={{ color: 'var(--red-text)' }}>₹{Number(hover.l).toFixed(2)}</span>
+                {hover.v ? (<><span>V</span><span className="tabular-nums">{Number(hover.v).toLocaleString('en-IN')}</span></>) : null}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10, fontSize: 10, color: 'var(--text3)' }}>
+        <LegendSwatch color="#22c55e" label="Support" dashed />
+        <LegendSwatch color="#ef4444" label="Resistance" dashed />
+        <LegendSwatch color="rgba(99,102,241,0.5)" label="Buy Zone" box />
+        <LegendSwatch color="#fbbf24" label="50-DMA" />
+        <LegendSwatch color="#6366f1" label="200-DMA" />
+        {fibs && (tf === '1Y' || tf === '3Y') && <LegendSwatch color="#6366f1" label="Fib 38.2 / 61.8" dashed />}
+        {currentPrice != null && (
+          <span className="tabular-nums" style={{ marginLeft: 'auto', color: 'var(--text2)' }}>
+            Spot ₹{Number(currentPrice).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LegendSwatch({ color, label, dashed, box }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      {box ? (
+        <span style={{ display: 'inline-block', width: 14, height: 10, background: color, border: `1px solid ${color}`, borderRadius: 2 }} />
+      ) : (
+        <span style={{
+          display: 'inline-block', width: 16, height: 0,
+          borderTop: `2px ${dashed ? 'dashed' : 'solid'} ${color}`,
+        }} />
+      )}
+      <span>{label}</span>
+    </span>
   );
 }
 
