@@ -122,34 +122,64 @@ function _classifyBSEEvent(label) {
 // positives from an LLM pass, too fragile vs a trained sentiment model.
 
 const NEGATIVE_KEYWORDS = [
-  // Regulatory
+  // Regulatory — SEBI specific
   'sebi fine', 'sebi penalty', 'sebi notice', 'sebi order', 'sebi probe',
   'enforcement', 'raid', 'search seizure',
+  // Regulatory — broad (Apr-2026 fix: JYOTICNC French-regulator case missed).
+  // Tuned narrow to avoid false positives from benign "investing" news.
+  'under investigation', 'being investigated', 'authorities investigating',
+  'regulator investigating', 'regulators investigating', 'probe launched',
+  'regulatory probe', 'regulatory action', 'regulatory notice',
+  'launches inquiry', 'faces inquiry',
+  'sec charges', 'doj investigation', 'department of justice',
+  'show cause notice', 'show-cause',
+  'misconduct', 'wrongdoing',
   // Governance
   'auditor resign', 'independent director resign', 'resignation of director',
+  'director resigned', 'director stepped down', 'cfo resigned', 'ceo resigned',
+  'cfo stepped down', 'ceo stepped down',
   'related party', 'promoter pledge', 'insider trading',
+  'corporate governance concerns', 'governance issue',
   // Fraud / criminal
   'fraud', 'embezzle', 'siphon', 'shell compan', 'money launder',
+  'forgery', 'misappropriation',
   // Financial distress
   'default', 'bankruptcy', 'insolvency', 'nclt', 'one-time settlement',
-  'credit rating downgrade', 'rating cut', 'negative outlook',
+  'credit rating downgrade', 'rating cut', 'negative outlook', 'rating downgrade',
+  'credit watch', 'under credit watch',
   // Operational
   'factory shutdown', 'plant closure', 'strike', 'labour unrest',
   'recall', 'drug recall', 'import ban', 'fda warning', 'fda 483',
+  'production halt', 'trading suspended', 'suspension of trading',
   // Legal
   'lawsuit', 'sued', 'arrested', 'fir', 'charge sheet',
+  'class action', 'criminal charges',
+  // Subsidiary / M&A stress (Apr-2026 fix: JYOTICNC Huron Graffenstaden case)
+  'subsidiary under investigation', 'subsidiary probe', 'arm under investigation',
+  'material subsidiary', 'write-down', 'impairment',
 ];
 
 async function fetchNewsSignalsForSymbol(symbol, companyName) {
   if (!symbol && !companyName) return null;
-  const q = encodeURIComponent(`"${companyName || symbol}" India`);
-  const url = `https://news.google.com/rss/search?q=${q}+when:7d&hl=en-IN&gl=IN&ceid=IN:en`;
-  const resp = await safeHttpGet(url, { timeout: 6000 });
-  if (!resp || resp.status !== 200 || !resp.body) return null;
+
+  // Two parallel queries to broaden coverage (Apr-2026 fix):
+  //   1. Company name + India — catches mainstream news
+  //   2. Symbol alone       — catches Indian finance news using ticker
+  // Merge + dedupe by title. Missing either query degrades gracefully.
+  const _buildUrl = (query) =>
+    `https://news.google.com/rss/search?q=${encodeURIComponent(query)}+when:7d&hl=en-IN&gl=IN&ceid=IN:en`;
+
+  const qName = companyName ? `"${companyName}" India` : null;
+  const qSym  = symbol ? `${symbol} stock` : null;
+
+  const urls = [qName && _buildUrl(qName), qSym && _buildUrl(qSym)].filter(Boolean);
+  if (!urls.length) return null;
+  const responses = await Promise.all(urls.map(u => safeHttpGet(u, { timeout: 6000 })));
+  const valid = responses.filter(r => r && r.status === 200 && r.body);
+  if (!valid.length) return null;
 
   // Crude XML parse — avoid pulling in a parser dep. Just extract <title> + <pubDate>.
-  const items = resp.body.split(/<item>/).slice(1);
-  const parsed = items.map(it => {
+  const parseItems = (body) => body.split(/<item>/).slice(1).map(it => {
     const titleM = it.match(/<title>\s*(?:<!\[CDATA\[)?([^<\]]+?)(?:\]\]>)?\s*<\/title>/);
     const dateM  = it.match(/<pubDate>([^<]+)<\/pubDate>/);
     const linkM  = it.match(/<link>([^<]+)<\/link>/);
@@ -159,6 +189,18 @@ async function fetchNewsSignalsForSymbol(symbol, companyName) {
       link: linkM ? linkM[1] : null,
     };
   }).filter(x => x.title);
+
+  // Merge + dedupe by title (first-seen wins, so mainstream news takes priority)
+  const seen = new Set();
+  const parsed = [];
+  for (const resp of valid) {
+    for (const item of parseItems(resp.body)) {
+      const k = item.title.toLowerCase().slice(0, 80);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      parsed.push(item);
+    }
+  }
 
   // Match negative keywords — each match counts 1, cap headlines returned.
   const hits = [];

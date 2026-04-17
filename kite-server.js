@@ -15846,6 +15846,85 @@ cron.schedule('*/30 8-16 * * 1-5',
   () => refreshExternalSignalsCron({ reason: '30m-news', sources: ['news'] }),
   { timezone: 'Asia/Kolkata' });
 
+// ── Stale-data healthcheck + priority re-fetch (Apr-2026) ───────────────
+// External review (2026-04-17) caught PERSISTENT showing ₹5443 vs market
+// ₹4850 (~12% stale). Individual symbols can quietly fall out of the
+// 30-min refresh if fetchKiteDaily timed out or the symbol-to-token map is
+// broken. This cron hunts for them every 15 min during market hours and
+// priority-refetches the stalest.
+async function staleDataHealthcheck() {
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
+  if (!isMarketOpen()) return;
+  try {
+    const MAX_AGE_MS = 90 * 60 * 1000;  // 90 min = 3x the 30-min refresh cron
+    const now = Date.now();
+    const stale = [];
+    for (const sym of Object.keys(stockFundamentals)) {
+      const f = stockFundamentals[sym];
+      if (!f) continue;
+      // Prioritize stocks that are in the current scored cache — those are
+      // the ones driving picks, so freshness matters most there.
+      const ageMs = f.fetchedAt ? (now - f.fetchedAt) : Infinity;
+      if (ageMs > MAX_AGE_MS) stale.push({ sym, ageMs });
+    }
+    if (!stale.length) return;
+    stale.sort((a, b) => b.ageMs - a.ageMs);
+
+    // Cap the re-fetch burst at 30 symbols per tick so this cron can't
+    // hog the Kite rate-limit queue. Stalest N first.
+    const toRefetch = stale.slice(0, 30);
+    console.log(`[stale-healthcheck] ${stale.length} symbols > 90m stale, refetching top ${toRefetch.length}`);
+    const results = await Promise.allSettled(toRefetch.map(async ({ sym }) => {
+      const daily = await fetchKiteDaily(sym).catch(() => null);
+      if (daily && daily.length >= 50) {
+        try {
+          const tech = computeTechnicals(daily);
+          const sf = stockFundamentals[sym];
+          if (sf) {
+            for (const key of TA_FIELDS) {
+              if (tech[key] !== undefined) sf[key] = tech[key];
+            }
+            sf.fetchedAt = Date.now();
+          }
+          return { sym, ok: true };
+        } catch (e) {
+          return { sym, ok: false, err: e.message };
+        }
+      }
+      return { sym, ok: false, err: 'no_candles' };
+    }));
+    const okCount = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
+    const failCount = results.length - okCount;
+    console.log(`[stale-healthcheck] refreshed ${okCount}/${results.length} (${failCount} failed)`);
+    if (failCount > 0) {
+      // Log the first 3 failures for diagnostic visibility
+      const fails = results
+        .filter(r => r.status === 'fulfilled' && !r.value.ok)
+        .slice(0, 3)
+        .map(r => `${r.value.sym}:${r.value.err}`);
+      if (fails.length) console.log(`[stale-healthcheck] sample fails: ${fails.join(', ')}`);
+    }
+  } catch (e) {
+    console.warn('[stale-healthcheck] error:', e.message);
+  }
+}
+// Every 15 min during IST market hours (offset :07 to avoid overlap with
+// fundamentals cron at :00/:30 and news cron at :00/:30)
+cron.schedule('7,22,37,52 8-16 * * 1-5',
+  () => staleDataHealthcheck(),
+  { timezone: 'Asia/Kolkata' });
+
+// Admin endpoint to trigger healthcheck on demand — useful when the external
+// review flags a specific stale stock and you want to force-retry immediately.
+app.post('/api/admin/stale-healthcheck', async (req, res) => {
+  try {
+    await staleDataHealthcheck();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // BSE: hourly during IST market hours, Mon-Fri (at 5 past the hour so it
 // doesn't overlap with the fundamentals cron at :00/:30 and news at :00/:30)
 cron.schedule('5 8-16 * * 1-5',
