@@ -8041,12 +8041,33 @@ function renderStockRecPage(){
     });
   }
 
+  // ── Client-side sector cap + disqualifier filter (Apr-2026) ──────────
+  // Mirrors server-side applySectorCap (kite-server.js:8672). Run client-
+  // side so the user's market-cap filter (NIFTY50 / MIDCAP / SMALLCAP /
+  // All) is respected — server-side capped arrays would lose that context.
+  // Max 2 per sector preserves the existing sort order.
+  function _applySectorCap(sortedList, maxPerSector){
+    var out = [];
+    var counts = {};
+    for (var i = 0; i < sortedList.length; i++) {
+      var s = sortedList[i];
+      var sec = s.sector || 'Other';
+      if ((counts[sec] || 0) >= maxPerSector) continue;
+      counts[sec] = (counts[sec] || 0) + 1;
+      out.push(s);
+    }
+    return out;
+  }
+  // Disqualified stocks (server-tagged pledge>75% / D/E>5 non-fin / auditor /
+  // SEBI / persistent losses / data<30%) are filtered out of every picks tab.
+  function _notDQ(s){ return !s.disqualified; }
+
   // Rebound Picks column = fallen angels (quality on sale) in the selected slice.
-  var swingPicks = _srSortBy(
-    filtered.filter(function(s){ return s.isFallenAngel; }),
+  var swingPicks = _applySectorCap(_srSortBy(
+    filtered.filter(function(s){ return s.isFallenAngel && _notDQ(s); }),
     srSwingSortKey,
     srSwingSortDir
-  );
+  ), 2);
 
   // Momentum Picks column = the highest-conviction PM Momentum Picks
   // (composite ≥ 55 = Buy tier or better from scoreStockForPortfolio).
@@ -8055,11 +8076,11 @@ function renderStockRecPage(){
   // per-stock in /api/stocks/score so the numbers match everywhere.
   // Stocks that fail the portfolio quality gate (penny stocks,
   // catastrophic debt, etc.) have composite=null and are excluded.
-  var momentumPicks = _srSortBy(
-    filtered.filter(function(s){ return s.composite!=null && s.composite>=55; }),
+  var momentumPicks = _applySectorCap(_srSortBy(
+    filtered.filter(function(s){ return s.composite!=null && s.composite>=55 && _notDQ(s); }),
     srMomSortKey,
     srMomSortDir
-  );
+  ), 2);
 
   // Long-Term Trades column = quality stocks worth buying-and-holding. Now
   // that the Stock Picks fetch uses ?scoreVersion=2, every row carries the
@@ -8068,8 +8089,9 @@ function renderStockRecPage(){
   // invariant in test/v2-invariants.js). This is the SAME number Portfolio
   // Manager → Long Term Portfolio uses, so a stock's LONG TERM SCORE is
   // identical across every tab.
-  var longTermPicks = _srSortBy(
+  var longTermPicks = _applySectorCap(_srSortBy(
     filtered.filter(function(s){
+      if (!_notDQ(s)) return false;
       var roeOk = (s.roe==null) || s.roe>=12;
       var deOk  = (s.debtToEq==null) || s.debtToEq<=2;
       var grOk  = (s.earGrowth==null) || s.earGrowth>=0;
@@ -8078,7 +8100,7 @@ function renderStockRecPage(){
     }),
     srLongSortKey,
     srLongSortDir
-  );
+  ), 2);
 
   // Sortable header builder: clicking a header toggles asc/desc on that col.
   // `group` is 'swing', 'mom', or 'long' so each table has independent sort state.
