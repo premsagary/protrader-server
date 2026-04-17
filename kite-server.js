@@ -3774,15 +3774,29 @@ async function scanAndTrade() {
   // ║  candidates into a ranked queue. No entries happen in this pass.    ║
   // ╚══════════════════════════════════════════════════════════════════════╝
   const buyCandidates = []; // { stock, result, candles, last }
+  // Reset cache-hit counters at start of each scan
+  _fiveMinCacheHits   = 0;
+  _fiveMinCacheMisses = 0;
 
   for (const stock of UNIVERSE) {
     try {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
       if (!token){await delay(200);continue;}
 
-      const today   = new Date().toISOString().split("T")[0];
-      const weekAgo = new Date(Date.now()-7*24*60*60*1000).toISOString().split("T")[0];
-      const candles = await kite.getHistoricalData(token,"5minute",weekAgo,today);
+      // Try cache first — Unified Pipeline populates it every 5 min. Only
+      // fall back to a direct Kite fetch when cache is missing or stale
+      // (cold start, or Unified Pipeline hasn't run yet this cycle).
+      let candles = _getCachedFiveMin(stock.sym);
+      if (candles) {
+        _fiveMinCacheHits++;
+      } else {
+        _fiveMinCacheMisses++;
+        const today   = new Date().toISOString().split("T")[0];
+        const weekAgo = new Date(Date.now()-7*24*60*60*1000).toISOString().split("T")[0];
+        candles = await kite.getHistoricalData(token,"5minute",weekAgo,today);
+        // Populate cache for other consumers so we don't repeat this fetch
+        if (candles && candles.length) _setCachedFiveMin(stock.sym, candles);
+      }
       if (!candles||candles.length<30){await delay(350);continue;}
 
       // Update live price cache
@@ -4382,7 +4396,9 @@ async function scanAndTrade() {
     "INSERT INTO scan_log (stocks,signals,regime,strategy,message) VALUES ($1,$2,$3,$4,$5)",
     [UNIVERSE.length, signalCount, dominantRegime, dominantStrategy, scanMsg]
   );
-  console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals | ${_scanDurationSec}s\n`);
+  const _total5m = _fiveMinCacheHits + _fiveMinCacheMisses;
+  const _hitPct = _total5m > 0 ? Math.round(100 * _fiveMinCacheHits / _total5m) : 0;
+  console.log(`✓ Scan done | Market regime: ${dominantRegime} | ${signalCount} signals | ${_scanDurationSec}s | 5m cache: ${_fiveMinCacheHits}/${_total5m} hits (${_hitPct}%) — saved ${_fiveMinCacheHits} Kite calls\n`);
 }
 
 // -- REST API ------------------------------------------------------------------
@@ -8692,6 +8708,32 @@ async function fetchKiteDaily(sym) {
 //
 // The outcome engine (commit 4) consumes this table strictly via ts > T so
 // there is no lookahead risk — we're always filling the past, not the future.
+// ── Cross-job 5-min candle cache (Apr-2026) ────────────────────────────────
+// Unified Pipeline populates this; Smart Scan + any other 5-min consumer
+// reads from it. Previously both jobs fetched the same 5-min candles from
+// Kite independently, costing ~63K duplicate calls/day. Now Smart Scan
+// gets the data for free.
+//
+// TTL: 6 minutes. 5-min bars finalize on the clock (10:05, 10:10, ...),
+// so 6 min ensures we always have the most recent finalized bar while
+// staying strictly fresh enough for intraday decisions.
+const _fiveMinCandlesCache = new Map();
+const FIVE_MIN_CACHE_TTL_MS = 6 * 60 * 1000;
+function _getCachedFiveMin(sym) {
+  const entry = _fiveMinCandlesCache.get(sym);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > FIVE_MIN_CACHE_TTL_MS) return null;
+  return entry.candles;
+}
+function _setCachedFiveMin(sym, candles) {
+  if (candles && candles.length >= 20) {
+    _fiveMinCandlesCache.set(sym, { candles, ts: Date.now() });
+  }
+}
+// Diagnostic counter — logged once per Smart Scan run
+let _fiveMinCacheHits   = 0;
+let _fiveMinCacheMisses = 0;
+
 let _nifty1mRunning = false;
 async function ingestNifty50OneMinCandles() {
   if (_nifty1mRunning) return { skipped: true };
@@ -10523,6 +10565,13 @@ async function runUnifiedKitePipeline(force = false) {
           kite.getHistoricalData(token, '5minute', weekAgo, today)
             .catch(() => null),
         ]);
+
+        // Cache the 5-min candles for Smart Scan / other consumers to reuse.
+        // Eliminates ~63K duplicate Kite historical calls/day previously
+        // incurred by scanAndTrade re-fetching the same data.
+        if (fiveMinCandles && fiveMinCandles.length) {
+          _setCachedFiveMin(sym, fiveMinCandles);
+        }
 
         // ── TA Rescore path (daily candles → TA fields → stockFundamentals) ──
         if (dailyCandles) {
