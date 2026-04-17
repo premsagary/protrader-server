@@ -7,6 +7,11 @@ import StockData from './components/pages/StockData';
 import Holdings from './components/pages/Holdings';
 import MFPicks from './components/pages/MFPicks';
 import Architecture from './components/pages/Architecture';
+import StocksRoboTrade from './components/pages/StocksRoboTrade';
+import CryptoRoboTrade from './components/pages/CryptoRoboTrade';
+import DayTrade from './components/pages/DayTrade';
+import MiroFishLab from './components/pages/MiroFishLab';
+import Admin from './components/pages/Admin';
 import ComingSoon from './components/pages/ComingSoon';
 
 export default function App() {
@@ -24,6 +29,11 @@ export default function App() {
     if (currentTab === 'holdings') return <Holdings />;
     if (currentTab === 'mf') return <MFPicks />;
     if (currentTab === 'architecture') return <Architecture />;
+    if (currentTab === 'stocks/overview' || currentTab.startsWith('stocks/')) return <StocksRoboTrade />;
+    if (currentTab === 'crypto/overview' || currentTab.startsWith('crypto/')) return <CryptoRoboTrade />;
+    if (currentTab === 'daytrade') return <DayTrade />;
+    if (currentTab === 'mirofish') return <MiroFishLab />;
+    if (currentTab === 'admin') return <Admin />;
     return <ComingSoon tab={currentTab} />;
   };
 
