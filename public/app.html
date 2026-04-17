@@ -3531,7 +3531,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <button class="mode-tab admin-only" onclick="setMode('holdings')" id="mode-holdings">💼 Holdings</button>
     <button class="mode-tab admin-only" onclick="setMode('mirofish')" id="mode-mirofish" style="display:none" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata">📊 Stock Data</button>
-    <button class="mode-tab admin-only" onclick="setMode('daytrade')" id="mode-daytrade" style="color:#ef4444;display:none">⚡ DayTrade</button>
+    <button class="mode-tab" onclick="setMode('daytrade')" id="mode-daytrade" style="color:#ef4444">⚡ DayTrade</button>
     <button class="mode-tab admin-only" onclick="setMode('agent')" id="mode-agent" style="color:#a855f7;display:none" title="Rule-based auto-trading agent (Phase 1 dry-run)">🤖 Agent</button>
     <button class="mode-tab admin-only" onclick="setMode('architecture')" id="mode-architecture" style="display:none">🏛 Architecture</button>
     <button class="mode-tab admin-only" onclick="setMode('admin')" id="mode-admin" style="display:none">⚙</button>
@@ -3835,7 +3835,7 @@ function setMode(mode){
   try{ document.getElementById("mode-holdings").className ="mode-tab admin-only"+(mode==="holdings"?" active":""); }catch(e){}
   try{ document.getElementById("mode-mirofish").className ="mode-tab admin-only"+(mode==="mirofish"?" active":""); }catch(e){}
   try{ document.getElementById("mode-stockdata").className="mode-tab"      +(mode==="stockdata"?" active":""); }catch(e){}
-  try{ document.getElementById("mode-daytrade").className ="mode-tab admin-only"+(mode==="daytrade"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-daytrade").className ="mode-tab"+(mode==="daytrade"?" active":""); }catch(e){}
   try{ document.getElementById("mode-agent").className    ="mode-tab admin-only"+(mode==="agent"   ?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab admin-only"+(mode==="admin"    ?" active":""); }catch(e){}
@@ -12707,7 +12707,7 @@ function renderDayTradePage(){
     ? '<span style="font-size:10px;font-weight:600;color:#f59e0b;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.25);border-radius:4px;padding:2px 8px;margin-left:6px;letter-spacing:0.2px">FROM LAST SESSION</span>'
     : '';
   html += '<div>'
-    +'<div style="font-weight:700;font-size:16px;letter-spacing:-.3px">⚡ DayTrading Picks <span style="font-size:10px;color:var(--text4);font-weight:400;background:rgba(239,68,68,.15);color:#ef4444;border-radius:4px;padding:2px 8px;margin-left:6px">ADMIN ONLY</span>'+lastSessionBadge+'</div>'
+    +'<div style="font-weight:700;font-size:16px;letter-spacing:-.3px">⚡ DayTrading Picks'+lastSessionBadge+'</div>'
     +'<div style="font-size:11px;color:var(--text3);margin-top:3px">'
     +'All-in-one intraday scanner · 5-min candles · VWAP + Gap + Breakout + Oversold Bounce · '
     +'<span data-dt-scanned>'+(data.lastScannedAt ? 'Scanned '+new Date(data.lastScannedAt).toLocaleTimeString('en-IN') : 'Scanning...')+'</span>'
@@ -13032,21 +13032,23 @@ function renderDayTradePage(){
       html += '<div style="text-align:center;padding:8px;font-size:10px;color:var(--text4)">Showing top 50 of '+filtered.length+' setups</div>';
     }
   } else {
-    // Empty-state with admin force-scan action. Cache warms automatically on
-    // startup + every 5 min during market hours, but off-hours a restart or
-    // a Kite token hiccup can leave _dayTradeCache at 0. This button forces
-    // a unified-pipeline run with force=1 so admins can refill on demand.
+    // Empty-state message. Non-admins see explanation only; admins get a
+    // force-scan button that calls /api/admin/unified-pipeline?force=1 (admin
+    // route). Hiding the button for non-admins avoids a confusing 403.
+    var _isAdm = _authUser && _authUser.role === 'admin';
     html += '<div style="padding:30px;text-align:center;color:var(--text4);font-size:11px">'
       +'<div style="margin-bottom:14px">'
       +(marketOpen
         ? 'No intraday setups found yet — scanner runs every 5 min during market hours.'
-        : 'Cache is empty. During market hours (9:15-15:30 IST) picks refresh every 5 min automatically. Off-hours you can force a scan against the last trading session:')
+        : 'Cache is empty. During market hours (9:15-15:30 IST) picks refresh every 5 min automatically.'+(_isAdm?' Off-hours you can force a scan against the last trading session:':''))
       +'</div>'
-      +'<button id="dt-force-scan-btn" onclick="_dayTradeForceScan()" '
-        +'style="background:#0A84FF;color:#fff;border:1px solid rgba(10,132,255,0.4);border-radius:10px;'
-        +'padding:10px 22px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.3px;font-family:inherit">'
-        +'⚡ Force Scan Now</button>'
-      +'<div id="dt-force-scan-status" style="margin-top:10px;font-size:11px;color:var(--text3);min-height:16px"></div>'
+      +(_isAdm
+        ? ('<button id="dt-force-scan-btn" onclick="_dayTradeForceScan()" '
+           +'style="background:#0A84FF;color:#fff;border:1px solid rgba(10,132,255,0.4);border-radius:10px;'
+           +'padding:10px 22px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.3px;font-family:inherit">'
+           +'⚡ Force Scan Now</button>'
+           +'<div id="dt-force-scan-status" style="margin-top:10px;font-size:11px;color:var(--text3);min-height:16px"></div>')
+        : '')
       +'</div>';
   }
   html += '</div>'; // end full table panel
@@ -13867,7 +13869,7 @@ function renderArchitecturePage(){
 
   // ── MIROFISH WEALTH PROJECTION ──
   h += _archCard('\u26A1', 'DayTrading Picks — intraday setups from 5-min candles (Admin only)',
-      'Renderer: <code>renderDayTradePage()</code> in index.html. Server engine: <code>scoreDayTrade(candles, sym)</code> + <code>scanDayTrades()</code> in kite-server.js. API: <code>GET /api/stocks/picks/daytrade</code> (optional <code>?setup=</code> filter). Access: admin-only — tab hidden for non-admin users. Data: 5-min candles from Kite Connect <code>getHistoricalData(token, \'5minute\', weekAgo, today)</code>. Scan frequency: every 5 min aligned with candle close (cron runs at :01, :06, :11... so indicators reflect completed bars).',
+      'Renderer: <code>renderDayTradePage()</code> in index.html. Server engine: <code>scoreDayTrade(candles, sym)</code> + <code>scanDayTrades()</code> in kite-server.js. API: <code>GET /api/stocks/picks/daytrade</code> (optional <code>?setup=</code> filter). Access: public (read-only) — tab and picks API visible to all users. Force-scan admin action stays admin-only. Data: 5-min candles from Kite Connect <code>getHistoricalData(token, \'5minute\', weekAgo, today)</code>. Scan frequency: every 5 min aligned with candle close (cron runs at :01, :06, :11... so indicators reflect completed bars).',
       '<div style="margin-bottom:10px">A standalone intraday scanner separate from the daily-candle Stock Picks pipeline. Uses the same Kite 5-min candle feed that <code>scanAndTrade()</code> already reads, but applies 4 day-trading setup detectors grounded in Varsity Module 2 (Technical Analysis).</div>'
     + '<div style="margin:14px 0 8px 0;font-weight:700;color:var(--text)">Light Quality Gate (all must pass)</div>'
     + _archPillar('Min price', '≥ ₹20', 'No penny stocks — Varsity M2: sub-₹20 stocks have wide spreads and erratic fills, making intraday SL unreliable.')

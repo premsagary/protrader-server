@@ -4239,6 +4239,7 @@ app.get('/api/auth/me', async (req, res) => {
 const PUBLIC_ROUTE_PREFIXES = [
   '/auth/',
   '/stocks/score',        // Stock Picks + Stock Data (scored universe)
+  '/stocks/picks/daytrade', // DayTrade picks (read-only — admin force-scan stays at /admin/)
   '/stocks/analyze/',     // Deep Analyzer (per-stock analysis)
   '/stocks/bucket-stats', // Bucket stats
   '/universe/',           // Universe list — stock dropdown for Analyzer, Picks
