@@ -40,6 +40,17 @@ const { computeRiskFlags, applyRiskFlagPenalty, summarizeSeverity } = require(".
 // losses, data-completeness <30%. Returns {code, reason, severity} or null.
 const { checkDisqualifiers } = require("./disqualifiers");
 
+// ── External signals (BSE corp events / news / analyst consensus) ────────
+// Fetched by a cron job (see refreshExternalSignalsCron below) and cached
+// in the external_signals_cache PG table. At scoring time, lookups are
+// in-memory-O(1) via _externalSignalsCache populated at startup + after
+// every cron refresh. Detectors in risk-flags.js consume the attached
+// fields f._bseEvents / f._newsNegative / f._analystConsensus.
+const externalSignals = require("./external-signals");
+let _externalSignalsCache = {};       // symbol → payload
+let _externalSignalsTs    = 0;
+const EXT_SIGNALS_MAX_AGE_MS = 8 * 3600 * 1000;  // 8 hours — stale cron tolerated
+
 // ── In-memory log buffer (last 500 lines, visible in Admin panel) ─────────────
 const LOG_BUFFER = [];
 const _origLog = console.log.bind(console);
@@ -737,7 +748,24 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_rankings_category ON mf_ai_rankings(category)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mf_ai_rankings_cat_model ON mf_ai_rankings(category, model_id)`);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings tables included)");
+    // ── External signals cache (Apr-2026) ────────────────────────────────
+    // Persistent cache for BSE corp events / news-triggers / analyst
+    // consensus fetched by external-signals.js. Refreshed by cron every
+    // 6 hours for the top ~150 symbols (those appearing in any picks list).
+    // Per-symbol JSONB payload:
+    //   bseEvents[]:      { type, label, date, daysAway }
+    //   newsNegative:     { count, score, headlines[], keywords[], asOf }
+    //   analystConsensus: { rating, targetPrice, impliedReturn, asOf }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS external_signals_cache (
+        symbol        VARCHAR(40) PRIMARY KEY,
+        payload       JSONB NOT NULL,
+        refreshed_at  TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ext_signals_refreshed ON external_signals_cache(refreshed_at)`);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -13170,6 +13198,21 @@ app.get('/api/stocks/score', async(req,res)=>{
       arr.forEach(r => { r._sectorMedian52w = med52; });
     });
 
+    // ── Attach external-signal cache lookups (Apr-2026) ──────────────────
+    // BSE events, news triggers, analyst consensus — populated by cron,
+    // read here in O(1). Stale (>8h) entries are treated as absent so the
+    // detectors don't act on out-of-date news.
+    const _extFresh = _externalSignalsCache && (Date.now() - _externalSignalsTs) < EXT_SIGNALS_MAX_AGE_MS;
+    if (_extFresh) {
+      all.forEach(f => {
+        const row = _externalSignalsCache[f.sym];
+        if (!row) return;
+        f._bseEvents        = row.bseEvents || null;
+        f._newsNegative     = row.newsNegative || null;
+        f._analystConsensus = row.analystConsensus || null;
+      });
+    }
+
     const scored = all.map(f=>{
       const peers = bySector[f.sector||'Other'] || all;
       const {score,hits} = scoreOneStock(f, peers);
@@ -15343,6 +15386,88 @@ cron.schedule('*/30 8-16 * * 1-5', async () => {
   await refreshMissingFundamentals();
   await refreshAllFundamentals();
 }, { timezone: 'Asia/Kolkata' });
+
+// ── External signals refresher (Apr-2026) ─────────────────────────────────
+// Every 6 hours: refresh BSE corporate events, negative-news signals, and
+// analyst consensus for the top ~150 symbols (anything currently appearing
+// in picks lists). Persisted to external_signals_cache. Per-fetch errors
+// degrade gracefully — main pipeline never blocks on an external source.
+async function refreshExternalSignalsCron(opts = {}) {
+  const { limit = 150, reason = 'cron' } = opts;
+  if (!pool) return;
+  try {
+    const t0 = Date.now();
+    // Pick the top-N scored symbols to keep fetch count bounded. If no
+    // scoring has happened yet, fall back to the full universe.
+    const src = Array.isArray(_lastScoredV2) && _lastScoredV2.length
+      ? _lastScoredV2.slice(0, limit)
+      : Object.values(stockFundamentals).slice(0, limit);
+
+    const targets = src.map(s => ({
+      symbol: s.sym || s.symbol,
+      companyName: s.name || s.company_name || s.sym,
+      bseCode: s.bseCode || s.bse_code || null,
+      price: s.price || (livePrices[s.sym]?.price) || null,
+    })).filter(t => t.symbol);
+
+    if (!targets.length) { console.log('[ext-signals] no targets to refresh'); return; }
+
+    console.log(`[ext-signals] refreshing ${targets.length} symbols (${reason})...`);
+    const results = await externalSignals.refreshExternalSignals(targets, { concurrency: 3 });
+
+    // Persist + repopulate in-memory cache
+    let saved = 0;
+    for (const sym of Object.keys(results)) {
+      try {
+        await pool.query(
+          `INSERT INTO external_signals_cache (symbol, payload, refreshed_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (symbol) DO UPDATE SET payload = EXCLUDED.payload, refreshed_at = NOW()`,
+          [sym, results[sym]]
+        );
+        _externalSignalsCache[sym] = results[sym];
+        saved++;
+      } catch (e) { /* per-row failures shouldn't abort the batch */ }
+    }
+    _externalSignalsTs = Date.now();
+    console.log(`[ext-signals] done — ${saved} rows persisted, ${Date.now() - t0}ms`);
+  } catch (e) {
+    console.warn('[ext-signals] refresh error:', e.message);
+  }
+}
+
+// Run every 6 hours — aligned to UTC 0/6/12/18, so IST 5:30/11:30/17:30/23:30
+cron.schedule('0 */6 * * *', () => refreshExternalSignalsCron({ reason: '6h-cron' }));
+
+// Startup: load cached external signals into memory so the first request
+// after a deploy gets them, even before the cron fires.
+async function loadExternalSignalsCache() {
+  if (!pool) return;
+  try {
+    const r = await pool.query(
+      `SELECT symbol, payload, refreshed_at FROM external_signals_cache
+       WHERE refreshed_at > NOW() - INTERVAL '24 hours'`
+    );
+    const m = {};
+    for (const row of r.rows) m[row.symbol] = row.payload;
+    _externalSignalsCache = m;
+    _externalSignalsTs = Date.now();
+    console.log(`[ext-signals] loaded ${r.rows.length} cached rows from DB`);
+  } catch (e) {
+    console.warn('[ext-signals] startup load error:', e.message);
+  }
+}
+loadExternalSignalsCache();
+
+// Expose an admin endpoint to trigger a manual refresh (debug / post-deploy)
+app.post('/api/admin/refresh-external-signals', async (req, res) => {
+  try {
+    await refreshExternalSignalsCron({ limit: Number(req.body?.limit) || 150, reason: 'manual' });
+    res.json({ ok: true, count: Object.keys(_externalSignalsCache).length, refreshedAt: new Date(_externalSignalsTs).toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // 8AM IST — refresh stock universe from NSE CSVs → stock_universe DB
 cron.schedule('0 8 * * *', async () => {

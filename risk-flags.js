@@ -445,7 +445,150 @@ function detectSectorLaggard(f) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Public entry point — returns an array of flags (0-6 items typical)
+// 8. Rebound without confirmation (falling-knife with no recovery signals)
+// ────────────────────────────────────────────────────────────────────────────
+// scoreFallenAngel() has a rich Pillar 5 for "recovery signals" (bullishDiv /
+// obvRising / volume-climax / macdBull / near-200DMA / supertrend-flip). But
+// those sum into the score — they never gate eligibility. So a stock can be
+// labelled Fallen Angel (quality + down ≥20% + RSI ≤52 + low D/E) while every
+// Pillar 5 signal is absent → still falling, not rebounding.
+//
+// This detector enforces the gate: if in drawdown AND no recovery signal,
+// demote harder. Pure read of TA fields already in stockFundamentals.
+function detectReboundNoConfirmation(f) {
+  if (!f) return null;
+  const pfh = Number(f.pctFromHigh);
+  if (!Number.isFinite(pfh) || pfh > -15) return null; // not fallen enough to matter
+
+  // Any ONE of these = some form of bottom-confirmation signal
+  const hasConfirmation =
+       f.bullishDiv === true
+    || f.obvRising === true
+    || f.accumDist === 'Accumulation'
+    || f.macdBull === true
+    || f.supertrendSig === 'bullish'
+    || (Number.isFinite(f.pctAbove200) && f.pctAbove200 >= -5 && f.pctAbove200 <= 5) // at 200DMA zone
+    || f.weeklyTrend === 'up'
+    || f.weeklyTrendConfirmed === true || f.weeklyTrendConfirmed === 'bullish';
+
+  if (hasConfirmation) return null;
+
+  // HIGH: deep fall AND zero bottom signals = falling knife
+  if (pfh <= -25) {
+    return {
+      code: 'REBOUND_NO_CONFIRMATION',
+      severity: 'HIGH',
+      label: `Down ${pfh.toFixed(0)}% with no recovery signal (RSI div / OBV / accum / MACD / 200DMA) — not a rebound, still falling`,
+      penalty: 10,
+    };
+  }
+  // MEDIUM: moderate fall with no confirmation
+  return {
+    code: 'REBOUND_WEAK_CONFIRMATION',
+    severity: 'MEDIUM',
+    label: `Down ${pfh.toFixed(0)}% with no recovery signals firing`,
+    penalty: 5,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 9. External-signal consumers (BSE events / News / Analyst consensus)
+// ────────────────────────────────────────────────────────────────────────────
+// These read cached data attached upstream in /api/stocks/score (pulled from
+// external-signals.js). The detectors themselves are pure — they just read
+// f._bseEvents / f._newsNegative / f._analystConsensus fields and map them
+// to penalty flags. Network IO stays outside risk-flags.js.
+
+function detectBSEEventImminent(f) {
+  if (!f || !Array.isArray(f._bseEvents) || !f._bseEvents.length) return null;
+  // Take nearest future event
+  const soon = f._bseEvents
+    .map(e => ({ ...e, d: e.daysAway }))
+    .filter(e => Number.isFinite(e.d) && e.d >= 0 && e.d <= 14)
+    .sort((a,b) => a.d - b.d)[0];
+  if (!soon) return null;
+
+  // Higher severity for "negative surprise risk" events (board meeting on
+  // results day, dividend ex-date causing mechanical price drop)
+  const highRisk = /result|earnings|agm|board meeting/i.test(String(soon.type || soon.label || ''));
+  if (soon.d <= 3 && highRisk) {
+    return {
+      code: 'BSE_EVENT_IMMINENT',
+      severity: 'HIGH',
+      label: `${soon.label || soon.type} in ${soon.d}d — binary outcome risk`,
+      penalty: 8,
+    };
+  }
+  if (soon.d <= 7) {
+    return {
+      code: 'BSE_EVENT_SOON',
+      severity: 'MEDIUM',
+      label: `${soon.label || soon.type} in ${soon.d}d`,
+      penalty: 4,
+    };
+  }
+  return null;
+}
+
+function detectNewsNegative(f) {
+  if (!f || !f._newsNegative) return null;
+  const n = f._newsNegative;
+  // n = { count, score, headlines[], asOf }
+  // score: bigger = more negative
+  if (n.score >= 3) {
+    return {
+      code: 'NEWS_NEGATIVE_RECENT',
+      severity: 'HIGH',
+      label: `${n.count} negative headline(s) in last 7d — ${(n.headlines||[])[0] || 'see detail'}`,
+      penalty: 10,
+    };
+  }
+  if (n.score >= 2) {
+    return {
+      code: 'NEWS_NEGATIVE_MODERATE',
+      severity: 'MEDIUM',
+      label: `Negative news signal in last 7d`,
+      penalty: 5,
+    };
+  }
+  return null;
+}
+
+function detectAnalystDowngrade(f) {
+  if (!f || !f._analystConsensus) return null;
+  const a = f._analystConsensus;
+  // a = { rating, targetPrice, impliedReturn, asOf }
+  // rating: 'BUY' | 'HOLD' | 'SELL' | 'REDUCE' | null
+  if (a.rating === 'SELL' || a.rating === 'REDUCE') {
+    return {
+      code: 'ANALYST_SELL',
+      severity: 'HIGH',
+      label: `Analyst consensus: ${a.rating}${Number.isFinite(a.impliedReturn) ? ` (TP implies ${a.impliedReturn.toFixed(0)}%)` : ''}`,
+      penalty: 10,
+    };
+  }
+  // Negative implied return from aggregated target price
+  if (Number.isFinite(a.impliedReturn) && a.impliedReturn <= -15) {
+    return {
+      code: 'ANALYST_TP_BELOW',
+      severity: 'MEDIUM',
+      label: `Avg analyst TP ${a.impliedReturn.toFixed(0)}% below current price`,
+      penalty: 6,
+    };
+  }
+  if (a.rating === 'HOLD' && Number.isFinite(a.impliedReturn) && a.impliedReturn < 0) {
+    return {
+      code: 'ANALYST_CAUTIOUS',
+      severity: 'LOW',
+      label: `Analysts on HOLD, TP below spot`,
+      penalty: 2,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Public entry point — returns an array of flags (0-10 items typical)
 // ────────────────────────────────────────────────────────────────────────────
 function computeRiskFlags(f, now) {
   const out = [];
@@ -456,6 +599,10 @@ function computeRiskFlags(f, now) {
   const e = detectCyclicalPeak(f);                  if (e) out.push(e);
   const g = detectDrawdownImmaturity(f);            if (g) out.push(g);
   const h = detectSectorLaggard(f);                 if (h) out.push(h);
+  const i = detectReboundNoConfirmation(f);         if (i) out.push(i);
+  const j = detectBSEEventImminent(f);              if (j) out.push(j);
+  const k = detectNewsNegative(f);                  if (k) out.push(k);
+  const l = detectAnalystDowngrade(f);              if (l) out.push(l);
   return out;
 }
 
