@@ -180,15 +180,41 @@ export default function Agent() {
             Agent — Auto-Trader
           </div>
           <ModeBadge mode={d.mode || 'off'} />
+          {d.cycleRunning && (
+            <span className="animate-pulse-custom" style={{
+              fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
+              padding: '3px 10px', borderRadius: 9999,
+              background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.4)',
+            }}>
+              ⟳ CYCLE RUNNING
+            </span>
+          )}
           <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>
             env fallback: <b style={{ color: 'var(--text2)' }}>{d.envFallback || 'off'}</b> · config <b style={{ color: 'var(--text2)' }}>{d.configVersion || '?'}</b>
           </div>
         </div>
-        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.55, maxWidth: 920 }}>
+        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.55, maxWidth: 920, marginBottom: 12 }}>
           Rule-based intraday agent. Reads picks from the DayTrade scanner every minute, applies filters + hard constraints,
           writes every decision to <code style={{ background: 'var(--bg2)', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>agent_decisions</code>.
           {' '}Paper capital: <b style={{ color: 'var(--text)' }}>{fmtINR(d.paperCapital || 0)}</b>.
           {' '}Cycle auto-skips when mode is <code style={{ background: 'var(--bg2)', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>off</code>.
+        </div>
+        {/* Health row — cron / poller / armed */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <HealthChip on={d.cronActive} label="cycle cron" />
+          <HealthChip on={d.autoSchedule?.openCronActive} label="9:15 auto-open" />
+          <HealthChip on={d.autoSchedule?.closeCronActive} label="15:30 auto-close" />
+          <HealthChip on={d.trader?.running} label={`broker poller${d.trader?.tickCount ? ` · ${d.trader.tickCount} ticks` : ''}`} />
+          {typeof d.armedCount === 'number' && (
+            <span className="chip" style={{
+              fontSize: 10, padding: '3px 9px', borderRadius: 9999,
+              background: d.armedCount > 0 ? 'rgba(168,85,247,0.12)' : 'var(--bg2)',
+              color: d.armedCount > 0 ? '#c084fc' : 'var(--text3)',
+              border: `1px solid ${d.armedCount > 0 ? 'rgba(168,85,247,0.3)' : 'var(--border)'}`,
+            }}>
+              {d.armedCount} armed
+            </span>
+          )}
         </div>
       </div>
 
@@ -327,17 +353,19 @@ export default function Agent() {
                   </>
                 )}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {armed.map((a, i) => (
-                  <span key={`${a.sym}-${i}`} style={{
-                    fontFamily: '"SF Mono","JetBrains Mono",monospace', fontSize: 11,
-                    padding: '4px 10px', borderRadius: 8,
-                    background: 'rgba(168,85,247,0.12)', color: '#e9d5ff', border: '1px solid rgba(168,85,247,0.3)',
-                  }}>
-                    <b>{a.sym}</b> {a.side} @ ₹{a.trigger_price} × {a.quantity} ({(a.ageMins | 0)}m)
-                  </span>
-                ))}
-              </div>
+              <TradeTable
+                columns={['Sym', 'Side', 'Trigger', 'SL', 'Target', 'Qty', 'Age']}
+                rows={armed.map((a) => [
+                  <b key="s">{a.sym}</b>,
+                  <span key="si" style={{ color: a.side === 'BUY' ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 700 }}>{a.side}</span>,
+                  '₹' + fmtNum(a.trigger_price),
+                  <span key="sl" style={{ color: 'var(--red-text)' }}>₹{fmtNum(a.stop_loss)}</span>,
+                  <span key="tg" style={{ color: 'var(--green-text)' }}>₹{fmtNum(a.target)}</span>,
+                  a.quantity,
+                  <span key="age" style={{ color: 'var(--text3)' }}>{(a.ageMins | 0)}m</span>,
+                ])}
+                rightAlignFrom={2}
+              />
             </div>
           )}
 
@@ -406,11 +434,14 @@ export default function Agent() {
             </div>
           ) : (
             <TradeTable
-              columns={['Time', 'Sym', 'Setup', 'Score', 'Qty', 'Entry', 'SL', 'Tgt', 'RR', 'Result']}
+              columns={['Time', 'Mode', 'Sym', 'Sector', 'Setup', 'Side', 'Score', 'Qty', 'Entry', 'SL', 'Tgt', 'RR', 'Result']}
               rows={recent.map((r) => [
                 <span key="t" style={{ color: 'var(--text3)', fontFamily: '"SF Mono","JetBrains Mono",monospace' }}>{fmtTime(r.decided_at)}</span>,
+                <ModeBadge key="mo" mode={r.agent_mode || 'off'} />,
                 <b key="s">{r.sym}</b>,
+                <span key="sec" style={{ color: 'var(--text3)', fontSize: 11 }}>{r.sector || '—'}</span>,
                 <span key="st" style={{ color: 'var(--text2)' }}>{r.best_setup || '—'}</span>,
+                <span key="si" style={{ color: r.side === 'BUY' ? 'var(--green-text)' : r.side === 'SELL' ? 'var(--red-text)' : 'var(--text3)', fontWeight: 600, fontSize: 11 }}>{r.side || '—'}</span>,
                 <span key="sc" style={{ color: 'var(--text2)' }}>{r.day_trade_score ?? '—'}</span>,
                 r.quantity ?? '—',
                 r.entry_price ?? '—',
@@ -423,7 +454,7 @@ export default function Agent() {
                       {r.failed_filter || r.rejection_reason || '?'}
                     </span>,
               ])}
-              rightAlignFrom={3}
+              rightAlignFrom={6}
             />
           )}
         </div>
@@ -500,6 +531,27 @@ function AutoScheduleBar({ schedule, onChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Small building blocks
 // ─────────────────────────────────────────────────────────────────────────────
+function HealthChip({ on, label }) {
+  const onCol = '#22c55e';
+  const offCol = 'var(--text4, var(--text3))';
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      fontSize: 10, padding: '3px 9px', borderRadius: 9999,
+      background: on ? 'rgba(34,197,94,0.10)' : 'var(--bg2)',
+      color: on ? '#4ade80' : 'var(--text3)',
+      border: `1px solid ${on ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`,
+      letterSpacing: 0.3, fontWeight: 600,
+    }}>
+      <span style={{
+        width: 6, height: 6, borderRadius: 9999,
+        background: on ? onCol : offCol, display: 'inline-block',
+      }} />
+      {label}
+    </span>
+  );
+}
+
 function StatCard({ label, value, color = 'var(--text)', accent = 'var(--border)', bg = 'rgba(255,255,255,0.02)' }) {
   return (
     <div style={{
