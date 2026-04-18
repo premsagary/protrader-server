@@ -81,6 +81,82 @@ const FLAG_LABELS = {
   NEWS_NEGATIVE_LOW:               '🤖 AI: Minor',
 };
 
+// ══════════════════════════════════════════════════════════════════════
+// FLAG_EXPLANATIONS — plain-English 1-2 sentence description per code.
+// Shown in soft grey UNDER each flag so a non-expert can understand
+// WHY the score was penalised without needing internal jargon.
+// ══════════════════════════════════════════════════════════════════════
+const FLAG_EXPLANATIONS = {
+  EARNINGS_CLIFF:
+    "The latest quarter's profit dropped sharply (>20% vs the same quarter last year) even though the long-term track record was strong. Something may have broken structurally — patent cliff, lost customer, new competition — so we stay cautious until the next quarter confirms a recovery.",
+  EARNINGS_DROP_SEVERE:
+    "Most recent quarter's profit fell heavily year-on-year. It could be a one-off (raw material spike, forex, one-time charge) or the start of a trend — either way we discount the score until it stabilises.",
+  EARNINGS_DECELERATING:
+    "Profit growth is slowing down quarter-by-quarter. The stock may still look good on paper, but the earnings engine is losing steam — which usually leads to a de-rating if it continues.",
+  EARNINGS_SLOWING:
+    "The pace of earnings growth is flattening. Not a red flag on its own, but a high P/E multiple is hard to defend without growth to back it up.",
+  PRICE_PAT_DIVERGENCE_BEARISH:
+    "The share price is sitting near highs while profits are actually falling. Markets eventually reprice to match earnings reality, so this kind of divergence often precedes a correction.",
+  PRICE_EARNINGS_EXTENDED:
+    "The share price has run much faster than earnings over the past year. The valuation looks stretched relative to what the business is actually delivering.",
+  MOMENTUM_CYCLICAL_PEAK:
+    "Strong recent price momentum combined with cyclical-industry peak margins. Cyclical businesses rarely hold peak margins for long — mean reversion is the base case, not continued upside.",
+  LOCKIN_IMMINENT:
+    "A large block of shares (pre-IPO, promoter, or anchor) will unlock for sale within the next ~30 days. Supply overhang tends to cap upside and often triggers a short-term drop.",
+  LOCKIN_RECENT:
+    "A lock-in expired within the past few weeks and some of that supply may still be hitting the market. Price action can stay choppy while insiders trim positions.",
+  LOCKIN_UPCOMING:
+    "A share lock-in expiry is scheduled in the next few months. Not urgent, but a known future supply event that may weigh on price as the date approaches.",
+  EARNINGS_QUALITY_DIVERGENT:
+    "Reported profit is growing but free cash flow isn't keeping up. Profits that don't turn into actual cash are a classic early-warning sign of aggressive accounting.",
+  EARNINGS_QUALITY_WEAK:
+    "Free cash flow is lagging reported earnings. The business looks healthy on the P&L but isn't generating the cash to match, which makes the earnings lower-quality.",
+  CYCLICAL_PEAK_PROFITABILITY:
+    "This is a cyclical business (metals, autos, chemicals, etc.) running at historically peak margins. When the cycle turns, margins can halve very fast — so a high multiple at peak earnings is dangerous.",
+  CYCLICAL_ELEVATED_MARGINS:
+    "Margins are well above the long-run average for this industry. Usually a sign the cycle is mature — limited upside, full cycle-reversion downside.",
+  DRAWDOWN_STILL_FALLING:
+    "The stock has fallen a lot from its high, but the 3-month trend is still heading down. Classic falling-knife setup — better to wait for price to stop making new lows before buying.",
+  DRAWDOWN_IMMATURE:
+    "This stock fell only recently. There hasn't been enough time to tell if the worst is over — typically the first relief rally fails, so early buyers get shaken out.",
+  DRAWDOWN_ACCELERATING:
+    "The rate of decline is speeding up. Price is falling faster each month, which means sellers are still winning and there is no sign of a bottom yet.",
+  SECTOR_LAGGARD:
+    "The stock's sector is underperforming the broader market. Even a good company in a weak sector struggles to re-rate until the whole group turns.",
+  SECTOR_UNDERPERFORMER:
+    "This sector has trailed the index meaningfully. Capital usually flows to leading sectors first, so this pick is fighting a macro headwind.",
+  REBOUND_NO_CONFIRMATION:
+    "The stock has fallen a lot but there's still no sign of a bottom — the 3-month return is flat or negative and there's no reclaim of key levels. Better to wait for a clear bounce before buying.",
+  REBOUND_WEAK_CONFIRMATION:
+    "There's a tentative bounce but nothing decisive — no breakout of a swing high, no volume confirmation. Could easily roll over again, so size carefully.",
+  BSE_EVENT_IMMINENT:
+    "A corporate-action event (merger, buyback, rights issue, results, board meeting) is within a few trading days. Stocks tend to be volatile into these events — binary outcomes are not a great setup for a medium-term buy.",
+  BSE_EVENT_SOON:
+    "A corporate-action event is coming up in the next couple of weeks. Possible binary move — treat this pick as event-driven, not clean buy-and-hold.",
+  NEWS_DISQUALIFY:
+    "Recent news screened by AI is severe enough (fraud, regulatory ban, promoter exit, criminal case) that we avoid the stock entirely. No safe entry exists yet.",
+  NEWS_NEGATIVE_HIGH:
+    "AI screening found multiple high-severity negative news items recently. Material risk to fundamentals — avoid until the situation clears.",
+  NEWS_NEGATIVE_MEDIUM:
+    "AI screening found moderate-severity negative news. Manageable but keeps the risk-reward skew to the downside for now.",
+  NEWS_NEGATIVE_LOW:
+    "A few minor negative headlines were flagged by AI. Not disqualifying, but a small penalty to keep us honest about the optics.",
+  NEWS_NEGATIVE_RECENT:
+    "Negative news items have hit very recently (past few days). Markets often overshoot on fresh bad news — wait for the dust to settle.",
+  NEWS_NEGATIVE_MODERATE:
+    "A moderate amount of negative news has surfaced lately. Not a dealbreaker, but worth accounting for in position sizing.",
+  ANALYST_SELL:
+    "One or more sell-side analysts have an outright SELL rating. Institutional money tends to follow analyst guidance, so a SELL rating is a real headwind.",
+  ANALYST_TP_BELOW:
+    "The average analyst price target sits BELOW the current share price. According to consensus, the upside is already behind us.",
+  ANALYST_CAUTIOUS:
+    "Most analysts covering this stock are cautious (Hold/Reduce rather than Buy). Consensus doesn't see a clear path to upside.",
+  MOMENTUM_CONSENSUS_CONFLICT:
+    "Our momentum score is high but the analyst target price is below current levels. Technicals and fundamentals are disagreeing — one side is usually wrong.",
+  MOMENTUM_CONSENSUS_CAUTIOUS:
+    "Price momentum is strong but analyst consensus is only lukewarm. Buying into strength without fundamental conviction is riskier than it looks.",
+};
+
 function severityColors(severity) {
   if (severity === 'HIGH')   return { fg: 'var(--red-text)',    bg: 'var(--red-bg)',    border: 'rgba(248,113,113,0.35)' };
   if (severity === 'MEDIUM') return { fg: 'var(--amber-text)',  bg: 'var(--amber-bg)',  border: 'rgba(251,191,36,0.35)'   };
@@ -1014,23 +1090,94 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
             </span>
           </div>
           {flags.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {flags.slice(0, 4).map((fl, i) => (
-                <div key={i} style={{ fontSize: 11, color: 'var(--text2)' }}>
-                  <span style={{ color: severityColors(fl.severity).fg, fontWeight: 700 }}>
-                    [{fl.severity}]
-                  </span>{' '}
-                  {fl.label}{' '}
-                  <span style={{ color: 'var(--text3)' }}>(−{fl.penalty})</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {flags.slice(0, 4).map((fl, i) => {
+                const plainEnglish = FLAG_EXPLANATIONS[fl.code];
+                return (
+                  <div key={i}>
+                    <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: plainEnglish ? 3 : 0 }}>
+                      <span style={{ color: severityColors(fl.severity).fg, fontWeight: 700 }}>
+                        [{fl.severity}]
+                      </span>{' '}
+                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>{fl.label}</span>{' '}
+                      <span style={{ color: 'var(--text3)' }}>(−{fl.penalty})</span>
+                    </div>
+                    {plainEnglish && (
+                      <div style={{
+                        fontSize: 11,
+                        color: 'var(--text3)',
+                        lineHeight: 1.55,
+                        paddingLeft: 10,
+                        borderLeft: `2px solid ${severityColors(fl.severity).border || 'var(--border2)'}`,
+                        fontStyle: 'italic',
+                      }}>
+                        {plainEnglish}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {flags.length > 4 && (
+                <div style={{ fontSize: 10.5, color: 'var(--text4)', fontStyle: 'italic', marginTop: 2 }}>
+                  + {flags.length - 4} more flag{flags.length - 4 === 1 ? '' : 's'} not shown.
                 </div>
-              ))}
+              )}
             </div>
           )}
           {flags.length === 0 && (
-            <div style={{ color: 'var(--text4)', fontStyle: 'italic', fontSize: 10.5 }}>
-              Penalty applied by upstream filter (sector cap / VIX regime / external signal). See Architecture tab for source.
+            <div style={{ color: 'var(--text3)', fontSize: 11, lineHeight: 1.55 }}>
+              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: 3 }}>
+                Score adjusted by an upstream filter
+              </div>
+              <div style={{ fontStyle: 'italic', color: 'var(--text4)' }}>
+                No single risk flag fired on this stock, but an upstream gate trimmed the score —
+                likely one of: sector cap (too many picks from the same sector already qualified),
+                VIX regime tilt (market-wide volatility dampens ranks), or an external-signals
+                nudge (news / analyst consensus). See the Architecture tab for the full list.
+              </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Clean signal card — renders when a pick made the cut cleanly (no
+          penalty at all). Gives every row a human-readable bottom line so
+          Momentum / LongTerm picks — which rarely trigger risk flags — stop
+          looking eerily blank underneath. */}
+      {!wasPenalised && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: '1px dashed var(--border)',
+            fontSize: 11,
+            color: 'var(--text2)',
+            lineHeight: 1.55,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span style={{
+              fontSize: 13,
+              color: 'var(--green-text)',
+              fontWeight: 700,
+              lineHeight: 1,
+              marginTop: 1,
+            }}>
+              ✓
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, color: 'var(--green-text)', marginBottom: 2 }}>
+                Clean signal — no risk flags firing
+              </div>
+              <div style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 10.5 }}>
+                {tab.id === 'rebound'
+                  ? 'Passed all 6 disqualifiers, 11 risk-flag detectors, scoreV2 ≥ 55 quality gate, and rebound confirmation checks. No penalty applied.'
+                  : tab.id === 'momentum'
+                  ? 'Passed scoreV2 ≥ 50 quality gate, all disqualifiers, all risk-flag detectors, sector cap, and VIX regime tilt. Score is this stock on its own merits.'
+                  : 'Passed Varsity 4-pillar Investment Score ≥ 60 + ROE ≥ 12% + D/E ≤ 2 + non-negative EPS growth + no severe drawdown. Score is this stock on its own merits.'}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
