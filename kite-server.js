@@ -14352,10 +14352,13 @@ function scoreFallenAngel(f) {
 
 app.get('/api/stocks/score', async(req,res)=>{
   try {
-    // FEATURE FLAG: ?scoreVersion=2 opts into Varsity-aligned long-term
-    // fundamentals-first scoring (sub-score breakout + sector template).
-    // Default remains v1 so existing clients are unaffected.
-    const scoreVersion = (parseInt(req.query.scoreVersion, 10) === 2) ? 2 : 1;
+    // Unified scoring (Apr-2026): scoreV2 is THE score for every caller.
+    // The legacy ?scoreVersion= query-param is ignored — kept for backward
+    // compatibility with any external clients still passing it. scoreOneStock
+    // (the older checklist) is retained ONLY as an internal helper for the
+    // Fallen-Angel quality gate and the PM faRawScore — it is never ranked
+    // against scoreV2 nor surfaced as a separate "Score" column.
+    const scoreVersion = 2;
 
     const empty = Object.keys(stockFundamentals).length === 0;
     const stale = Date.now()-stockFundLastFetch > 23*3600*1000;
@@ -14370,15 +14373,12 @@ app.get('/api/stocks/score', async(req,res)=>{
 
     const all = Object.values(stockFundamentals);
 
-    // For scoreVersion=2 we fetch the latest bucket-stats calibration ONCE
-    // (cached 5m in getLatestBucketStats) and reuse for every stock below.
-    // This keeps request latency in-line with v1 — the only cost is one
-    // Postgres query every 5 minutes regardless of payload size.
+    // Fetch the latest bucket-stats calibration ONCE per request (cached 5m
+    // in getLatestBucketStats) and reuse for every stock. One Postgres query
+    // every 5 minutes regardless of payload size.
     let bucketStatsMap = null;
-    if (scoreVersion === 2) {
-      try { bucketStatsMap = await getLatestBucketStats(); }
-      catch (e) { bucketStatsMap = null; }
-    }
+    try { bucketStatsMap = await getLatestBucketStats(); }
+    catch (e) { bucketStatsMap = null; }
 
     // Pre-compute derived fields for peer percentile ranking
     all.forEach(f=>{
@@ -14424,14 +14424,13 @@ app.get('/api/stocks/score', async(req,res)=>{
 
     const scored = all.map(f=>{
       const peers = bySector[f.sector||'Other'] || all;
-      const {score,hits} = scoreOneStock(f, peers);
-      // Score v2 (Varsity long-term, fundamentals-first, sub-score breakout).
-      // Only computed when ?scoreVersion=2 is requested to keep default
-      // request latency unchanged. Snapshot cron computes v2 independently.
+      // Quality-checklist (legacy scoreOneStock) retained as internal helper
+      // for the Fallen-Angel entry filter and PM faRawScore. Not ranked.
+      const {score: _qcScore, hits} = scoreOneStock(f, peers);
+      const score = _qcScore;  // back-compat: clients that read `.score` get the checklist value
+      // scoreV2 is the canonical score for every picks list. Always computed.
       let _v2 = null;
-      if (scoreVersion === 2) {
-        try { _v2 = scoreOneStockV2(f, peers); } catch(e) { _v2 = null; }
-      }
+      try { _v2 = scoreOneStockV2(f, peers); } catch(e) { _v2 = null; }
       const px = f.price || livePrices[f.sym]?.price || null;
       // Varsity Fallen Angel filter:
       // 1. Score >= 50 (business quality screen — only quality businesses can be Fallen Angels)
@@ -14598,8 +14597,9 @@ app.get('/api/stocks/score', async(req,res)=>{
         cashConversionCycle:f.cashConversionCycle, inventoryDays:f.inventoryDays,
         sharpeRatio:f.sharpeRatio, workingCapitalHealth:f.workingCapitalHealth,
         fetchedAt:f.fetchedAt,
-        // ── Score v2 (opt-in via ?scoreVersion=2) ─────────────────────────
-        // Additive fields — never overwrite existing `score`/`hits`.
+        // ── scoreV2 (canonical) ───────────────────────────────────────────
+        // Additive fields — never overwrite existing `score`/`hits` (which
+        // remain the legacy quality-checklist number for back-compat).
         // Expected return is computed per-stock using the cached bucket
         // calibration map (Varsity M3 Ch15: long-run return expectations
         // by quality bucket, risk-adjusted per M9).
@@ -14656,31 +14656,23 @@ app.get('/api/stocks/score', async(req,res)=>{
       }
     });
 
-    // When scoreVersion=2 is requested, sort by expectedReturn DESC with
-    // confidence and scoreV2 as tiebreakers (plan §8). In cold-start mode
-    // (no calibration history), expectedReturn derives from the Bayesian
-    // prior and sorting falls back to pure scoreV2 ordering naturally.
-    if (scoreVersion === 2) {
-      scored.sort((a, b) => {
-        const er = (b.expectedReturn || 0) - (a.expectedReturn || 0);
-        if (Math.abs(er) > 1e-6) return er;
-        const cf = (b.confidence || 0) - (a.confidence || 0);
-        if (Math.abs(cf) > 1e-6) return cf;
-        return (b.scoreV2 || 0) - (a.scoreV2 || 0);
-      });
-    } else {
-      scored.sort((a,b)=>b.score-a.score);
-    }
+    // Sort by expectedReturn DESC with confidence and scoreV2 as tiebreakers
+    // (plan §8). In cold-start mode (no calibration history), expectedReturn
+    // derives from the Bayesian prior and sorting falls back to pure scoreV2
+    // ordering naturally.
+    scored.sort((a, b) => {
+      const er = (b.expectedReturn || 0) - (a.expectedReturn || 0);
+      if (Math.abs(er) > 1e-6) return er;
+      const cf = (b.confidence || 0) - (a.confidence || 0);
+      if (Math.abs(cf) > 1e-6) return cf;
+      return (b.scoreV2 || 0) - (a.scoreV2 || 0);
+    });
     scored.forEach((s,i)=>{s.rank=i+1;});
 
     // Cache the fully-scored rows so Stock Picks → Deep AI Review can compute
     // the top 10 per category using the SAME filter/sort the client just ran.
-    // Only cache the v2 payload since every tab that uses these picks calls
-    // with scoreVersion=2; v1 callers are legacy and not in the picks pipeline.
-    if (scoreVersion === 2) {
-      _lastScoredV2   = scored;
-      _lastScoredV2Ts = Date.now();
-    }
+    _lastScoredV2   = scored;
+    _lastScoredV2Ts = Date.now();
 
     // Fire Telegram alerts for new Fallen Angels (async, non-blocking)
     checkAndSendAlerts(scored).catch(e=>console.log('Alert error:',e.message));
@@ -14697,42 +14689,94 @@ app.get('/api/stocks/score', async(req,res)=>{
       }
     });
 
-    // ── Sector-capped top-10 per picks category (Apr-2026) ────────────────
-    // Build once server-side so all three Picks tabs — Rebound/Momentum/Long-
-    // Term — share one sector cap (max 2 per sector) and risk-flag demotion.
-    // Disqualified stocks (pledge>75%, D/E>5 non-fin, auditor/SEBI flags,
-    // persistent losses, data<30%) are filtered out before rank.
-    // Client still receives the full `stocks` list for ad-hoc screening.
+    // ── Sector-capped top-10 per picks category (Apr-2026, unified) ───────
+    // ONE TRUNK, THREE FILTERS:
+    //   * Every picks list gates on `scoreV2` — the canonical quality score.
+    //     A stock must clear a fundamental-quality floor before it can appear
+    //     in any bucket. This prevents e.g. a penny stock with spiked RSI
+    //     landing in Momentum without earnings to back it up.
+    //   * Inside the gate, each bucket ranks by its bucket-natural signal
+    //     so the list still answers the question the tab is asking:
+    //       - Rebound  → fallenScore (depth + preserved quality)
+    //       - Momentum → composite   (RSI / OBV / trend / vol)
+    //       - LongTerm → scoreV2     (pure fundamentals)
+    //   * Every pick carries a `pickBucketReason` string explaining why
+    //     THIS stock qualifies for THIS bucket (displayed in the UI).
+    //   * Sector cap (max 2 per sector) and risk-flag demotion preserved.
+    //   * Disqualified stocks (pledge>75%, D/E>5 non-fin, auditor/SEBI flags,
+    //     persistent losses, data<30%) filtered out before rank.
+    //   Client still receives the full `stocks` list for ad-hoc screening.
     let picksRebound = [], picksMomentum = [], picksLongTerm = [];
-    if (scoreVersion === 2) {
-      const notDQ = s => !s.disqualified;
-      picksRebound = applySectorCap(
-        scored.filter(s => s.isFallenAngel && notDQ(s))
-              .sort((a,b)=>(b.fallenScore||0)-(a.fallenScore||0)),
-        2
-      ).slice(0,10);
-      picksMomentum = applySectorCap(
-        scored.filter(s => s.composite != null && s.composite >= 55 && notDQ(s))
-              .sort((a,b)=>(b.composite||0)-(a.composite||0)),
-        2
-      ).slice(0,10);
-      picksLongTerm = applySectorCap(
-        scored.filter(s => {
-          if (!notDQ(s)) return false;
-          const roeOk = s.roe == null || s.roe >= 12;
-          const deOk  = s.debtToEq == null || s.debtToEq <= 2;
-          const grOk  = s.earGrowth == null || s.earGrowth >= 0;
-          const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
-          return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
-        }).sort((a,b)=>(b.scoreV2||0)-(a.scoreV2||0)),
-        2
-      ).slice(0,10);
-    }
+    const notDQ = s => !s.disqualified;
+
+    // --- REBOUND: quality business that has fallen hard (Varsity M9) ---
+    // Gate: scoreV2 ≥ 55  AND  isFallenAngel  AND  not disqualified.
+    // Rank: fallenScore (already captures depth-of-fall + quality).
+    picksRebound = applySectorCap(
+      scored.filter(s => s.isFallenAngel && notDQ(s) && (s.scoreV2 || 0) >= 55)
+            .map(s => ({
+              ...s,
+              pickBucketReason: [
+                `scoreV2 ${s.scoreV2?.toFixed(0)}`,
+                s.pctFromHigh != null ? `${s.pctFromHigh.toFixed(0)}% from 52w hi` : null,
+                s.rsi != null ? `RSI ${s.rsi}` : null,
+              ].filter(Boolean).join(' · '),
+            }))
+            .sort((a,b)=>(b.fallenScore||0)-(a.fallenScore||0)),
+      2
+    ).slice(0,10);
+
+    // --- MOMENTUM: current strong uptrend with fundamental backing ---
+    // Gate: scoreV2 ≥ 50  AND  composite ≥ 55  AND  not disqualified.
+    // (The scoreV2 floor is the new piece — was missing before, so junk
+    //  momentum plays could rank on technicals alone.)
+    // Rank: composite (PM-engine: FA×TA×Momentum×Risk).
+    picksMomentum = applySectorCap(
+      scored.filter(s => s.composite != null && s.composite >= 55 && notDQ(s) && (s.scoreV2 || 0) >= 50)
+            .map(s => ({
+              ...s,
+              pickBucketReason: [
+                `scoreV2 ${s.scoreV2?.toFixed(0)}`,
+                `composite ${s.composite}`,
+                s.rsi != null ? `RSI ${s.rsi}` : null,
+                s.macdBull ? 'MACD+' : null,
+                s.obvRising ? 'OBV↑' : null,
+              ].filter(Boolean).join(' · '),
+            }))
+            .sort((a,b)=>(b.composite||0)-(a.composite||0)),
+      2
+    ).slice(0,10);
+
+    // --- LONG-TERM: compounders for multi-year hold ---
+    // Gate: scoreV2 ≥ 60  AND  roeOk  AND  deOk  AND  grOk  AND  notCollapsing.
+    // Rank: scoreV2 (pure fundamentals — pillars already blended correctly).
+    picksLongTerm = applySectorCap(
+      scored.filter(s => {
+        if (!notDQ(s)) return false;
+        const roeOk = s.roe == null || s.roe >= 12;
+        const deOk  = s.debtToEq == null || s.debtToEq <= 2;
+        const grOk  = s.earGrowth == null || s.earGrowth >= 0;
+        const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
+        return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
+      }).map(s => ({
+          ...s,
+          pickBucketReason: [
+            `scoreV2 ${s.scoreV2?.toFixed(0)}`,
+            s.roe != null ? `ROE ${s.roe}` : null,
+            s.debtToEq != null ? `D/E ${s.debtToEq}` : null,
+            s.earGrowth != null ? `EPS g ${s.earGrowth.toFixed(0)}%` : null,
+          ].filter(Boolean).join(' · '),
+        }))
+        .sort((a,b)=>(b.scoreV2||0)-(a.scoreV2||0)),
+      2
+    ).slice(0,10);
 
     res.json({
       stocks:scored, total:scored.length,
       picksRebound, picksMomentum, picksLongTerm,
-      score_version: scoreVersion,
+      // Always 2 now — every picks list ranks against scoreV2 as the
+      // universal quality gate. Field kept for client back-compat.
+      score_version: 2,
       loading:stockFundLoading,
       loadingMsg:stockFundLoading?'Refreshing in background...':null,
       last_refresh: stockFundLastFetch
