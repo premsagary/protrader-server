@@ -767,12 +767,15 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
       onClick={onToggle}
     >
-      {/* Top row: rank + sym + group chip + score + price */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', minWidth: 18, textAlign: 'right' }}>
+      {/* Top row — mirrors the column-header grid (24px rank · 1fr stock · 80px score · 72px price)
+          so each sub-number aligns under its header. Previously this was a flex row with a single
+          right-aligned div that collapsed score + quality + price under the PRICE column, leaving
+          SCORE visually empty. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr 80px 72px', gap: 6, alignItems: 'start' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textAlign: 'right', paddingTop: 2 }}>
           {rank}.
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
               {s.sym}
@@ -786,9 +789,8 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {s.sector || s.name || '—'}
           </div>
-          {/* pickBucketReason — server-built string explaining why this stock
-              cleared the bucket's scoreV2 gate + bucket-natural filter. Shown
-              as a subtle italic sub-line so the bucket fit is never opaque. */}
+          {/* pickBucketReason — short string explaining why this stock cleared
+              the bucket's gate. Italic sub-line so the bucket fit is never opaque. */}
           {s.pickBucketReason && (
             <div
               style={{
@@ -801,12 +803,14 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
-              title="Server-built bucket-fit reason"
+              title="Bucket-fit reason"
             >
               {s.pickBucketReason}
             </div>
           )}
         </div>
+        {/* SCORE column — main bucket-rank number, labeled, with Quality sub-score
+            (non-longterm) or expected-return hint (longterm). */}
         <div style={{ textAlign: 'right' }}>
           <div
             className="tabular-nums"
@@ -820,9 +824,6 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           >
             {score != null ? score : '—'}
           </div>
-          {/* Label under the main score — tells users what the big number
-              actually measures in each bucket. Without this, 53 vs 92.3 vs 89
-              across 3 tabs looks arbitrary. */}
           <div
             title={
               tab.id === 'rebound' ? 'FallenScore — depth-of-fall from 52w high × preserved fundamentals'
@@ -842,8 +843,6 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
              : tab.id === 'momentum' ? 'Momentum'
              : 'Quality'}
           </div>
-          {/* Quality (scoreV2) sub-number for non-longterm tabs (longterm
-              ranks by scoreV2 itself, so this would be redundant there). */}
           {tab.id !== 'longterm' && s.scoreV2 != null && (
             <div
               className="tabular-nums"
@@ -861,7 +860,6 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
               Quality {Math.round(s.scoreV2)}
             </div>
           )}
-          {/* Expected 6M return from bucketStatsMap (post external-signal nudge) */}
           {tab.id === 'longterm' && s.expectedReturn != null && (
             <div
               className="tabular-nums"
@@ -875,7 +873,10 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
               ≈{s.expectedReturn >= 0 ? '+' : ''}{Number(s.expectedReturn).toFixed(1)}% / 6M
             </div>
           )}
-          <div className="tabular-nums" style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>
+        </div>
+        {/* PRICE column */}
+        <div style={{ textAlign: 'right' }}>
+          <div className="tabular-nums" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
             {priceStr}
           </div>
         </div>
