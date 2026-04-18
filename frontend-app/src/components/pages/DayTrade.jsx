@@ -317,6 +317,25 @@ export default function DayTrade() {
         ))}
       </div>
 
+      {/* ═══ PER-SETUP MINI-TABLES (top 10 per setup) ═══ */}
+      {!loading && !error && picks.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <div className="label-xs" style={{ marginBottom: 10 }}>Top picks by setup type</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 14 }}>
+            {SETUPS.map((s) => (
+              <SetupMiniTable
+                key={s.type}
+                setup={s}
+                rows={(Array.isArray(picks) ? picks : [])
+                  .filter((p) => String(p.bestSetup || '').toUpperCase() === s.type)
+                  .sort((a, b) => (b.dayTradeScore || 0) - (a.dayTradeScore || 0))
+                  .slice(0, 10)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ═══ SETUP FILTER + SEARCH ═══ */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
         <input
@@ -510,24 +529,6 @@ export default function DayTrade() {
         </div>
       )}
 
-      {/* ═══ PER-SETUP MINI-TABLES ═══ */}
-      {!loading && !error && picks.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <div className="label-xs" style={{ marginBottom: 10 }}>Top picks by setup type</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 14 }}>
-            {SETUPS.map((s) => (
-              <SetupMiniTable
-                key={s.type}
-                setup={s}
-                rows={(Array.isArray(picks) ? picks : [])
-                  .filter((p) => String(p.bestSetup || '').toUpperCase() === s.type)
-                  .sort((a, b) => (b.dayTradeScore || 0) - (a.dayTradeScore || 0))
-                  .slice(0, 10)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
