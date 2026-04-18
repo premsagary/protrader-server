@@ -12620,6 +12620,7 @@ async function fetchAIMarketData(stockSymbols) {
           value: vixIdx.last || vixIdx.previousClose,
           change: vixIdx.percentChange,
           high: vixIdx.dayHigh, low: vixIdx.dayLow,
+          fetchedAt: Date.now(),  // Apr-2026: enables dataFreshness.vix.ageSec
         };
         console.log(`  ✅ VIX: ${_marketDataCache.vix.value}`);
       }
@@ -14869,10 +14870,63 @@ app.get('/api/stocks/score', async(req,res)=>{
         : 'Balanced tape — no regime tilt applied.',
     };
 
+    // ── Picks meta (Apr-2026) ─────────────────────────────────────
+    // Makes the gate funnel inspectable: how many stocks the universe
+    // held, how many were disqualified, how many cleared the scoreV2
+    // quality floor per bucket, how many are using cold-start priors.
+    const _dqCount = scored.filter(s => s.disqualified).length;
+    const _coldStartCount = scored.filter(s => s.usingPrior).length;
+    const _reboundEligible = scored.filter(s => s.isFallenAngel && !s.disqualified).length;
+    const _reboundGated    = scored.filter(s => s.isFallenAngel && !s.disqualified && (s.scoreV2||0) >= 55).length;
+    const _momentumEligible = scored.filter(s => !s.disqualified && s.composite != null && s.composite >= 55).length;
+    const _momentumGated    = scored.filter(s => !s.disqualified && s.composite != null && s.composite >= 55 && (s.scoreV2||0) >= 50).length;
+    const _longTermEligible = scored.filter(s => !s.disqualified && (s.scoreV2||0) >= 60).length;
+    const _picksMeta = {
+      universeSize: scored.length,
+      disqualifiedCount: _dqCount,
+      coldStartCount: _coldStartCount,
+      buckets: {
+        rebound:  { eligible: _reboundEligible,  passedGate: _reboundGated,  surfaced: picksRebound.length,  gate: 'scoreV2 >= 55 + isFallenAngel' },
+        momentum: { eligible: _momentumEligible, passedGate: _momentumGated, surfaced: picksMomentum.length, gate: 'scoreV2 >= 50 + composite >= 55' },
+        longterm: { eligible: _longTermEligible, passedGate: _longTermEligible, surfaced: picksLongTerm.length, gate: 'scoreV2 >= 60 + roeOk + deOk + grOk' },
+      },
+    };
+
+    // ── Data freshness (Apr-2026) ─────────────────────────────────
+    // Surfaces the age of every data source feeding picks so the UI
+    // can show a freshness badge AND so the user knows when a cron
+    // was last run. All ages are reported in seconds for readability.
+    const _now = Date.now();
+    const _extAgeMs = _externalSignalsTs ? (_now - _externalSignalsTs) : null;
+    const _vixTs = (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix && _marketDataCache.vix.fetchedAt)
+      ? _marketDataCache.vix.fetchedAt : null;
+    const _fundAgeMs = stockFundLastFetch ? (_now - stockFundLastFetch) : null;
+    const _fmtAge = ms => (ms == null) ? null : Math.round(ms / 1000);
+    const _dataFreshness = {
+      fundamentals: {
+        ageSec: _fmtAge(_fundAgeMs),
+        stale: _fundAgeMs != null && _fundAgeMs > 23 * 3600 * 1000, // matches existing stale threshold above
+        lastFetch: stockFundLastFetch ? new Date(stockFundLastFetch).toISOString() : null,
+      },
+      externalSignals: {
+        ageSec: _fmtAge(_extAgeMs),
+        fresh: _externalSignalsTs && _extAgeMs < EXT_SIGNALS_MAX_AGE_MS,
+        lastFetch: _externalSignalsTs ? new Date(_externalSignalsTs).toISOString() : null,
+        maxAgeSec: EXT_SIGNALS_MAX_AGE_MS / 1000,
+      },
+      vix: {
+        ageSec: _fmtAge(_vixTs ? (_now - _vixTs) : null),
+        value: _picksVix,
+        lastFetch: _vixTs ? new Date(_vixTs).toISOString() : null,
+      },
+    };
+
     res.json({
       stocks:scored, total:scored.length,
       picksRebound, picksMomentum, picksLongTerm,
       picksRegime: _picksRegime,
+      picksMeta: _picksMeta,
+      dataFreshness: _dataFreshness,
       // Always 2 now — every picks list ranks against scoreV2 as the
       // universal quality gate. Field kept for client back-compat.
       score_version: 2,
