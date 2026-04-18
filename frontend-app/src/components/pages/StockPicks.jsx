@@ -79,6 +79,14 @@ const FLAG_LABELS = {
   NEWS_NEGATIVE_HIGH:              '🤖 AI: High-Severity',
   NEWS_NEGATIVE_MEDIUM:            '🤖 AI: Moderate',
   NEWS_NEGATIVE_LOW:               '🤖 AI: Minor',
+  // New flags (2026-04-18 detector expansion)
+  REG_PROBE:                        '⚖ Regulatory Probe',
+  REVENUE_PAT_BOTH_DECLINING:       '🚨 Demand Shock',
+  REVENUE_PAT_BOTH_SOFT:            '↓ Both Softening',
+  STALE_ANALYST_DATA:               '🕒 Stale Consensus',
+  STALE_ANALYST_DATA_OLD:           '🕒 Old Consensus',
+  ANALYST_TP_BELOW_SEVERE:          '👎 Severe Overshoot',
+  ANALYST_TP_BELOW_MILD:            '👎 Mild Overshoot',
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -155,6 +163,20 @@ const FLAG_EXPLANATIONS = {
     "Our momentum score is high but the analyst target price is below current levels. Technicals and fundamentals are disagreeing — one side is usually wrong.",
   MOMENTUM_CONSENSUS_CAUTIOUS:
     "Price momentum is strong but analyst consensus is only lukewarm. Buying into strength without fundamental conviction is riskier than it looks.",
+  REG_PROBE:
+    "The company is under investigation or has a regulatory/legal overhang (SEBI, CBI, ED, SFIO, tax raid, foreign regulator probe, forensic audit, etc.). Until the probe resolves, the stock is effectively un-investable — outcomes are binary and timelines are unpredictable.",
+  REVENUE_PAT_BOTH_DECLINING:
+    "BOTH sales and profit are falling year-on-year in the latest quarter. When both top line and bottom line go the wrong way together, it's a demand shock — not a one-off margin compression — and the business has a structural problem to work through.",
+  REVENUE_PAT_BOTH_SOFT:
+    "Sales and profit are both flat-to-negative in the latest quarter. Less severe than a full demand shock, but the dual weakness means margin tricks can't hide the softness — watch the next quarter closely.",
+  STALE_ANALYST_DATA:
+    "The analyst consensus data we have is more than two weeks old. Signals based on consensus (price target, rating) may no longer reflect current reality — take them with a grain of salt until the refresh runs.",
+  STALE_ANALYST_DATA_OLD:
+    "The analyst consensus data is more than a month old. Treat any consensus-derived signals as unreliable — the market has almost certainly repriced the stock since analysts last updated.",
+  ANALYST_TP_BELOW_SEVERE:
+    "The current share price is more than 20% ABOVE the average analyst price target. In other words, the consensus thinks the stock is already worth far less than it's trading at — that's a very meaningful valuation headwind.",
+  ANALYST_TP_BELOW_MILD:
+    "The current share price is 5-10% above the average analyst price target. A mild valuation overshoot — not a dealbreaker, but the upside analysts see is already behind us.",
 };
 
 function severityColors(severity) {

@@ -618,14 +618,38 @@ function detectAnalystDowngrade(f) {
       penalty: 10,
     };
   }
-  // Negative implied return from aggregated target price
-  if (Number.isFinite(a.impliedReturn) && a.impliedReturn <= -15) {
-    return {
-      code: 'ANALYST_TP_BELOW',
-      severity: 'MEDIUM',
-      label: `Avg analyst TP ${a.impliedReturn.toFixed(0)}% below current price`,
-      penalty: 6,
-    };
+  // Graduated TP-below detector (was binary at -15%; NATCOPHARM at -9% slipped
+  // through in Apr 2026 scan). Penalty scales with the gap so mild
+  // overshoots are discounted and severe overshoots are punished hard.
+  if (Number.isFinite(a.impliedReturn) && a.impliedReturn < 0) {
+    const gap = Math.abs(a.impliedReturn);
+    // Severe: spot ≥ 20% above consensus avg target
+    if (gap >= 20) {
+      return {
+        code: 'ANALYST_TP_BELOW_SEVERE',
+        severity: 'HIGH',
+        label: `Spot trades ${gap.toFixed(0)}% ABOVE avg analyst TP — severe overshoot`,
+        penalty: 12,
+      };
+    }
+    // Material: spot 10-20% above consensus
+    if (gap >= 10) {
+      return {
+        code: 'ANALYST_TP_BELOW',
+        severity: 'MEDIUM',
+        label: `Spot trades ${gap.toFixed(0)}% above avg analyst TP — material overshoot`,
+        penalty: 8,
+      };
+    }
+    // Mild: spot 5-10% above
+    if (gap >= 5) {
+      return {
+        code: 'ANALYST_TP_BELOW_MILD',
+        severity: 'LOW',
+        label: `Spot trades ${gap.toFixed(0)}% above avg analyst TP — mild overshoot`,
+        penalty: 4,
+      };
+    }
   }
   if (a.rating === 'HOLD' && Number.isFinite(a.impliedReturn) && a.impliedReturn < 0) {
     return {
@@ -692,6 +716,110 @@ function detectMomentumConsensusConflict(f) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// 13. Regulatory probe detector (2026-04-18)
+// ────────────────────────────────────────────────────────────────────────────
+// Catches stocks under SEBI / CBI / ED / SFIO / foreign-regulator investigation
+// or forensic audit. These are governance/legal overhangs that the generic
+// `detectNewsNegative` severity classifier frequently rates as MEDIUM even
+// when the real impact is that the stock is effectively un-investable until
+// the probe clears (JYOTICNC Huron Graffenstaden SAS probe by French
+// authorities, April 2026 — missed by the severity classifier which rated
+// it as ordinary negative news).
+//
+// Keyword regex over f._newsNegative.headlines[]. Any hit → HIGH severity
+// with penalty 18 (near NEWS_DISQUALIFY). Orthogonal to the LLM path, so
+// it fires even when LLM budget is exhausted or the classifier missed the
+// nuance.
+const REG_PROBE_RE = /\b(sebi|cbi|enforcement directorate|\bed\b|sfio|income.?tax.raid|i.?t raid|tax.?evasion|forensic.?audit|show.?cause notice|scn|probe|investigation|search.?and.?seizure|fraud allegation|whistle.?blower|class.?action|arrest|summon|f\.?i\.?r\.?|police.?complaint|foreign.?regulator|doj|fbi|sec charge|market.?abuse|insider.?trading|money.?laundering)\b/i;
+
+function detectRegulatoryProbe(f) {
+  if (!f || !f._newsNegative) return null;
+  const headlines = Array.isArray(f._newsNegative.headlines) ? f._newsNegative.headlines : [];
+  if (!headlines.length) return null;
+  let hit = null;
+  for (const h of headlines) {
+    const s = String(h || '');
+    if (REG_PROBE_RE.test(s)) { hit = s; break; }
+  }
+  if (!hit) return null;
+  // Truncate long headlines for display
+  const short = hit.length > 80 ? hit.slice(0, 78) + '…' : hit;
+  return {
+    code: 'REG_PROBE',
+    severity: 'HIGH',
+    label: `Regulatory/legal overhang — "${short}"`,
+    penalty: 18,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 14. Revenue + PAT BOTH declining (demand-shock value trap) (2026-04-18)
+// ────────────────────────────────────────────────────────────────────────────
+// `detectEarningsDeceleration` fires on PAT alone — which misses stocks
+// where margin compression masks a revenue hole, or vice versa. When BOTH
+// the top line AND bottom line are going the wrong way in the latest Q,
+// that's a demand shock not a one-off — and the stock is a classic value
+// trap (VINATIORGA — sales −6.2%, PAT −7.5%, fresh 52w low on 13 Apr 2026).
+function detectRevenuePatDualDecline(f) {
+  if (!f) return null;
+  const qPat   = Number(f.patQtrYoy);
+  const qSales = Number(f.salesQtrYoy);
+  if (!Number.isFinite(qPat) || !Number.isFinite(qSales)) return null;
+  // Both falling, both non-trivial
+  if (qPat <= -5 && qSales <= -2) {
+    return {
+      code: 'REVENUE_PAT_BOTH_DECLINING',
+      severity: 'HIGH',
+      label: `Sales ${qSales.toFixed(0)}% AND PAT ${qPat.toFixed(0)}% YoY — demand shock, not one-off`,
+      penalty: 10,
+    };
+  }
+  // Softer variant — both flat-to-negative
+  if (qPat < 0 && qSales < 0) {
+    return {
+      code: 'REVENUE_PAT_BOTH_SOFT',
+      severity: 'MEDIUM',
+      label: `Sales ${qSales.toFixed(0)}% and PAT ${qPat.toFixed(0)}% YoY — both softening`,
+      penalty: 5,
+    };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 15. Stale analyst data flag (2026-04-18)
+// ────────────────────────────────────────────────────────────────────────────
+// NATCOPHARM appeared at Momentum 92.4 / LongTerm 87.6 even though public
+// consensus was Neutral with avg TP 10% BELOW spot. The culprit: stale
+// analyst-consensus data meant ANALYST_TP_BELOW never fired. This flag
+// surfaces the freshness issue directly — LOW severity, -2 penalty — so
+// stocks relying on stale consensus data rank below ones backed by fresh
+// consensus.
+function detectStaleAnalystData(f, now) {
+  if (!f || !f._analystConsensus || !f._analystConsensus.asOf) return null;
+  const asOfMs = new Date(f._analystConsensus.asOf).getTime();
+  if (!Number.isFinite(asOfMs)) return null;
+  const ageDays = Math.floor(((now ? now.getTime() : Date.now()) - asOfMs) / 86400000);
+  if (ageDays <= 14) return null;
+  // 15-30 days: info-level
+  if (ageDays <= 30) {
+    return {
+      code: 'STALE_ANALYST_DATA',
+      severity: 'LOW',
+      label: `Analyst consensus ${ageDays}d old — treat TP-based signals cautiously`,
+      penalty: 2,
+    };
+  }
+  // 30+ days: bigger concern
+  return {
+    code: 'STALE_ANALYST_DATA_OLD',
+    severity: 'MEDIUM',
+    label: `Analyst consensus ${ageDays}d old — consensus signals likely unreliable`,
+    penalty: 5,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Public entry point — returns an array of flags (0-10 items typical)
 // ────────────────────────────────────────────────────────────────────────────
 function computeRiskFlags(f, now) {
@@ -708,6 +836,9 @@ function computeRiskFlags(f, now) {
   const k = detectNewsNegative(f);                  if (k) out.push(k);
   const l = detectAnalystDowngrade(f);              if (l) out.push(l);
   const m = detectMomentumConsensusConflict(f);     if (m) out.push(m);
+  const n = detectRegulatoryProbe(f);               if (n) out.push(n);
+  const o = detectRevenuePatDualDecline(f);         if (o) out.push(o);
+  const p = detectStaleAnalystData(f, now);         if (p) out.push(p);
   return out;
 }
 

@@ -14783,23 +14783,68 @@ app.get('/api/stocks/score', async(req,res)=>{
     // mutating the stored score fields (client still sees raw values).
     const _tiltKey = (base, tilt) => base + tilt * 100;
 
+    // ── Conviction map (Apr-2026) ─────────────────────────────────────
+    // Count how many of the three buckets each symbol qualifies for
+    // BEFORE sorting. A stock that clears Rebound + LongTerm gates is
+    // a higher-conviction pick than one clearing a single bucket —
+    // reward it with a small sort-key bonus so multi-bucket picks
+    // bubble to the top of each panel. Bonus is additive (+1.5 per
+    // additional bucket) so it's small relative to the raw score but
+    // decisive when two picks are otherwise equally ranked.
+    const _reboundQ  = s => s.isFallenAngel && notDQ(s) && (s.scoreV2 || 0) >= 55;
+    const _momentumQ = s => s.composite != null && s.composite >= 55 && notDQ(s) && (s.scoreV2 || 0) >= 50;
+    const _longTermQ = s => {
+      if (!notDQ(s)) return false;
+      const roeOk = s.roe == null || s.roe >= 12;
+      const deOk  = s.debtToEq == null || s.debtToEq <= 2;
+      const grOk  = s.earGrowth == null || s.earGrowth >= 0;
+      const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
+      return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
+    };
+    const _conviction = {};
+    for (const s of scored) {
+      let c = 0;
+      if (_reboundQ(s))  c++;
+      if (_momentumQ(s)) c++;
+      if (_longTermQ(s)) c++;
+      if (c > 1) _conviction[s.sym] = c;
+    }
+    // convictionBoost: 0 for single-bucket picks, +1.5 for 2-bucket, +3 for 3-bucket
+    const _convKey = (sym) => (_conviction[sym] ? (_conviction[sym] - 1) * 1.5 : 0);
+
+    // Tie-breaker helper: inside equal sort keys, prefer picks with
+    // FEWER risk flags (the cleaner signal). This pushes "clean top of
+    // bucket" picks above flagged-but-same-score picks.
+    const _flagCountPenalty = (s, fieldName) => {
+      const flags = Array.isArray(s[fieldName]) ? s[fieldName] : [];
+      // 0.1 per flag — dwarfed by any real score difference, but decisive
+      // when two picks score exactly the same after penalty
+      return flags.length * 0.1;
+    };
+
     // --- REBOUND: quality business that has fallen hard (Varsity M9) ---
     // Gate: scoreV2 ≥ 55  AND  isFallenAngel  AND  not disqualified.
     // Rank: fallenScore (already captures depth-of-fall + quality).
     picksRebound = applySectorCap(
-      scored.filter(s => s.isFallenAngel && notDQ(s) && (s.scoreV2 || 0) >= 55)
+      scored.filter(_reboundQ)
             .map(s => ({
               ...s,
               pickBucketReason: [
                 `scoreV2 ${s.scoreV2?.toFixed(0)}`,
                 s.pctFromHigh != null ? `${s.pctFromHigh.toFixed(0)}% from 52w hi` : null,
                 s.rsi != null ? `RSI ${s.rsi}` : null,
+                _conviction[s.sym] ? `${_conviction[s.sym]}-bucket conviction` : null,
                 _picksVixRegime !== 'NORMAL' && _regimeTilt.rebound > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
                 _picksVixRegime !== 'NORMAL' && _regimeTilt.rebound < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
               ].filter(Boolean).join(' · '),
               regimeTilt: _regimeTilt.rebound,
+              convictionCount: _conviction[s.sym] || 1,
             }))
-            .sort((a,b)=>_tiltKey(b.fallenScore||0, _regimeTilt.rebound) - _tiltKey(a.fallenScore||0, _regimeTilt.rebound)),
+            .sort((a,b)=>{
+              const ka = _tiltKey(a.fallenScore||0, _regimeTilt.rebound) + _convKey(a.sym) - _flagCountPenalty(a, 'fallenRiskFlags');
+              const kb = _tiltKey(b.fallenScore||0, _regimeTilt.rebound) + _convKey(b.sym) - _flagCountPenalty(b, 'fallenRiskFlags');
+              return kb - ka;
+            }),
       2
     ).slice(0,10);
 
@@ -14809,7 +14854,7 @@ app.get('/api/stocks/score', async(req,res)=>{
     //  momentum plays could rank on technicals alone.)
     // Rank: composite (PM-engine: FA×TA×Momentum×Risk).
     picksMomentum = applySectorCap(
-      scored.filter(s => s.composite != null && s.composite >= 55 && notDQ(s) && (s.scoreV2 || 0) >= 50)
+      scored.filter(_momentumQ)
             .map(s => ({
               ...s,
               pickBucketReason: [
@@ -14818,12 +14863,18 @@ app.get('/api/stocks/score', async(req,res)=>{
                 s.rsi != null ? `RSI ${s.rsi}` : null,
                 s.macdBull ? 'MACD+' : null,
                 s.obvRising ? 'OBV↑' : null,
+                _conviction[s.sym] ? `${_conviction[s.sym]}-bucket conviction` : null,
                 _picksVixRegime !== 'NORMAL' && _regimeTilt.momentum > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
                 _picksVixRegime !== 'NORMAL' && _regimeTilt.momentum < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
               ].filter(Boolean).join(' · '),
               regimeTilt: _regimeTilt.momentum,
+              convictionCount: _conviction[s.sym] || 1,
             }))
-            .sort((a,b)=>_tiltKey(b.composite||0, _regimeTilt.momentum) - _tiltKey(a.composite||0, _regimeTilt.momentum)),
+            .sort((a,b)=>{
+              const ka = _tiltKey(a.composite||0, _regimeTilt.momentum) + _convKey(a.sym) - _flagCountPenalty(a, 'compositeRiskFlags');
+              const kb = _tiltKey(b.composite||0, _regimeTilt.momentum) + _convKey(b.sym) - _flagCountPenalty(b, 'compositeRiskFlags');
+              return kb - ka;
+            }),
       2
     ).slice(0,10);
 
@@ -14831,26 +14882,26 @@ app.get('/api/stocks/score', async(req,res)=>{
     // Gate: scoreV2 ≥ 60  AND  roeOk  AND  deOk  AND  grOk  AND  notCollapsing.
     // Rank: scoreV2 (pure fundamentals — pillars already blended correctly).
     picksLongTerm = applySectorCap(
-      scored.filter(s => {
-        if (!notDQ(s)) return false;
-        const roeOk = s.roe == null || s.roe >= 12;
-        const deOk  = s.debtToEq == null || s.debtToEq <= 2;
-        const grOk  = s.earGrowth == null || s.earGrowth >= 0;
-        const notCollapsing = s.pctFromHigh == null || s.pctFromHigh >= -35;
-        return (s.scoreV2 || 0) >= 60 && roeOk && deOk && grOk && notCollapsing;
-      }).map(s => ({
-          ...s,
-          pickBucketReason: [
-            `scoreV2 ${s.scoreV2?.toFixed(0)}`,
-            s.roe != null ? `ROE ${s.roe}` : null,
-            s.debtToEq != null ? `D/E ${s.debtToEq}` : null,
-            s.earGrowth != null ? `EPS g ${s.earGrowth.toFixed(0)}%` : null,
-            _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
-            _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
-          ].filter(Boolean).join(' · '),
-          regimeTilt: _regimeTilt.longterm,
-        }))
-        .sort((a,b)=>_tiltKey(b.scoreV2||0, _regimeTilt.longterm) - _tiltKey(a.scoreV2||0, _regimeTilt.longterm)),
+      scored.filter(_longTermQ)
+            .map(s => ({
+              ...s,
+              pickBucketReason: [
+                `scoreV2 ${s.scoreV2?.toFixed(0)}`,
+                s.roe != null ? `ROE ${s.roe}` : null,
+                s.debtToEq != null ? `D/E ${s.debtToEq}` : null,
+                s.earGrowth != null ? `EPS g ${s.earGrowth.toFixed(0)}%` : null,
+                _conviction[s.sym] ? `${_conviction[s.sym]}-bucket conviction` : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
+              ].filter(Boolean).join(' · '),
+              regimeTilt: _regimeTilt.longterm,
+              convictionCount: _conviction[s.sym] || 1,
+            }))
+            .sort((a,b)=>{
+              const ka = _tiltKey(a.scoreV2||0, _regimeTilt.longterm) + _convKey(a.sym) - _flagCountPenalty(a, 'riskFlags');
+              const kb = _tiltKey(b.scoreV2||0, _regimeTilt.longterm) + _convKey(b.sym) - _flagCountPenalty(b, 'riskFlags');
+              return kb - ka;
+            }),
       2
     ).slice(0,10);
 
