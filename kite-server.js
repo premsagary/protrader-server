@@ -9723,6 +9723,85 @@ function scoreDayTrade(candles, sym, ctx) {
   const aboveCpr = cpr && px > cpr.cprHi;
   const belowCpr = cpr && px < cpr.cprLo;
 
+  // ── Commit 3: Microstructure signals (NR7 · inside bar · aVWAP · bid-ask · partial OR) ──
+  // Small-sample structural signals that fire on specific bar patterns. Used
+  // as conviction modifiers (not primary setups). Varsity M2 Ch 11: "coiling
+  // price memory precedes expansion" — NR7/inside-bar are the coil; aVWAP is
+  // the institutional defense line; partial OR means the usual levels aren't
+  // yet authoritative.
+  const last2 = todayCandles.slice(-2);
+  const currBar = last2[1] || last2[0];
+  const prevBar = last2[0];
+  const currRange = currBar ? (currBar.high - currBar.low) : 0;
+  // NR7: current 5-min range is the narrowest of the last 7 bars
+  const last7Ranges = todayCandles.slice(-7).map(c => c.high - c.low);
+  const isNR7 = last7Ranges.length >= 7 &&
+    currRange > 0 &&
+    currRange === Math.min(...last7Ranges);
+  // Inside bar: current entirely within prev bar's range (compression)
+  const isInsideBar = !!(currBar && prevBar &&
+    currBar.high <= prevBar.high && currBar.low >= prevBar.low &&
+    (currBar.high - currBar.low) < (prevBar.high - prevBar.low));
+  // NR7 + inside bar together = classic Varsity "coil" — strongest pre-expansion signal
+  const coiledBar = isNR7 && isInsideBar;
+
+  // Anchored VWAP from previous day high and low — intraday institutional
+  // reference lines. Much more meaningful than a naive session VWAP when
+  // price is testing a recent pivot. If we're bouncing off aVWAP from PDL,
+  // that's buyers defending the prior day's base.
+  let avwapFromPDH = null, avwapFromPDL = null;
+  try {
+    if (prevDayCandles.length && todayCandles.length >= 2) {
+      // Find the bar where PDH/PDL were set (last bar at those extremes)
+      let pdhIdx = 0, pdlIdx = 0;
+      for (let i = 0; i < prevDayCandles.length; i++) {
+        if (prevDayCandles[i].high >= pdHigh) pdhIdx = i;
+        if (prevDayCandles[i].low  <= pdLow)  pdlIdx = i;
+      }
+      // Anchor from PDH/PDL forward through today
+      const anchorBars = prevDayCandles.concat(todayCandles);
+      const pdhAnchor = anchorBars.slice(prevDayCandles.length - (prevDayCandles.length - pdhIdx));
+      const pdlAnchor = anchorBars.slice(prevDayCandles.length - (prevDayCandles.length - pdlIdx));
+      const _aVWAP = bars => {
+        let numer = 0, denom = 0;
+        for (const b of bars) {
+          const tp = (b.high + b.low + b.close) / 3;
+          const v = b.volume || 0;
+          numer += tp * v; denom += v;
+        }
+        return denom > 0 ? numer / denom : null;
+      };
+      avwapFromPDH = _aVWAP(pdhAnchor);
+      avwapFromPDL = _aVWAP(pdlAnchor);
+    }
+  } catch (e) { /* aVWAP best-effort */ }
+  const nearAVWAPFromPDL = avwapFromPDL && Math.abs(px - avwapFromPDL) / px < 0.005; // within 0.5%
+  const nearAVWAPFromPDH = avwapFromPDH && Math.abs(px - avwapFromPDH) / px < 0.005;
+
+  // Bid-ask spread proxy — we don't have tick-level quotes but can approximate
+  // liquidity from recent wick/body symmetry + ATR. A "clean" candle (small
+  // wicks, tight range vs ATR) implies tight spreads. Messy candle with long
+  // wicks and huge range = wide spreads / thin book. Used to penalize illiquid
+  // setups where slippage will eat RR.
+  const recent10 = todayCandles.slice(-10);
+  let msSpreadProxy = null;
+  if (recent10.length >= 5) {
+    const avgRange = recent10.reduce((a, c) => a + (c.high - c.low), 0) / recent10.length;
+    const avgWick  = recent10.reduce((a, c) => {
+      const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
+      return a + (c.high - bodyHi) + (bodyLo - c.low);
+    }, 0) / recent10.length;
+    // Ratio: wick-to-range. High = messy, wide spreads. Low = clean, tight.
+    msSpreadProxy = avgRange > 0 ? +(avgWick / avgRange).toFixed(2) : null;
+  }
+  const wideSpreadLikely = msSpreadProxy != null && msSpreadProxy > 0.75;
+
+  // Partial OR flag: during OPENING phase (first 30 min, < 6 bars), OR is
+  // still forming. BREAKOUT signals built on an incomplete OR are provisional;
+  // we surface the flag + lower the breakout confidence.
+  const orBars = todayFirst6.length;
+  const orIncomplete = orBars < 6;
+
   // ── Varsity M2 Ch 5-10: Candlestick pattern detection on 5-min ──
   // Use today's candles so pattern reflects the current session's psychology.
   // Declared with `let` because Ch 4 prior-trend filter below may demote weight.
@@ -10201,6 +10280,21 @@ function scoreDayTrade(candles, sym, ctx) {
   // Narrow CPR confirms trending-day breakout bias
   if (cpr && cpr.type === 'NARROW' && breakoutScore >= 30) { breakoutScore += _gain('BRK', 6, `Narrow CPR (${cpr.widthPct.toFixed(2)}%) — trending day`); breakoutDetail.push('Narrow CPR'); }
   else if (cpr && cpr.type === 'WIDE') { breakoutScore += _penalty('BRK', 8, `Wide CPR (${cpr.widthPct.toFixed(2)}%) — range day fade risk`); breakoutDetail.push('Wide CPR range day'); }
+  // Commit 3: partial OR — breakout above an unfinished range is provisional
+  if (orIncomplete && aboveOR) {
+    breakoutScore += _penalty('BRK', 8, `OR still forming (${orBars}/6 bars) — breakout provisional`);
+    breakoutDetail.push(`OR incomplete (${orBars}/6)`);
+  }
+  // Commit 3: coiled bar (NR7 + inside) preceding the breakout = pre-expansion
+  if (coiledBar) {
+    breakoutScore += _gain('BRK', 6, 'NR7 inside-bar coil — pre-expansion pattern');
+    breakoutDetail.push('Coiled bar (NR7+inside)');
+  }
+  // Commit 3: wide bid-ask proxy penalty on breakouts (slippage risk)
+  if (wideSpreadLikely) {
+    breakoutScore += _penalty('BRK', 4, `Wide spread proxy (wick/range ${msSpreadProxy}) — slippage risk`);
+    breakoutDetail.push('Wide-spread proxy');
+  }
   // Varsity M2 Ch 5-10: bullish pattern confirming the breakout
   if (bullPattern && bullPattern.weight >= 12 && breakoutScore >= 30) {
     const bonus = Math.round(bullPattern.weight * 0.5);
@@ -10460,6 +10554,96 @@ function scoreDayTrade(candles, sym, ctx) {
       }
     }
   } catch (e) { /* sector momentum unavailable */ }
+
+  // ── Commit 3: F&O OI context (for F&O stocks only) ─────────────────────
+  // When the stock is in F&O, options-market positioning is load-bearing
+  // context. PCR > 1.3 = put-heavy (bearish skew, but also contrarian floor);
+  // PCR < 0.7 = call-heavy (bullish but potential exhaustion). Max pain
+  // attraction: price tends to drift toward max pain on expiry week; if
+  // we're > 3% away from max pain with expiry < 3d, there's mean-reversion
+  // gravity pulling against momentum.
+  let fnoContext = null;
+  try {
+    const od = (typeof _marketDataCache !== 'undefined' && _marketDataCache.optionData)
+      ? _marketDataCache.optionData[sym] : null;
+    if (od && od.pcr) {
+      const pcr = +od.pcr;
+      const maxPain = od.maxPain;
+      const maxPainDistPct = (maxPain && px)
+        ? +(((px - maxPain) / px) * 100).toFixed(2) : null;
+      fnoContext = {
+        pcr, maxPain, maxPainDistPct,
+        atmIV: od.atmIV,
+        totalCEOI: od.totalCEOI, totalPEOI: od.totalPEOI,
+      };
+      // PCR extremes — contrarian bias
+      if (pcr > 1.5) {
+        // Very bearish positioning → contrarian bullish floor for longs
+        overall = Math.min(100, overall + _gain('MULTI', 3, `PCR ${pcr.toFixed(2)} — put-heavy, contrarian floor`));
+      } else if (pcr < 0.6) {
+        // Excessive call-heavy → exhaustion risk on longs
+        overall = Math.max(0, overall + _penalty('MULTI', 4, `PCR ${pcr.toFixed(2)} — call-heavy, exhaustion risk`));
+      }
+      // Max pain gravity — only apply if expiry is near (approx by non-zero OI magnitude + distance)
+      if (maxPainDistPct != null && Math.abs(maxPainDistPct) > 3) {
+        // Price above max pain = downward pull; below = upward pull
+        if (maxPainDistPct > 3) {
+          // Price well above max pain → gravity pulls down (bad for longs)
+          overall = Math.max(0, overall + _penalty('MULTI', 3, `Px ${maxPainDistPct.toFixed(1)}% above max pain ${maxPain} — gravity pulls down`));
+        } else if (maxPainDistPct < -3 && best.type === 'OVERSOLD_BOUNCE') {
+          // Price well below max pain + bounce setup → gravity aligns with thesis
+          overall = Math.min(100, overall + _gain('MULTI', 4, `Px ${Math.abs(maxPainDistPct).toFixed(1)}% below max pain ${maxPain} — bounce aligned with gravity`));
+        }
+      }
+      // Elevated ATM IV → expect wider swings; mild warn
+      if (od.atmIV && od.atmIV > 35) {
+        overall = Math.max(0, overall + _penalty('MULTI', 2, `ATM IV elevated (${od.atmIV}%) — expect wider swings`));
+      }
+    }
+  } catch (e) { /* F&O context best-effort */ }
+
+  // ── Commit 3: Pre-open auction context (meaningful only early session) ──
+  // Pre-open IEP + buy/sell imbalance tells us whether the 9:15 gap was
+  // institutionally conviction-backed. A +3% gap with +0.6 buy imbalance
+  // and big ATO buy orders = real gap-and-go. A +3% gap with -0.2 imbalance
+  // means sellers were dominating pre-open → gap-fill risk.
+  let preOpenContext = null;
+  try {
+    const pod = (typeof _marketDataCache !== 'undefined' && _marketDataCache.preOpenData)
+      ? _marketDataCache.preOpenData[sym] : null;
+    // Only apply during OPENING/MORNING phases when pre-open is still relevant
+    if (pod && (sessionPhase === 'OPENING' || sessionPhase === 'MORNING')) {
+      preOpenContext = {
+        iep: pod.iep, gapPct: pod.gapPct,
+        imbalance: pod.imbalance, totalBuyQty: pod.totalBuyQty, totalSellQty: pod.totalSellQty,
+      };
+      // Pre-open conviction: gap-and-go + strong buy imbalance = big boost
+      if (best.type === 'GAP_AND_GO' && pod.gapPct != null && pod.gapPct > 1.0) {
+        if (pod.imbalance > 0.3) {
+          overall = Math.min(100, overall + _gain('MULTI', 5, `Pre-open: +${pod.gapPct}% gap with ${(pod.imbalance*100).toFixed(0)}% buy imbalance`));
+        } else if (pod.imbalance < -0.2) {
+          overall = Math.max(0, overall + _penalty('MULTI', 6, `Pre-open: +${pod.gapPct}% gap but ${Math.abs(pod.imbalance*100).toFixed(0)}% sell imbalance — gap-fill risk`));
+        }
+      }
+      // Large-gap pre-open conviction check applies to ALL setups on gap-up days
+      if (pod.gapPct != null && Math.abs(pod.gapPct) > 2.0 && Math.abs(pod.imbalance) < 0.1) {
+        // Big gap with flat imbalance = uncertain — mild dampener
+        overall = Math.max(0, overall + _penalty('MULTI', 2, `Pre-open gap ${pod.gapPct}% with flat imbalance — low conviction`));
+      }
+    }
+  } catch (e) { /* pre-open context best-effort */ }
+
+  // ── Commit 3: Microstructure bonuses (aVWAP bounce · coil) ──────────────
+  // Broadly applicable to any long setup.
+  if (nearAVWAPFromPDL && best.type === 'OVERSOLD_BOUNCE') {
+    overall = Math.min(100, overall + _gain('MULTI', 4, 'Near anchored VWAP from PDL — institutional defense line'));
+  } else if (nearAVWAPFromPDH && best.type === 'BREAKOUT') {
+    overall = Math.min(100, overall + _gain('MULTI', 3, 'Near anchored VWAP from PDH — pivot level re-test'));
+  }
+  if (coiledBar && best.type !== 'BREAKOUT') {
+    // Already credited inside breakoutScore for BREAKOUT; credit here for others
+    overall = Math.min(100, overall + _gain('MULTI', 2, 'Coiled bar (NR7+inside) — pre-expansion'));
+  }
 
   // Late session penalty
   if (isLateTrade) { overall = Math.max(0, overall + _penalty('MULTI', 15, 'Late session penalty (after 3PM IST — Varsity M9)')); }
@@ -10892,6 +11076,22 @@ function scoreDayTrade(candles, sym, ctx) {
     sectorRank,            // { sector, rank, total, avgScore } or null
     betaUsed: _beta != null ? +(+_beta).toFixed(2) : null,
     betaSLMult: +betaSLMult.toFixed(2),
+    // Commit 3: F&O OI + pre-open + microstructure
+    fnoContext,            // { pcr, maxPain, maxPainDistPct, atmIV, totalCEOI, totalPEOI } or null
+    preOpenContext,        // { iep, gapPct, imbalance, totalBuyQty, totalSellQty } or null
+    microstructure: {
+      isNR7,
+      isInsideBar,
+      coiledBar,
+      avwapFromPDH: avwapFromPDH ? +avwapFromPDH.toFixed(2) : null,
+      avwapFromPDL: avwapFromPDL ? +avwapFromPDL.toFixed(2) : null,
+      nearAVWAPFromPDH,
+      nearAVWAPFromPDL,
+      spreadProxy: msSpreadProxy,
+      wideSpreadLikely,
+      orIncomplete,
+      orBarsComplete: orBars,
+    },
     // Varsity M2 Ch 14: RSI midline state
     rsiAboveMidline, rsiCrossedMidlineUp,
     // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
@@ -12341,7 +12541,8 @@ async function fetchFromNSE(sym) {
 
 let _marketDataCache = {
   vix: null, fiiDii: null, crude: null, usdInr: null, rbiRepoRate: null,
-  deliveryData: {}, optionData: {}, quarterlyResults: {}, fetchedAt: 0
+  deliveryData: {}, optionData: {}, preOpenData: {},   // Commit 3: pre-open auction data
+  quarterlyResults: {}, fetchedAt: 0
 };
 
 // Get NSE session cookies (reusable)
@@ -12430,6 +12631,32 @@ async function fetchAIMarketData(stockSymbols) {
           prevClose: trade.previousClose,
           isFnO: secInfo.surveillance?.isFNO === 'true' || false,
         };
+
+        // Commit 3: persist pre-open auction data (9:00-9:08 IST window).
+        // Unlike the 9:15 open price, pre-open IEP reflects institutional
+        // order-book imbalance *before* retail shows up. Strong pre-open
+        // upside gap + high buy/sell imbalance + large ATO order = high
+        // conviction gap-and-go; weak/reversed pre-open = gap-fill risk.
+        if (preOpen && (preOpen.IEP || preOpen.iep || preOpen.finalPrice)) {
+          const iep = preOpen.IEP || preOpen.iep || preOpen.finalPrice;
+          const prev = trade.previousClose;
+          const totalBuy  = preOpen.totalBuyQuantity  || preOpen.totalBuy  || 0;
+          const totalSell = preOpen.totalSellQuantity || preOpen.totalSell || 0;
+          const imbalance = (totalBuy + totalSell) > 0
+            ? ((totalBuy - totalSell) / (totalBuy + totalSell))
+            : 0;
+          _marketDataCache.preOpenData = _marketDataCache.preOpenData || {};
+          _marketDataCache.preOpenData[sym] = {
+            iep: iep ? +(+iep).toFixed(2) : null,
+            gapPct: (iep && prev) ? +(((iep - prev) / prev) * 100).toFixed(2) : null,
+            totalBuyQty: totalBuy,
+            totalSellQty: totalSell,
+            imbalance: +imbalance.toFixed(2),   // -1..+1, >0 = buy-heavy
+            atoBuy: preOpen.atoBuyQty || preOpen.atoBuy || 0,
+            atoSell: preOpen.atoSellQty || preOpen.atoSell || 0,
+            fetchedAt: Date.now(),
+          };
+        }
 
         if (secInfo.surveillance?.isFNO === 'true') fnoStocks.add(sym);
       } catch (e) { /* skip this stock */ }
