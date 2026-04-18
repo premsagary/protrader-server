@@ -8,9 +8,9 @@ export default function MiroFishLab() {
   const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
-    // Server returns scoreV2 (not investment_score). Requires ?scoreVersion=2.
-    // Also apply Long-Term gate: roe ≥ 8 AND debtToEq ≤ 3 AND not disqualified.
-    apiGet('/api/stocks/score?scoreVersion=2')
+    // Server always returns scoreV2 as the canonical score.
+    // Apply Long-Term gate: roe ≥ 8 AND debtToEq ≤ 3 AND not disqualified.
+    apiGet('/api/stocks/score')
       .then((d) => {
         const all = (d.stocks || d || [])
           .filter((s) => {
