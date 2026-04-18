@@ -14611,6 +14611,39 @@ app.get('/api/stocks/score', async(req,res)=>{
             riskLevel: _v2.riskLevel,
             dataCompleteness: _v2.dataCompleteness,
           }, bucketStatsMap, 'r_6m');
+
+          // ── External-signal nudge (Apr-2026) ────────────────────────────
+          // Fold analyst consensus + news severity into expectedReturn as a
+          // bounded additive adjustment (±3.0 percentage points total). This
+          // is orthogonal to the risk-flag penalty pipeline (which demotes
+          // scoreV2 itself) — the nudge tunes expected RETURN, the flags
+          // tune quality SCORE. Zero-impact when f._analystConsensus /
+          // f._newsNegative are absent (cron not run, or signal not cached).
+          let erAdj = er.expectedReturn;
+          const nudges = { analyst: 0, news: 0 };
+          const ac = f._analystConsensus;
+          if (ac && Number.isFinite(ac.impliedReturn)) {
+            // Clamp implied return to ±25% before folding in — one broker with
+            // a moonshot TP shouldn't flip our rank. Then blend at 0.08 weight:
+            // a +20% implied return => +1.6pp nudge; a -20% => -1.6pp.
+            const ir = Math.max(-25, Math.min(25, ac.impliedReturn));
+            nudges.analyst = +(ir * 0.08).toFixed(2);
+          }
+          const nn = f._newsNegative;
+          if (nn && nn.max_severity && nn.max_severity !== 'NONE') {
+            // LLM-classified severity tiers → bounded damper. Deliberately
+            // smaller than analyst nudge — risk-flags already penalise the
+            // underlying scoreV2 when news is HIGH; this is just a rank tilt.
+            const damp = nn.max_severity === 'HIGH' ? -1.5
+                       : nn.max_severity === 'MEDIUM' ? -0.8
+                       : nn.max_severity === 'LOW' ? -0.3 : 0;
+            nudges.news = damp;
+          }
+          const totalNudge = _clampNum(nudges.analyst + nudges.news, -3.0, 3.0);
+          if (Number.isFinite(erAdj) && totalNudge !== 0) {
+            erAdj = +(erAdj + totalNudge).toFixed(3);
+          }
+
           return {
             scoreV2:         _v2.scoreV2 != null ? +_v2.scoreV2.toFixed(2) : null,
             subScores:       _v2.subScores || null,
@@ -14621,7 +14654,10 @@ app.get('/api/stocks/score', async(req,res)=>{
             dataCompleteness:_v2.dataCompleteness != null ? +_v2.dataCompleteness.toFixed(3) : null,
             sectorTemplate:  _v2.sectorTemplate || null,
             scoreBucket:     bucket,
-            expectedReturn:  er.expectedReturn,
+            expectedReturn:  erAdj,
+            expectedReturnRaw: er.expectedReturn,
+            expectedReturnNudge: +totalNudge.toFixed(2),
+            expectedReturnNudgeParts: nudges,
             expectedReturnHorizon: er.expectedReturnHorizon,
             confidence:      er.confidence,
             usingPrior:      er.usingPrior,
