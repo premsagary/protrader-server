@@ -524,70 +524,38 @@ async function initDB() {
     `);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PICKS PAPER-TRACKER — Phase 0 (Apr-2026)
-    // Records every pick that appears on Rebound / Momentum / LongTerm panels
-    // so short-horizon outcomes (T+5/T+20/T+60) can be attributed back to the
-    // bucket, flags, score band, and conviction level. This is the evidence
-    // substrate that tells us which rules are actually earning alpha vs noise.
-    // One row per (snapshot_date, bucket, sym) — idempotent on repeat scans.
+    // PICKS AI BUY PLAN — single-model LLM review of the merged top-30 picks
+    // (10 rebound + 10 momentum + 10 longterm). Input: the 30 candidates; the
+    // LLM decides which are genuinely buy-worthy, ranks only the approved ones,
+    // and emits a complete exit plan per pick (target, stop, horizon, sell-if).
+    // Manual trigger only (POST /api/ai-picks/run). Not cron-driven.
     // ─────────────────────────────────────────────────────────────────────────
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS picks_history (
-        pick_id          BIGSERIAL PRIMARY KEY,
-        snapshot_date    DATE NOT NULL,
-        recorded_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        sym              VARCHAR(20) NOT NULL,
-        bucket           VARCHAR(15) NOT NULL,
-        rank             INTEGER,
-        score_v2         DECIMAL(6,2),
-        fallen_score     DECIMAL(10,4),
-        composite        DECIMAL(10,4),
-        entry_price      DECIMAL(18,2),
-        sector           VARCHAR(100),
-        conviction_count INTEGER,
-        risk_flags       JSONB,
-        regime_tilt      DECIMAL(6,3),
-        vix_regime       VARCHAR(20),
-        UNIQUE (snapshot_date, bucket, sym)
+      CREATE TABLE IF NOT EXISTS picks_ai_buy_plan (
+        plan_id       BIGSERIAL PRIMARY KEY,
+        run_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        run_date      DATE NOT NULL,
+        run_by        VARCHAR(64),
+        model         VARCHAR(64),
+        top30_input   JSONB NOT NULL,
+        plan          JSONB NOT NULL,
+        picks_count   INTEGER NOT NULL DEFAULT 0,
+        skipped_count INTEGER NOT NULL DEFAULT 0,
+        duration_ms   INTEGER,
+        input_tokens  INTEGER,
+        output_tokens INTEGER,
+        error         TEXT
       )
     `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(snapshot_date DESC)`).catch(()=>{});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_sym  ON picks_history(sym, snapshot_date DESC)`).catch(()=>{});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_bucket ON picks_history(bucket, snapshot_date DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_buy_plan_date ON picks_ai_buy_plan(run_date DESC, run_at DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_ai_buy_plan_run_at ON picks_ai_buy_plan(run_at DESC)`).catch(()=>{});
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS picks_outcomes (
-        pick_id          BIGINT NOT NULL REFERENCES picks_history(pick_id) ON DELETE CASCADE,
-        horizon          VARCHAR(5) NOT NULL,
-        price_at_t       DECIMAL(18,2),
-        return_pct       DECIMAL(10,4),
-        nifty_return_pct DECIMAL(10,4),
-        alpha_pct        DECIMAL(10,4),
-        filled_at        TIMESTAMPTZ DEFAULT NOW(),
-        PRIMARY KEY (pick_id, horizon)
-      )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_outcomes_horizon ON picks_outcomes(horizon, filled_at DESC)`).catch(()=>{});
-
-    // Picks Journal — Phase 0C behavioral guardrail. When the user marks
-    // "I'm interested" on a pick, we record the intent + their 1-line reason
-    // and start a 24h decision window. UI blocks the "ready to act" badge
-    // until 24h elapses — empirically the single biggest retail-alpha boost.
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS picks_journal (
-        journal_id   BIGSERIAL PRIMARY KEY,
-        username     VARCHAR(50) NOT NULL,
-        sym          VARCHAR(20) NOT NULL,
-        bucket       VARCHAR(15) NOT NULL,
-        reason       TEXT,
-        decided_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        acted_at     TIMESTAMPTZ,
-        acted_outcome VARCHAR(20),
-        UNIQUE (username, sym, bucket, decided_at)
-      )
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_journal_user ON picks_journal(username, decided_at DESC)`).catch(()=>{});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_journal_sym ON picks_journal(sym, decided_at DESC)`).catch(()=>{});
+    // One-time cleanup: drop retired Phase 0 paper-tracker + journal tables
+    // (picks_history / picks_outcomes / picks_journal) if they exist. Safe no-op
+    // on fresh DBs. Replaces observability with the AI buy plan above.
+    await pool.query(`DROP TABLE IF EXISTS picks_journal  CASCADE`).catch(()=>{});
+    await pool.query(`DROP TABLE IF EXISTS picks_outcomes CASCADE`).catch(()=>{});
+    await pool.query(`DROP TABLE IF EXISTS picks_history  CASCADE`).catch(()=>{});
 
     // Bucket calibration stats — recomputed nightly
     await pool.query(`
@@ -1085,7 +1053,7 @@ async function initDB() {
       )
     `);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily + daytrade_cache tables included)");
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + picks_ai_buy_plan + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily + daytrade_cache tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -15038,50 +15006,6 @@ app.get('/api/stocks/score', async(req,res)=>{
       },
     };
 
-    // ── Paper-tracker snapshot (Phase 0) ──────────────────────────
-    // Fire-and-forget; idempotent on (snapshot_date, bucket, sym) so repeat
-    // calls today are DB-no-ops. Never blocks the response or propagates errors.
-    // This is the substrate for per-pick alpha attribution against NIFTY.
-    try {
-      if (pool) {
-        const _snapDate = _llmTodayISO();
-        const _snapBucket = (bucketName, list) => list.forEach((p, idx) => {
-          const _flags = []
-            .concat(Array.isArray(p.fallenRiskFlags)    ? p.fallenRiskFlags    : [])
-            .concat(Array.isArray(p.compositeRiskFlags) ? p.compositeRiskFlags : [])
-            .concat(Array.isArray(p.riskFlags)          ? p.riskFlags          : []);
-          const _uniq = Array.from(new Map(_flags.map(f => [f.code, f])).values());
-          pool.query(
-            `INSERT INTO picks_history
-               (snapshot_date, sym, bucket, rank, score_v2, fallen_score, composite,
-                entry_price, sector, conviction_count, risk_flags, regime_tilt, vix_regime)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-             ON CONFLICT (snapshot_date, bucket, sym) DO NOTHING`,
-            [
-              _snapDate, p.sym, bucketName, idx + 1,
-              p.scoreV2 != null ? +p.scoreV2 : null,
-              p.fallenScore != null ? +p.fallenScore : null,
-              p.composite != null ? +p.composite : null,
-              p.price != null ? +p.price : null,
-              p.sector || null,
-              p.convictionCount || 1,
-              JSON.stringify(_uniq),
-              p.regimeTilt != null ? +p.regimeTilt : 0,
-              _picksVixRegime || 'NORMAL',
-            ]
-          ).catch(e => {
-            if (!_snapBucket._warned) {
-              _snapBucket._warned = true;
-              console.warn(`picks_history insert warn (${bucketName}/${p.sym}): ${e.message}`);
-            }
-          });
-        });
-        _snapBucket('rebound',  picksRebound);
-        _snapBucket('momentum', picksMomentum);
-        _snapBucket('longterm', picksLongTerm);
-      }
-    } catch (e) { /* never block response */ }
-
     res.json({
       stocks:scored, total:scored.length,
       picksRebound, picksMomentum, picksLongTerm,
@@ -17585,404 +17509,462 @@ app.post('/api/admin/forward-returns/run', async (req, res) => {
 });
 
 // =============================================================================
-// PICKS OUTCOME CRON — Phase 0 paper-tracker
-// Short-horizon per-pick attribution against NIFTY. Fills picks_outcomes at
-// T+5 / T+20 / T+60 calendar days (±tolerance) with entry→current return, NIFTY
-// return over the same window, and alpha. Separate from stock_forward_returns
-// because this tracks WHAT ACTUALLY SHOWED UP on Rebound/Momentum/LongTerm
-// panels — the honest question is "do the panels beat NIFTY?", which requires
-// per-pick not per-snapshot attribution.
+// PICKS AI BUY PLAN (retired Phase 0 paper-tracker + journal — replaced by
+// a single-model LLM review of the merged top-30 list). The AI runtime lives
+// below BUCKET STATS; this marker is kept so audit greps still land somewhere.
 // =============================================================================
-const _PICK_HORIZONS = [
-  { key: 't5',  days: 5,  tol: 2 },
-  { key: 't20', days: 20, tol: 2 },
-  { key: 't60', days: 60, tol: 3 },
-];
+// =============================================================================
+// AI BUY PLAN — single-model LLM review of the merged top-30 picks
+// =============================================================================
+// Takes the top 10 rebound + top 10 momentum + top 10 longterm picks from the
+// current /api/stocks/score response and sends them to a single LLM for a buy/
+// reject decision. The model is free to approve 0-30 and ranks ONLY the
+// approved ones. Each approved pick gets a complete exit plan:
+//   - entry_zone (low/high)
+//   - target_price
+//   - stop_loss
+//   - horizon_days
+//   - expected_return_pct, risk_reward
+//   - sell_if[] — 2-4 thesis-break triggers
+//
+// Manual trigger only. One row per run, stored in picks_ai_buy_plan. The
+// frontend reads GET /api/ai-picks/latest to show the most recent plan, and
+// POST /api/ai-picks/run to regenerate on demand.
+// =============================================================================
 
-async function fillPicksOutcomes(reason = 'cron') {
-  const t0 = Date.now();
-  if (!pool) return { filled: 0, skipped: 'no-pool' };
-
-  // One NIFTY fetch per run; build date→close lookup. Tolerates weekends/
-  // holidays by walking back up to 5 days to the nearest prior close.
-  let niftyByDate = null, niftyLastClose = null;
-  try {
-    const nc = await fetchKiteDaily('NIFTY 50');
-    if (nc && nc.length) {
-      niftyByDate = new Map();
-      nc.forEach(c => {
-        const d = typeof c.date === 'string'
-          ? c.date.slice(0, 10)
-          : (c.date instanceof Date ? c.date.toISOString().slice(0, 10) : null);
-        if (d && Number.isFinite(+c.close)) niftyByDate.set(d, +c.close);
-      });
-      niftyLastClose = +nc[nc.length - 1].close;
-    }
-  } catch (e) { console.warn('picks-outcomes: nifty fetch failed:', e.message); }
-
-  const _niftyOn = (isoDate) => {
-    if (!niftyByDate) return null;
-    if (niftyByDate.has(isoDate)) return niftyByDate.get(isoDate);
-    const d = new Date(isoDate + 'T00:00:00Z');
-    for (let i = 1; i <= 7; i++) {
-      d.setUTCDate(d.getUTCDate() - 1);
-      const k = d.toISOString().slice(0, 10);
-      if (niftyByDate.has(k)) return niftyByDate.get(k);
-    }
-    return null;
+// Strip a pick down to what the LLM actually needs — keeps the prompt compact
+// (a fat 30-pick prompt can blow past 60K input tokens otherwise).
+function _aiPickCandidate(p, bucket, rank) {
+  if (!p) return null;
+  const _flags = []
+    .concat(Array.isArray(p.fallenRiskFlags)    ? p.fallenRiskFlags    : [])
+    .concat(Array.isArray(p.compositeRiskFlags) ? p.compositeRiskFlags : [])
+    .concat(Array.isArray(p.riskFlags)          ? p.riskFlags          : [])
+    .concat(Array.isArray(p.infoFlags)          ? p.infoFlags          : []);
+  const flagCodes = Array.from(new Set(_flags.map(f => f && f.code).filter(Boolean)));
+  return {
+    rank,
+    sym: p.sym,
+    bucket,
+    price: p.price != null ? +(+p.price).toFixed(2) : null,
+    sector: p.sector || null,
+    scoreV2: p.scoreV2 != null ? +(+p.scoreV2).toFixed(2) : null,
+    fallenScore: p.fallenScore != null ? +(+p.fallenScore).toFixed(2) : null,
+    composite: p.composite != null ? +(+p.composite).toFixed(2) : null,
+    momentum: p.momentumScore != null ? +(+p.momentumScore).toFixed(2) : null,
+    expectedReturn: p.expectedReturn != null ? +(+p.expectedReturn).toFixed(2) : null,
+    confidenceInput: p.confidence != null ? +(+p.confidence).toFixed(2) : null,
+    convictionCount: p.convictionCount || 1,
+    riskFlags: flagCodes,
+    regimeTilt: p.regimeTilt != null ? +(+p.regimeTilt).toFixed(3) : 0,
+    reason: (p.reason || '').toString().slice(0, 200),
+    pe: p.pe != null ? +(+p.pe).toFixed(2) : null,
+    roe: p.roe != null ? +(+p.roe).toFixed(2) : null,
+    debtEq: p.debtEq != null ? +(+p.debtEq).toFixed(2) : null,
+    salesGrowth: p.salesGrowth != null ? +(+p.salesGrowth).toFixed(2) : null,
+    profitGrowth: p.profitGrowth != null ? +(+p.profitGrowth).toFixed(2) : null,
   };
-
-  let filled = 0, errors = 0;
-  const todayMs = Date.now();
-
-  for (const h of _PICK_HORIZONS) {
-    const target = new Date(todayMs - h.days * 24 * 3600 * 1000);
-    const lo = new Date(target.getTime() - h.tol * 24 * 3600 * 1000).toISOString().slice(0, 10);
-    const hi = new Date(target.getTime() + h.tol * 24 * 3600 * 1000).toISOString().slice(0, 10);
-
-    let rows;
-    try {
-      const r = await pool.query(
-        `SELECT h.pick_id, h.sym, h.entry_price, h.snapshot_date
-           FROM picks_history h
-           LEFT JOIN picks_outcomes o
-             ON o.pick_id = h.pick_id AND o.horizon = $3
-          WHERE h.snapshot_date BETWEEN $1 AND $2
-            AND h.entry_price IS NOT NULL
-            AND o.pick_id IS NULL
-          LIMIT 5000`,
-        [lo, hi, h.key]
-      );
-      rows = r.rows || [];
-    } catch (e) {
-      console.error(`picks-outcomes query failed (${h.key}):`, e.message);
-      continue;
-    }
-
-    for (const row of rows) {
-      const entryPx = Number(row.entry_price);
-      if (!Number.isFinite(entryPx) || entryPx <= 0) continue;
-      const f = stockFundamentals[row.sym];
-      const nowPx = (f && f.price) || livePrices[row.sym]?.price || null;
-      if (!nowPx || !Number.isFinite(nowPx) || nowPx <= 0) continue;
-
-      const ret = +((nowPx / entryPx - 1).toFixed(6));
-      const isoSnap = typeof row.snapshot_date === 'string'
-        ? row.snapshot_date.slice(0, 10)
-        : row.snapshot_date.toISOString().slice(0, 10);
-      const niftyEntry = _niftyOn(isoSnap);
-      const niftyRet = (niftyEntry && niftyLastClose)
-        ? +((niftyLastClose / niftyEntry - 1).toFixed(6))
-        : null;
-      const alpha = (niftyRet != null) ? +(ret - niftyRet).toFixed(6) : null;
-
-      try {
-        await pool.query(
-          `INSERT INTO picks_outcomes (pick_id, horizon, price_at_t, return_pct, nifty_return_pct, alpha_pct, filled_at)
-           VALUES ($1,$2,$3,$4,$5,$6, NOW())
-           ON CONFLICT (pick_id, horizon) DO UPDATE SET
-             price_at_t = EXCLUDED.price_at_t,
-             return_pct = EXCLUDED.return_pct,
-             nifty_return_pct = EXCLUDED.nifty_return_pct,
-             alpha_pct = EXCLUDED.alpha_pct,
-             filled_at = NOW()`,
-          [row.pick_id, h.key, nowPx, ret, niftyRet, alpha]
-        );
-        filled++;
-      } catch (e) {
-        errors++;
-        if (errors < 5) console.error(`picks-outcomes upsert failed ${row.sym} ${h.key}:`, e.message);
-      }
-    }
-  }
-  console.log(`📈 Picks outcomes filled (${reason}): ${filled} — ${errors} errors — ${Date.now() - t0}ms`);
-  return { filled, errors, tookMs: Date.now() - t0 };
 }
 
-// 10:45PM IST daily — runs after stock_forward_returns (10:30PM)
-cron.schedule('45 22 * * *', async () => {
-  console.log('📈 10:45PM: Picks outcomes fill starting...');
-  try { await fillPicksOutcomes('cron-1045pm'); }
-  catch (e) { console.error('Picks outcomes cron error:', e.message); }
-}, { timezone: 'Asia/Kolkata' });
+function _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm) {
+  const reb  = (picksRebound  || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'rebound',  i + 1)).filter(Boolean);
+  const mom  = (picksMomentum || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'momentum', i + 1)).filter(Boolean);
+  const lt   = (picksLongTerm || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'longterm', i + 1)).filter(Boolean);
+  return { rebound: reb, momentum: mom, longterm: lt };
+}
 
-// Manual trigger
-app.post('/api/admin/picks-outcomes/run', async (req, res) => {
-  try {
-    const result = await fillPicksOutcomes('manual');
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+function _aiBuildPrompt(top30, ctx) {
+  const sys = `You are a senior Indian equity analyst reviewing a short list of 30 pre-screened stocks — 10 from each of three buckets: rebound (oversold bounce candidates), momentum (trend continuation), longterm (fundamental compounders).
 
-// =============================================================================
-// PICKS TRACKER STATS — Phase 0 paper-tracker analytics
-// Returns per-bucket hit-rate vs NIFTY, per-score-band hit-rate, per-flag
-// hit-rate delta, clean-signal vs flagged, top winners/losers, rolling alpha.
-// Powers the Tracker UI tab. Default horizon t20 (20 calendar days).
-// =============================================================================
-app.get('/api/picks-tracker/stats', async (req, res) => {
-  if (!pool) return res.json({ ok: false, error: 'no-pool' });
-  const horizon = String(req.query.horizon || 't20').toLowerCase();
-  if (!['t5', 't20', 't60'].includes(horizon)) {
-    return res.status(400).json({ ok: false, error: 'invalid horizon (t5|t20|t60)' });
+Your job: decide which of these 30 are ACTUALLY worth buying today for a retail investor using Zerodha Kite. Then rank ONLY the ones you approve. Do NOT force a fixed count. If only 3 are genuinely good, return 3. If all 30 are good, return 30. If zero meet your bar, return 0.
+
+For every approved pick you MUST provide a complete exit plan:
+  - entry_zone: {low, high} in rupees — where it's buyable now
+  - target_price: in rupees — where you'd take profit
+  - stop_loss: in rupees — where the thesis is wrong
+  - horizon_days: expected holding period
+  - expected_return_pct: (target - entry_mid) / entry_mid * 100, 1dp
+  - risk_reward: (target - entry_high) / (entry_low - stop_loss), must be >= 1.5
+  - sell_if[]: 2-4 specific triggers. At least one must be a price stop, at least one must be a thesis-break (earnings miss, sector shock, competitor news, guidance cut, etc.).
+  - confidence: "high" | "medium" | "low"
+  - rationale: 2-3 sentences. Cite SPECIFIC numbers from the data (score, PE, growth, etc.). Reference the bucket logic.
+
+Be strict. Reject candidates with:
+- Weak composite (<6.5) without a strong compensating catalyst
+- Major risk flags (ANALYST_TP_BELOW, EARNINGS_SEQUENTIAL_DECLINE, REG_PROBE, LOW_VOL, WHIPSAW_RISK) not explicitly compensated
+- Deteriorating fundamentals dressed up as value
+- Momentum picks without price>MA + volume confirmation inferred from the data
+- Rebound picks whose "oversold" framing isn't backed by a reasonable base
+
+Bucket-specific rules:
+- rebound horizon_days: 5-25
+- momentum horizon_days: 15-45
+- longterm horizon_days: 90-365
+
+Be decisive. No wishy-washy "watchlist" entries. Either it's a buy today, or it goes into "skipped".
+
+OUTPUT: strict JSON only. NO markdown fences, no prose outside JSON, no trailing commentary.`;
+
+  const header = `Market context:
+  VIX regime: ${ctx.vixRegime || 'UNKNOWN'}   VIX: ${ctx.vix != null ? ctx.vix : 'n/a'}
+  Breadth (% above VWAP): ${ctx.breadthPct != null ? ctx.breadthPct : 'n/a'}
+  Regime tag: ${ctx.regime || 'NEUTRAL'}
+  As of (IST): ${ctx.asOf || ''}
+
+`;
+
+  const renderList = (label, list) => {
+    if (!list || !list.length) return `=== ${label.toUpperCase()} (empty) ===\n`;
+    const rows = list.map(p => {
+      const flags = p.riskFlags && p.riskFlags.length ? p.riskFlags.join(', ') : 'none';
+      return `  #${p.rank} ${p.sym} [${p.sector || '—'}]  ₹${p.price != null ? p.price : '?'}
+     scoreV2=${p.scoreV2} fallen=${p.fallenScore} composite=${p.composite} mom=${p.momentum}
+     expectedReturn=${p.expectedReturn}%  confidenceInput=${p.confidenceInput}  regimeTilt=${p.regimeTilt}
+     conviction=${p.convictionCount} bucket(s)   PE=${p.pe} ROE=${p.roe} D/E=${p.debtEq}
+     growth: sales=${p.salesGrowth}%  profit=${p.profitGrowth}%
+     risk_flags: ${flags}
+     scorer_note: ${p.reason}`;
+    }).join('\n\n');
+    return `=== ${label.toUpperCase()} CANDIDATES (${list.length}) ===\n${rows}\n\n`;
+  };
+
+  const user = header
+    + renderList('rebound',  top30.rebound)
+    + renderList('momentum', top30.momentum)
+    + renderList('longterm', top30.longterm)
+    + `Return EXACTLY this JSON shape (no markdown fences):
+
+{
+  "summary": "<1-2 sentence overall read — is today's list strong, mixed, or weak?>",
+  "market_read": "<1 sentence on how regime/VIX/breadth shape today's risk budget>",
+  "picks": [
+    {
+      "rank": 1,
+      "sym": "<SYMBOL>",
+      "bucket": "rebound" | "momentum" | "longterm",
+      "confidence": "high" | "medium" | "low",
+      "rationale": "<2-3 sentences with specific numbers>",
+      "entry_zone": { "low": <number>, "high": <number> },
+      "target_price": <number>,
+      "stop_loss": <number>,
+      "horizon_days": <integer>,
+      "expected_return_pct": <number>,
+      "risk_reward": <number>,
+      "sell_if": [ "<trigger 1>", "<trigger 2>", ... ]
+    }
+  ],
+  "skipped": [
+    { "sym": "<SYMBOL>", "bucket": "rebound|momentum|longterm", "reason": "<1 sentence>" }
+  ]
+}
+
+Rules: picks[] is ONLY approved stocks, ranked 1..N (1=highest conviction). skipped[] must list EVERY rejected candidate with its bucket. Total approved+skipped MUST equal the number of candidates in the input (30 when lists are full). No duplicate sym across picks and skipped.`;
+
+  return { sys, user };
+}
+
+// Extract JSON from the model response, tolerating stray fences or preamble.
+function _aiExtractJSON(raw) {
+  if (!raw || typeof raw !== 'string') throw new Error('empty LLM response');
+  let s = raw.trim();
+  // Strip markdown fences
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  }
+  // Pluck first { ... last } if there is preamble
+  const first = s.indexOf('{');
+  const last  = s.lastIndexOf('}');
+  if (first > 0 || last !== s.length - 1) {
+    if (first >= 0 && last > first) s = s.slice(first, last + 1);
   }
   try {
-    const totalR = await pool.query(
-      `SELECT
-          (SELECT COUNT(*)::int FROM picks_history)                                    AS total_picks,
-          (SELECT COUNT(*)::int FROM picks_outcomes WHERE horizon = $1)                AS total_outcomes,
-          (SELECT COUNT(DISTINCT snapshot_date)::int FROM picks_history)               AS days_tracked,
-          (SELECT MIN(snapshot_date)::text FROM picks_history)                         AS first_day,
-          (SELECT MAX(snapshot_date)::text FROM picks_history)                         AS last_day`,
-      [horizon]
-    );
-
-    const bucketR = await pool.query(
-      `SELECT h.bucket,
-              COUNT(o.pick_id)::int                                        AS n,
-              ROUND(AVG(o.return_pct)::numeric      * 100, 3)::float       AS avg_return_pct,
-              ROUND(AVG(o.nifty_return_pct)::numeric * 100, 3)::float      AS avg_nifty_pct,
-              ROUND(AVG(o.alpha_pct)::numeric       * 100, 3)::float       AS avg_alpha_pct,
-              ROUND(AVG(CASE WHEN o.alpha_pct  > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate_vs_nifty,
-              ROUND(AVG(CASE WHEN o.return_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate_positive
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        GROUP BY h.bucket
-        ORDER BY h.bucket`,
-      [horizon]
-    );
-
-    const bandR = await pool.query(
-      `SELECT
-          CASE
-            WHEN h.score_v2 >= 70 THEN '70+'
-            WHEN h.score_v2 >= 60 THEN '60-70'
-            WHEN h.score_v2 >= 50 THEN '50-60'
-            ELSE '<50'
-          END AS band,
-          h.bucket,
-          COUNT(o.pick_id)::int                                        AS n,
-          ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
-          ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        GROUP BY band, h.bucket
-        ORDER BY h.bucket, band`,
-      [horizon]
-    );
-
-    const flagR = await pool.query(
-      `WITH flags_exp AS (
-         SELECT h.pick_id, h.bucket, o.alpha_pct,
-                (flag->>'code') AS code
-           FROM picks_history h
-           JOIN picks_outcomes o
-             ON o.pick_id = h.pick_id AND o.horizon = $1
-           CROSS JOIN LATERAL jsonb_array_elements(COALESCE(h.risk_flags,'[]'::jsonb)) AS flag
-       )
-       SELECT code,
-              COUNT(*)::int                                        AS n,
-              ROUND(AVG(alpha_pct)::numeric * 100, 3)::float       AS avg_alpha_pct,
-              ROUND(AVG(CASE WHEN alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
-         FROM flags_exp
-        GROUP BY code
-        ORDER BY avg_alpha_pct ASC`,
-      [horizon]
-    );
-
-    const cleanR = await pool.query(
-      `SELECT h.bucket,
-              COUNT(o.pick_id)::int                                        AS n,
-              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
-              ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        WHERE jsonb_array_length(COALESCE(h.risk_flags,'[]'::jsonb)) = 0
-        GROUP BY h.bucket`,
-      [horizon]
-    );
-
-    const winnersR = await pool.query(
-      `SELECT h.sym, h.bucket, h.snapshot_date::text AS snapshot_date,
-              ROUND(o.return_pct::numeric       * 100, 2)::float AS return_pct,
-              ROUND(o.alpha_pct::numeric        * 100, 2)::float AS alpha_pct,
-              ROUND(o.nifty_return_pct::numeric * 100, 2)::float AS nifty_return_pct
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        WHERE h.snapshot_date > NOW() - INTERVAL '120 days'
-        ORDER BY o.alpha_pct DESC NULLS LAST
-        LIMIT 10`,
-      [horizon]
-    );
-    const losersR = await pool.query(
-      `SELECT h.sym, h.bucket, h.snapshot_date::text AS snapshot_date,
-              ROUND(o.return_pct::numeric       * 100, 2)::float AS return_pct,
-              ROUND(o.alpha_pct::numeric        * 100, 2)::float AS alpha_pct,
-              ROUND(o.nifty_return_pct::numeric * 100, 2)::float AS nifty_return_pct
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        WHERE h.snapshot_date > NOW() - INTERVAL '120 days'
-        ORDER BY o.alpha_pct ASC NULLS LAST
-        LIMIT 10`,
-      [horizon]
-    );
-
-    const rollR = await pool.query(
-      `SELECT h.bucket,
-              CASE
-                WHEN h.snapshot_date > NOW() - INTERVAL '30 days'  THEN '30d'
-                WHEN h.snapshot_date > NOW() - INTERVAL '60 days'  THEN '60d'
-                WHEN h.snapshot_date > NOW() - INTERVAL '90 days'  THEN '90d'
-                ELSE 'older'
-              END AS window,
-              COUNT(o.pick_id)::int                                    AS n,
-              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float         AS avg_alpha_pct
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        GROUP BY h.bucket, window
-        ORDER BY h.bucket, window`,
-      [horizon]
-    );
-
-    // Conviction: does multi-bucket conviction actually earn more alpha?
-    const convR = await pool.query(
-      `SELECT h.conviction_count::int AS conviction,
-              COUNT(o.pick_id)::int                                        AS n,
-              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
-              ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
-         FROM picks_history h
-         JOIN picks_outcomes o
-           ON o.pick_id = h.pick_id AND o.horizon = $1
-        GROUP BY h.conviction_count
-        ORDER BY h.conviction_count`,
-      [horizon]
-    );
-
-    res.json({
-      ok: true,
-      horizon,
-      meta: totalR.rows[0] || { total_picks: 0, total_outcomes: 0, days_tracked: 0 },
-      byBucket:    bucketR.rows,
-      byScoreBand: bandR.rows,
-      byFlag:      flagR.rows,
-      cleanSignal: cleanR.rows,
-      byConviction: convR.rows,
-      winners:     winnersR.rows,
-      losers:      losersR.rows,
-      rolling:     rollR.rows,
-    });
+    return JSON.parse(s);
   } catch (e) {
-    console.error('picks-tracker stats error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    throw new Error(`JSON parse failed: ${e.message} — head=${s.slice(0, 120)}`);
   }
-});
+}
 
-// =============================================================================
-// PICKS JOURNAL — Phase 0C behavioral guardrail
-// Records the user's "I'm interested" intent with a 1-line reason before they
-// actually execute. A 24h hold on the "ready to act" badge enforces a cooling
-// period — one of the most reliable retail-alpha boosters per the research.
-// =============================================================================
-app.post('/api/picks-journal', async (req, res) => {
+// Validate + coerce the shape. Drops garbage entries with warnings rather than
+// rejecting the whole response, so one bad pick row doesn't kill the run.
+function _aiNormalizePlan(parsed, top30) {
+  if (!parsed || typeof parsed !== 'object') throw new Error('plan is not an object');
+  const validSyms = new Set([
+    ...top30.rebound.map(p => p.sym),
+    ...top30.momentum.map(p => p.sym),
+    ...top30.longterm.map(p => p.sym),
+  ]);
+  const validBuckets = new Set(['rebound', 'momentum', 'longterm']);
+  const validConf = new Set(['high', 'medium', 'low']);
+
+  const picksIn = Array.isArray(parsed.picks) ? parsed.picks : [];
+  const picks = [];
+  for (const raw of picksIn) {
+    if (!raw || typeof raw !== 'object') continue;
+    const sym = String(raw.sym || '').trim().toUpperCase();
+    const bucket = String(raw.bucket || '').trim().toLowerCase();
+    if (!validSyms.has(sym)) continue;
+    if (!validBuckets.has(bucket)) continue;
+    const ez = raw.entry_zone || {};
+    const entryLo = +ez.low, entryHi = +ez.high;
+    const target  = +raw.target_price;
+    const stop    = +raw.stop_loss;
+    if (!Number.isFinite(entryLo) || !Number.isFinite(entryHi) || !Number.isFinite(target) || !Number.isFinite(stop)) continue;
+    if (!(stop < entryLo && entryLo <= entryHi && entryHi < target)) continue;
+    const conf = validConf.has(String(raw.confidence || '').toLowerCase()) ? String(raw.confidence).toLowerCase() : 'medium';
+    const horizonDays = Math.max(1, Math.min(400, parseInt(raw.horizon_days, 10) || 30));
+    const sellIf = Array.isArray(raw.sell_if)
+      ? raw.sell_if.map(x => String(x || '').slice(0, 280)).filter(Boolean).slice(0, 6)
+      : [];
+    const entryMid = (entryLo + entryHi) / 2;
+    const rr = (entryLo - stop) > 0 ? +(((target - entryHi) / (entryLo - stop)).toFixed(2)) : null;
+    const expRet = entryMid > 0 ? +(((target - entryMid) / entryMid) * 100).toFixed(2) : null;
+    picks.push({
+      rank: parseInt(raw.rank, 10) || picks.length + 1,
+      sym,
+      bucket,
+      confidence: conf,
+      rationale: String(raw.rationale || '').slice(0, 800),
+      entry_zone: { low: +entryLo.toFixed(2), high: +entryHi.toFixed(2) },
+      target_price: +target.toFixed(2),
+      stop_loss:    +stop.toFixed(2),
+      horizon_days: horizonDays,
+      expected_return_pct: Number.isFinite(+raw.expected_return_pct) ? +(+raw.expected_return_pct).toFixed(2) : expRet,
+      risk_reward:         Number.isFinite(+raw.risk_reward) ? +(+raw.risk_reward).toFixed(2) : rr,
+      sell_if: sellIf,
+    });
+  }
+  // Re-rank 1..N in case model used sparse ranks
+  picks.sort((a, b) => (a.rank || 999) - (b.rank || 999));
+  picks.forEach((p, i) => { p.rank = i + 1; });
+
+  // Build approved sym set for skipped dedup
+  const approvedSyms = new Set(picks.map(p => p.sym));
+  const skippedIn = Array.isArray(parsed.skipped) ? parsed.skipped : [];
+  const skipped = [];
+  for (const raw of skippedIn) {
+    if (!raw || typeof raw !== 'object') continue;
+    const sym = String(raw.sym || '').trim().toUpperCase();
+    if (!validSyms.has(sym) || approvedSyms.has(sym)) continue;
+    const bucket = String(raw.bucket || '').trim().toLowerCase();
+    skipped.push({
+      sym,
+      bucket: validBuckets.has(bucket) ? bucket : '',
+      reason: String(raw.reason || '').slice(0, 300) || 'No reason provided',
+    });
+  }
+  // Fill in any candidates the model forgot to mention — treat as skipped with
+  // default reason, so the UI never shows phantom untagged picks.
+  for (const sym of validSyms) {
+    if (!approvedSyms.has(sym) && !skipped.find(s => s.sym === sym)) {
+      skipped.push({ sym, bucket: '', reason: 'Not reviewed by model' });
+    }
+  }
+
+  return {
+    summary:     String(parsed.summary || '').slice(0, 500),
+    market_read: String(parsed.market_read || '').slice(0, 300),
+    picks,
+    skipped,
+  };
+}
+
+// Thin single-model LLM call. Anthropic direct. Claude Haiku 4.5 by default —
+// fast, cheap, strong at structured JSON under strict schema. Override via
+// AI_PICKS_MODEL env.
+async function _aiCallClaude(sys, user) {
+  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const model = process.env.AI_PICKS_MODEL || 'claude-haiku-4-5-20251001';
+  const maxTokens = parseInt(process.env.AI_PICKS_MAX_TOKENS || '8000', 10);
+  const t0 = Date.now();
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': ANTHROPIC_API_KEY,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      system: sys,
+      messages: [{ role: 'user', content: user }],
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!resp.ok) {
+    const text = (await resp.text()).slice(0, 300);
+    throw new Error(`Anthropic ${resp.status}: ${text}`);
+  }
+  const data = await resp.json();
+  const raw = data.content?.[0]?.text || '';
+  const tokens = { input: data.usage?.input_tokens || 0, output: data.usage?.output_tokens || 0 };
+  return { raw, tokens, model, durationMs: Date.now() - t0 };
+}
+
+// POST /api/ai-picks/run — generate a fresh plan.
+// Body: { picks: { rebound: [...], momentum: [...], longterm: [...] }, meta?: { vixRegime, vix, regime, breadthPct } }
+// The client sends exactly the picks it's rendering so the LLM reviews the
+// same 30 the user sees. Server is the source of truth for the LLM call but
+// the candidate list comes from the client (auth-gated, tamper just wastes
+// the user's own LLM budget).
+app.post('/api/ai-picks/run', async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: 'no-pool' });
   const username = (req.user && req.user.username) ? req.user.username : 'public';
   if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
 
-  const { sym, bucket, reason } = req.body || {};
-  if (!sym || !bucket) return res.status(400).json({ ok: false, error: 'sym + bucket required' });
-  if (!['rebound', 'momentum', 'longterm'].includes(bucket)) {
-    return res.status(400).json({ ok: false, error: 'bucket must be rebound|momentum|longterm' });
-  }
-  const cleanReason = (reason || '').toString().slice(0, 500);
-
   try {
-    const r = await pool.query(
-      `INSERT INTO picks_journal (username, sym, bucket, reason)
-       VALUES ($1, $2, $3, $4)
-       RETURNING journal_id, decided_at`,
-      [username, sym, bucket, cleanReason]
+    const body = req.body || {};
+    const p = body.picks || {};
+    const picksRebound  = Array.isArray(p.rebound)  ? p.rebound  : [];
+    const picksMomentum = Array.isArray(p.momentum) ? p.momentum : [];
+    const picksLongTerm = Array.isArray(p.longterm) ? p.longterm : [];
+    const meta = body.meta || {};
+
+    const top30 = _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm);
+    const totalIn = top30.rebound.length + top30.momentum.length + top30.longterm.length;
+    if (totalIn === 0) {
+      return res.status(400).json({ ok: false, error: 'no picks supplied in body.picks.{rebound,momentum,longterm}' });
+    }
+
+    const ctx = {
+      vixRegime:  meta.vixRegime  || 'NORMAL',
+      vix:        meta.vix != null ? meta.vix : null,
+      breadthPct: meta.breadthPct != null ? meta.breadthPct : null,
+      regime:     meta.regime     || 'NEUTRAL',
+      asOf: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+    };
+    const { sys, user } = _aiBuildPrompt(top30, ctx);
+
+    let call, parsed, plan;
+    try {
+      call = await _aiCallClaude(sys, user);
+    } catch (e) {
+      // Persist the failure row so the UI can show an error state
+      await pool.query(
+        `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, error)
+         VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6)`,
+        [username, process.env.AI_PICKS_MODEL || 'claude-haiku-4-5-20251001',
+         JSON.stringify(top30), JSON.stringify({ summary: '', market_read: '', picks: [], skipped: [] }),
+         0, e.message.slice(0, 500)]
+      ).catch(()=>{});
+      return res.status(502).json({ ok: false, error: 'LLM call failed: ' + e.message });
+    }
+
+    try {
+      parsed = _aiExtractJSON(call.raw);
+      plan = _aiNormalizePlan(parsed, top30);
+    } catch (e) {
+      await pool.query(
+        `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error)
+         VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6, $7, $8)`,
+        [username, call.model, JSON.stringify(top30),
+         JSON.stringify({ summary: '', market_read: '', picks: [], skipped: [], raw: call.raw.slice(0, 4000) }),
+         call.durationMs, call.tokens.input, call.tokens.output, e.message.slice(0, 500)]
+      ).catch(()=>{});
+      return res.status(502).json({ ok: false, error: 'parse failed: ' + e.message });
+    }
+
+    const ins = await pool.query(
+      `INSERT INTO picks_ai_buy_plan
+         (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, input_tokens, output_tokens)
+       VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING plan_id, run_at`,
+      [username, call.model, JSON.stringify(top30), JSON.stringify(plan),
+       plan.picks.length, plan.skipped.length,
+       call.durationMs, call.tokens.input, call.tokens.output]
     );
+
     res.json({
       ok: true,
-      journal_id: r.rows[0].journal_id,
-      decided_at: r.rows[0].decided_at,
-      ready_at: new Date(new Date(r.rows[0].decided_at).getTime() + 24 * 3600 * 1000).toISOString(),
+      plan_id: ins.rows[0].plan_id,
+      run_at:  ins.rows[0].run_at,
+      run_by:  username,
+      model:   call.model,
+      duration_ms:   call.durationMs,
+      input_tokens:  call.tokens.input,
+      output_tokens: call.tokens.output,
+      top30_input:   top30,
+      plan,
     });
   } catch (e) {
-    console.error('picks-journal insert error:', e.message);
+    console.error('ai-picks run error:', e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-app.get('/api/picks-journal', async (req, res) => {
+// GET /api/ai-picks/latest — most recent successful plan (any user, global).
+// Optional ?mine=1 to scope to current user's runs.
+app.get('/api/ai-picks/latest', async (req, res) => {
   if (!pool) return res.json({ ok: false, error: 'no-pool' });
-  const username = (req.user && req.user.username) ? req.user.username : 'public';
-  if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
-
+  const username = (req.user && req.user.username) ? req.user.username : null;
+  const mineOnly = String(req.query.mine || '') === '1' && username;
   try {
-    const r = await pool.query(
-      `SELECT journal_id, sym, bucket, reason,
-              decided_at,
-              acted_at, acted_outcome
-         FROM picks_journal
-        WHERE username = $1
-        ORDER BY decided_at DESC
-        LIMIT 200`,
-      [username]
-    );
-    const now = Date.now();
-    const entries = r.rows.map(e => {
-      const decidedMs = new Date(e.decided_at).getTime();
-      const readyMs = decidedMs + 24 * 3600 * 1000;
-      return {
-        ...e,
-        ready_at: new Date(readyMs).toISOString(),
-        hold_elapsed: now >= readyMs,
-        seconds_until_ready: Math.max(0, Math.round((readyMs - now) / 1000)),
-      };
+    const q = mineOnly
+      ? `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
+                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
+           FROM picks_ai_buy_plan
+          WHERE run_by = $1 AND error IS NULL
+          ORDER BY run_at DESC LIMIT 1`
+      : `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
+                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
+           FROM picks_ai_buy_plan
+          WHERE error IS NULL
+          ORDER BY run_at DESC LIMIT 1`;
+    const r = mineOnly ? await pool.query(q, [username]) : await pool.query(q);
+    if (!r.rows.length) return res.json({ ok: true, latest: null });
+    const row = r.rows[0];
+    const ageMs = Date.now() - new Date(row.run_at).getTime();
+    res.json({
+      ok: true,
+      latest: {
+        plan_id: row.plan_id,
+        run_at:  row.run_at,
+        run_date: row.run_date,
+        run_by:  row.run_by,
+        model:   row.model,
+        picks_count:   row.picks_count,
+        skipped_count: row.skipped_count,
+        duration_ms:   row.duration_ms,
+        input_tokens:  row.input_tokens,
+        output_tokens: row.output_tokens,
+        age_hours:     +(ageMs / (3600 * 1000)).toFixed(2),
+        top30_input:   row.top30_input,
+        plan:          row.plan,
+      },
     });
-    res.json({ ok: true, entries });
   } catch (e) {
-    console.error('picks-journal fetch error:', e.message);
+    console.error('ai-picks latest error:', e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// Mark a journal entry as acted (user executed the trade or passed)
-app.patch('/api/picks-journal/:id', async (req, res) => {
-  if (!pool) return res.status(500).json({ ok: false, error: 'no-pool' });
-  const username = (req.user && req.user.username) ? req.user.username : 'public';
-  if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
-
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid id' });
-
-  const { outcome } = req.body || {};
-  if (!['bought', 'passed', 'watching'].includes(outcome)) {
-    return res.status(400).json({ ok: false, error: 'outcome must be bought|passed|watching' });
-  }
-
+// GET /api/ai-picks/history — last N plans (for debugging / future "diff" view)
+app.get('/api/ai-picks/history', async (req, res) => {
+  if (!pool) return res.json({ ok: false, error: 'no-pool' });
+  const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 10));
   try {
     const r = await pool.query(
-      `UPDATE picks_journal
-          SET acted_outcome = $1, acted_at = NOW()
-        WHERE journal_id = $2 AND username = $3
-        RETURNING journal_id, acted_at, acted_outcome`,
-      [outcome, id, username]
+      `SELECT plan_id, run_at, run_date, run_by, model, picks_count, skipped_count,
+              duration_ms, input_tokens, output_tokens, error
+         FROM picks_ai_buy_plan
+        ORDER BY run_at DESC LIMIT $1`,
+      [limit]
     );
-    if (!r.rows.length) return res.status(404).json({ ok: false, error: 'not found' });
-    res.json({ ok: true, ...r.rows[0] });
+    res.json({ ok: true, entries: r.rows });
   } catch (e) {
-    console.error('picks-journal update error:', e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// RETIRED Phase 0 stubs — any residual client still hitting these endpoints
+// from a stale tab gets 410 Gone instead of a 500. Safe to delete in ~30 days.
+async function fillPicksOutcomes() { return { skipped: 'retired', filled: 0, errors: 0, tookMs: 0 }; }
+app.post('/api/admin/picks-outcomes/run', (_req, res) => res.status(410).json({ ok: false, error: 'retired: picks paper-tracker has been replaced by /api/ai-picks/*' }));
+app.get ('/api/picks-tracker/stats',      (_req, res) => res.status(410).json({ ok: false, error: 'retired: picks paper-tracker has been replaced by /api/ai-picks/*' }));
+app.post('/api/picks-journal',            (_req, res) => res.status(410).json({ ok: false, error: 'retired: picks journal has been replaced by /api/ai-picks/*' }));
+app.get ('/api/picks-journal',            (_req, res) => res.status(410).json({ ok: false, error: 'retired: picks journal has been replaced by /api/ai-picks/*' }));
+app.patch('/api/picks-journal/:id',       (_req, res) => res.status(410).json({ ok: false, error: 'retired: picks journal has been replaced by /api/ai-picks/*' }));
 
 // =============================================================================
 // BUCKET STATS — calibration layer
