@@ -751,6 +751,26 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {s.sector || s.name || '—'}
           </div>
+          {/* pickBucketReason — server-built string explaining why this stock
+              cleared the bucket's scoreV2 gate + bucket-natural filter. Shown
+              as a subtle italic sub-line so the bucket fit is never opaque. */}
+          {s.pickBucketReason && (
+            <div
+              style={{
+                fontSize: 10,
+                color: 'var(--brand-text)',
+                marginTop: 3,
+                fontStyle: 'italic',
+                lineHeight: 1.3,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title="Server-built bucket-fit reason"
+            >
+              {s.pickBucketReason}
+            </div>
+          )}
         </div>
         <div style={{ textAlign: 'right' }}>
           <div
@@ -765,6 +785,39 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           >
             {score != null ? score : '—'}
           </div>
+          {/* Unified scoreV2 quality sub-number for non-longterm tabs (longterm
+              ranks by scoreV2 itself, so this would be redundant there). */}
+          {tab.id !== 'longterm' && s.scoreV2 != null && (
+            <div
+              className="tabular-nums"
+              title={`Unified scoreV2 quality gate (${tab.id === 'rebound' ? '≥55' : '≥50'} floor)`}
+              style={{
+                fontSize: 9.5,
+                color:
+                  s.scoreV2 >= 70 ? 'var(--green-text)'
+                  : s.scoreV2 >= (tab.id === 'rebound' ? 55 : 50) ? 'var(--amber-text)'
+                  : 'var(--red-text)',
+                marginTop: 2,
+                fontWeight: 700,
+              }}
+            >
+              Q:{Math.round(s.scoreV2)}
+            </div>
+          )}
+          {/* Expected 6M return from bucketStatsMap (post external-signal nudge) */}
+          {tab.id === 'longterm' && s.expectedReturn != null && (
+            <div
+              className="tabular-nums"
+              title={`Calibrated 6M expected return from bucket-stats history${
+                s.expectedReturnNudge != null && s.expectedReturnNudge !== 0
+                  ? ` (incl. ${s.expectedReturnNudge >= 0 ? '+' : ''}${s.expectedReturnNudge}pp ext. signals)`
+                  : ''
+              }`}
+              style={{ fontSize: 9.5, color: 'var(--brand-text)', marginTop: 2, fontWeight: 600 }}
+            >
+              ≈{s.expectedReturn >= 0 ? '+' : ''}{Number(s.expectedReturn).toFixed(1)}% / 6M
+            </div>
+          )}
           <div className="tabular-nums" style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>
             {priceStr}
           </div>
