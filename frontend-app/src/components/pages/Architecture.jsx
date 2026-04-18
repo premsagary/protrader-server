@@ -172,7 +172,7 @@ function FlagRow({ code, severity, penalty, label, triggers }) {
 // ═════════════════════════════════════════════════════════════════════
 
 const TAB_MAP = [
-  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-10 of each bucket (30 stocks), sends to Claude (Haiku 4.5) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers. Manual trigger; persisted per-user in picks_ai_buy_plan.', 'var(--brand-text)'],
+  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-10 of each bucket (30 stocks), sends to Claude (Opus 4.6 default) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers — stops sized from daily σ + anchored to real S/R / DMAs / pivots. Retries once on parse failure. Manual trigger; persisted per-user in picks_ai_buy_plan.', 'var(--brand-text)'],
   ['Day Trade',     '5-min intraday setups. Separate cache + scoring engine via Unified Pipeline.', '#ef4444'],
   ['Stocks RoboTrade', 'Paper + live execution engine. Pass 1.5 Structure Filter + LLM sub-tab.', 'var(--green-text)'],
   ['Crypto RoboTrade', '24×7 crypto scanner + trade execution.', '#f59e0b'],
@@ -472,7 +472,7 @@ const ROADMAP_PHASES = [
     title: 'AI Buy Plan (single-model LLM curation)',
     status: 'shipped',
     when: 'Week 1 · shipped 2026-04-18 (balaji) · superseded Phase 0 paper-tracker',
-    cost: '~₹0.30/run (Haiku 4.5 · ~8k tokens)',
+    cost: '~₹5-8/run (Opus 4.6 default · 16k max output · one retry on parse failure)',
     goal: 'Single-model Claude review of the merged top-30 (10 per bucket) that drops weak setups and ranks ONLY the keepers with full exit plans: entry zone · target · stop · horizon · risk-reward · sell-if triggers.',
     includes: [
       'picks_ai_buy_plan — persisted per-user LLM plan history (top30_input + ranked plan + skipped)',

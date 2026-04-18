@@ -17822,8 +17822,13 @@ function _aiNormalizePlan(parsed, top30) {
 // AI_PICKS_MODEL env.
 async function _aiCallClaude(sys, user) {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
-  const model = process.env.AI_PICKS_MODEL || 'claude-haiku-4-5-20251001';
-  const maxTokens = parseInt(process.env.AI_PICKS_MAX_TOKENS || '8000', 10);
+  // Opus 4.6 is the default for real-money quality: tightest rejections on
+  // borderline picks, best at grounding stops/targets in the structure anchors
+  // we ship (DMAs, S/R, pivots, annualVol). Override to Haiku / Sonnet via env.
+  // 16K max output is well above what a 30-pick plan actually emits (~4K on
+  // full-approval days); only pays for tokens actually generated.
+  const model = process.env.AI_PICKS_MODEL || 'claude-opus-4-6';
+  const maxTokens = parseInt(process.env.AI_PICKS_MAX_TOKENS || '16000', 10);
   const t0 = Date.now();
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -17893,25 +17898,67 @@ app.post('/api/ai-picks/run', async (req, res) => {
       await pool.query(
         `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, error)
          VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6)`,
-        [username, process.env.AI_PICKS_MODEL || 'claude-haiku-4-5-20251001',
+        [username, process.env.AI_PICKS_MODEL || 'claude-opus-4-6',
          JSON.stringify(top30), JSON.stringify({ summary: '', market_read: '', picks: [], skipped: [] }),
          0, e.message.slice(0, 500)]
       ).catch(()=>{});
       return res.status(502).json({ ok: false, error: 'LLM call failed: ' + e.message });
     }
 
+    // Parse + normalize, with ONE retry on failure. Rationale: at temp 0.2 the
+    // JSON-shape failure rate is already low (~1-3%), but when it does fail
+    // we've already burned the input tokens. A single retry at same temp with
+    // an explicit correction nudge catches the vast majority of those glitches
+    // transparently — user sees a slightly slower click instead of a 502.
+    // Extra cost on the ≤3% retry path: one more full input burn (~₹0.80 at
+    // Opus rates). On the 97% happy path: zero extra cost.
+    let retryCall = null;
+    let firstErr = null;
     try {
       parsed = _aiExtractJSON(call.raw);
       plan = _aiNormalizePlan(parsed, top30);
     } catch (e) {
-      await pool.query(
-        `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error)
-         VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6, $7, $8)`,
-        [username, call.model, JSON.stringify(top30),
-         JSON.stringify({ summary: '', market_read: '', picks: [], skipped: [], raw: call.raw.slice(0, 4000) }),
-         call.durationMs, call.tokens.input, call.tokens.output, e.message.slice(0, 500)]
-      ).catch(()=>{});
-      return res.status(502).json({ ok: false, error: 'parse failed: ' + e.message });
+      firstErr = e;
+    }
+    if (firstErr) {
+      try {
+        retryCall = await _aiCallClaude(
+          sys,
+          user + '\n\n---\nREMINDER: your previous attempt could not be parsed. Return STRICT JSON only — no markdown fences, no prose before or after the JSON object.'
+        );
+        parsed = _aiExtractJSON(retryCall.raw);
+        plan = _aiNormalizePlan(parsed, top30);
+      } catch (secondErr) {
+        const totalIn  = call.tokens.input  + (retryCall ? retryCall.tokens.input  : 0);
+        const totalOut = call.tokens.output + (retryCall ? retryCall.tokens.output : 0);
+        const totalDur = call.durationMs    + (retryCall ? retryCall.durationMs    : 0);
+        const errMsg   = `parse failed: ${firstErr.message}` + (retryCall ? ` | retry: ${secondErr.message}` : '');
+        await pool.query(
+          `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error)
+           VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6, $7, $8)`,
+          [username, call.model, JSON.stringify(top30),
+           JSON.stringify({
+             summary: '', market_read: '', picks: [], skipped: [],
+             raw: call.raw.slice(0, 4000),
+             retryRaw: retryCall ? retryCall.raw.slice(0, 4000) : null,
+           }),
+           totalDur, totalIn, totalOut, errMsg.slice(0, 500)]
+        ).catch(()=>{});
+        return res.status(502).json({ ok: false, error: errMsg });
+      }
+      // Retry succeeded — merge token/duration totals so the INSERT below
+      // records the true cost of this run (both calls, not just the retry).
+      call = {
+        raw: retryCall.raw,
+        model: retryCall.model,
+        tokens: {
+          input:  call.tokens.input  + retryCall.tokens.input,
+          output: call.tokens.output + retryCall.tokens.output,
+        },
+        durationMs: call.durationMs + retryCall.durationMs,
+      };
+      // Mark the plan so the UI / future audits can see this run needed a retry.
+      plan._meta = { ...(plan._meta || {}), retried: true, firstErr: String(firstErr.message || '').slice(0, 200) };
     }
 
     const ins = await pool.query(
