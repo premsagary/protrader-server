@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import { useAppStore } from '../../store/useAppStore';
 
 // ══════════════════════════════════════════════════════════════════════
 // Sector canonicalization — mirrors kite-server.js canonicalSector()
@@ -434,6 +435,11 @@ export default function StockPicks() {
           </span>
         </div>
       </div>
+
+      {/* ═══ QUICK-START BARS — one-click top picks → Deep Analyzer ═══ */}
+      {!loading && !error && (
+        <QuickStartBars tabPicks={tabPicks} />
+      )}
 
       {/* ═══ ERROR ═══ */}
       {error && (
@@ -1032,6 +1038,83 @@ function ExpandedAIReview({ council, judge, sym }) {
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Quick-start bars — top 5 per strategy as one-click tiles → Deep Analyzer
+// ══════════════════════════════════════════════════════════════════════
+const QS_STRATEGIES = [
+  { id: 'rebound', label: 'Rebound', color: 'var(--amber-text)', bg: 'var(--amber-bg)', icon: '🔄' },
+  { id: 'momentum', label: 'Momentum', color: 'var(--green-text)', bg: 'var(--green-bg)', icon: '⚡' },
+  { id: 'investment', label: 'Long-Term', color: 'var(--brand-text)', bg: 'var(--brand-bg)', icon: '🏛' },
+];
+
+function QuickStartBars({ tabPicks }) {
+  const analyzeStock = useAppStore((s) => s.analyzeStock);
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      {QS_STRATEGIES.map((strat) => {
+        const picks = (tabPicks[strat.id] || []).slice(0, 5);
+        if (!picks.length) return null;
+        return (
+          <div
+            key={strat.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 16px',
+              marginBottom: 8,
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${strat.color.replace('var(', '').replace(')', '')}`,
+              borderLeftColor: strat.color,
+              borderRadius: 12,
+            }}
+          >
+            <span style={{
+              fontSize: 13, fontWeight: 700, color: strat.color,
+              minWidth: 110, display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              {strat.icon} {strat.label} →
+            </span>
+            {picks.map((s) => (
+              <button
+                key={s.sym}
+                onClick={() => analyzeStock(s.sym)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 14px',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  transition: 'all 180ms ease',
+                  color: 'var(--text)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = strat.color;
+                  e.currentTarget.style.background = strat.bg;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border)';
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                }}
+              >
+                {s.sym}
+              </button>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

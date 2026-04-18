@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiGet } from '../../api/client';
+import { useAppStore } from '../../store/useAppStore';
 
 export default function DeepAnalyzer() {
+  // Check if we were sent here from Stock Picks quick-start
+  const pendingSym = useAppStore((s) => s.pendingAnalyzeSymbol);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -36,6 +39,16 @@ export default function DeepAnalyzer() {
     );
     setHighlightIdx(-1);
   }, [query, universe]);
+
+  // Auto-analyze if navigated from Stock Picks quick-start
+  useEffect(() => {
+    if (pendingSym) {
+      setQuery(pendingSym);
+      setSelected({ sym: pendingSym });
+      useAppStore.setState({ pendingAnalyzeSymbol: null });
+      setTimeout(() => runAnalyze(pendingSym), 100);
+    }
+  }, [pendingSym]);
 
   const runAnalyze = async (symRaw) => {
     const sym = (symRaw || '').trim().toUpperCase().split(/\s+/)[0].replace(/[^A-Z0-9&]/g, '');

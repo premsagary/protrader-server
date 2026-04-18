@@ -27,6 +27,14 @@ export const useAppStore = create((set, get) => ({
   user: null,
   token: localStorage.getItem('pt_token') || null,
 
+  // Pre-fill for Deep Analyzer when navigating from Stock Picks quick-start
+  pendingAnalyzeSymbol: null,
+  analyzeStock: (sym) => {
+    set({ pendingAnalyzeSymbol: sym });
+    const store = get();
+    store.setCurrentTab('stockanalyzer');
+  },
+
   setCurrentTab: (id) => {
     window.location.hash = `#${id}`;
     set({ currentTab: id });
