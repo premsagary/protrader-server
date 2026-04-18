@@ -114,6 +114,7 @@ const TABS = [
     desc: 'Quality stocks down ≥20% from 52W high · RSI ≤50 · D/E ≤2',
     scoreField: 'fallenScore',
     scoreRaw:   'fallenScoreRaw',
+    scoreFlags: 'fallenRiskFlags',
     scoreLabel: 'REBOUND SCORE',
     accent: 'var(--amber-text)',
     accentSoft: 'rgba(251,191,36,0.10)',
@@ -126,6 +127,7 @@ const TABS = [
     desc: 'Momentum Score ≥55 · FA 35% + Val 15% + TA 20% + Mom 15% + Risk 15%',
     scoreField: 'composite',
     scoreRaw:   'compositeRaw',
+    scoreFlags: 'compositeRiskFlags',
     scoreLabel: 'MOMENTUM SCORE',
     accent: 'var(--green-text)',
     accentSoft: 'var(--green-bg)',
@@ -138,6 +140,7 @@ const TABS = [
     desc: 'Investment Score ≥60 · ROE ≥12% · D/E ≤2 · Non-negative EPS growth',
     scoreField: 'scoreV2',
     scoreRaw:   'scoreV2Raw',
+    scoreFlags: 'riskFlags',
     scoreLabel: 'INVESTMENT SCORE',
     accent: 'var(--brand-text)',
     accentSoft: 'var(--brand-bg)',
@@ -740,8 +743,16 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
   const score = rawScore != null ? Math.round(rawScore * 10) / 10 : null;
   const rawOrig = s[tab.scoreRaw];
   const priceStr = s.price != null ? `₹${Number(s.price).toLocaleString('en-IN', { maximumFractionDigits: 1 })}` : '—';
-  const flags = Array.isArray(s.riskFlags) ? s.riskFlags : [];
+  // Risk flags live on different fields per bucket:
+  //   Rebound  → fallenRiskFlags
+  //   Momentum → compositeRiskFlags
+  //   LongTerm → riskFlags
+  // Fall back to s.riskFlags if tab.scoreFlags isn't set (defensive).
+  const flagsField = tab.scoreFlags || 'riskFlags';
+  const flags = Array.isArray(s[flagsField]) ? s[flagsField] : (Array.isArray(s.riskFlags) ? s.riskFlags : []);
   const disq = s.disqualifier;
+  const penaltyDelta = (rawOrig != null && rawScore != null) ? +(rawOrig - rawScore).toFixed(1) : 0;
+  const wasPenalised = penaltyDelta > 0;
 
   // AI review badges (top 10 only — match old server scoping)
   const showAiBadges = rank <= 10;
@@ -944,7 +955,7 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
         </div>
       )}
 
-      {/* Risk flag badges */}
+      {/* Risk flag badges — compact short-code chips (always visible) */}
       {flags.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
           {flags.map((fl, i) => {
@@ -972,8 +983,59 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
         </div>
       )}
 
-      {/* Expanded detail */}
-      {expanded && (
+      {/* ═══ Penalty explainer — ALWAYS visible when score was penalised ═══
+          Previously this block only rendered inside `{expanded && ...}` which
+          confused users: they saw a "FALLEN SCORE 39" with no obvious reason.
+          Rendered inline (not expand-gated) so the WHY sits right under the
+          stock's sub-metrics row. */}
+      {wasPenalised && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: '1px dashed var(--border)',
+            fontSize: 11,
+            color: 'var(--text2)',
+            lineHeight: 1.55,
+          }}
+        >
+          <div style={{ marginBottom: flags.length > 0 ? 6 : 0, color: 'var(--text3)' }}>
+            Raw score:{' '}
+            <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--text)' }}>
+              {Math.round((rawOrig ?? 0) * 10) / 10}
+            </span>
+            <span style={{ margin: '0 6px', color: 'var(--text4)' }}>→</span>
+            Penalised:{' '}
+            <span className="tabular-nums" style={{ fontWeight: 700, color: tab.accent }}>
+              {score}
+            </span>
+            <span style={{ marginLeft: 6, color: 'var(--red-text)', fontWeight: 700 }}>
+              (−{penaltyDelta})
+            </span>
+          </div>
+          {flags.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {flags.slice(0, 4).map((fl, i) => (
+                <div key={i} style={{ fontSize: 11, color: 'var(--text2)' }}>
+                  <span style={{ color: severityColors(fl.severity).fg, fontWeight: 700 }}>
+                    [{fl.severity}]
+                  </span>{' '}
+                  {fl.label}{' '}
+                  <span style={{ color: 'var(--text3)' }}>(−{fl.penalty})</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {flags.length === 0 && (
+            <div style={{ color: 'var(--text4)', fontStyle: 'italic', fontSize: 10.5 }}>
+              Penalty applied by upstream filter (sector cap / VIX regime / external signal). See Architecture tab for source.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Expanded detail — AI council verdicts only (penalty block is now inline above) */}
+      {expanded && showAiBadges && hasReviews && (
         <div style={{
           marginTop: 10,
           paddingTop: 10,
@@ -982,39 +1044,7 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           color: 'var(--text2)',
           lineHeight: 1.55,
         }}>
-          {rawOrig != null && rawOrig !== rawScore && (
-            <div style={{ marginBottom: 6, color: 'var(--text3)' }}>
-              Raw score: <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--text)' }}>{Math.round(rawOrig * 10) / 10}</span>
-              <span style={{ margin: '0 6px', color: 'var(--text4)' }}>→</span>
-              Penalised: <span className="tabular-nums" style={{ fontWeight: 700, color: tab.accent }}>{score}</span>
-              <span style={{ marginLeft: 6, color: 'var(--red-text)' }}>(−{Math.round((rawOrig - rawScore) * 10) / 10})</span>
-            </div>
-          )}
-          {flags.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-              {flags.slice(0, 4).map((fl, i) => (
-                <div key={i} style={{ fontSize: 11, color: 'var(--text2)' }}>
-                  <span style={{ color: severityColors(fl.severity).fg, fontWeight: 700 }}>
-                    [{fl.severity}]
-                  </span>
-                  {' '}
-                  {fl.label}
-                  {' '}
-                  <span style={{ color: 'var(--text3)' }}>(−{fl.penalty})</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {flags.length === 0 && !disq && (
-            <div style={{ color: 'var(--text3)', fontStyle: 'italic', marginBottom: 10 }}>
-              No risk flags firing. Clean signal.
-            </div>
-          )}
-
-          {/* AI Council verdicts (per-model detail) */}
-          {showAiBadges && hasReviews && (
-            <ExpandedAIReview council={council} judge={judge} sym={s.sym} />
-          )}
+          <ExpandedAIReview council={council} judge={judge} sym={s.sym} />
         </div>
       )}
     </div>
