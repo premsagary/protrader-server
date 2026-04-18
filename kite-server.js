@@ -8941,6 +8941,15 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
+// ── DayTrade systemic context (Commit 2 — VIX / breadth / sector rotation) ──
+// All three are rolled at the END of each full scan and read by the NEXT
+// scan. One-cycle lag (5 min) is fine — intraday sector leadership + breadth
+// do not flip within a single scan cycle.
+let _dayTradeBreadth = { aboveVWAPPct: 50, pctAboveYestClose: 50, n: 0, ts: 0 };
+// sector -> { avgIntradayPct, n, rank } — rank 1 = best performing sector today
+let _dayTradeSectorMomentum = {};
+let _dayTradeSectorMomentumTs = 0;
+
 // ── DayTrade reliability state (Commit 1 — preflight gates) ──────────────
 // All state here is INTRADAY-ONLY and resets on process bounce. That's fine:
 // the scanner is always running during market hours, and a restart mid-day
@@ -9352,6 +9361,70 @@ function applySectorCap(sortedPicks, maxPerSector = 2) {
 // scoreDayTrade can compute relative strength (stock vs index) without
 // needing Kite index fetches inside the per-stock scoring loop.
 let _niftyDailyChangePct = null;
+
+// ── Commit 2: systemic-context rollup ─────────────────────────────────────
+// Runs at the end of each DayTrade scan with the populated `results` array
+// (already ranked, pre-sector-cap). Computes market breadth + sector-momentum
+// tables that the NEXT scan reads when scoring individual stocks. One-cycle
+// lag (5 min) is acceptable — breadth + sector leadership don't flip inside
+// one scan cycle, and staying stateless inside scoreDayTrade keeps that
+// function fast + pure.
+//
+// Breadth signals used:
+//   - % above VWAP: classic intraday breadth. < 30% = weak; > 70% = strong.
+//   - Avg gap %:    whether the tape opened risk-on or risk-off overall.
+// Sector momentum = avg dayTradeScore per sector, ranked. Top-3 sectors get
+// a small bonus in the next scan; bottom-3 get a small penalty.
+function _rollupSystemicContext(results) {
+  try {
+    if (!Array.isArray(results) || results.length < 5) return;
+    // Breadth — VWAP side of the tape
+    let aboveVWAP = 0, sumGap = 0;
+    for (const r of results) {
+      if ((r.vwapDist || 0) > 0) aboveVWAP++;
+      if (typeof r.gapPct === 'number') sumGap += r.gapPct;
+    }
+    _dayTradeBreadth = {
+      aboveVWAPPct: Math.round(100 * aboveVWAP / results.length),
+      avgGapPct: +(sumGap / results.length).toFixed(2),
+      n: results.length,
+      ts: Date.now(),
+    };
+    // Sector momentum — rank sectors by avg score
+    const bySector = Object.create(null);
+    for (const r of results) {
+      const s = canonicalSector(r.sector) || 'Other';
+      if (!bySector[s]) bySector[s] = { sum: 0, n: 0, sumGap: 0 };
+      bySector[s].sum    += r.dayTradeScore || 0;
+      bySector[s].sumGap += r.gapPct || 0;
+      bySector[s].n      += 1;
+    }
+    const ranked = Object.entries(bySector)
+      .filter(([, v]) => v.n >= 2)
+      .map(([s, v]) => ({
+        sector: s,
+        avgScore: v.sum / v.n,
+        avgGapPct: v.sumGap / v.n,
+        n: v.n,
+      }))
+      .sort((a, b) => b.avgScore - a.avgScore);
+    const table = {};
+    ranked.forEach((e, idx) => {
+      table[e.sector] = {
+        avgScore: +e.avgScore.toFixed(1),
+        avgGapPct: +e.avgGapPct.toFixed(2),
+        n: e.n,
+        rank: idx + 1,
+        total: ranked.length,
+      };
+    });
+    _dayTradeSectorMomentum = table;
+    _dayTradeSectorMomentumTs = Date.now();
+  } catch (e) {
+    // Never let context rollup break a scan
+    console.warn('⚠️ _rollupSystemicContext error:', e.message);
+  }
+}
 
 function scoreDayTrade(candles, sym, ctx) {
   ctx = ctx || {};
@@ -10298,7 +10371,95 @@ function scoreDayTrade(candles, sym, ctx) {
     // Varsity M2: "never fight the higher timeframe trend"
     if (dailyF2.pctAbove200 < -5 && dailyF2.rsi < 35) overall = Math.max(0, overall + _penalty('MULTI', 10, 'Daily trend bearish (price below 200DMA, RSI extreme)'));
     if (dailyF2.dowTheoryTrend === 'DOWNTREND') overall = Math.max(0, overall + _penalty('MULTI', 5, 'Dow Theory downtrend on daily'));
+    // Commit 2: tighten counter-trend penalty. All 4 intraday setups are LONG,
+    // so a bearish daily structure is ALWAYS a headwind. Layered penalties by
+    // severity — bottom case (price < 200DMA AND dowTrend=DOWN AND supertrend=SELL)
+    // can never rank Strong Entry regardless of how clean the 5-min setup looks.
+    const counterTrendFlags = [
+      dailyF2.pctAbove200 != null && dailyF2.pctAbove200 < 0,
+      dailyF2.dowTheoryTrend === 'DOWNTREND',
+      dailyF2.supertrendSig === 'SELL' || dailyF2.supertrendSig === 'bearish',
+      dailyF2.goldenCross === false && dailyF2.dma50 != null && dailyF2.dma200 != null,
+    ].filter(Boolean).length;
+    if (counterTrendFlags >= 3) {
+      overall = Math.max(0, overall + _penalty('MULTI', 8, `Counter-trend: ${counterTrendFlags}/4 daily headwinds`));
+      overall = Math.min(overall, 59); // cap below "Good Setup" threshold
+    } else if (counterTrendFlags === 2) {
+      overall = Math.max(0, overall + _penalty('MULTI', 4, 'Counter-trend: 2/4 daily headwinds'));
+    }
   }
+
+  // ── Commit 2: Systemic context modulators (VIX · breadth · sector rotation) ──
+  // These are light-touch adjustments (±2-8 points) applied AFTER the daily-TF
+  // alignment block so they modulate conviction without overwhelming the
+  // per-stock structural signals.
+  //
+  // • VIX:   regime-dependent amplification/dampening. Low VIX → momentum
+  //   setups are cleaner. High VIX → whipsaw risk ↑, false breakouts ↑.
+  // • Breadth: if < 30% of scanned stocks are above VWAP, every long is
+  //   swimming upstream. Varsity M2 Ch22: "trade with the tape."
+  // • Sector momentum: top-3 sectors today usually trend through the close;
+  //   bottom-3 tend to fade further. Varsity M9: "ride the leaders."
+  let vixValue = null, vixRegime = 'NORMAL';
+  try {
+    if (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix && _marketDataCache.vix.value) {
+      vixValue = +_marketDataCache.vix.value;
+      if (vixValue < 12) {
+        vixRegime = 'CALM';
+        // Calm VIX → breakouts and momentum run clean; give a small boost
+        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
+          overall = Math.min(100, overall + _gain('MULTI', 3, `VIX calm (${vixValue.toFixed(1)}) — momentum setups run cleaner`));
+        }
+      } else if (vixValue > 24) {
+        vixRegime = 'HIGH';
+        // High VIX → whipsaw. Hard dampener on breakouts, gentler on bounces.
+        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
+          overall = Math.max(0, overall + _penalty('MULTI', 8, `VIX high (${vixValue.toFixed(1)}) — momentum whipsaws frequent`));
+        } else if (best.type === 'OVERSOLD_BOUNCE') {
+          overall = Math.min(100, overall + _gain('MULTI', 2, `VIX high (${vixValue.toFixed(1)}) — bounces favored over breakouts`));
+        } else {
+          overall = Math.max(0, overall + _penalty('MULTI', 4, `VIX high (${vixValue.toFixed(1)}) — widen expectations of drawdown`));
+        }
+      } else if (vixValue > 18) {
+        vixRegime = 'ELEVATED';
+        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
+          overall = Math.max(0, overall + _penalty('MULTI', 3, `VIX elevated (${vixValue.toFixed(1)}) — breakouts less reliable`));
+        }
+      }
+    }
+  } catch (e) { /* VIX read failed — fall through with NORMAL regime */ }
+
+  // Breadth — rolled from the previous scan. All 4 intraday setups are LONG,
+  // so weak breadth is a universal headwind.
+  let breadthContext = null;
+  try {
+    if (_dayTradeBreadth && _dayTradeBreadth.n >= 5) {
+      const bPct = _dayTradeBreadth.aboveVWAPPct;
+      breadthContext = { aboveVWAPPct: bPct, avgGapPct: _dayTradeBreadth.avgGapPct, n: _dayTradeBreadth.n };
+      if (bPct < 25) {
+        overall = Math.max(0, overall + _penalty('MULTI', 6, `Weak breadth: only ${bPct}% of names above VWAP`));
+      } else if (bPct < 40) {
+        overall = Math.max(0, overall + _penalty('MULTI', 3, `Soft breadth: ${bPct}% above VWAP`));
+      } else if (bPct > 70) {
+        overall = Math.min(100, overall + _gain('MULTI', 3, `Strong breadth: ${bPct}% above VWAP — tape is risk-on`));
+      }
+    }
+  } catch (e) { /* breadth unavailable */ }
+
+  // Sector rotation — ride the leaders, fade the laggards.
+  let sectorRank = null;
+  try {
+    const sec = canonicalSector(stockFundamentals[sym]?.sector) || 'Other';
+    const row = _dayTradeSectorMomentum && _dayTradeSectorMomentum[sec];
+    if (row && row.total >= 4) {
+      sectorRank = { sector: sec, rank: row.rank, total: row.total, avgScore: row.avgScore };
+      if (row.rank <= 3) {
+        overall = Math.min(100, overall + _gain('MULTI', 3, `Sector ${sec} ranked #${row.rank}/${row.total} today — leading`));
+      } else if (row.rank >= row.total - 2 && row.total >= 6) {
+        overall = Math.max(0, overall + _penalty('MULTI', 3, `Sector ${sec} ranked #${row.rank}/${row.total} today — lagging`));
+      }
+    }
+  } catch (e) { /* sector momentum unavailable */ }
 
   // Late session penalty
   if (isLateTrade) { overall = Math.max(0, overall + _penalty('MULTI', 15, 'Late session penalty (after 3PM IST — Varsity M9)')); }
@@ -10384,7 +10545,22 @@ function scoreDayTrade(candles, sym, ctx) {
   // Varsity M9: ATR-based stop loss — SL must be at least 1 ATR away from entry
   const atrSlice = candles.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)));
   const atr14val = atrSlice.slice(-14).reduce((a, b) => a + b, 0) / 14;
-  const minSLDist = atr14val;
+  // Commit 2: beta-adjusted SL widening. High-beta stocks routinely move
+  // 1.5-2x the market on a normal bar — a tight ATR stop that works on a
+  // beta=0.8 FMCG name gets wicked constantly on a beta=1.8 small-cap.
+  // Widen the minimum SL by a beta factor so volatile names get room to
+  // breathe without blowing the risk budget (the Kelly/vol sizing block
+  // already scales qty down for high-ATR names, so capital risk is stable).
+  const _beta = stockFundamentals[sym]?.beta;
+  let betaSLMult = 1.0;
+  if (typeof _beta === 'number' && isFinite(_beta)) {
+    if (_beta >= 1.8) betaSLMult = 1.25;
+    else if (_beta >= 1.3) betaSLMult = 1.15;
+    else if (_beta >= 1.0) betaSLMult = 1.05;
+    else if (_beta >= 0.7) betaSLMult = 1.00;
+    else betaSLMult = 0.95; // very low-beta defensive — tighter SL OK
+  }
+  const minSLDist = atr14val * betaSLMult;
   if (px - sl < minSLDist) sl = +(px - minSLDist).toFixed(2);
   // Recalc targets and RR after ATR adjustment
   tgt = +(px + (px - sl) * Math.max(1.5, rrRatio || 1.5)).toFixed(2);
@@ -10710,6 +10886,12 @@ function scoreDayTrade(candles, sym, ctx) {
     rrTooTight: rrRatioNet < 1.3,
     deliveryPct: _delPct,
     adrExhausted: adrUsedPct >= 75,
+    // Commit 2: systemic context exposed for UI + audit
+    vixValue, vixRegime,
+    breadthContext,        // { aboveVWAPPct, avgGapPct, n } or null
+    sectorRank,            // { sector, rank, total, avgScore } or null
+    betaUsed: _beta != null ? +(+_beta).toFixed(2) : null,
+    betaSLMult: +betaSLMult.toFixed(2),
     // Varsity M2 Ch 14: RSI midline state
     rsiAboveMidline, rsiCrossedMidlineUp,
     // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
@@ -10802,7 +10984,9 @@ async function scanDayTrades(force = false) {
       // no single sector dominates the top 10 with more than 2 picks.
       _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
+      // Commit 2: roll systemic context (breadth + sector momentum) for next scan
+      _rollupSystemicContext(results);
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached · breadth ${_dayTradeBreadth.aboveVWAPPct}% >VWAP`);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
@@ -11118,6 +11302,8 @@ async function runUnifiedKitePipeline(force = false) {
       // Varsity M9 sector-correlation cap — same logic as scanDayTrades.
       _dayTradeCache   = applySectorCap(dayTradeResults, 2);
       _dayTradeCacheTs = Date.now();
+      // Commit 2: roll systemic context (breadth + sector momentum) for next scan
+      _rollupSystemicContext(dayTradeResults);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
@@ -16376,6 +16562,19 @@ app.post('/api/admin/daytrade/refresh-hit-rate', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// Commit 2: inspect the systemic-context tables (VIX / breadth / sector rank)
+// rolled by the previous scan and used by the next one. Useful for diagnosing
+// "why is every stock penalized today" — usually weak breadth or high VIX.
+app.get('/api/admin/daytrade/systemic-context', (req, res) => {
+  res.json({
+    vix: (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix) ? _marketDataCache.vix : null,
+    breadth: _dayTradeBreadth,
+    breadthUpdatedAt: _dayTradeBreadth.ts ? new Date(_dayTradeBreadth.ts).toISOString() : null,
+    sectorMomentum: _dayTradeSectorMomentum,
+    sectorMomentumUpdatedAt: _dayTradeSectorMomentumTs ? new Date(_dayTradeSectorMomentumTs).toISOString() : null,
+  });
 });
 
 // BSE: hourly during IST market hours, Mon-Fri (at 5 past the hour so it
