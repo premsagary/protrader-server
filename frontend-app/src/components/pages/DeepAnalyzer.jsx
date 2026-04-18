@@ -345,66 +345,127 @@ function AnalysisResult({ data }) {
           gap: 24,
         }}
       >
-        <div>
-          <div className="label-xs" style={{ marginBottom: 10 }}>
-            {a.grp || 'NSE'}{a.sector ? ` · ${a.sector}` : ''}
-          </div>
-          <h2 style={{ fontSize: 36, fontWeight: 800, letterSpacing: '-0.8px', color: 'var(--text)', marginBottom: 6, lineHeight: 1.1 }}>
-            {a.sym || '—'}
-          </h2>
-          <div style={{ fontSize: 16, color: 'var(--text2)', marginBottom: 14 }}>
-            {a.name || ''}
-            {a.price != null && <span className="tabular-nums" style={{ marginLeft: 14, color: 'var(--text)', fontWeight: 700, fontSize: 20 }}>₹{Number(a.price).toLocaleString('en-IN', { maximumFractionDigits: 1 })}</span>}
-          </div>
-          {verdict && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 16px',
-                background: tierBg, color: tierColor,
-                borderRadius: 9999, fontSize: 13, fontWeight: 700, letterSpacing: '0.3px',
-              }}>
-                {verdictIcon} {verdict}
+        <div style={{ flex: 1, minWidth: 240 }}>
+          {/* Sector + Group chips */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {a.sector && (
+              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
+                {a.sector}
               </span>
-              {action && (
-                <span className="chip chip-brand" style={{ height: 30, fontSize: 12, fontWeight: 700 }}>{action}</span>
+            )}
+            {a.grp && (
+              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
+                {a.grp}
+              </span>
+            )}
+            {a.industry && (
+              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
+                {a.industry}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+            <h2 style={{ fontSize: 32, fontWeight: 800, letterSpacing: '-0.8px', color: 'var(--text)', lineHeight: 1.1, margin: 0 }}>
+              {a.sym || '—'}
+            </h2>
+            {a.name && (
+              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 500 }}>{a.name}</span>
+            )}
+          </div>
+          {a.price != null && (
+            <div className="tabular-nums" style={{ fontSize: 30, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.6px', marginBottom: 6 }}>
+              ₹{Number(a.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              {a.priceChange != null && (
+                <span style={{
+                  fontSize: 14, fontWeight: 700, marginLeft: 10,
+                  color: a.priceChange > 0 ? 'var(--green-text)' : a.priceChange < 0 ? 'var(--red-text)' : 'var(--text3)',
+                }}>
+                  {a.priceChange > 0 ? '+' : ''}{Number(a.priceChange).toFixed(2)}
+                  {a.priceChangePct != null && ` (${a.priceChangePct > 0 ? '+' : ''}${Number(a.priceChangePct).toFixed(2)}%)`}
+                </span>
               )}
             </div>
           )}
-          {verdictTimeframe && (
-            <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 10, fontStyle: 'italic' }}>{verdictTimeframe}</div>
+          {/* Compact market-cap / volume line */}
+          {(a.marketCap || a.volume || fund?.marketCap) && (
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+              {(a.marketCap || fund?.marketCap) && (
+                <span>Mkt Cap: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>
+                  {typeof (a.marketCap || fund?.marketCap) === 'string'
+                    ? (a.marketCap || fund?.marketCap)
+                    : `₹${Number(a.marketCap || fund?.marketCap).toLocaleString('en-IN')} Cr`}
+                </span></span>
+              )}
+              {a.volume && (
+                <span>Volume: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>{Number(a.volume).toLocaleString('en-IN')}</span></span>
+              )}
+              {tech.wk52Hi && tech.wk52Lo && (
+                <span>52W: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>₹{tech.wk52Lo} – ₹{tech.wk52Hi}</span></span>
+              )}
+            </div>
           )}
         </div>
         {score != null && (
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>
+          <div style={{
+            textAlign: 'center',
+            padding: '18px 22px',
+            background: 'rgba(10,14,24,0.6)',
+            border: `1px solid ${tierColor}44`,
+            borderRadius: 14,
+            minWidth: 220,
+            boxShadow: `0 0 28px ${tierColor}22`,
+          }}>
+            {verdictIcon && <div style={{ fontSize: 28, marginBottom: 6 }}>{verdictIcon}</div>}
+            {verdict && (
+              <div style={{ fontSize: 16, fontWeight: 700, color: tierColor, letterSpacing: '0.3px', marginBottom: 4 }}>
+                {verdict}
+              </div>
+            )}
+            {verdictTimeframe && (
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10, fontWeight: 500 }}>
+                {verdictTimeframe}
+              </div>
+            )}
+            <div className="tabular-nums" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 4 }}>
               Varsity Score
             </div>
-            <div className="tabular-nums gradient-fill" style={{ fontSize: 72, fontWeight: 800, lineHeight: 1, letterSpacing: '-2px' }}>
+            <div className="tabular-nums" style={{ fontSize: 48, fontWeight: 800, lineHeight: 1, letterSpacing: '-1.5px', color: tierColor }}>
               {countupScore}
+              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 500, marginLeft: 2 }}>/ 100</span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, fontWeight: 500 }}>
+              {a.passCount || 0}/{a.totalChecks || 0} criteria passed
             </div>
             {/* Progress bar under the score */}
-            <div style={{ height: 6, width: 160, marginLeft: 'auto', marginTop: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: 5, width: '100%', marginTop: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${countupScore}%`, background: tierColor, borderRadius: 3, transition: 'width 200ms ease' }} />
             </div>
-            <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 4, fontWeight: 500 }}>
-              / 100 · {a.passCount || 0}/{a.totalChecks || 0} checks pass
-            </div>
+            {action && (
+              <div style={{
+                marginTop: 12, padding: '7px 14px', borderRadius: 9,
+                background: 'rgba(255,255,255,0.04)', color: tierColor,
+                border: `1px solid ${tierColor}44`,
+                fontWeight: 700, fontSize: 12, letterSpacing: '0.3px',
+              }}>
+                {action}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* ═══ DATA AVAILABILITY CHIPS ═══ */}
+      {/* ═══ DATA AVAILABILITY CHIPS — what candles/feeds drove this analysis ═══ */}
       {Object.keys(dataAvail).length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
           {[
-            ['Daily ' + (dataAvail.candlesUsed || dataAvail.kite1y ? (dataAvail.candlesUsed || 'Y') : ''), !!(dataAvail.candlesUsed || dataAvail.kite1y)],
             ['1Y', !!dataAvail.kite1y],
             ['3Y', !!dataAvail.kite3y],
             ['10Y', !!dataAvail.kite10w],
             ['MAX ' + (dataAvail.maxCandles ? dataAvail.maxCandles + 'mo' : ''), !!dataAvail.kiteMax],
             ['Hourly', !!dataAvail.kite1h],
             ['News', !!dataAvail.news],
-            ['Fundamentals ✓', !!dataAvail.fundamentals],
+            ['Fundamentals', !!dataAvail.fundamentals],
+            ['Candles: ' + (dataAvail.candlesUsed || 0), (dataAvail.candlesUsed || 0) > 100],
           ].map(([label, ok], i) => (
             <span key={i} className={ok ? 'chip chip-green' : 'chip'} style={{
               height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600,
@@ -433,26 +494,31 @@ function AnalysisResult({ data }) {
         dataAvail={dataAvail}
       />
 
-      {/* ═══ AT-A-GLANCE METRICS ═══ */}
+      {/* ═══ AT-A-GLANCE METRICS — matches old `az-fade-up` summary bar ═══ */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-        gap: 10,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+        gap: 8,
         marginBottom: 18,
       }}>
+        {tech.dma200Trend && (
+          <MetricPill label="Trend"
+            value={tech.dma200Trend === 'rising' ? '▲ Rising' : '▼ Falling'}
+            color={tech.dma200Trend === 'rising' ? 'var(--green-text)' : 'var(--red-text)'} />
+        )}
         <MetricPill label="RSI-14" value={tech.rsi14} fmt={(v) => Math.round(v)}
-          color={(v) => v == null ? 'var(--text4)' : v < 30 ? 'var(--green-text)' : v > 70 ? 'var(--red-text)' : 'var(--text)'} />
+          color={(v) => v == null ? 'var(--text4)' : v < 40 ? 'var(--green-text)' : v > 65 ? 'var(--red-text)' : 'var(--amber-text)'} />
         <MetricPill label="ADX" value={tech.adx} fmt={(v) => Math.round(v)} sub={tech.trendStrength} />
         <MetricPill label="R:R" value={a.riskReward || tech.riskReward} fmt={(v) => v ? `${Number(v).toFixed(2)}x` : '—'}
           color={(v) => v >= 2 ? 'var(--green-text)' : v >= 1.5 ? 'var(--amber-text)' : 'var(--red-text)'} />
         <MetricPill label="Upside" value={a.upsidePct || tech.upsidePct} fmt={(v) => v != null ? `${Number(v).toFixed(1)}%` : '—'}
           color={(v) => v > 0 ? 'var(--green-text)' : 'var(--red-text)'} />
         {fund?.roe != null && <MetricPill label="ROE" value={fund.roe} fmt={(v) => `${Number(v).toFixed(1)}%`}
-          color={(v) => v >= 15 ? 'var(--green-text)' : v >= 10 ? 'var(--amber-text)' : 'var(--red-text)'} />}
+          color={(v) => v >= 20 ? 'var(--green-text)' : v >= 12 ? 'var(--amber-text)' : 'var(--red-text)'} />}
         {fund?.de != null && <MetricPill label="D/E" value={fund.de} fmt={(v) => `${Number(v).toFixed(2)}x`}
-          color={(v) => v < 1 ? 'var(--green-text)' : v < 2 ? 'var(--text)' : 'var(--red-text)'} />}
+          color={(v) => v <= 0.5 ? 'var(--green-text)' : v <= 1.5 ? 'var(--amber-text)' : 'var(--red-text)'} />}
         {fund?.pe != null && <MetricPill label="P/E" value={fund.pe} fmt={(v) => Number(v).toFixed(1)}
-          color={(v) => v < 20 ? 'var(--green-text)' : v < 35 ? 'var(--text)' : 'var(--red-text)'} />}
+          color={(v) => v < 20 ? 'var(--green-text)' : v < 40 ? 'var(--amber-text)' : 'var(--red-text)'} />}
       </div>
 
       {/* ═══ VARSITY 14-POINT CHECKLIST ═══ */}
@@ -493,11 +559,14 @@ function AnalysisResult({ data }) {
               const t = buyPlan[k];
               if (!t) return null;
               const colors = ['var(--green-text)', 'var(--amber-text)', 'var(--brand-text)'];
+              const defaultPcts = [30, 30, 40];
+              const pct = t.pct != null ? t.pct : defaultPcts[i];
+              const labelPrefix = ['1st Buy', '2nd Buy', '3rd Buy'][i];
               return (
                 <div key={k} style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>TRANCHE {i + 1} · {t.pct}%</div>
+                  <div style={{ fontSize: 10, color: 'var(--green-text)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{labelPrefix} ({pct}%)</div>
                   <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: colors[i], marginTop: 4 }}>₹{t.price}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>{t.when}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>{t.when}</div>
                 </div>
               );
             })}
@@ -644,6 +713,21 @@ function AnalysisResult({ data }) {
       {/* ═══ PLAIN-ENGLISH ANALYSIS ═══ */}
       {analysis.length > 0 && (
         <Section title="Plain-English Analysis" subtitle={`${analysis.length} signals across trend, momentum, valuation, volume, fundamentals`}>
+          {/* Verdict header strip — matches old buildUI "Our Verdict: ..." line */}
+          {verdict && (
+            <div style={{
+              marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', letterSpacing: '0.2px' }}>
+                {verdictIcon} Our Verdict: <span style={{ color: tierColor }}>{verdict}</span>
+              </div>
+              {verdictTimeframe && (
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, fontWeight: 500 }}>
+                  {verdictTimeframe}
+                </div>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {analysis.map((sig, i) => {
               const color = sig.signal === 'positive' ? 'var(--green-text)'
@@ -674,32 +758,96 @@ function AnalysisResult({ data }) {
         </Section>
       )}
 
-      {/* ═══ FUNDAMENTALS ═══ */}
+      {/* ═══ FUNDAMENTALS ═══
+          Uses SigBox signal-cells with peer comparison notes (roePeer, dePeer,
+          pePeer, growthPeer) — matches old buildUI Fundamental Analysis block. */}
       {fund && (
-        <Section title="Fundamentals" subtitle="Varsity Module 3 — Quality + Growth + Valuation">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-            {[
-              { l: 'ROE',       v: fund.roe,     s: '%', peer: fund.roePeer },
-              { l: 'ROA',       v: fund.roa,     s: '%' },
-              { l: 'ROCE',      v: fund.roce,    s: '%' },
-              { l: 'D/E',       v: fund.de,      s: 'x', peer: fund.dePeer },
-              { l: 'P/E',       v: fund.pe,      s: 'x', peer: fund.pePeer },
-              { l: 'P/B',       v: fund.pb,      s: 'x' },
-              { l: 'PEG',       v: fund.peg,     s: '' },
-              { l: 'EV/EBITDA', v: fund.evEbitda, s: 'x' },
-              { l: 'EPS Growth',v: fund.epsGr,   s: '%', peer: fund.growthPeer },
-              { l: 'Op Margin', v: fund.opMgn,   s: '%' },
-              { l: 'Net Margin',v: fund.netMgn,  s: '%' },
-              { l: 'Div Yield', v: fund.divYld,  s: '%' },
-            ].filter((x) => x.v != null).map((x, i) => (
-              <div key={i} style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{x.l}</div>
-                <div className="tabular-nums" style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>
-                  {Number(x.v).toFixed(x.s === '%' || x.s === 'x' ? 1 : 2)}{x.s}
-                </div>
-                {x.peer && <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 3 }}>{x.peer}</div>}
-              </div>
-            ))}
+        <Section title="Fundamental Analysis" subtitle="Varsity Module 3 — Quality + Growth + Valuation · peer-relative where available">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+            {fund.roe != null && (
+              <SigBox label="ROE" value={`${fund.roe}%`}
+                signal={fund.roe>=20?'bullish':fund.roe>=12?'neutral':'bearish'}
+                detail={fund.roePeer || (fund.roe>=20?'High quality':fund.roe>=12?'Decent':'Weak return')} />
+            )}
+            {fund.roa != null && (
+              <SigBox label="ROA" value={`${fund.roa}%`}
+                signal={fund.roa>=10?'bullish':fund.roa>=5?'neutral':'bearish'}
+                detail="Return on assets" />
+            )}
+            {fund.roce != null && (
+              <SigBox label="ROCE" value={`${fund.roce}%`}
+                signal={fund.roce>=20?'bullish':fund.roce>=12?'neutral':'bearish'}
+                detail="Return on capital" />
+            )}
+            {fund.de != null && (
+              <SigBox label="Debt/Equity" value={`${fund.de}x`}
+                signal={fund.de<=0.5?'bullish':fund.de<=1.5?'neutral':'bearish'}
+                detail={fund.dePeer || (fund.de<=0.5?'Low leverage':fund.de<=1.5?'Moderate':'High leverage')} />
+            )}
+            {fund.pe != null && (
+              <SigBox label="P/E Ratio" value={`${fund.pe}x`}
+                signal={fund.pe<20?'bullish':fund.pe<40?'neutral':'bearish'}
+                detail={fund.pePeer || (fund.pe<20?'Cheap':fund.pe<40?'Fair':'Expensive')} />
+            )}
+            {fund.pb != null && (
+              <SigBox label="P/B Ratio" value={`${fund.pb}x`}
+                signal={fund.pb<2?'bullish':fund.pb<4?'neutral':'bearish'}
+                detail="Price to book" />
+            )}
+            {fund.peg != null && (
+              <SigBox label="PEG Ratio" value={String(fund.peg)}
+                signal={fund.peg<1?'bullish':fund.peg<2?'neutral':'bearish'}
+                detail={fund.peg<1?'Undervalued':fund.peg<2?'Fair':'Expensive'} />
+            )}
+            {fund.evEbitda != null && (
+              <SigBox label="EV/EBITDA" value={`${fund.evEbitda}x`}
+                signal={fund.evEbitda<12?'bullish':fund.evEbitda<20?'neutral':'bearish'}
+                detail="Enterprise value" />
+            )}
+            {fund.revGr != null && (
+              <SigBox label="Revenue Growth" value={`${fund.revGr}%`}
+                signal={fund.revGr>=15?'bullish':fund.revGr>=5?'neutral':'bearish'}
+                detail={fund.growthPeer || (fund.revGr>=15?'Fast-growing':fund.revGr>=5?'Growing':'Slow')} />
+            )}
+            {fund.epsGr != null && (
+              <SigBox label="EPS Growth" value={`${fund.epsGr}%`}
+                signal={fund.epsGr>=15?'bullish':fund.epsGr>=5?'neutral':'bearish'}
+                detail={fund.epsGr>=25?'Hypergrowth':fund.epsGr>=0?'Growing':'Declining'} />
+            )}
+            {fund.opMgn != null && (
+              <SigBox label="Op Margin" value={`${fund.opMgn}%`}
+                signal={fund.opMgn>=20?'bullish':fund.opMgn>=10?'neutral':'bearish'}
+                detail={fund.opMgn>=20?'High margin':'Moderate'} />
+            )}
+            {fund.netMgn != null && (
+              <SigBox label="Net Margin" value={`${fund.netMgn}%`}
+                signal={fund.netMgn>=15?'bullish':fund.netMgn>=5?'neutral':'bearish'}
+                detail="Bottom line" />
+            )}
+            {fund.divYld != null && (
+              <SigBox label="Div Yield" value={`${fund.divYld}%`}
+                signal={fund.divYld>=3?'bullish':fund.divYld>=1?'neutral':'bearish'}
+                detail="Dividend yield" />
+            )}
+            {fund.interestCoverage != null && (
+              <SigBox label="Int. Coverage" value={`${fund.interestCoverage}x`}
+                signal={fund.interestCoverage>=5?'bullish':fund.interestCoverage>=2?'neutral':'bearish'}
+                detail={fund.interestCoverage>=5?'Very safe':fund.interestCoverage>=2?'Safe':'At risk'} />
+            )}
+            {fund.currentRatio != null && (
+              <SigBox label="Current Ratio" value={`${fund.currentRatio}x`}
+                signal={fund.currentRatio>=1.5?'bullish':fund.currentRatio>=1?'neutral':'bearish'}
+                detail="Liquidity" />
+            )}
+            {fund.cfoQuality != null && (
+              <SigBox label="CFO Quality" value={String(fund.cfoQuality)}
+                signal={String(fund.cfoQuality).toLowerCase().includes('high')||String(fund.cfoQuality).toLowerCase().includes('good')?'bullish':'neutral'}
+                detail="Cash flow quality" />
+            )}
+            {fund.marketCap != null && (
+              <SigBox label="Market Cap" value={typeof fund.marketCap === 'string' ? fund.marketCap : `₹${Number(fund.marketCap).toLocaleString('en-IN')} Cr`}
+                signal="neutral" detail={fund.marketCapTier || 'Size'} />
+            )}
           </div>
         </Section>
       )}
@@ -758,16 +906,19 @@ function AnalysisResult({ data }) {
         </Section>
       )}
 
-      {/* ═══ TECHNICAL INDICATORS ═══ */}
+      {/* ═══ COMPLETE TECHNICAL ANALYSIS ═══
+          One card, grouped subsections: MA · Oscillators · Trend & Vol ·
+          Volume & Accum · Ichimoku · Performance · Candle Patterns
+          (mirrors old buildUI `Complete Technical Analysis` block) */}
       {Object.keys(tech).length > 0 && (
-        <Section title="Technical Indicators" subtitle="30+ indicators across moving averages, oscillators, trend, volume">
-          <TechnicalsGrid t={tech} />
+        <Section title="Complete Technical Analysis" subtitle="30+ indicators across moving averages, oscillators, trend & volatility, volume, Ichimoku and price performance">
+          <TechnicalsGrid t={tech} px={currentPrice} ichimoku={ichimoku} patterns={patterns} />
         </Section>
       )}
 
       {/* ═══ FIBONACCI ═══ */}
       {fibs && (
-        <Section title="Fibonacci Retracement" subtitle="Key pullback levels — 23.6 / 38.2 / 50 / 61.8 / 78.6">
+        <Section title="Fibonacci Retracement (52W)" subtitle="Key pullback levels — 23.6 / 38.2 / 50 / 61.8 / 78.6">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10 }}>
             {[
               { l: '0%',    v: fibs.r0 },
@@ -799,78 +950,78 @@ function AnalysisResult({ data }) {
         </Section>
       )}
 
-      {/* ═══ ICHIMOKU ═══ */}
-      {ichimoku && ichimoku.tenkan != null && (
-        <Section title="Ichimoku Cloud (Varsity M2 Ch21)" subtitle={ichimoku.bullish ? '☁ Bullish — above cloud + TK cross up' : '⛈ Caution — below or inside cloud'}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-            {[
-              { l: 'Tenkan (9)',  v: ichimoku.tenkan },
-              { l: 'Kijun (26)',  v: ichimoku.kijun },
-              { l: 'Senkou A',    v: ichimoku.senkouA },
-              { l: 'Senkou B',    v: ichimoku.senkouB },
-              { l: 'Chikou',      v: ichimoku.chikou },
-            ].filter((x) => x.v != null).map((x, i) => (
-              <div key={i} style={{ padding: 12, background: 'rgba(212,160,23,0.06)', border: '1px solid rgba(212,160,23,0.2)', borderRadius: 10 }}>
-                <div style={{ fontSize: 10, color: '#d4a017', fontWeight: 700, letterSpacing: '0.5px' }}>{x.l}</div>
-                <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(x.v).toFixed(1)}</div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
+      {/* Ichimoku and candlestick patterns are rendered as subsections inside
+          Complete Technical Analysis (above), matching the old layout.      */}
 
-      {/* ═══ CANDLESTICK PATTERNS ═══ */}
-      {patterns.length > 0 && (
-        <Section title="Candlestick Patterns" subtitle={`${patterns.length} pattern(s) detected`}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {patterns.map((p, i) => (
-              <span key={i} className="chip" style={{
-                height: 28, fontSize: 12, fontWeight: 700, padding: '0 12px',
-                background: p.signal === 'bullish' ? 'var(--green-bg)' : 'var(--red-bg)',
-                color: p.signal === 'bullish' ? 'var(--green-text)' : 'var(--red-text)',
-                border: `1px solid ${p.signal === 'bullish' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)'}`,
-              }} title={p.desc || ''}>
-                🕯 {p.name}
-              </span>
-            ))}
+      {/* ═══ NEWS & SENTIMENT ═══
+          Always rendered so the user sees sentiment bar; when no news matched
+          we show ET Markets / Moneycontrol fallback links (matches old). */}
+      <Section title="News & Sentiment" subtitle={news.length
+        ? `${sentiment.bull || 0} bullish · ${sentiment.bear || 0} bearish · ${sentiment.neutral || 0} neutral · last 24-72h`
+        : 'No recent news matched — check the sources below'}>
+        {/* Sentiment header strip with tally glyphs */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 14, fontSize: 11, fontWeight: 600 }}>
+            <span style={{ color: 'var(--green-text)' }}>▲ {sentiment.bull || 0}</span>
+            <span style={{ color: 'var(--red-text)' }}>▼ {sentiment.bear || 0}</span>
+            <span style={{ color: 'var(--text3)' }}>● {sentiment.neutral || 0}</span>
           </div>
-        </Section>
-      )}
-
-      {/* ═══ NEWS & SENTIMENT ═══ */}
-      {news.length > 0 && (
-        <Section title="News & Sentiment" subtitle={`${sentiment.bull || 0} bullish · ${sentiment.bear || 0} bearish · ${sentiment.neutral || 0} neutral · last 24-72h`}>
-          {/* Sentiment bar */}
-          <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', marginBottom: 14 }}>
-            <div style={{ flex: sentiment.bull || 0, background: 'var(--green)' }} />
-            <div style={{ flex: sentiment.neutral || 0.1, background: 'var(--amber)' }} />
-            <div style={{ flex: sentiment.bear || 0, background: 'var(--red)' }} />
+        </div>
+        {/* Sentiment bar */}
+        {(sentiment.bull || sentiment.bear || sentiment.neutral) ? (
+          <div style={{ display: 'flex', height: 6, borderRadius: 4, overflow: 'hidden', marginBottom: 14, background: 'rgba(255,255,255,0.04)' }}>
+            {sentiment.bull ? <div style={{ flex: sentiment.bull, background: 'var(--green)' }} /> : null}
+            {sentiment.neutral ? <div style={{ flex: sentiment.neutral, background: 'rgba(255,255,255,0.12)' }} /> : null}
+            {sentiment.bear ? <div style={{ flex: sentiment.bear, background: 'var(--red)' }} /> : null}
           </div>
+        ) : null}
+        {news.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.6, padding: '6px 0' }}>
+            No recent news matched this ticker. Check external sources:{' '}
+            <a href={`https://economictimes.indiatimes.com/topic/${encodeURIComponent(a.sym || '')}`} target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>ET Markets</a>
+            {' · '}
+            <a href={`https://www.moneycontrol.com/stocks/cptmarket/compsearchnew.php?search_data=${encodeURIComponent(a.sym || '')}`} target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Moneycontrol</a>
+            {' · '}
+            <a href={`https://www.google.com/finance/quote/${encodeURIComponent((a.sym || '') + ':NSE')}`} target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Google Finance</a>
+          </div>
+        ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {news.slice(0, 10).map((n, i) => {
+            {news.slice(0, 12).map((n, i) => {
               const color = n.sentiment === 'bullish' ? 'var(--green-text)'
                           : n.sentiment === 'bearish' ? 'var(--red-text)'
-                          : 'var(--amber-text)';
+                          : 'var(--text3)';
+              const glyph = n.sentiment === 'bullish' ? '▲' : n.sentiment === 'bearish' ? '▼' : '●';
               return (
-                <a key={i} href={n.link} target="_blank" rel="noopener noreferrer" style={{
-                  display: 'block', padding: '10px 14px', background: 'rgba(255,255,255,0.03)',
+                <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer" style={{
+                  display: 'flex', padding: '10px 14px', background: 'rgba(255,255,255,0.03)',
                   border: '1px solid var(--border)', borderRadius: 10, textDecoration: 'none',
-                  transition: 'background 150ms ease',
+                  transition: 'background 150ms ease', gap: 10, alignItems: 'flex-start',
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.06)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0 }}>{n.title}</span>
-                    <span style={{ fontSize: 10, color, fontWeight: 700, textTransform: 'uppercase' }}>{n.sentiment}</span>
+                  <span style={{ color, fontSize: 12, flexShrink: 0, marginTop: 1 }}>{glyph}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0 }}>{n.title}</span>
+                      {n.sentiment && <span style={{ fontSize: 9, color, fontWeight: 700, textTransform: 'uppercase' }}>{n.sentiment}</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text3)' }}>{n.src}{n.timeAgo ? ` · ${n.timeAgo}` : ''}</div>
+                    {n.desc && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3, lineHeight: 1.5 }}>
+                        {String(n.desc).slice(0, 180)}{String(n.desc).length > 180 ? '…' : ''}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)' }}>{n.src} · {n.timeAgo}</div>
                 </a>
               );
             })}
           </div>
-        </Section>
-      )}
+        )}
+      </Section>
 
       {/* Disclaimer */}
       <div style={{ marginTop: 28, padding: 16, background: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 10, fontSize: 11, color: 'var(--text3)', lineHeight: 1.55 }}>
@@ -901,12 +1052,15 @@ function MetricPill({ label, value, fmt, color, sub }) {
   if (value == null || (typeof value === 'number' && !isFinite(value))) return null;
   const col = typeof color === 'function' ? color(value) : (color || 'var(--text)');
   return (
-    <div className="card" style={{ padding: '12px 14px' }}>
-      <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.6px', textTransform: 'uppercase' }}>{label}</div>
-      <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: col, marginTop: 4, letterSpacing: '-0.4px' }}>
+    <div style={{
+      padding: '10px 12px', background: 'rgba(18,24,40,0.92)',
+      border: '1px solid var(--border)', borderRadius: 10, textAlign: 'center',
+    }}>
+      <div style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 700, color: col, letterSpacing: '-0.3px' }}>
         {fmt ? fmt(value) : value}
       </div>
-      {sub && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -1318,75 +1472,192 @@ function LegendSwatch({ color, label, dashed, box }) {
   );
 }
 
-function TechnicalsGrid({ t }) {
-  const groups = [
-    {
-      name: 'Moving Averages', icon: '📉', color: 'var(--red-text)',
-      items: [
-        ['9-EMA',   t.ema9],   ['20-EMA',  t.ema20],
-        ['50-EMA',  t.ema50],  ['200-EMA', t.ema200],
-        ['9-DMA',   t.dma9],   ['20-DMA',  t.dma20],
-        ['50-DMA',  t.dma50],  ['100-DMA', t.dma100],
-        ['150-DMA', t.dma150], ['200-DMA', t.dma200],
-      ],
-      fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—',
-    },
-    {
-      name: 'Oscillators', icon: '🌀', color: 'var(--amber-text)',
-      items: [
-        ['RSI-7',  t.rsi7],  ['RSI-14', t.rsi14], ['RSI-21', t.rsi21],
-        ['Stoch-K', t.stochK], ['Stoch-D', t.stochD],
-        ['MACD',    t.macd || t.macdVal], ['MACD Hist', t.macdHist],
-        ['Williams %R', t.willR], ['CCI', t.cci],
-      ],
-      fmt: (v) => v != null ? Number(v).toFixed(1) : '—',
-    },
-    {
-      name: 'Trend & Volatility', icon: '📊', color: 'var(--brand-text)',
-      items: [
-        ['ADX',       t.adx],    ['+DI', t.adxPlus], ['-DI', t.adxMinus],
-        ['ATR-14',    t.atr14],  ['ATR %', t.atrPct],
-        ['BB Upper',  t.bbUpper], ['BB Lower', t.bbLower],
-        ['BB Width',  t.bbWidth], ['BB %',     t.bbPct],
-        ['Supertrend', t.supertrendVal], ['SAR', t.sar],
-      ],
-      fmt: (v) => v != null ? Number(v).toFixed(2) : '—',
-    },
-    {
-      name: 'Volume & Accumulation', icon: '📈', color: 'var(--green-text)',
-      items: [
-        ['Vol Ratio',  t.volRatio],
-        ['OBV',        t.obv],
-        ['Accum/Dist', t.accumDist],
-        ['Bullish Div', t.bullishDiv ? 'Yes' : 'No'],
-        ['Bearish Div', t.bearishDiv ? 'Yes' : 'No'],
-      ],
-      fmt: (v) => v == null ? '—' : typeof v === 'number' ? Number(v).toFixed(2) : String(v),
-    },
-  ];
+// SigBox — signal cell matching old `sigBox(label,val,signal,detail)` helper
+// used throughout the Complete Technical Analysis section. Renders a tinted
+// value with directional ▲/▼/● glyph and optional context line beneath.
+function SigBox({ label, value, signal, detail }) {
+  const color = signal === 'bullish' ? 'var(--green-text)'
+              : signal === 'bearish' ? 'var(--red-text)'
+              : 'var(--amber-text)';
+  const icon = signal === 'bullish' ? '▲' : signal === 'bearish' ? '▼' : '●';
+  const bg   = signal === 'bullish' ? 'rgba(34,197,94,0.06)'
+             : signal === 'bearish' ? 'rgba(239,68,68,0.06)'
+             : 'rgba(255,255,255,0.03)';
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-      {groups.map((g) => {
-        const visible = g.items.filter(([, v]) => v != null && v !== '—');
-        if (visible.length === 0) return null;
-        return (
-          <div key={g.name} style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: g.color, marginBottom: 10, letterSpacing: '-0.1px' }}>
-              {g.icon} {g.name}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, fontSize: 11 }}>
-              {visible.map(([label, val], i) => (
-                <React.Fragment key={i}>
-                  <span style={{ color: 'var(--text3)' }}>{label}</span>
-                  <span className="tabular-nums" style={{ color: 'var(--text)', textAlign: 'right', fontWeight: 500 }}>
-                    {g.fmt(val)}
-                  </span>
-                </React.Fragment>
-              ))}
-            </div>
+    <div style={{
+      padding: '10px 12px', background: bg, border: '1px solid var(--border)',
+      borderRadius: 10, minWidth: 0,
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+        {label}
+      </div>
+      <div className="tabular-nums" style={{
+        fontSize: 13, fontWeight: 700, color, marginTop: 4,
+        display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.2,
+      }}>
+        <span style={{ fontSize: 10 }}>{icon}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+      </div>
+      {detail && (
+        <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 3, lineHeight: 1.4 }}>
+          {detail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -- Grouped tech subsection wrapper (matches old `techSection` helper) ------
+function TechSubsection({ title, boxes }) {
+  const visible = boxes.filter(Boolean);
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{
+        fontSize: 11, fontWeight: 700, color: 'var(--brand-text)',
+        marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em',
+      }}>
+        {title}
+      </div>
+      {visible.length > 0 ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+          {visible}
+        </div>
+      ) : (
+        <div style={{ fontSize: 10, color: 'var(--text3)', padding: 4 }}>Need more data</div>
+      )}
+    </div>
+  );
+}
+
+// Complete Technical Analysis grid — ported line-for-line from old buildUI()
+// Moving Averages · Oscillators · Trend & Volatility · Volume & Accumulation
+// · Ichimoku · Price Performance — each as a sigBox cell.
+function TechnicalsGrid({ t, px, ichimoku, patterns }) {
+  const n = (v, d = 1) => v != null && Number.isFinite(+v) ? (+v).toFixed(d) : '—';
+
+  // ─── MOVING AVERAGES ──────────────────────────────────────────────────
+  const maBoxes = [
+    px != null && t.dma9  != null  && <SigBox key="dma9"  label="DMA 9"   value={`₹${n(t.dma9,1)}`}   signal={px>t.dma9?'bullish':'bearish'}  detail={px>t.dma9?'Above':'Below'} />,
+    px != null && t.dma20 != null  && <SigBox key="dma20" label="DMA 20"  value={`₹${n(t.dma20,1)}`}  signal={px>t.dma20?'bullish':'bearish'} detail={px>t.dma20?'Above':'Below'} />,
+    px != null && t.dma50 != null  && <SigBox key="dma50" label="DMA 50"  value={`₹${n(t.dma50,1)}`}  signal={px>t.dma50?'bullish':'bearish'} detail={px>t.dma50?'Inst. support':'Below support'} />,
+    px != null && t.dma100!= null  && <SigBox key="dma100"label="DMA 100" value={`₹${n(t.dma100,1)}`} signal={px>t.dma100?'bullish':'bearish'} detail="" />,
+    px != null && t.dma150!= null  && <SigBox key="dma150"label="DMA 150" value={`₹${n(t.dma150,1)}`} signal={px>t.dma150?'bullish':'bearish'} detail="" />,
+    px != null && t.dma200!= null  && <SigBox key="dma200"label="DMA 200" value={`₹${n(t.dma200,1)}`} signal={px>t.dma200?'bullish':'bearish'} detail={px>t.dma200?'Long-term up':'Downtrend'} />,
+    (t.dma50 != null && t.dma200 != null) && <SigBox key="macross" label="MA Cross" value={t.goldenCross?'Golden':'Death'} signal={t.goldenCross?'bullish':'bearish'} detail={t.goldenCross?'50 > 200 bullish':'50 < 200 bearish'} />,
+    t.dma200Trend && <SigBox key="dma200tr" label="200DMA Trend" value={t.dma200Trend==='rising'?'Rising':'Falling'} signal={t.dma200Trend==='rising'?'bullish':'bearish'} detail="Long-term direction" />,
+    px != null && t.ema20 != null  && <SigBox key="ema20" label="EMA 20"  value={`₹${n(t.ema20,1)}`}  signal={px>t.ema20?'bullish':'bearish'} detail="Dynamic S/R" />,
+    px != null && t.ema50 != null  && <SigBox key="ema50" label="EMA 50"  value={`₹${n(t.ema50,1)}`}  signal={px>t.ema50?'bullish':'bearish'} detail="" />,
+    px != null && t.ema200!= null  && <SigBox key="ema200"label="EMA 200" value={`₹${n(t.ema200,1)}`} signal={px>t.ema200?'bullish':'bearish'} detail="Long-term EMA" />,
+  ];
+
+  // ─── OSCILLATORS ──────────────────────────────────────────────────────
+  const oscBoxes = [
+    t.rsi7 != null && <SigBox key="rsi7" label="RSI-7" value={n(t.rsi7,1)} signal={t.rsi7<35?'bullish':t.rsi7>70?'bearish':'neutral'} detail={t.rsi7<35?'Oversold':t.rsi7>70?'Overbought':'Neutral'} />,
+    t.rsi14!= null && <SigBox key="rsi14" label="RSI-14" value={n(t.rsi14,1)} signal={t.rsi14<40?'bullish':t.rsi14>65?'bearish':'neutral'} detail={t.rsi14<40?'Oversold':t.rsi14>65?'Overbought':'Neutral'} />,
+    t.rsi21!= null && <SigBox key="rsi21" label="RSI-21" value={n(t.rsi21,1)} signal={t.rsi21<40?'bullish':t.rsi21>65?'bearish':'neutral'} detail="Slow RSI" />,
+    t.stochRsiK != null && <SigBox key="stochrsi" label="StochRSI" value={`${n(t.stochRsiK,0)}%`} signal={t.stochRsiK<20?'bullish':t.stochRsiK>80?'bearish':'neutral'} detail="RSI of RSI" />,
+    t.stochK != null && <SigBox key="stoch" label="Stoch %K" value={`%K:${n(t.stochK,0)} %D:${n(t.stochD,1)}`} signal={t.stochK<25?'bullish':t.stochK>75?'bearish':'neutral'} detail="Stochastic osc" />,
+    (t.macd != null || t.macdVal != null) && <SigBox key="macd" label="MACD" value={n(t.macd ?? t.macdVal, 2)} signal={t.macdBull?'bullish':'bearish'} detail={`Hist: ${t.macdHist ?? '—'}${t.macdMomentum ? ' · ' + t.macdMomentum : ''}`} />,
+    t.cci != null && <SigBox key="cci" label="CCI-20" value={n(t.cci,0)} signal={t.cciSignal==='oversold'?'bullish':t.cciSignal==='overbought'?'bearish':'neutral'} detail={t.cciSignal||'Neutral'} />,
+    t.willR != null && <SigBox key="willr" label="Williams %R" value={`${n(t.willR,0)}%`} signal={t.willR<-80?'bullish':t.willR>-20?'bearish':'neutral'} detail={t.willR<-80?'Oversold':t.willR>-20?'Overbought':'Neutral'} />,
+    t.roc10 != null && <SigBox key="roc10" label="ROC-10" value={`${t.roc10>0?'+':''}${n(t.roc10,1)}%`} signal={t.roc10>0?'bullish':'bearish'} detail="Rate of change" />,
+    t.mfi != null && <SigBox key="mfi" label="MFI-14" value={n(t.mfi,0)} signal={t.mfi<30?'bullish':t.mfi>70?'bearish':'neutral'} detail="Vol-weighted RSI" />,
+  ];
+
+  // ─── TREND & VOLATILITY ───────────────────────────────────────────────
+  const trendBoxes = [
+    t.adx != null && <SigBox key="adx" label="ADX" value={n(t.adx,1)} signal={t.adx>25?'bullish':'neutral'} detail={t.trendStrength||'Trend strength'} />,
+    t.adxPlus  != null && <SigBox key="adxp" label="+DI" value={n(t.adxPlus,1)} signal={t.adxMinus!=null && t.adxPlus>t.adxMinus?'bullish':'neutral'} detail="Bullish directional" />,
+    t.adxMinus != null && <SigBox key="adxm" label="-DI" value={n(t.adxMinus,1)} signal={t.adxPlus!=null && t.adxMinus>t.adxPlus?'bearish':'neutral'} detail="Bearish directional" />,
+    t.supertrendSig && <SigBox key="st" label="Supertrend" value={`₹${n(t.supertrend,1)}`} signal={t.supertrendSig} detail={t.supertrendSig==='bullish'?'Above ST':'Below ST'} />,
+    t.sarSignal && <SigBox key="sar" label="Parabolic SAR" value={`₹${n(t.sar,1)}`} signal={t.sarSignal} detail={t.sarSignal==='bullish'?'SAR below':'SAR above'} />,
+    t.bbUpper != null && <SigBox key="bbu" label="BB Upper" value={`₹${n(t.bbUpper,1)}`} signal="neutral" detail="Upper band" />,
+    t.bbLower != null && <SigBox key="bbl" label="BB Lower" value={`₹${n(t.bbLower,1)}`} signal="neutral" detail="Lower band" />,
+    t.bbPct != null && <SigBox key="bbpct" label="BB %B" value={`${n(t.bbPct*100,0)}%`} signal={t.bbPct<0.2?'bullish':t.bbPct>0.8?'bearish':'neutral'} detail={t.bbWidth!=null?`Width: ${t.bbWidth}%`:'Band position'} />,
+    t.bbSqueeze != null && <SigBox key="bbsq" label="BB Squeeze" value={t.bbSqueeze?'Active':'No'} signal="neutral" detail="Precedes big move" />,
+    t.sqzMomentum != null && <SigBox key="sqzmom" label="Sqz Momentum" value={t.sqzMomentum?'Squeeze':'Normal'} signal="neutral" detail="Volatility" />,
+    t.atr14 != null && <SigBox key="atr14" label="ATR-14" value={n(t.atr14,2)} signal="neutral" detail="Avg true range" />,
+    t.atrPct != null && <SigBox key="atrpct" label="ATR%" value={`${t.atrPct}%`} signal="neutral" detail="Daily volatility" />,
+    t.annualVol != null && <SigBox key="avol" label="Annual Vol" value={`${t.annualVol}%`} signal={t.annualVol<25?'bullish':t.annualVol>50?'bearish':'neutral'} detail="Yearly volatility" />,
+    t.beta != null && <SigBox key="beta" label="Beta" value={String(t.beta)} signal={Math.abs(t.beta-1)<0.4?'bullish':'neutral'} detail={t.beta<0.8?'Low risk':t.beta>1.5?'High risk':'Market-like'} />,
+    t.pctAbove200 != null && <SigBox key="vs200" label="vs 200DMA" value={`${t.pctAbove200>0?'+':''}${t.pctAbove200}%`} signal={t.pctAbove200>0&&t.pctAbove200<20?'bullish':t.pctAbove200>30?'neutral':'bearish'} detail={t.overextended?'OVEREXTENDED':'Normal range'} />,
+  ];
+
+  // ─── VOLUME & ACCUMULATION ────────────────────────────────────────────
+  const volBoxes = [
+    (t.volRatio20 != null || t.volRatio != null) && <SigBox key="volr" label="Vol / 20D Avg" value={`${n(t.volRatio20 ?? t.volRatio,2)}x`} signal={(t.volRatio20 ?? t.volRatio)>1.2?'bullish':(t.volRatio20 ?? t.volRatio)<0.8?'bearish':'neutral'} detail={t.volTrend||'Activity vs average'} />,
+    t.accumDist && <SigBox key="ad" label="Accum/Dist" value={String(t.accumDist)} signal={String(t.accumDist).toLowerCase().includes('accum')?'bullish':'bearish'} detail="Volume pattern" />,
+    t.obvTrend && <SigBox key="obvtr" label="OBV" value={String(t.obvTrend).split('(')[0].trim()} signal={String(t.obvTrend).toLowerCase().includes('rising')?'bullish':'bearish'} detail="On-balance volume" />,
+    t.obv != null && !t.obvTrend && <SigBox key="obv" label="OBV" value={n(t.obv,0)} signal="neutral" detail="On-balance volume" />,
+    px != null && t.vwap != null && <SigBox key="vwap" label="VWAP" value={`₹${n(t.vwap,1)}`} signal={px>t.vwap?'bullish':'bearish'} detail={px>t.vwap?'Above VWAP':'Below VWAP'} />,
+    t.mfi != null && <SigBox key="mfif" label="MFI Flow" value={n(t.mfi,0)} signal={t.mfi>60?'bullish':t.mfi<40?'bearish':'neutral'} detail="Money flow" />,
+    t.bullishDiv && <SigBox key="bulldiv" label="Bullish Div" value="Yes" signal="bullish" detail="Price↓ OBV↑" />,
+    t.bearishDiv && <SigBox key="beardiv" label="Bearish Div" value="Yes" signal="bearish" detail="Price↑ OBV↓" />,
+  ];
+
+  // ─── ICHIMOKU CLOUD ───────────────────────────────────────────────────
+  const ich = ichimoku || {};
+  const ichBoxes = ich.tenkan != null ? [
+    ich.tenkan  != null && <SigBox key="ten" label="Tenkan (9)"  value={`₹${n(ich.tenkan,1)}`}  signal={ich.tenkanAboveKijun?'bullish':'bearish'} detail="Fast line" />,
+    ich.kijun   != null && <SigBox key="kij" label="Kijun (26)"  value={`₹${n(ich.kijun,1)}`}   signal={ich.tenkanAboveKijun?'bullish':'bearish'} detail="Slow line" />,
+    ich.senkouA != null && <SigBox key="sa"  label="Senkou A"    value={`₹${n(ich.senkouA,1)}`} signal="neutral" detail="Cloud edge 1" />,
+    ich.senkouB != null && <SigBox key="sb"  label="Senkou B"    value={`₹${n(ich.senkouB,1)}`} signal="neutral" detail="Cloud edge 2" />,
+    ich.chikou  != null && <SigBox key="ch"  label="Chikou"      value={`₹${n(ich.chikou,1)}`}  signal="neutral" detail="Lagging span" />,
+    ich.aboveCloud != null && <SigBox key="clvs" label="Cloud" value={ich.aboveCloud?'Above':'Below'} signal={ich.aboveCloud?'bullish':'bearish'} detail="vs Ichimoku cloud" />,
+    ich.bullish != null && <SigBox key="ichov" label="Overall" value={ich.bullish?'Bullish':'Bearish'} signal={ich.bullish?'bullish':'bearish'} detail="All signals" />,
+  ] : [];
+
+  // ─── PRICE PERFORMANCE ────────────────────────────────────────────────
+  const perfBoxes = [
+    t.ret1m != null && <SigBox key="r1m" label="1M Return" value={`${t.ret1m>0?'+':''}${t.ret1m}%`} signal={t.ret1m>0?'bullish':'bearish'} detail="" />,
+    t.ret3m != null && <SigBox key="r3m" label="3M Return" value={`${t.ret3m>0?'+':''}${t.ret3m}%`} signal={t.ret3m>0?'bullish':'bearish'} detail="" />,
+    t.ret6m != null && <SigBox key="r6m" label="6M Return" value={`${t.ret6m>0?'+':''}${t.ret6m}%`} signal={t.ret6m>0?'bullish':'bearish'} detail="" />,
+    t.ret1y != null && <SigBox key="r1y" label="1Y Return" value={`${t.ret1y>0?'+':''}${t.ret1y}%`} signal={t.ret1y>0?'bullish':'bearish'} detail="" />,
+    t.ret3y != null && <SigBox key="r3y" label="3Y Return" value={`${t.ret3y>0?'+':''}${t.ret3y}%`} signal={t.ret3y>0?'bullish':'bearish'} detail="" />,
+    t.wk52Hi != null && <SigBox key="hi" label="52W High" value={`₹${t.wk52Hi}`} signal="neutral" detail={t.pctFromHigh!=null?`${t.pctFromHigh}% away`:''} />,
+    t.wk52Lo != null && <SigBox key="lo" label="52W Low" value={`₹${t.wk52Lo}`} signal="neutral" detail={t.pctFromLow!=null?`+${t.pctFromLow}% above`:''} />,
+    t.weeklyTrend && <SigBox key="wtr" label="Weekly Trend" value={String(t.weeklyTrend).charAt(0).toUpperCase()+String(t.weeklyTrend).slice(1)} signal={t.weeklyTrend==='uptrend'?'bullish':t.weeklyTrend==='downtrend'?'bearish':'neutral'} detail="Higher highs/lows" />,
+  ];
+
+  return (
+    <div>
+      <TechSubsection title="Moving Averages" boxes={maBoxes} />
+      <TechSubsection title="Oscillators" boxes={oscBoxes} />
+      <TechSubsection title="Trend & Volatility" boxes={trendBoxes} />
+      <TechSubsection title="Volume & Accumulation" boxes={volBoxes} />
+      {ichBoxes.length > 0 && <TechSubsection title="Ichimoku Cloud" boxes={ichBoxes} />}
+      <TechSubsection title="Price Performance" boxes={perfBoxes} />
+
+      {/* Candlestick patterns — as signal-badges, matching old layout */}
+      {Array.isArray(patterns) && patterns.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--brand-text)',
+            marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em',
+          }}>
+            Candlestick Patterns
           </div>
-        );
-      })}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {patterns.map((p, i) => {
+              const col = p.signal === 'bullish' ? 'var(--green-text)'
+                        : p.signal === 'bearish' ? 'var(--red-text)'
+                        : 'var(--amber-text)';
+              const bg  = p.signal === 'bullish' ? 'var(--green-bg)'
+                        : p.signal === 'bearish' ? 'var(--red-bg)'
+                        : 'var(--amber-bg)';
+              return (
+                <div key={i} style={{
+                  background: bg, border: `1px solid ${col}33`, borderRadius: 8,
+                  padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0,
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: col }}>🕯 {p.name}</div>
+                  {p.desc && <div style={{ fontSize: 9, color: 'var(--text3)' }}>{p.desc}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
