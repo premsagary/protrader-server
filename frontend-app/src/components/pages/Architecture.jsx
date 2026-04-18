@@ -172,7 +172,7 @@ function FlagRow({ code, severity, penalty, label, triggers }) {
 // ═════════════════════════════════════════════════════════════════════
 
 const TAB_MAP = [
-  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap. Risk-flag badges per card. Paper-tracker records every pick into picks_history; outcomes fill at T+5/T+20/T+60 for alpha vs NIFTY attribution. Phase 0C: 🗒 Log-interest button on each row starts a 24h behavioral hold (picks_journal); countdown chip → green "Ready to act" → Bought/Passed/Watching outcome stamp — surfaced in the "My Journal" panel for self-audit.', 'var(--brand-text)'],
+  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-10 of each bucket (30 stocks), sends to Claude (Haiku 4.5) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers. Manual trigger; persisted per-user in picks_ai_buy_plan.', 'var(--brand-text)'],
   ['Day Trade',     '5-min intraday setups. Separate cache + scoring engine via Unified Pipeline.', '#ef4444'],
   ['Stocks RoboTrade', 'Paper + live execution engine. Pass 1.5 Structure Filter + LLM sub-tab.', 'var(--green-text)'],
   ['Crypto RoboTrade', '24×7 crypto scanner + trade execution.', '#f59e0b'],
@@ -426,12 +426,10 @@ const DB_TABLES = [
     ['external_signals_cache',    'BSE + news + analyst JSONB'],
     ['news_classification_cache', 'LLM verdicts by headline hash'],
     ['llm_budget_daily',          'Daily LLM spend tracking'],
-    ['picks_ai_reviews',          'Deep AI Review council verdicts'],
+    ['picks_ai_reviews',          'Deep AI Review council verdicts (per-category council + judge)'],
+    ['picks_ai_buy_plan',         'AI Buy Plan runs: ranked LLM picks + exit plans (entry/target/stop/sell-if) from top-30 candidates'],
     ['features_snapshot',         '~100-column ML feature row per scan'],
     ['outcome_metrics',           'Forward MFE/MAE metrics'],
-    ['picks_history',             'Paper-tracker: every pick surfaced on Rebound/Momentum/LongTerm panels'],
-    ['picks_outcomes',            'T+5/T+20/T+60 return + NIFTY alpha per tracked pick'],
-    ['picks_journal',             'Phase 0C behavioral log — user intent + 24h hold cooldown before acting'],
     ['writer_dead_letter',        'DLQ for failed DB writes'],
   ]],
   ['Trading', [
@@ -471,20 +469,20 @@ const ADMIN_ENDPOINTS = [
 const ROADMAP_PHASES = [
   {
     id: 0,
-    title: 'Measurement Infrastructure',
+    title: 'AI Buy Plan (single-model LLM curation)',
     status: 'shipped',
-    when: 'Week 1 · shipped 2026-04-18 (balaji cb229ec)',
-    cost: '₹0',
-    goal: 'Paper-portfolio tracker + per-pick alpha vs NIFTY + 24h behavioral hold. The evidence substrate everything else rests on.',
+    when: 'Week 1 · shipped 2026-04-18 (balaji) · superseded Phase 0 paper-tracker',
+    cost: '~₹0.30/run (Haiku 4.5 · ~8k tokens)',
+    goal: 'Single-model Claude review of the merged top-30 (10 per bucket) that drops weak setups and ranks ONLY the keepers with full exit plans: entry zone · target · stop · horizon · risk-reward · sell-if triggers.',
     includes: [
-      'picks_history — every Rebound/Momentum/LongTerm pick recorded daily',
-      'picks_outcomes — T+5/T+20/T+60 return + NIFTY alpha per pick',
-      'picks_journal — user intent log with 24h cooldown + outcome stamp',
-      '/api/picks-tracker/stats (byBucket · byFlag · rolling · winners/losers)',
-      'TrackerPanel UI (default-open) with per-bucket alpha + rolling grid',
-      '"My Journal" panel + 🗒 Log-interest button on every pick',
+      'picks_ai_buy_plan — persisted per-user LLM plan history (top30_input + ranked plan + skipped)',
+      'POST /api/ai-picks/run — manual trigger; body carries top-10 per bucket + market meta',
+      'GET /api/ai-picks/latest — cached plan for stale-tab rehydration',
+      'AIReviewPanel UI — ranked cards with rank/sym/bucket/confidence/rationale, expandable exit plan, collapsible rejected list',
+      'Strict JSON normalisation (stop < entryLo ≤ entryHi < target; auto re-rank; auto-skip unknowns)',
+      'Filter-then-rank flow: AI approves genuine picks first, THEN ranks only the approved ones (no artificial cap)',
     ],
-    why: 'Nothing downstream matters until we can measure. Without Phase 0, every later phase is a guess layered on a guess.',
+    why: 'Real-money reliability matters more than evidence collection. Paper-tracking (picks_history/outcomes/journal) churned data without producing actionable signal — the AI Buy Plan tells you what to buy and when to sell, right now.',
   },
   {
     id: 1,
@@ -496,7 +494,7 @@ const ROADMAP_PHASES = [
     includes: [
       'Subscribe to Trendlyne Pro, Tijori, or Tikr (or OFB PIT-FA via NSE EOD)',
       'Walk-forward harness: replay the full pipeline on any historical date',
-      'Backfill picks_history back 1-2 years for immediate evidence',
+      'Backfill pick history back 1-2 years for immediate backtest evidence',
       'Drop from a 90-day wait to a same-week verdict on every tweak',
     ],
     why: 'Highest-leverage spend in the whole plan — turns Phase 0\'s 90-day evidence wait into a hours-long backtest loop.',
@@ -1291,7 +1289,7 @@ export default function Architecture() {
           {/* ═══════════ STACK ═══════════ */}
           {/* ═══════════ BUILD-BEST ROADMAP ═══════════ */}
           <SectionCard id="roadmap" icon="🗺" title="Build-Best Roadmap"
-            subtitle="The approved 8-phase plan to turn ProTrader Stock Picks into a real-money edge. Phase 0 = measurement; every later phase is gated by Phase 0's outcome evidence. Full cost envelope: ₹16k–40k/mo at steady state, with a free on-ramp until Phase 0 proves itself."
+            subtitle="The approved 8-phase plan to turn ProTrader Stock Picks into a real-money edge. Phase 0 (AI Buy Plan) is shipped — manual LLM curation of the top-30; later phases layer PIT data, professional signal feeds, deep thesis, ML, and portfolio-aware refinement on top. Full cost envelope: ₹16k–40k/mo at steady state."
             accent="var(--purple-text)">
 
             <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 14 }}>

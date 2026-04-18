@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { apiGet, apiPost, apiPatch } from '../../api/client';
+import { apiGet, apiPost } from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -324,70 +324,33 @@ export default function StockPicks() {
   const [aiRunning, setAiRunning] = useState({}); // { category: bool }
   const [aiExpanded, setAiExpanded] = useState({}); // { "category:sym": true }
 
-  // ═══ Phase 0C — behavioral guardrail: 24h journal / hold ═══
-  // `journal` = raw entries from /api/picks-journal (user's own decisions).
-  // `journalMap` = quick lookup keyed by `${bucket}:${sym}` → most-recent entry,
-  //  so PickRow can render its state without scanning the list on every render.
-  const [journal, setJournal] = useState([]);
-  const [journalLoading, setJournalLoading] = useState(false);
-  const [journalAuthed, setJournalAuthed] = useState(true); // assume true; if 401 → false
+  // ═══ AI Buy Plan — single-model review of the merged top-30 picks ═══
+  // Manual trigger only. `aiPlan` holds the most-recent plan (either freshly
+  // run or loaded from /api/ai-picks/latest on mount). `aiPlanLoading` covers
+  // both the initial fetch and the Run Review click. `aiPlanAuthed` degrades
+  // the panel gracefully for guest views.
+  const [aiPlan, setAiPlan]               = useState(null);
+  const [aiPlanLoading, setAiPlanLoading] = useState(false);
+  const [aiPlanRunning, setAiPlanRunning] = useState(false);
+  const [aiPlanAuthed, setAiPlanAuthed]   = useState(true);
+  const [aiPlanError, setAiPlanError]     = useState(null);
 
-  const fetchJournal = useCallback(async () => {
-    setJournalLoading(true);
+  const fetchAiPlan = useCallback(async () => {
+    setAiPlanLoading(true);
+    setAiPlanError(null);
     try {
-      const d = await apiGet('/api/picks-journal');
-      setJournal(Array.isArray(d?.entries) ? d.entries : []);
-      setJournalAuthed(true);
+      const d = await apiGet('/api/ai-picks/latest');
+      if (d && d.ok && d.latest) setAiPlan(d.latest);
+      else setAiPlan(null);
+      setAiPlanAuthed(true);
     } catch (e) {
-      // Gracefully degrade: if user isn't logged in, we just don't show the
-      // journal UI (buttons stay hidden, TrackerPanel still works).
-      if (String(e?.message || '').includes('401')) setJournalAuthed(false);
-      setJournal([]);
+      if (String(e?.message || '').includes('401')) setAiPlanAuthed(false);
+      setAiPlan(null);
     } finally {
-      setJournalLoading(false);
+      setAiPlanLoading(false);
     }
   }, []);
-  useEffect(() => { fetchJournal(); }, [fetchJournal]);
-
-  // Tick a counter every 30s so countdown chips update without a manual reload.
-  const [, setNowTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
-    return () => clearInterval(t);
-  }, []);
-
-  const journalMap = useMemo(() => {
-    const m = {};
-    for (const e of journal) {
-      const k = `${e.bucket}:${e.sym}`;
-      // keep most-recent entry per (bucket,sym); entries come back desc already
-      if (!m[k]) m[k] = e;
-    }
-    return m;
-  }, [journal]);
-
-  const logInterest = useCallback(async (sym, bucket, reason) => {
-    try {
-      await apiPost('/api/picks-journal', { sym, bucket, reason: reason || '' });
-      await fetchJournal();
-    } catch (e) {
-      if (String(e?.message || '').includes('401')) {
-        alert('Please log in to use the 24h hold guardrail.');
-        setJournalAuthed(false);
-      } else {
-        alert('Could not log interest: ' + (e.message || 'unknown error'));
-      }
-    }
-  }, [fetchJournal]);
-
-  const markActed = useCallback(async (journalId, outcome) => {
-    try {
-      await apiPatch(`/api/picks-journal/${journalId}`, { outcome });
-      await fetchJournal();
-    } catch (e) {
-      alert('Could not update journal entry: ' + (e.message || 'unknown error'));
-    }
-  }, [fetchJournal]);
+  useEffect(() => { fetchAiPlan(); }, [fetchAiPlan]);
 
   useEffect(() => {
     setLoading(true);
@@ -441,6 +404,36 @@ export default function StockPicks() {
     });
   }, []);
 
+  // Strip a pick down to the compact payload we send to /api/ai-picks/run.
+  // Keep it small — the LLM doesn't need every flag code, just the numbers
+  // that justify a ranking and the context to write an exit plan.
+  const _aiSlim = (s) => ({
+    sym: s.sym,
+    name: s.name,
+    grp: s.grp,
+    sector: s.sector,
+    ltp: s.ltp,
+    chgPct: s.chgPct,
+    scoreV2: s.scoreV2,
+    composite: s.composite,
+    fallenScore: s.fallenScore,
+    fallen_from_52w_high_pct: s.fallen_from_52w_high_pct,
+    rsi14: s.rsi14,
+    pe: s.pe,
+    pb: s.pb,
+    peg: s.peg,
+    roe: s.roe,
+    debtToEquity: s.debtToEquity,
+    opMargin: s.opMargin,
+    revGrowthYoY: s.revGrowthYoY,
+    epsGrowthYoY: s.epsGrowthYoY,
+    expectedReturn: s.expectedReturn,
+    flags: Array.isArray(s.flags) ? s.flags.slice(0, 8) : undefined,
+    riskFlags: Array.isArray(s.riskFlags) ? s.riskFlags.slice(0, 6) : undefined,
+    pickBucketReason: s.pickBucketReason,
+  });
+
+
   const setSort = useCallback((tabId, key) => {
     setSorts((p) => {
       const cur = p[tabId];
@@ -479,6 +472,44 @@ export default function StockPicks() {
     }
     return out;
   }, [filteredByGrp, sorts]);
+
+  // Kick off a fresh AI review. Sends top-10 of each bucket (already sorted
+  // + sector-capped client-side) and the market meta strip. Backend calls
+  // Claude, persists to picks_ai_buy_plan, returns the ranked plan.
+  const runAiPlan = useCallback(async () => {
+    if (aiPlanRunning) return;
+    setAiPlanRunning(true);
+    setAiPlanError(null);
+    try {
+      const top10 = (arr) => (arr || []).slice(0, 10).map(_aiSlim);
+      const body = {
+        picks: {
+          rebound:  top10(tabPicks.rebound),
+          momentum: top10(tabPicks.momentum),
+          longterm: top10(tabPicks.longterm),
+        },
+        meta: {
+          vixRegime:  data?.meta?.vixRegime,
+          vix:        data?.meta?.vix,
+          breadthPct: data?.meta?.breadthAboveVWAPPct,
+          regime:     data?.meta?.regime,
+        },
+      };
+      const r = await apiPost('/api/ai-picks/run', body);
+      if (r && r.ok && r.plan) {
+        setAiPlan(r.plan);
+        setAiPlanAuthed(true);
+      } else if (r && r.error) {
+        setAiPlanError(r.error);
+      }
+    } catch (e) {
+      const msg = String(e?.message || '');
+      if (msg.includes('401')) setAiPlanAuthed(false);
+      setAiPlanError(msg || 'AI review failed');
+    } finally {
+      setAiPlanRunning(false);
+    }
+  }, [aiPlanRunning, tabPicks, data]);
 
   // Header stat counts (before cap)
   const counts = useMemo(() => ({
@@ -684,32 +715,27 @@ export default function StockPicks() {
                 onRunReview={() => runDeepReview(tab.id)}
                 aiExpanded={aiExpanded}
                 onToggleExpand={toggleExpand}
-                journalMap={journalMap}
-                journalAuthed={journalAuthed}
-                onLogInterest={logInterest}
-                onMarkActed={markActed}
               />
             );
           })}
         </div>
       )}
 
-      {/* ═══ PICKS PERFORMANCE TRACKER (Phase 0) ═══ */}
+      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-30 candidates ═══
+          Replaces the old Phase 0 paper-tracker + 24h-hold journal. The model
+          reviews top-10 of each bucket (rebound/momentum/longterm), filters
+          out the weak setups, and ranks ONLY the approved ones with a full
+          exit plan (entry zone / target / stop / horizon / sell-if).
+          Manual trigger only — user clicks "Run AI Review", executes in Kite. */}
       {!loading && !error && (
-        <TrackerPanel />
-      )}
-
-      {/* ═══ MY JOURNAL — 24h behavioral-hold log (Phase 0C) ═══
-          Surfaces every "Log interest" click the user has made, with its
-          countdown state (cooling / ready) and an outcome stamp once they
-          act. Renders for logged-in users only; cleanly hidden for guest
-          views so the page doesn't scream LOGIN at casual browsers. */}
-      {!loading && !error && journalAuthed && (
-        <JournalPanel
-          journal={journal}
-          journalLoading={journalLoading}
-          onMarkActed={markActed}
-          onRefresh={fetchJournal}
+        <AIReviewPanel
+          plan={aiPlan}
+          loading={aiPlanLoading}
+          running={aiPlanRunning}
+          authed={aiPlanAuthed}
+          error={aiPlanError}
+          onRun={runAiPlan}
+          onRefresh={fetchAiPlan}
         />
       )}
 
@@ -764,7 +790,6 @@ function PicksColumn({
   sort, onSort,
   aiReviews, aiLoading, aiRunning, onRunReview,
   aiExpanded, onToggleExpand,
-  journalMap, journalAuthed, onLogInterest, onMarkActed,
 }) {
   return (
     <div
@@ -870,10 +895,6 @@ function PicksColumn({
           aiLoading={aiLoading}
           expanded={!!aiExpanded[`${tab.id}:${s.sym}`]}
           onToggle={() => onToggleExpand(tab.id, s.sym)}
-          journalEntry={journalMap ? journalMap[`${tab.id}:${s.sym}`] : null}
-          journalAuthed={journalAuthed}
-          onLogInterest={onLogInterest}
-          onMarkActed={onMarkActed}
         />
       ))}
 
@@ -931,37 +952,12 @@ function SortHeader({ label, sortKey, sort, onSort, align }) {
 // ══════════════════════════════════════════════════════════════════════
 function PickRow({
   stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle,
-  journalEntry, journalAuthed, onLogInterest, onMarkActed,
 }) {
   const rawScore = s[tab.scoreField];
   const score = rawScore != null ? Math.round(rawScore * 10) / 10 : null;
   const rawOrig = s[tab.scoreRaw];
   const priceStr = s.price != null ? `₹${Number(s.price).toLocaleString('en-IN', { maximumFractionDigits: 1 })}` : '—';
 
-  // ═══ Phase 0C — 24h behavioral hold ═══
-  // journalEntry, if present, represents the user's most-recent "log interest"
-  // for this (sym,bucket). Compute the countdown against its decided_at.
-  const nowMs = Date.now();
-  let journalState = 'none';    // 'none' | 'cooling' | 'ready' | 'acted'
-  let holdSecondsLeft = 0;
-  let holdReadyAtMs = null;
-  if (journalEntry) {
-    if (journalEntry.acted_outcome) {
-      journalState = 'acted';
-    } else {
-      const decidedMs = new Date(journalEntry.decided_at).getTime();
-      const readyMs = decidedMs + 24 * 3600 * 1000;
-      holdReadyAtMs = readyMs;
-      if (nowMs >= readyMs) journalState = 'ready';
-      else { journalState = 'cooling'; holdSecondsLeft = Math.max(0, Math.floor((readyMs - nowMs) / 1000)); }
-    }
-  }
-  const fmtCountdown = (sec) => {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (h >= 1) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
   // Risk flags live on different fields per bucket:
   //   Rebound  → fallenRiskFlags
   //   Momentum → compositeRiskFlags
@@ -1324,135 +1320,6 @@ function PickRow({
         </div>
       )}
 
-      {/* ═══ Phase 0C — 24h Hold Guardrail (journal) ═══
-          Always-visible strip at the bottom of every pick card so the
-          behavioral layer is discoverable without digging into tabs. States:
-          • none    → "🗒 Log interest (24h hold)" button → logs intent to DB
-          • cooling → shows cooldown pill with live countdown
-          • ready   → shows green "Ready to act" + Bought/Passed/Watching
-          • acted   → shows frozen stamp, e.g. "✓ Acted: BOUGHT"
-          Click on any button is stopPropagation'd so the row's expand toggle
-          isn't accidentally fired. */}
-      {journalAuthed && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
-            borderTop: '1px dashed var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          {journalState === 'none' && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (typeof onLogInterest === 'function') {
-                  const reason = window.prompt(
-                    `Why are you interested in ${s.sym} (${tab.label})?\n\nStart a 24h hold — you can act after the cooldown.`,
-                    ''
-                  );
-                  if (reason === null) return; // user cancelled
-                  onLogInterest(s.sym, tab.id, reason);
-                }
-              }}
-              title="Start a 24h behavioral hold before acting — retail alpha boost per research"
-              style={{
-                background: 'linear-gradient(135deg, rgba(251,191,36,0.12), rgba(124,58,237,0.12))',
-                color: 'var(--text)',
-                border: '1px solid var(--border2)',
-                borderRadius: 9999,
-                padding: '4px 12px',
-                fontSize: 10.5,
-                fontWeight: 700,
-                letterSpacing: '0.3px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                transition: 'all 150ms ease',
-              }}
-            >
-              🗒 Log interest <span style={{ color: 'var(--text3)', fontWeight: 500 }}>· 24h hold</span>
-            </button>
-          )}
-
-          {journalState === 'cooling' && (
-            <>
-              <span
-                className="chip"
-                title={`You logged interest at ${new Date(journalEntry.decided_at).toLocaleString()}. Action unlocks after 24h.`}
-                style={{
-                  fontSize: 10.5,
-                  height: 22,
-                  padding: '0 10px',
-                  fontWeight: 700,
-                  background: 'rgba(251,191,36,0.14)',
-                  color: 'var(--amber-text)',
-                  border: '1px solid rgba(251,191,36,0.35)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                }}
-              >
-                ⏳ Cooling down · {fmtCountdown(holdSecondsLeft)}
-              </span>
-              <span style={{ fontSize: 9.5, color: 'var(--text4)', fontStyle: 'italic' }}>
-                Logged at {new Date(journalEntry.decided_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </>
-          )}
-
-          {journalState === 'ready' && (
-            <>
-              <span
-                className="chip"
-                title="24h hold cleared — ready to act with a cooler head"
-                style={{
-                  fontSize: 10.5,
-                  height: 22,
-                  padding: '0 10px',
-                  fontWeight: 800,
-                  background: 'rgba(34,197,94,0.16)',
-                  color: 'var(--green-text)',
-                  border: '1px solid rgba(34,197,94,0.4)',
-                  letterSpacing: '0.3px',
-                }}
-              >
-                ✓ READY TO ACT
-              </span>
-              <JournalActionButton label="Bought"   color="var(--green-text)" onClick={() => onMarkActed && onMarkActed(journalEntry.journal_id, 'bought')} />
-              <JournalActionButton label="Passed"   color="var(--red-text)"   onClick={() => onMarkActed && onMarkActed(journalEntry.journal_id, 'passed')} />
-              <JournalActionButton label="Watching" color="var(--amber-text)" onClick={() => onMarkActed && onMarkActed(journalEntry.journal_id, 'watching')} />
-            </>
-          )}
-
-          {journalState === 'acted' && (
-            <span
-              className="chip"
-              title={`Decision recorded on ${new Date(journalEntry.acted_at || journalEntry.decided_at).toLocaleString()}`}
-              style={{
-                fontSize: 10.5,
-                height: 22,
-                padding: '0 10px',
-                fontWeight: 700,
-                background: journalEntry.acted_outcome === 'bought'   ? 'rgba(34,197,94,0.14)'
-                          : journalEntry.acted_outcome === 'passed'   ? 'rgba(239,68,68,0.12)'
-                          : 'rgba(251,191,36,0.12)',
-                color:      journalEntry.acted_outcome === 'bought'   ? 'var(--green-text)'
-                          : journalEntry.acted_outcome === 'passed'   ? 'var(--red-text)'
-                          : 'var(--amber-text)',
-                border:  '1px solid var(--border2)',
-                letterSpacing: '0.3px',
-              }}
-            >
-              ✓ Acted: {String(journalEntry.acted_outcome || '').toUpperCase()}
-            </span>
-          )}
-        </div>
-      )}
-
       {/* Expanded detail — AI council verdicts only (penalty block is now inline above) */}
       {expanded && showAiBadges && hasReviews && (
         <div style={{
@@ -1684,589 +1551,433 @@ function QuickStartBars({ tabPicks }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TRACKER PANEL — Phase 0 paper-tracker UI
-// Collapsed by default. When expanded, fetches /api/picks-tracker/stats and
-// renders per-bucket hit-rate vs NIFTY, rolling alpha, flag attribution,
-// conviction attribution, winners/losers. Horizon selector: T+5, T+20, T+60.
-// This is the evidence layer — how we know whether the picks system actually
-// adds alpha versus just indexing NIFTY.
+// AI BUY PLAN PANEL — LLM-curated picks + exit plans
+// Consumes /api/ai-picks/run (manual trigger) + /api/ai-picks/latest (cache).
+// The model reviews top-10 of each bucket, filters weak setups, and ranks
+// ONLY the approved ones with full exit plans (entry/target/stop/sell-if).
+// Manual execution: user buys in Kite themselves.
 // ══════════════════════════════════════════════════════════════════════
-const BUCKET_ACCENT = {
-  rebound:  { color: 'var(--amber-text)', bg: 'rgba(251,191,36,0.08)',  border: 'rgba(251,191,36,0.25)'  },
-  momentum: { color: 'var(--green-text)', bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.25)'  },
-  longterm: { color: 'var(--brand-text)', bg: 'rgba(99,102,241,0.08)',  border: 'rgba(99,102,241,0.25)'  },
-};
-const BUCKET_LABEL = { rebound: 'Rebound', momentum: 'Momentum', longterm: 'Long-Term' };
+function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh }) {
+  const picks    = Array.isArray(plan?.plan?.picks)   ? plan.plan.picks   : [];
+  const skipped  = Array.isArray(plan?.plan?.skipped) ? plan.plan.skipped : [];
+  const mread    = plan?.plan?.market_read || null;
+  const summary  = plan?.plan?.summary || null;
+  const runAt    = plan?.run_at ? new Date(plan.run_at) : null;
+  const pickN    = plan?.picks_count || picks.length;
+  const skipN    = plan?.skipped_count || skipped.length;
+  const inputN   = (plan?.top30_input
+                      ? ( (plan.top30_input.rebound?.length  || 0)
+                        + (plan.top30_input.momentum?.length || 0)
+                        + (plan.top30_input.longterm?.length || 0) )
+                      : 30);
+  const [expanded,  setExpanded]  = useState({});
+  const [showSkip,  setShowSkip]  = useState(false);
 
-function fmtPct(v, digits = 2) {
-  if (v == null || !Number.isFinite(+v)) return '—';
-  return (v >= 0 ? '+' : '') + (+v).toFixed(digits) + '%';
-}
-function alphaColor(v) {
-  if (v == null) return 'var(--text3)';
-  if (v > 2) return 'var(--green-text)';
-  if (v > 0) return 'var(--amber-text)';
-  return 'var(--red-text)';
-}
+  const toggle = (sym) => setExpanded((p) => ({ ...p, [sym]: !p[sym] }));
+  const hoursAgo = (d) => {
+    if (!d) return '—';
+    const ms = Date.now() - d.getTime();
+    const h = ms / 3600000;
+    if (h < 1)  return `${Math.max(1, Math.round(ms / 60000))}m ago`;
+    if (h < 24) return `${h.toFixed(h < 3 ? 1 : 0)}h ago`;
+    return `${Math.round(h / 24)}d ago`;
+  };
 
-function TrackerPanel() {
-  // Default-open so users see the tracker immediately — Phase 0 is meant
-  // to be loud and visible. If the panel is in cold-start, the prominent
-  // "recording in progress" card makes clear what's happening.
-  const [open, setOpen] = useState(true);
-  const [horizon, setHorizon] = useState('t20');
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-
-  const fetchStats = useCallback(async (h) => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const r = await apiGet(`/api/picks-tracker/stats?horizon=${h}`);
-      if (r && r.ok) setData(r);
-      else { setErr(r && r.error ? r.error : 'no data'); setData(null); }
-    } catch (e) {
-      setErr(e.message || 'fetch failed');
-      setData(null);
-    } finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => {
-    if (open) fetchStats(horizon);
-  }, [open, horizon, fetchStats]);
-
-  const meta = data?.meta || {};
-  const coldStart = !data || (meta.total_outcomes || 0) === 0;
+  const bucketAccent = (b) => {
+    if (b === 'rebound')  return { color: 'var(--amber-text)', bg: 'rgba(251,191,36,0.10)',  border: 'rgba(251,191,36,0.32)'  };
+    if (b === 'momentum') return { color: 'var(--green-text)', bg: 'rgba(52,211,153,0.10)',  border: 'rgba(52,211,153,0.32)'  };
+    return                       { color: 'var(--brand-text)', bg: 'rgba(99,102,241,0.10)',  border: 'rgba(99,102,241,0.32)'  };
+  };
 
   return (
-    <div className="card" style={{ marginTop: 18, padding: 0, overflow: 'hidden' }}>
-      {/* Collapsible header */}
-      <button
-        onClick={() => setOpen(v => !v)}
-        style={{
-          width: '100%', textAlign: 'left',
-          padding: '14px 18px',
-          background: open ? 'rgba(99,102,241,0.08)' : 'transparent',
-          border: 'none',
-          borderBottom: open ? '1px solid var(--border)' : 'none',
-          color: 'var(--text)',
-          fontFamily: 'inherit',
-          cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          transition: 'background 220ms ease',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 18 }}>📊</span>
-          <span style={{ fontWeight: 700, fontSize: 14 }}>
-            Picks Performance Tracker
-          </span>
-          <span className="label-xs" style={{ color: 'var(--text3)' }}>
-            · Alpha vs NIFTY · Evidence over opinion
-          </span>
-        </div>
-        <span style={{
-          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-          transition: 'transform 220ms ease',
-          color: 'var(--text3)', fontSize: 14,
-        }}>▾</span>
-      </button>
-
-      {open && (
-        <div style={{ padding: 18 }}>
-          {/* Horizon selector */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-            <span className="label-xs" style={{ marginRight: 4 }}>Horizon:</span>
-            {[
-              { id: 't5',  label: 'T+5 days',  desc: '5 calendar days — short-term setups' },
-              { id: 't20', label: 'T+20 days', desc: '20 calendar days — swing horizon' },
-              { id: 't60', label: 'T+60 days', desc: '60 calendar days — position trade' },
-            ].map(h => (
-              <button
-                key={h.id}
-                onClick={() => setHorizon(h.id)}
-                title={h.desc}
-                style={{
-                  padding: '5px 12px',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  background: horizon === h.id ? 'var(--brand)' : 'rgba(255,255,255,0.04)',
-                  color: horizon === h.id ? '#fff' : 'var(--text2)',
-                  border: `1px solid ${horizon === h.id ? 'var(--brand)' : 'var(--border)'}`,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  transition: 'all 180ms ease',
-                }}
-              >
-                {h.label}
-              </button>
-            ))}
-            <div style={{ flex: 1 }} />
-            {data && (
-              <span className="label-xs" style={{ color: 'var(--text3)' }}>
-                {meta.total_picks || 0} picks tracked · {meta.total_outcomes || 0} outcomes at {horizon.toUpperCase()} · {meta.days_tracked || 0} days
-              </span>
-            )}
+    <div
+      className="card"
+      style={{
+        marginTop: 18,
+        padding: 0,
+        overflow: 'hidden',
+        border: '1px solid rgba(139,92,246,0.35)',
+        background: 'linear-gradient(135deg, rgba(139,92,246,0.05), rgba(99,102,241,0.04))',
+      }}
+    >
+      {/* Header */}
+      <div style={{
+        padding: '16px 20px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+      }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px' }}>
+            🧠 AI Buy Plan
+            <span style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 600, marginLeft: 8, letterSpacing: '0.3px' }}>
+              · LLM-curated · manual execution
+            </span>
           </div>
-
-          {/* Loading / error / cold-start */}
-          {loading && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading tracker data…</div>
-          )}
-          {!loading && err && (
-            <div style={{ padding: 16, color: 'var(--red-text)', fontSize: 13 }}>
-              Tracker unavailable: {err}
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.45 }}>
+            Takes top-10 of each bucket (30 stocks), drops the weak setups, and ranks the keepers with entry zones,
+            targets, stops, horizons, and sell-if triggers. Buy them yourself in Kite.
+          </div>
+          {runAt && (
+            <div style={{ fontSize: 10.5, color: 'var(--text4)', marginTop: 6 }}>
+              Last run: <b style={{ color: 'var(--text2)' }}>{hoursAgo(runAt)}</b>
+              {' · '}<b style={{ color: pickN > 0 ? 'var(--green-text)' : 'var(--red-text)' }}>{pickN}</b> approved of {inputN}
+              {plan?.model && <> · <span style={{ color: 'var(--text3)' }}>{plan.model}</span></>}
+              {' · '}<button
+                onClick={onRefresh}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--brand-text)',
+                  cursor: 'pointer',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: 0,
+                  fontFamily: 'inherit',
+                  textDecoration: 'underline',
+                }}
+                title="Reload cached plan"
+              >
+                Refresh
+              </button>
             </div>
           )}
-          {!loading && !err && coldStart && (
-            <div style={{
-              padding: '20px 16px',
-              background: 'rgba(99,102,241,0.06)',
-              border: '1px dashed rgba(99,102,241,0.30)',
-              borderRadius: 10,
-              fontSize: 13,
-              color: 'var(--text2)',
-              lineHeight: 1.6,
-            }}>
-              <div style={{ fontWeight: 700, color: 'var(--brand-text)', marginBottom: 6 }}>
-                Cold start — no outcomes yet
-              </div>
-              Picks shown on this page are now being recorded every time the scan runs. Outcomes fill
-              automatically at T+5, T+20, and T+60 after each pick's snapshot date. Come back in a
-              few days to see whether the panels are beating NIFTY.
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>
-                {meta.total_picks ? `${meta.total_picks} picks already captured, waiting for ${horizon.toUpperCase()} to elapse.` : 'First snapshot will land on the next scan.'}
-              </div>
-            </div>
-          )}
+        </div>
 
-          {/* Stats grid */}
-          {!loading && !err && !coldStart && data && (
-            <>
-              {/* Per-bucket cards */}
+        <button
+          onClick={onRun}
+          disabled={running || !authed}
+          title={!authed ? 'Log in to run AI Buy Plan.' : 'Send top-30 to Claude and get a ranked buy plan.'}
+          style={{
+            background: running
+              ? 'rgba(139,92,246,0.25)'
+              : 'linear-gradient(135deg, #8B5CF6, #6366F1)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 9999,
+            padding: '9px 18px',
+            fontSize: 12,
+            fontWeight: 800,
+            cursor: running || !authed ? 'not-allowed' : 'pointer',
+            opacity: running || !authed ? 0.6 : 1,
+            boxShadow: '0 4px 14px rgba(139,92,246,0.3)',
+            letterSpacing: '0.3px',
+            fontFamily: 'inherit',
+            transition: 'all 200ms ease',
+          }}
+        >
+          {running ? '🧠 Reviewing 30 picks…' : '🧠 Run AI Review'}
+        </button>
+      </div>
+
+      {/* Body */}
+      <div style={{ padding: '16px 20px' }}>
+        {!authed && (
+          <div style={{
+            padding: 14,
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.25)',
+            borderRadius: 8,
+            color: 'var(--red-text)',
+            fontSize: 12,
+          }}>
+            Log in to run the AI Buy Plan. The review uses your Claude credits and is cached per user.
+          </div>
+        )}
+
+        {authed && error && (
+          <div style={{
+            padding: 12,
+            marginBottom: 12,
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.25)',
+            borderRadius: 8,
+            color: 'var(--red-text)',
+            fontSize: 11.5,
+          }}>
+            ⚠ {error}
+          </div>
+        )}
+
+        {authed && loading && !plan && (
+          <div style={{
+            padding: 24,
+            textAlign: 'center',
+            color: 'var(--text3)',
+            fontSize: 12,
+            fontStyle: 'italic',
+          }}>
+            Loading latest plan…
+          </div>
+        )}
+
+        {authed && !loading && !plan && (
+          <div style={{
+            padding: 18,
+            background: 'rgba(99,102,241,0.06)',
+            border: '1px dashed var(--border)',
+            borderRadius: 10,
+            fontSize: 12,
+            color: 'var(--text2)',
+            lineHeight: 1.5,
+          }}>
+            No AI plan yet. Click <b>Run AI Review</b> above to have Claude review today's top-30 picks
+            (10 per bucket), drop weak setups, and rank the keepers with exit plans.
+          </div>
+        )}
+
+        {authed && plan && pickN === 0 && (
+          <div style={{
+            padding: 14,
+            background: 'rgba(251,191,36,0.10)',
+            border: '1px solid rgba(251,191,36,0.32)',
+            borderRadius: 8,
+            color: 'var(--amber-text)',
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1.5,
+          }}>
+            AI rejected all {inputN} candidates this run.{' '}
+            {summary && <span style={{ color: 'var(--text2)', fontWeight: 500 }}>{summary}</span>}
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic', fontWeight: 500 }}>
+              That's a feature, not a bug — on choppy days the model should pass.
+            </div>
+          </div>
+        )}
+
+        {authed && plan && pickN > 0 && (
+          <>
+            {/* Summary + market read */}
+            {(summary || mread) && (
               <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: 12,
-                marginBottom: 18,
+                padding: 12,
+                marginBottom: 14,
+                background: 'rgba(99,102,241,0.06)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                fontSize: 11.5,
+                color: 'var(--text2)',
+                lineHeight: 1.55,
               }}>
-                {data.byBucket.map(b => {
-                  const acc = BUCKET_ACCENT[b.bucket] || BUCKET_ACCENT.longterm;
-                  return (
-                    <div key={b.bucket} style={{
-                      padding: '14px 16px',
+                {summary && <div><b style={{ color: 'var(--text)' }}>Summary:</b> {summary}</div>}
+                {mread && (
+                  <div style={{ marginTop: summary ? 6 : 0, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 10.5, color: 'var(--text3)' }}>
+                    {mread.stance  && <span><b style={{ color: 'var(--text2)' }}>Stance:</b> {mread.stance}</span>}
+                    {mread.vix     && <span><b style={{ color: 'var(--text2)' }}>VIX:</b> {mread.vix}</span>}
+                    {mread.breadth && <span><b style={{ color: 'var(--text2)' }}>Breadth:</b> {mread.breadth}</span>}
+                    {mread.note    && <span style={{ fontStyle: 'italic' }}>{mread.note}</span>}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Ranked cards */}
+            <div style={{ display: 'grid', gap: 10 }}>
+              {picks.map((p, i) => {
+                const acc = bucketAccent(p.bucket);
+                const isOpen = !!expanded[p.sym];
+                const conf = Number.isFinite(+p.confidence) ? Math.round(+p.confidence) : null;
+                return (
+                  <div
+                    key={p.sym || i}
+                    onClick={() => toggle(p.sym)}
+                    style={{
+                      padding: 14,
                       background: acc.bg,
                       border: `1px solid ${acc.border}`,
                       borderRadius: 10,
-                    }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: acc.color, letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 8 }}>
-                        {BUCKET_LABEL[b.bucket] || b.bucket}
+                      cursor: 'pointer',
+                      transition: 'all 180ms ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{
+                        minWidth: 28,
+                        height: 28,
+                        borderRadius: '50%',
+                        background: acc.color,
+                        color: '#000',
+                        fontWeight: 900,
+                        fontSize: 13,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        letterSpacing: '-0.5px',
+                      }}>
+                        {p.rank || (i + 1)}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
-                        <span className="tabular-nums" style={{
-                          fontSize: 26, fontWeight: 800, letterSpacing: '-0.6px',
-                          color: alphaColor(b.avg_alpha_pct),
-                        }}>
-                          {fmtPct(b.avg_alpha_pct)}
-                        </span>
-                        <span style={{ fontSize: 11, color: 'var(--text3)' }}>avg alpha</span>
+                      <div style={{ flex: 1, minWidth: 160 }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px' }}>
+                          {p.sym}
+                          <span style={{
+                            fontSize: 9.5,
+                            color: acc.color,
+                            fontWeight: 700,
+                            marginLeft: 8,
+                            padding: '2px 8px',
+                            border: `1px solid ${acc.border}`,
+                            borderRadius: 9999,
+                            letterSpacing: '0.5px',
+                            textTransform: 'uppercase',
+                          }}>
+                            {p.bucket}
+                          </span>
+                          {conf != null && (
+                            <span style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 600, marginLeft: 8 }}>
+                              · {conf}% conf
+                            </span>
+                          )}
+                        </div>
+                        {p.rationale && (
+                          <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4, lineHeight: 1.45 }}>
+                            {p.rationale}
+                          </div>
+                        )}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text2)', lineHeight: 1.55 }}>
-                        <div>Hit rate vs NIFTY: <strong style={{ color: 'var(--text)' }}>{b.hit_rate_vs_nifty != null ? b.hit_rate_vs_nifty.toFixed(0) + '%' : '—'}</strong></div>
-                        <div>Avg return: {fmtPct(b.avg_return_pct)} · NIFTY: {fmtPct(b.avg_nifty_pct)}</div>
-                        <div style={{ color: 'var(--text3)', marginTop: 4 }}>n = {b.n}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>
+                        {isOpen ? '▾' : '▸'}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
 
-              {/* Rolling alpha 30d/60d/90d */}
-              {data.rolling && data.rolling.length > 0 && (
-                <div style={{ marginBottom: 18 }}>
-                  <div className="label-xs" style={{ marginBottom: 8 }}>Rolling Alpha by Window</div>
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'auto repeat(4, 1fr)',
-                    gap: 6,
-                    fontSize: 12,
-                  }}>
-                    <div style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px' }}>Bucket</div>
-                    {['30d', '60d', '90d', 'older'].map(w => (
-                      <div key={w} style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px', textAlign: 'right' }}>{w}</div>
-                    ))}
-                    {['rebound', 'momentum', 'longterm'].map(bucket => (
-                      <React.Fragment key={bucket}>
-                        <div style={{ padding: '6px 8px', color: (BUCKET_ACCENT[bucket] || {}).color, fontWeight: 600 }}>
-                          {BUCKET_LABEL[bucket] || bucket}
-                        </div>
-                        {['30d', '60d', '90d', 'older'].map(w => {
-                          const r = data.rolling.find(x => x.bucket === bucket && x.window === w);
-                          return (
-                            <div key={w} className="tabular-nums" style={{
-                              padding: '6px 8px', textAlign: 'right',
-                              color: alphaColor(r?.avg_alpha_pct),
-                              fontWeight: 600,
-                            }}>
-                              {r ? `${fmtPct(r.avg_alpha_pct)} (${r.n})` : '—'}
+                    {isOpen && (
+                      <div style={{
+                        marginTop: 12,
+                        paddingTop: 12,
+                        borderTop: `1px dashed ${acc.border}`,
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                        gap: 10,
+                        fontSize: 11.5,
+                      }}>
+                        {p.entry_zone && (p.entry_zone.low != null || p.entry_zone.high != null) && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>Entry Zone</div>
+                            <div style={{ color: 'var(--text)', fontWeight: 700, marginTop: 2 }}>
+                              ₹{p.entry_zone.low ?? '—'} – ₹{p.entry_zone.high ?? '—'}
                             </div>
-                          );
-                        })}
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Clean vs flagged */}
-              {data.cleanSignal && data.cleanSignal.length > 0 && (
-                <div style={{ marginBottom: 18 }}>
-                  <div className="label-xs" style={{ marginBottom: 8 }}>Clean Signal (no risk flags firing)</div>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    {data.cleanSignal.map(c => (
-                      <div key={c.bucket} style={{
-                        padding: '10px 14px',
-                        background: 'rgba(52,211,153,0.06)',
-                        border: '1px solid rgba(52,211,153,0.25)',
-                        borderRadius: 8,
-                        fontSize: 12,
-                      }}>
-                        <span style={{ fontWeight: 700, color: (BUCKET_ACCENT[c.bucket] || {}).color }}>
-                          {BUCKET_LABEL[c.bucket] || c.bucket}
-                        </span>
-                        <span style={{ color: 'var(--text2)', marginLeft: 8 }}>
-                          {fmtPct(c.avg_alpha_pct)} alpha · {c.hit_rate != null ? c.hit_rate.toFixed(0) + '%' : '—'} hit · n={c.n}
-                        </span>
+                          </div>
+                        )}
+                        {p.target != null && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>Target</div>
+                            <div style={{ color: 'var(--green-text)', fontWeight: 700, marginTop: 2 }}>
+                              ₹{p.target}
+                            </div>
+                          </div>
+                        )}
+                        {p.stop != null && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>Stop</div>
+                            <div style={{ color: 'var(--red-text)', fontWeight: 700, marginTop: 2 }}>
+                              ₹{p.stop}
+                            </div>
+                          </div>
+                        )}
+                        {p.horizon_days != null && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>Horizon</div>
+                            <div style={{ color: 'var(--text)', fontWeight: 700, marginTop: 2 }}>
+                              {p.horizon_days} days
+                            </div>
+                          </div>
+                        )}
+                        {p.expected_return_pct != null && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>Expected</div>
+                            <div style={{ color: 'var(--brand-text)', fontWeight: 700, marginTop: 2 }}>
+                              {Number(p.expected_return_pct).toFixed(1)}%
+                            </div>
+                          </div>
+                        )}
+                        {p.risk_reward != null && (
+                          <div>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase' }}>R:R</div>
+                            <div style={{ color: 'var(--text)', fontWeight: 700, marginTop: 2 }}>
+                              {Number(p.risk_reward).toFixed(2)}
+                            </div>
+                          </div>
+                        )}
+                        {Array.isArray(p.sell_if) && p.sell_if.length > 0 && (
+                          <div style={{ gridColumn: '1 / -1', marginTop: 4 }}>
+                            <div style={{ fontSize: 9.5, color: 'var(--text4)', letterSpacing: '0.3px', textTransform: 'uppercase', marginBottom: 4 }}>
+                              🚨 Sell If
+                            </div>
+                            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text2)', fontSize: 11, lineHeight: 1.55 }}>
+                              {p.sell_if.map((x, k) => <li key={k}>{x}</li>)}
+                            </ul>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
-              )}
-
-              {/* Conviction attribution */}
-              {data.byConviction && data.byConviction.length > 0 && (
-                <div style={{ marginBottom: 18 }}>
-                  <div className="label-xs" style={{ marginBottom: 8 }}>Conviction (buckets qualified)</div>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    {data.byConviction.map(c => (
-                      <div key={c.conviction} style={{
-                        padding: '8px 12px',
-                        background: 'rgba(255,255,255,0.02)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        fontSize: 12,
-                      }}>
-                        <strong style={{ color: 'var(--text)' }}>{c.conviction}-bucket</strong>
-                        <span style={{ color: alphaColor(c.avg_alpha_pct), marginLeft: 8, fontWeight: 600 }}>
-                          {fmtPct(c.avg_alpha_pct)}
-                        </span>
-                        <span style={{ color: 'var(--text3)', marginLeft: 8 }}>
-                          {c.hit_rate != null ? c.hit_rate.toFixed(0) + '%' : '—'} · n={c.n}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Per-flag attribution */}
-              {data.byFlag && data.byFlag.length > 0 && (
-                <div style={{ marginBottom: 18 }}>
-                  <div className="label-xs" style={{ marginBottom: 8 }}>
-                    Risk-Flag Attribution · sorted worst → best alpha (helpful flags should be at the top with negative alpha; noisy flags cluster near zero)
-                  </div>
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr auto auto auto',
-                    gap: 4,
-                    fontSize: 11,
-                    maxHeight: 280,
-                    overflowY: 'auto',
-                  }}>
-                    <div style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px' }}>Flag</div>
-                    <div style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px', textAlign: 'right' }}>Alpha</div>
-                    <div style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px', textAlign: 'right' }}>Hit %</div>
-                    <div style={{ fontWeight: 700, color: 'var(--text3)', padding: '6px 8px', textAlign: 'right' }}>n</div>
-                    {data.byFlag.map(f => (
-                      <React.Fragment key={f.code}>
-                        <div style={{ padding: '6px 8px', color: 'var(--text2)', fontFamily: 'ui-monospace, monospace' }}>{f.code}</div>
-                        <div className="tabular-nums" style={{ padding: '6px 8px', textAlign: 'right', color: alphaColor(f.avg_alpha_pct), fontWeight: 600 }}>
-                          {fmtPct(f.avg_alpha_pct)}
-                        </div>
-                        <div className="tabular-nums" style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>
-                          {f.hit_rate != null ? f.hit_rate.toFixed(0) + '%' : '—'}
-                        </div>
-                        <div className="tabular-nums" style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text3)' }}>{f.n}</div>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Winners / losers side-by-side */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
-                <div>
-                  <div className="label-xs" style={{ marginBottom: 8, color: 'var(--green-text)' }}>Top Winners (last 120d)</div>
-                  <WinnerLoserTable rows={data.winners} />
-                </div>
-                <div>
-                  <div className="label-xs" style={{ marginBottom: 8, color: 'var(--red-text)' }}>Top Losers (last 120d)</div>
-                  <WinnerLoserTable rows={data.losers} />
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function WinnerLoserTable({ rows }) {
-  if (!rows || rows.length === 0) {
-    return <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>No data yet</div>;
-  }
-  return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: 'auto auto 1fr auto',
-      gap: 4,
-      fontSize: 12,
-    }}>
-      {rows.map((r, idx) => (
-        <React.Fragment key={`${r.sym}-${r.snapshot_date}-${idx}`}>
-          <div style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace', color: 'var(--text)', fontWeight: 600 }}>{r.sym}</div>
-          <div style={{ padding: '5px 8px', color: (BUCKET_ACCENT[r.bucket] || {}).color, fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            {BUCKET_LABEL[r.bucket] || r.bucket}
-          </div>
-          <div className="tabular-nums" style={{ padding: '5px 8px', textAlign: 'right', color: alphaColor(r.alpha_pct), fontWeight: 700 }}>
-            {fmtPct(r.alpha_pct)}
-          </div>
-          <div className="tabular-nums" style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
-            {r.snapshot_date}
-          </div>
-        </React.Fragment>
-      ))}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Phase 0C · Journal action button — compact pill used on ready-to-act state
-// ══════════════════════════════════════════════════════════════════════
-function JournalActionButton({ label, color, onClick }) {
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onClick && onClick(); }}
-      style={{
-        background: 'transparent',
-        border: `1px solid ${color}`,
-        color,
-        borderRadius: 9999,
-        padding: '2px 10px',
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: '0.3px',
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-        transition: 'all 150ms ease',
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Phase 0C · Journal Panel — the user's own decision log with cooldown state
-// and outcome stamps. Gives a single place to audit your own discipline:
-// how often do you follow through after the 24h hold, and on what.
-// ══════════════════════════════════════════════════════════════════════
-function JournalPanel({ journal, journalLoading, onMarkActed, onRefresh }) {
-  const [open, setOpen] = useState(true);
-  const [, setNowTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
-    return () => clearInterval(t);
-  }, []);
-
-  const nowMs = Date.now();
-  const stats = useMemo(() => {
-    const total = journal.length;
-    const acted = journal.filter((j) => !!j.acted_outcome).length;
-    const bought = journal.filter((j) => j.acted_outcome === 'bought').length;
-    const passed = journal.filter((j) => j.acted_outcome === 'passed').length;
-    const watching = journal.filter((j) => j.acted_outcome === 'watching').length;
-    const cooling = journal.filter((j) => {
-      if (j.acted_outcome) return false;
-      return nowMs < new Date(j.decided_at).getTime() + 24 * 3600 * 1000;
-    }).length;
-    const ready = journal.filter((j) => {
-      if (j.acted_outcome) return false;
-      return nowMs >= new Date(j.decided_at).getTime() + 24 * 3600 * 1000;
-    }).length;
-    return { total, acted, bought, passed, watching, cooling, ready };
-  }, [journal, nowMs]);
-
-  return (
-    <div className="card" style={{ padding: 16, marginTop: 18, border: '1px solid var(--border)' }}>
-      <div
-        onClick={() => setOpen(!open)}
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 10,
-          cursor: 'pointer',
-          userSelect: 'none',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 800, color: 'var(--text)', fontSize: 14, letterSpacing: '-0.2px' }}>
-            🗒 My Journal
-            <span style={{ fontSize: 10, color: 'var(--text4)', fontWeight: 500, marginLeft: 8, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              24h Behavioral Hold
-            </span>
-          </div>
-          <span className="chip" style={{ fontSize: 9.5, height: 18, padding: '0 7px', fontWeight: 700 }}>
-            {stats.total} total
-          </span>
-          {stats.cooling > 0 && (
-            <span className="chip chip-amber" style={{ fontSize: 9.5, height: 18, padding: '0 7px', fontWeight: 700 }}>
-              ⏳ {stats.cooling} cooling
-            </span>
-          )}
-          {stats.ready > 0 && (
-            <span className="chip chip-green" style={{ fontSize: 9.5, height: 18, padding: '0 7px', fontWeight: 700 }}>
-              ✓ {stats.ready} ready
-            </span>
-          )}
-          {stats.acted > 0 && (
-            <span className="chip" style={{ fontSize: 9.5, height: 18, padding: '0 7px', fontWeight: 700 }}>
-              {stats.acted} acted · {stats.bought}B/{stats.passed}P/{stats.watching}W
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onRefresh && onRefresh(); }}
-            title="Refresh"
-            style={{
-              background: 'transparent',
-              border: '1px solid var(--border2)',
-              color: 'var(--text3)',
-              borderRadius: 6,
-              padding: '3px 8px',
-              fontSize: 10,
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
-          >
-            {journalLoading ? '…' : '↻'}
-          </button>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{open ? '▾' : '▸'}</span>
-        </div>
-      </div>
-
-      {open && (
-        <div style={{ marginTop: 12 }}>
-          {journal.length === 0 && (
-            <div style={{
-              padding: 16,
-              textAlign: 'center',
-              color: 'var(--text3)',
-              fontSize: 12,
-              lineHeight: 1.55,
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px dashed var(--border)',
-              borderRadius: 8,
-              fontStyle: 'italic',
-            }}>
-              No journal entries yet. Click <b>🗒 Log interest</b> on any pick above
-              to start a 24h behavioral hold before acting — research shows this
-              boosts retail alpha by cutting impulsive decisions.
-            </div>
-          )}
-          {journal.length > 0 && (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'auto auto 1fr auto auto',
-              gap: 0,
-              fontSize: 12,
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              overflow: 'hidden',
-            }}>
-              <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.04)', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Stock</div>
-              <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.04)', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Bucket</div>
-              <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.04)', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Reason</div>
-              <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.04)', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', letterSpacing: '0.5px', textTransform: 'uppercase', textAlign: 'right' }}>Status</div>
-              <div style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.04)', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', letterSpacing: '0.5px', textTransform: 'uppercase', textAlign: 'right' }}>Decided</div>
-              {journal.slice(0, 25).map((j, idx) => {
-                const acc = BUCKET_ACCENT[j.bucket] || BUCKET_ACCENT.longterm;
-                const decidedMs = new Date(j.decided_at).getTime();
-                const readyMs = decidedMs + 24 * 3600 * 1000;
-                const isCooling = !j.acted_outcome && nowMs < readyMs;
-                const isReady = !j.acted_outcome && nowMs >= readyMs;
-                const secLeft = Math.max(0, Math.floor((readyMs - nowMs) / 1000));
-                const hLeft = Math.floor(secLeft / 3600);
-                const mLeft = Math.floor((secLeft % 3600) / 60);
-                const countdown = hLeft >= 1 ? `${hLeft}h ${mLeft}m` : `${mLeft}m`;
-                const zebra = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)';
-                return (
-                  <React.Fragment key={j.journal_id}>
-                    <div style={{ padding: '7px 10px', background: zebra, fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: 'var(--text)' }}>
-                      {j.sym}
-                    </div>
-                    <div style={{ padding: '7px 10px', background: zebra, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, color: acc.color }}>
-                      {BUCKET_LABEL[j.bucket] || j.bucket}
-                    </div>
-                    <div style={{ padding: '7px 10px', background: zebra, color: 'var(--text3)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={j.reason || ''}>
-                      {j.reason || <span style={{ fontStyle: 'italic', color: 'var(--text4)' }}>— no note —</span>}
-                    </div>
-                    <div style={{ padding: '7px 10px', background: zebra, textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
-                      {isCooling && (
-                        <span style={{ color: 'var(--amber-text)', fontWeight: 700, fontSize: 10 }}>⏳ {countdown}</span>
-                      )}
-                      {isReady && (
-                        <>
-                          <span style={{ color: 'var(--green-text)', fontWeight: 800, fontSize: 10, marginRight: 4 }}>✓ READY</span>
-                          <JournalActionButton label="Bought"   color="var(--green-text)" onClick={() => onMarkActed && onMarkActed(j.journal_id, 'bought')} />
-                          <JournalActionButton label="Passed"   color="var(--red-text)"   onClick={() => onMarkActed && onMarkActed(j.journal_id, 'passed')} />
-                          <JournalActionButton label="Watching" color="var(--amber-text)" onClick={() => onMarkActed && onMarkActed(j.journal_id, 'watching')} />
-                        </>
-                      )}
-                      {j.acted_outcome && (
-                        <span style={{
-                          color: j.acted_outcome === 'bought' ? 'var(--green-text)'
-                               : j.acted_outcome === 'passed' ? 'var(--red-text)'
-                               : 'var(--amber-text)',
-                          fontWeight: 800,
-                          fontSize: 10,
-                          letterSpacing: '0.3px',
-                        }}>
-                          ✓ {String(j.acted_outcome).toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ padding: '7px 10px', background: zebra, textAlign: 'right', color: 'var(--text4)', fontSize: 10.5 }}>
-                      {new Date(j.decided_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  </React.Fragment>
                 );
               })}
             </div>
-          )}
-          {journal.length > 25 && (
-            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text4)', textAlign: 'center', fontStyle: 'italic' }}>
-              Showing 25 most-recent of {journal.length} entries.
-            </div>
-          )}
+
+            {/* Collapsible skipped section */}
+            {skipped.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <button
+                  onClick={() => setShowSkip((v) => !v)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    color: 'var(--text3)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    padding: '6px 12px',
+                    fontFamily: 'inherit',
+                    letterSpacing: '0.3px',
+                  }}
+                >
+                  {showSkip ? '▾' : '▸'} Rejected ({skipN})
+                </button>
+                {showSkip && (
+                  <div style={{
+                    marginTop: 8,
+                    padding: 10,
+                    background: 'rgba(239,68,68,0.04)',
+                    border: '1px dashed var(--border)',
+                    borderRadius: 8,
+                    fontSize: 11,
+                    color: 'var(--text3)',
+                    lineHeight: 1.55,
+                  }}>
+                    {skipped.map((s, i) => (
+                      <div key={s.sym || i} style={{ padding: '4px 0', borderBottom: i < skipped.length - 1 ? '1px dashed var(--border)' : 'none' }}>
+                        <b style={{ color: 'var(--text2)' }}>{s.sym}</b>
+                        {s.bucket && <span style={{ color: 'var(--text4)', fontSize: 10, marginLeft: 6 }}>· {s.bucket}</span>}
+                        {s.reason && <span style={{ marginLeft: 8, color: 'var(--text3)' }}>— {s.reason}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Disclaimer */}
+        <div style={{
+          marginTop: 14,
+          padding: '8px 12px',
+          background: 'rgba(251,191,36,0.06)',
+          border: '1px solid rgba(251,191,36,0.2)',
+          borderRadius: 6,
+          fontSize: 10,
+          color: 'var(--amber-text)',
+          lineHeight: 1.5,
+          fontStyle: 'italic',
+        }}>
+          ⚠ Educational suggestions only. Execute manually in Kite. Verify every entry/stop against live price.
+          Past performance never guarantees future returns.
         </div>
-      )}
+      </div>
     </div>
   );
 }
