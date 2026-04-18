@@ -523,6 +523,72 @@ async function initDB() {
       )
     `);
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // PICKS PAPER-TRACKER — Phase 0 (Apr-2026)
+    // Records every pick that appears on Rebound / Momentum / LongTerm panels
+    // so short-horizon outcomes (T+5/T+20/T+60) can be attributed back to the
+    // bucket, flags, score band, and conviction level. This is the evidence
+    // substrate that tells us which rules are actually earning alpha vs noise.
+    // One row per (snapshot_date, bucket, sym) — idempotent on repeat scans.
+    // ─────────────────────────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS picks_history (
+        pick_id          BIGSERIAL PRIMARY KEY,
+        snapshot_date    DATE NOT NULL,
+        recorded_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sym              VARCHAR(20) NOT NULL,
+        bucket           VARCHAR(15) NOT NULL,
+        rank             INTEGER,
+        score_v2         DECIMAL(6,2),
+        fallen_score     DECIMAL(10,4),
+        composite        DECIMAL(10,4),
+        entry_price      DECIMAL(18,2),
+        sector           VARCHAR(100),
+        conviction_count INTEGER,
+        risk_flags       JSONB,
+        regime_tilt      DECIMAL(6,3),
+        vix_regime       VARCHAR(20),
+        UNIQUE (snapshot_date, bucket, sym)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(snapshot_date DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_sym  ON picks_history(sym, snapshot_date DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_history_bucket ON picks_history(bucket, snapshot_date DESC)`).catch(()=>{});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS picks_outcomes (
+        pick_id          BIGINT NOT NULL REFERENCES picks_history(pick_id) ON DELETE CASCADE,
+        horizon          VARCHAR(5) NOT NULL,
+        price_at_t       DECIMAL(18,2),
+        return_pct       DECIMAL(10,4),
+        nifty_return_pct DECIMAL(10,4),
+        alpha_pct        DECIMAL(10,4),
+        filled_at        TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (pick_id, horizon)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_outcomes_horizon ON picks_outcomes(horizon, filled_at DESC)`).catch(()=>{});
+
+    // Picks Journal — Phase 0C behavioral guardrail. When the user marks
+    // "I'm interested" on a pick, we record the intent + their 1-line reason
+    // and start a 24h decision window. UI blocks the "ready to act" badge
+    // until 24h elapses — empirically the single biggest retail-alpha boost.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS picks_journal (
+        journal_id   BIGSERIAL PRIMARY KEY,
+        username     VARCHAR(50) NOT NULL,
+        sym          VARCHAR(20) NOT NULL,
+        bucket       VARCHAR(15) NOT NULL,
+        reason       TEXT,
+        decided_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        acted_at     TIMESTAMPTZ,
+        acted_outcome VARCHAR(20),
+        UNIQUE (username, sym, bucket, decided_at)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_journal_user ON picks_journal(username, decided_at DESC)`).catch(()=>{});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_picks_journal_sym ON picks_journal(sym, decided_at DESC)`).catch(()=>{});
+
     // Bucket calibration stats — recomputed nightly
     await pool.query(`
       CREATE TABLE IF NOT EXISTS score_bucket_stats (
@@ -14972,6 +15038,50 @@ app.get('/api/stocks/score', async(req,res)=>{
       },
     };
 
+    // ── Paper-tracker snapshot (Phase 0) ──────────────────────────
+    // Fire-and-forget; idempotent on (snapshot_date, bucket, sym) so repeat
+    // calls today are DB-no-ops. Never blocks the response or propagates errors.
+    // This is the substrate for per-pick alpha attribution against NIFTY.
+    try {
+      if (pool) {
+        const _snapDate = _llmTodayISO();
+        const _snapBucket = (bucketName, list) => list.forEach((p, idx) => {
+          const _flags = []
+            .concat(Array.isArray(p.fallenRiskFlags)    ? p.fallenRiskFlags    : [])
+            .concat(Array.isArray(p.compositeRiskFlags) ? p.compositeRiskFlags : [])
+            .concat(Array.isArray(p.riskFlags)          ? p.riskFlags          : []);
+          const _uniq = Array.from(new Map(_flags.map(f => [f.code, f])).values());
+          pool.query(
+            `INSERT INTO picks_history
+               (snapshot_date, sym, bucket, rank, score_v2, fallen_score, composite,
+                entry_price, sector, conviction_count, risk_flags, regime_tilt, vix_regime)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+             ON CONFLICT (snapshot_date, bucket, sym) DO NOTHING`,
+            [
+              _snapDate, p.sym, bucketName, idx + 1,
+              p.scoreV2 != null ? +p.scoreV2 : null,
+              p.fallenScore != null ? +p.fallenScore : null,
+              p.composite != null ? +p.composite : null,
+              p.price != null ? +p.price : null,
+              p.sector || null,
+              p.convictionCount || 1,
+              JSON.stringify(_uniq),
+              p.regimeTilt != null ? +p.regimeTilt : 0,
+              _picksVixRegime || 'NORMAL',
+            ]
+          ).catch(e => {
+            if (!_snapBucket._warned) {
+              _snapBucket._warned = true;
+              console.warn(`picks_history insert warn (${bucketName}/${p.sym}): ${e.message}`);
+            }
+          });
+        });
+        _snapBucket('rebound',  picksRebound);
+        _snapBucket('momentum', picksMomentum);
+        _snapBucket('longterm', picksLongTerm);
+      }
+    } catch (e) { /* never block response */ }
+
     res.json({
       stocks:scored, total:scored.length,
       picksRebound, picksMomentum, picksLongTerm,
@@ -17472,6 +17582,406 @@ app.post('/api/admin/forward-returns/run', async (req, res) => {
     const result = await fillForwardReturns('manual');
     res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// PICKS OUTCOME CRON — Phase 0 paper-tracker
+// Short-horizon per-pick attribution against NIFTY. Fills picks_outcomes at
+// T+5 / T+20 / T+60 calendar days (±tolerance) with entry→current return, NIFTY
+// return over the same window, and alpha. Separate from stock_forward_returns
+// because this tracks WHAT ACTUALLY SHOWED UP on Rebound/Momentum/LongTerm
+// panels — the honest question is "do the panels beat NIFTY?", which requires
+// per-pick not per-snapshot attribution.
+// =============================================================================
+const _PICK_HORIZONS = [
+  { key: 't5',  days: 5,  tol: 2 },
+  { key: 't20', days: 20, tol: 2 },
+  { key: 't60', days: 60, tol: 3 },
+];
+
+async function fillPicksOutcomes(reason = 'cron') {
+  const t0 = Date.now();
+  if (!pool) return { filled: 0, skipped: 'no-pool' };
+
+  // One NIFTY fetch per run; build date→close lookup. Tolerates weekends/
+  // holidays by walking back up to 5 days to the nearest prior close.
+  let niftyByDate = null, niftyLastClose = null;
+  try {
+    const nc = await fetchKiteDaily('NIFTY 50');
+    if (nc && nc.length) {
+      niftyByDate = new Map();
+      nc.forEach(c => {
+        const d = typeof c.date === 'string'
+          ? c.date.slice(0, 10)
+          : (c.date instanceof Date ? c.date.toISOString().slice(0, 10) : null);
+        if (d && Number.isFinite(+c.close)) niftyByDate.set(d, +c.close);
+      });
+      niftyLastClose = +nc[nc.length - 1].close;
+    }
+  } catch (e) { console.warn('picks-outcomes: nifty fetch failed:', e.message); }
+
+  const _niftyOn = (isoDate) => {
+    if (!niftyByDate) return null;
+    if (niftyByDate.has(isoDate)) return niftyByDate.get(isoDate);
+    const d = new Date(isoDate + 'T00:00:00Z');
+    for (let i = 1; i <= 7; i++) {
+      d.setUTCDate(d.getUTCDate() - 1);
+      const k = d.toISOString().slice(0, 10);
+      if (niftyByDate.has(k)) return niftyByDate.get(k);
+    }
+    return null;
+  };
+
+  let filled = 0, errors = 0;
+  const todayMs = Date.now();
+
+  for (const h of _PICK_HORIZONS) {
+    const target = new Date(todayMs - h.days * 24 * 3600 * 1000);
+    const lo = new Date(target.getTime() - h.tol * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const hi = new Date(target.getTime() + h.tol * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+    let rows;
+    try {
+      const r = await pool.query(
+        `SELECT h.pick_id, h.sym, h.entry_price, h.snapshot_date
+           FROM picks_history h
+           LEFT JOIN picks_outcomes o
+             ON o.pick_id = h.pick_id AND o.horizon = $3
+          WHERE h.snapshot_date BETWEEN $1 AND $2
+            AND h.entry_price IS NOT NULL
+            AND o.pick_id IS NULL
+          LIMIT 5000`,
+        [lo, hi, h.key]
+      );
+      rows = r.rows || [];
+    } catch (e) {
+      console.error(`picks-outcomes query failed (${h.key}):`, e.message);
+      continue;
+    }
+
+    for (const row of rows) {
+      const entryPx = Number(row.entry_price);
+      if (!Number.isFinite(entryPx) || entryPx <= 0) continue;
+      const f = stockFundamentals[row.sym];
+      const nowPx = (f && f.price) || livePrices[row.sym]?.price || null;
+      if (!nowPx || !Number.isFinite(nowPx) || nowPx <= 0) continue;
+
+      const ret = +((nowPx / entryPx - 1).toFixed(6));
+      const isoSnap = typeof row.snapshot_date === 'string'
+        ? row.snapshot_date.slice(0, 10)
+        : row.snapshot_date.toISOString().slice(0, 10);
+      const niftyEntry = _niftyOn(isoSnap);
+      const niftyRet = (niftyEntry && niftyLastClose)
+        ? +((niftyLastClose / niftyEntry - 1).toFixed(6))
+        : null;
+      const alpha = (niftyRet != null) ? +(ret - niftyRet).toFixed(6) : null;
+
+      try {
+        await pool.query(
+          `INSERT INTO picks_outcomes (pick_id, horizon, price_at_t, return_pct, nifty_return_pct, alpha_pct, filled_at)
+           VALUES ($1,$2,$3,$4,$5,$6, NOW())
+           ON CONFLICT (pick_id, horizon) DO UPDATE SET
+             price_at_t = EXCLUDED.price_at_t,
+             return_pct = EXCLUDED.return_pct,
+             nifty_return_pct = EXCLUDED.nifty_return_pct,
+             alpha_pct = EXCLUDED.alpha_pct,
+             filled_at = NOW()`,
+          [row.pick_id, h.key, nowPx, ret, niftyRet, alpha]
+        );
+        filled++;
+      } catch (e) {
+        errors++;
+        if (errors < 5) console.error(`picks-outcomes upsert failed ${row.sym} ${h.key}:`, e.message);
+      }
+    }
+  }
+  console.log(`📈 Picks outcomes filled (${reason}): ${filled} — ${errors} errors — ${Date.now() - t0}ms`);
+  return { filled, errors, tookMs: Date.now() - t0 };
+}
+
+// 10:45PM IST daily — runs after stock_forward_returns (10:30PM)
+cron.schedule('45 22 * * *', async () => {
+  console.log('📈 10:45PM: Picks outcomes fill starting...');
+  try { await fillPicksOutcomes('cron-1045pm'); }
+  catch (e) { console.error('Picks outcomes cron error:', e.message); }
+}, { timezone: 'Asia/Kolkata' });
+
+// Manual trigger
+app.post('/api/admin/picks-outcomes/run', async (req, res) => {
+  try {
+    const result = await fillPicksOutcomes('manual');
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// PICKS TRACKER STATS — Phase 0 paper-tracker analytics
+// Returns per-bucket hit-rate vs NIFTY, per-score-band hit-rate, per-flag
+// hit-rate delta, clean-signal vs flagged, top winners/losers, rolling alpha.
+// Powers the Tracker UI tab. Default horizon t20 (20 calendar days).
+// =============================================================================
+app.get('/api/picks-tracker/stats', async (req, res) => {
+  if (!pool) return res.json({ ok: false, error: 'no-pool' });
+  const horizon = String(req.query.horizon || 't20').toLowerCase();
+  if (!['t5', 't20', 't60'].includes(horizon)) {
+    return res.status(400).json({ ok: false, error: 'invalid horizon (t5|t20|t60)' });
+  }
+  try {
+    const totalR = await pool.query(
+      `SELECT
+          (SELECT COUNT(*)::int FROM picks_history)                                    AS total_picks,
+          (SELECT COUNT(*)::int FROM picks_outcomes WHERE horizon = $1)                AS total_outcomes,
+          (SELECT COUNT(DISTINCT snapshot_date)::int FROM picks_history)               AS days_tracked,
+          (SELECT MIN(snapshot_date)::text FROM picks_history)                         AS first_day,
+          (SELECT MAX(snapshot_date)::text FROM picks_history)                         AS last_day`,
+      [horizon]
+    );
+
+    const bucketR = await pool.query(
+      `SELECT h.bucket,
+              COUNT(o.pick_id)::int                                        AS n,
+              ROUND(AVG(o.return_pct)::numeric      * 100, 3)::float       AS avg_return_pct,
+              ROUND(AVG(o.nifty_return_pct)::numeric * 100, 3)::float      AS avg_nifty_pct,
+              ROUND(AVG(o.alpha_pct)::numeric       * 100, 3)::float       AS avg_alpha_pct,
+              ROUND(AVG(CASE WHEN o.alpha_pct  > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate_vs_nifty,
+              ROUND(AVG(CASE WHEN o.return_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate_positive
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        GROUP BY h.bucket
+        ORDER BY h.bucket`,
+      [horizon]
+    );
+
+    const bandR = await pool.query(
+      `SELECT
+          CASE
+            WHEN h.score_v2 >= 70 THEN '70+'
+            WHEN h.score_v2 >= 60 THEN '60-70'
+            WHEN h.score_v2 >= 50 THEN '50-60'
+            ELSE '<50'
+          END AS band,
+          h.bucket,
+          COUNT(o.pick_id)::int                                        AS n,
+          ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
+          ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        GROUP BY band, h.bucket
+        ORDER BY h.bucket, band`,
+      [horizon]
+    );
+
+    const flagR = await pool.query(
+      `WITH flags_exp AS (
+         SELECT h.pick_id, h.bucket, o.alpha_pct,
+                (flag->>'code') AS code
+           FROM picks_history h
+           JOIN picks_outcomes o
+             ON o.pick_id = h.pick_id AND o.horizon = $1
+           CROSS JOIN LATERAL jsonb_array_elements(COALESCE(h.risk_flags,'[]'::jsonb)) AS flag
+       )
+       SELECT code,
+              COUNT(*)::int                                        AS n,
+              ROUND(AVG(alpha_pct)::numeric * 100, 3)::float       AS avg_alpha_pct,
+              ROUND(AVG(CASE WHEN alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
+         FROM flags_exp
+        GROUP BY code
+        ORDER BY avg_alpha_pct ASC`,
+      [horizon]
+    );
+
+    const cleanR = await pool.query(
+      `SELECT h.bucket,
+              COUNT(o.pick_id)::int                                        AS n,
+              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
+              ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        WHERE jsonb_array_length(COALESCE(h.risk_flags,'[]'::jsonb)) = 0
+        GROUP BY h.bucket`,
+      [horizon]
+    );
+
+    const winnersR = await pool.query(
+      `SELECT h.sym, h.bucket, h.snapshot_date::text AS snapshot_date,
+              ROUND(o.return_pct::numeric       * 100, 2)::float AS return_pct,
+              ROUND(o.alpha_pct::numeric        * 100, 2)::float AS alpha_pct,
+              ROUND(o.nifty_return_pct::numeric * 100, 2)::float AS nifty_return_pct
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        WHERE h.snapshot_date > NOW() - INTERVAL '120 days'
+        ORDER BY o.alpha_pct DESC NULLS LAST
+        LIMIT 10`,
+      [horizon]
+    );
+    const losersR = await pool.query(
+      `SELECT h.sym, h.bucket, h.snapshot_date::text AS snapshot_date,
+              ROUND(o.return_pct::numeric       * 100, 2)::float AS return_pct,
+              ROUND(o.alpha_pct::numeric        * 100, 2)::float AS alpha_pct,
+              ROUND(o.nifty_return_pct::numeric * 100, 2)::float AS nifty_return_pct
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        WHERE h.snapshot_date > NOW() - INTERVAL '120 days'
+        ORDER BY o.alpha_pct ASC NULLS LAST
+        LIMIT 10`,
+      [horizon]
+    );
+
+    const rollR = await pool.query(
+      `SELECT h.bucket,
+              CASE
+                WHEN h.snapshot_date > NOW() - INTERVAL '30 days'  THEN '30d'
+                WHEN h.snapshot_date > NOW() - INTERVAL '60 days'  THEN '60d'
+                WHEN h.snapshot_date > NOW() - INTERVAL '90 days'  THEN '90d'
+                ELSE 'older'
+              END AS window,
+              COUNT(o.pick_id)::int                                    AS n,
+              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float         AS avg_alpha_pct
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        GROUP BY h.bucket, window
+        ORDER BY h.bucket, window`,
+      [horizon]
+    );
+
+    // Conviction: does multi-bucket conviction actually earn more alpha?
+    const convR = await pool.query(
+      `SELECT h.conviction_count::int AS conviction,
+              COUNT(o.pick_id)::int                                        AS n,
+              ROUND(AVG(o.alpha_pct)::numeric * 100, 3)::float             AS avg_alpha_pct,
+              ROUND(AVG(CASE WHEN o.alpha_pct > 0 THEN 1 ELSE 0 END)::numeric * 100, 1)::float AS hit_rate
+         FROM picks_history h
+         JOIN picks_outcomes o
+           ON o.pick_id = h.pick_id AND o.horizon = $1
+        GROUP BY h.conviction_count
+        ORDER BY h.conviction_count`,
+      [horizon]
+    );
+
+    res.json({
+      ok: true,
+      horizon,
+      meta: totalR.rows[0] || { total_picks: 0, total_outcomes: 0, days_tracked: 0 },
+      byBucket:    bucketR.rows,
+      byScoreBand: bandR.rows,
+      byFlag:      flagR.rows,
+      cleanSignal: cleanR.rows,
+      byConviction: convR.rows,
+      winners:     winnersR.rows,
+      losers:      losersR.rows,
+      rolling:     rollR.rows,
+    });
+  } catch (e) {
+    console.error('picks-tracker stats error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =============================================================================
+// PICKS JOURNAL — Phase 0C behavioral guardrail
+// Records the user's "I'm interested" intent with a 1-line reason before they
+// actually execute. A 24h hold on the "ready to act" badge enforces a cooling
+// period — one of the most reliable retail-alpha boosters per the research.
+// =============================================================================
+app.post('/api/picks-journal', async (req, res) => {
+  if (!pool) return res.status(500).json({ ok: false, error: 'no-pool' });
+  const username = (req.user && req.user.username) ? req.user.username : 'public';
+  if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
+
+  const { sym, bucket, reason } = req.body || {};
+  if (!sym || !bucket) return res.status(400).json({ ok: false, error: 'sym + bucket required' });
+  if (!['rebound', 'momentum', 'longterm'].includes(bucket)) {
+    return res.status(400).json({ ok: false, error: 'bucket must be rebound|momentum|longterm' });
+  }
+  const cleanReason = (reason || '').toString().slice(0, 500);
+
+  try {
+    const r = await pool.query(
+      `INSERT INTO picks_journal (username, sym, bucket, reason)
+       VALUES ($1, $2, $3, $4)
+       RETURNING journal_id, decided_at`,
+      [username, sym, bucket, cleanReason]
+    );
+    res.json({
+      ok: true,
+      journal_id: r.rows[0].journal_id,
+      decided_at: r.rows[0].decided_at,
+      ready_at: new Date(new Date(r.rows[0].decided_at).getTime() + 24 * 3600 * 1000).toISOString(),
+    });
+  } catch (e) {
+    console.error('picks-journal insert error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/picks-journal', async (req, res) => {
+  if (!pool) return res.json({ ok: false, error: 'no-pool' });
+  const username = (req.user && req.user.username) ? req.user.username : 'public';
+  if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
+
+  try {
+    const r = await pool.query(
+      `SELECT journal_id, sym, bucket, reason,
+              decided_at,
+              acted_at, acted_outcome
+         FROM picks_journal
+        WHERE username = $1
+        ORDER BY decided_at DESC
+        LIMIT 200`,
+      [username]
+    );
+    const now = Date.now();
+    const entries = r.rows.map(e => {
+      const decidedMs = new Date(e.decided_at).getTime();
+      const readyMs = decidedMs + 24 * 3600 * 1000;
+      return {
+        ...e,
+        ready_at: new Date(readyMs).toISOString(),
+        hold_elapsed: now >= readyMs,
+        seconds_until_ready: Math.max(0, Math.round((readyMs - now) / 1000)),
+      };
+    });
+    res.json({ ok: true, entries });
+  } catch (e) {
+    console.error('picks-journal fetch error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Mark a journal entry as acted (user executed the trade or passed)
+app.patch('/api/picks-journal/:id', async (req, res) => {
+  if (!pool) return res.status(500).json({ ok: false, error: 'no-pool' });
+  const username = (req.user && req.user.username) ? req.user.username : 'public';
+  if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
+
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid id' });
+
+  const { outcome } = req.body || {};
+  if (!['bought', 'passed', 'watching'].includes(outcome)) {
+    return res.status(400).json({ ok: false, error: 'outcome must be bought|passed|watching' });
+  }
+
+  try {
+    const r = await pool.query(
+      `UPDATE picks_journal
+          SET acted_outcome = $1, acted_at = NOW()
+        WHERE journal_id = $2 AND username = $3
+        RETURNING journal_id, acted_at, acted_outcome`,
+      [outcome, id, username]
+    );
+    if (!r.rows.length) return res.status(404).json({ ok: false, error: 'not found' });
+    res.json({ ok: true, ...r.rows[0] });
+  } catch (e) {
+    console.error('picks-journal update error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // =============================================================================

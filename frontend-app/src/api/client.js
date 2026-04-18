@@ -36,3 +36,22 @@ export async function apiPost(path, body) {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
+
+export async function apiPatch(path, body) {
+  const token = getToken();
+  const res = await fetch(path, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body || {}),
+  });
+  if (res.status === 401 && token) {
+    localStorage.removeItem('pt_token');
+    window.location.href = '/';
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}

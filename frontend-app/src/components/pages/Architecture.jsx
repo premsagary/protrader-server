@@ -171,7 +171,7 @@ function FlagRow({ code, severity, penalty, label, triggers }) {
 // ═════════════════════════════════════════════════════════════════════
 
 const TAB_MAP = [
-  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap. Risk-flag badges per card.', 'var(--brand-text)'],
+  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap. Risk-flag badges per card. Paper-tracker records every pick into picks_history; outcomes fill at T+5/T+20/T+60 for alpha vs NIFTY attribution. Phase 0C: 🗒 Log-interest button on each row starts a 24h behavioral hold (picks_journal); countdown chip → green "Ready to act" → Bought/Passed/Watching outcome stamp — surfaced in the "My Journal" panel for self-audit.', 'var(--brand-text)'],
   ['Day Trade',     '5-min intraday setups. Separate cache + scoring engine via Unified Pipeline.', '#ef4444'],
   ['Stocks RoboTrade', 'Paper + live execution engine. Pass 1.5 Structure Filter + LLM sub-tab.', 'var(--green-text)'],
   ['Crypto RoboTrade', '24×7 crypto scanner + trade execution.', '#f59e0b'],
@@ -428,6 +428,9 @@ const DB_TABLES = [
     ['picks_ai_reviews',          'Deep AI Review council verdicts'],
     ['features_snapshot',         '~100-column ML feature row per scan'],
     ['outcome_metrics',           'Forward MFE/MAE metrics'],
+    ['picks_history',             'Paper-tracker: every pick surfaced on Rebound/Momentum/LongTerm panels'],
+    ['picks_outcomes',            'T+5/T+20/T+60 return + NIFTY alpha per tracked pick'],
+    ['picks_journal',             'Phase 0C behavioral log — user intent + 24h hold cooldown before acting'],
     ['writer_dead_letter',        'DLQ for failed DB writes'],
   ]],
   ['Trading', [
