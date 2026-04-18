@@ -317,11 +317,11 @@ export default function DayTrade() {
         ))}
       </div>
 
-      {/* ═══ PER-SETUP MINI-TABLES (top 10 per setup) ═══ */}
+      {/* ═══ PER-SETUP MINI-TABLES (top 10 per setup — 2×2 grid) ═══ */}
       {!loading && !error && picks.length > 0 && (
         <div style={{ marginBottom: 22 }}>
           <div className="label-xs" style={{ marginBottom: 10 }}>Top picks by setup type</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}>
             {SETUPS.map((s) => (
               <SetupMiniTable
                 key={s.type}
