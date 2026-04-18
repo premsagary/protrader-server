@@ -17533,36 +17533,69 @@ app.post('/api/admin/forward-returns/run', async (req, res) => {
 // =============================================================================
 
 // Strip a pick down to what the LLM actually needs — keeps the prompt compact
-// (a fat 30-pick prompt can blow past 60K input tokens otherwise).
+// (a fat 30-pick prompt can blow past 60K input tokens otherwise). Field names
+// MUST match the canonical /api/stocks/score shape — the client's _aiSlim
+// sends them in this form, so any rename here needs a matching rename there.
+// Exit-plan anchors (DMAs, 52w hi/lo, S/R, pivot levels, annualVol as ATR
+// proxy) are included so stops and targets land on real structure, not round
+// numbers.
 function _aiPickCandidate(p, bucket, rank) {
   if (!p) return null;
-  const _flags = []
-    .concat(Array.isArray(p.fallenRiskFlags)    ? p.fallenRiskFlags    : [])
-    .concat(Array.isArray(p.compositeRiskFlags) ? p.compositeRiskFlags : [])
-    .concat(Array.isArray(p.riskFlags)          ? p.riskFlags          : [])
-    .concat(Array.isArray(p.infoFlags)          ? p.infoFlags          : []);
-  const flagCodes = Array.from(new Set(_flags.map(f => f && f.code).filter(Boolean)));
+  // The client already slims flags to string arrays; keep a defensive path for
+  // the legacy {code,...} shape in case a raw pick ever gets passed in.
+  const _normalize = (arr) => (Array.isArray(arr) ? arr : [])
+    .map(f => (typeof f === 'string' ? f : (f && f.code)))
+    .filter(Boolean);
+  const flagCodes = Array.from(new Set([
+    ..._normalize(p.riskFlags),
+    ..._normalize(p.flags),
+  ]));
+  const n2 = (v) => (v != null && Number.isFinite(+v)) ? +(+v).toFixed(2) : null;
+  const n1 = (v) => (v != null && Number.isFinite(+v)) ? +(+v).toFixed(1) : null;
   return {
     rank,
     sym: p.sym,
     bucket,
-    price: p.price != null ? +(+p.price).toFixed(2) : null,
     sector: p.sector || null,
-    scoreV2: p.scoreV2 != null ? +(+p.scoreV2).toFixed(2) : null,
-    fallenScore: p.fallenScore != null ? +(+p.fallenScore).toFixed(2) : null,
-    composite: p.composite != null ? +(+p.composite).toFixed(2) : null,
-    momentum: p.momentumScore != null ? +(+p.momentumScore).toFixed(2) : null,
-    expectedReturn: p.expectedReturn != null ? +(+p.expectedReturn).toFixed(2) : null,
-    confidenceInput: p.confidence != null ? +(+p.confidence).toFixed(2) : null,
-    convictionCount: p.convictionCount || 1,
+    price: n2(p.price),
+    // Ranking signals
+    scoreV2: n2(p.scoreV2),
+    fallenScore: n2(p.fallenScore),
+    composite: n2(p.composite),
+    expectedReturn: n2(p.expectedReturn),
+    confidence: n2(p.confidence),
+    // Fundamentals
+    pe: n2(p.pe),
+    pb: n2(p.pb),
+    peg: n2(p.peg),
+    roe: n1(p.roe),
+    debtToEq: n2(p.debtToEq),
+    opMargin: n1(p.opMargin),
+    profMgn: n1(p.profMgn),
+    revGrowth: n1(p.revGrowth),
+    earGrowth: n1(p.earGrowth),
+    // Exit-plan structure
+    rsi: n1(p.rsi),
+    pctFromHigh: n1(p.pctFromHigh),
+    wk52Hi: n2(p.wk52Hi),
+    wk52Lo: n2(p.wk52Lo),
+    dma50: n2(p.dma50),
+    dma200: n2(p.dma200),
+    support: n2(p.support),
+    resistance: n2(p.resistance),
+    pivot: n2(p.pivot),
+    pivotR1: n2(p.pivotR1),
+    pivotS1: n2(p.pivotS1),
+    annualVol: n2(p.annualVol),     // ATR proxy
+    beta: n2(p.beta),
+    volRatio: n2(p.volRatio),
+    change1m: n1(p.change1m),
+    change3m: n1(p.change3m),
+    goldenCross: p.goldenCross === true ? true : (p.goldenCross === false ? false : null),
+    dma200Trend: p.dma200Trend || null,
+    // Flags + bucket-fit note
     riskFlags: flagCodes,
-    regimeTilt: p.regimeTilt != null ? +(+p.regimeTilt).toFixed(3) : 0,
-    reason: (p.reason || '').toString().slice(0, 200),
-    pe: p.pe != null ? +(+p.pe).toFixed(2) : null,
-    roe: p.roe != null ? +(+p.roe).toFixed(2) : null,
-    debtEq: p.debtEq != null ? +(+p.debtEq).toFixed(2) : null,
-    salesGrowth: p.salesGrowth != null ? +(+p.salesGrowth).toFixed(2) : null,
-    profitGrowth: p.profitGrowth != null ? +(+p.profitGrowth).toFixed(2) : null,
+    bucketReason: (p.pickBucketReason || '').toString().slice(0, 180),
   };
 }
 
@@ -17579,22 +17612,23 @@ function _aiBuildPrompt(top30, ctx) {
 Your job: decide which of these 30 are ACTUALLY worth buying today for a retail investor using Zerodha Kite. Then rank ONLY the ones you approve. Do NOT force a fixed count. If only 3 are genuinely good, return 3. If all 30 are good, return 30. If zero meet your bar, return 0.
 
 For every approved pick you MUST provide a complete exit plan:
-  - entry_zone: {low, high} in rupees — where it's buyable now
-  - target_price: in rupees — where you'd take profit
-  - stop_loss: in rupees — where the thesis is wrong
+  - entry_zone: {low, high} in rupees — where it's buyable now. Anchor to visible structure (near support / DMA50 / pivot / prior base), not round numbers.
+  - target_price: in rupees — where you'd take profit. Anchor to resistance / pivotR1 / 52w high / prior swing. Must sit above entry_high.
+  - stop_loss: in rupees — where the thesis is wrong. Size using daily σ (shown as "σ≈%/day"): rough rule is 2–3× daily σ below entry_low, OR just below nearest real support / DMA / pivotS1 — whichever is tighter AND structurally valid. Never tighter than 1× daily σ (gets whipsawed).
   - horizon_days: expected holding period
   - expected_return_pct: (target - entry_mid) / entry_mid * 100, 1dp
   - risk_reward: (target - entry_high) / (entry_low - stop_loss), must be >= 1.5
-  - sell_if[]: 2-4 specific triggers. At least one must be a price stop, at least one must be a thesis-break (earnings miss, sector shock, competitor news, guidance cut, etc.).
+  - sell_if[]: 2-4 specific triggers. At least one must be a price stop (cite the structural level), at least one must be a thesis-break (earnings miss, sector shock, competitor news, guidance cut, etc.).
   - confidence: "high" | "medium" | "low"
-  - rationale: 2-3 sentences. Cite SPECIFIC numbers from the data (score, PE, growth, etc.). Reference the bucket logic.
+  - rationale: 2-3 sentences. Cite SPECIFIC numbers from the data (score, PE, growth, distance from DMA200, etc.). Reference the bucket logic.
 
 Be strict. Reject candidates with:
-- Weak composite (<6.5) without a strong compensating catalyst
+- Weak score (scoreV2 < 55 or composite < 55 on a 0-100 scale) without a strong compensating catalyst
 - Major risk flags (ANALYST_TP_BELOW, EARNINGS_SEQUENTIAL_DECLINE, REG_PROBE, LOW_VOL, WHIPSAW_RISK) not explicitly compensated
-- Deteriorating fundamentals dressed up as value
-- Momentum picks without price>MA + volume confirmation inferred from the data
-- Rebound picks whose "oversold" framing isn't backed by a reasonable base
+- Deteriorating fundamentals dressed up as value (negative earGrowth + rising debt + valuation still stretched)
+- Momentum picks without price-above-DMA200 + volRatio ≥ 1.0 + a bullish trend signal (goldenCross/dma200Trend=uptrend)
+- Rebound picks already above DMA50 and well off the lows (oversold claim doesn't hold)
+- Any pick where the required RR ≥ 1.5 can't be justified from visible structure (resistance too close, or support too far below)
 
 Bucket-specific rules:
 - rebound horizon_days: 5-25
@@ -17615,15 +17649,30 @@ OUTPUT: strict JSON only. NO markdown fences, no prose outside JSON, no trailing
 
   const renderList = (label, list) => {
     if (!list || !list.length) return `=== ${label.toUpperCase()} (empty) ===\n`;
+    const fmt = (v) => (v == null ? '—' : v);
+    const pctFromPrice = (lvl, px) => {
+      if (lvl == null || px == null || !Number.isFinite(+lvl) || !Number.isFinite(+px) || +px === 0) return '';
+      return ` (${((+lvl - +px) / +px * 100).toFixed(1)}%)`;
+    };
     const rows = list.map(p => {
       const flags = p.riskFlags && p.riskFlags.length ? p.riskFlags.join(', ') : 'none';
-      return `  #${p.rank} ${p.sym} [${p.sector || '—'}]  ₹${p.price != null ? p.price : '?'}
-     scoreV2=${p.scoreV2} fallen=${p.fallenScore} composite=${p.composite} mom=${p.momentum}
-     expectedReturn=${p.expectedReturn}%  confidenceInput=${p.confidenceInput}  regimeTilt=${p.regimeTilt}
-     conviction=${p.convictionCount} bucket(s)   PE=${p.pe} ROE=${p.roe} D/E=${p.debtEq}
-     growth: sales=${p.salesGrowth}%  profit=${p.profitGrowth}%
+      const px = p.price;
+      // Volatility line: annualVol is annualized σ of daily log returns. Rough
+      // daily σ ≈ annualVol/16. For a 2×ATR-style stop width estimate, we hand
+      // the LLM annualVol as a percent so it can size stops off the actual
+      // volatility of the stock instead of a flat 6-8% guess.
+      const volDailyPct = p.annualVol != null && Number.isFinite(+p.annualVol)
+        ? `${(+p.annualVol * 100 / 16).toFixed(2)}%/day`
+        : '—';
+      return `  #${p.rank} ${p.sym} [${p.sector || '—'}] ${p.bucket}  ₹${fmt(px)}
+     scoreV2=${fmt(p.scoreV2)} fallen=${fmt(p.fallenScore)} composite=${fmt(p.composite)}  ER=${fmt(p.expectedReturn)}%  conf=${fmt(p.confidence)}
+     fundamentals: PE=${fmt(p.pe)} PB=${fmt(p.pb)} PEG=${fmt(p.peg)} ROE=${fmt(p.roe)}% D/E=${fmt(p.debtToEq)} opMgn=${fmt(p.opMargin)}% revG=${fmt(p.revGrowth)}% earG=${fmt(p.earGrowth)}%
+     technicals: RSI=${fmt(p.rsi)} pctFromHigh=${fmt(p.pctFromHigh)}% change1m=${fmt(p.change1m)}% change3m=${fmt(p.change3m)}% volRatio=${fmt(p.volRatio)}x beta=${fmt(p.beta)} trend=${fmt(p.dma200Trend)} golden=${p.goldenCross === true ? 'Y' : p.goldenCross === false ? 'N' : '—'}
+     structure: 52w[${fmt(p.wk52Lo)}${pctFromPrice(p.wk52Lo, px)} — ${fmt(p.wk52Hi)}${pctFromPrice(p.wk52Hi, px)}]  DMA50=${fmt(p.dma50)}${pctFromPrice(p.dma50, px)}  DMA200=${fmt(p.dma200)}${pctFromPrice(p.dma200, px)}
+     levels: support=${fmt(p.support)}${pctFromPrice(p.support, px)}  resistance=${fmt(p.resistance)}${pctFromPrice(p.resistance, px)}  pivot=${fmt(p.pivot)}  R1=${fmt(p.pivotR1)}  S1=${fmt(p.pivotS1)}
+     vol: σ≈${volDailyPct} (annualVol=${fmt(p.annualVol)})
      risk_flags: ${flags}
-     scorer_note: ${p.reason}`;
+     bucket_fit: ${p.bucketReason || '—'}`;
     }).join('\n\n');
     return `=== ${label.toUpperCase()} CANDIDATES (${list.length}) ===\n${rows}\n\n`;
   };

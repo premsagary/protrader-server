@@ -405,31 +405,65 @@ export default function StockPicks() {
   }, []);
 
   // Strip a pick down to the compact payload we send to /api/ai-picks/run.
-  // Keep it small — the LLM doesn't need every flag code, just the numbers
-  // that justify a ranking and the context to write an exit plan.
+  // Field names MUST match the canonical /api/stocks/score shape — the server's
+  // _aiPickCandidate reads these back out, so any rename here needs a matching
+  // rename there. Includes exit-plan anchors (DMAs, 52w hi/lo, support /
+  // resistance, pivot levels, annualVol as ATR proxy) so the LLM can ground its
+  // stops and targets in real price structure instead of guessing.
   const _aiSlim = (s) => ({
     sym: s.sym,
     name: s.name,
     grp: s.grp,
     sector: s.sector,
-    ltp: s.ltp,
-    chgPct: s.chgPct,
+    price: s.price,
+    // Scores / ranking signals
     scoreV2: s.scoreV2,
     composite: s.composite,
     fallenScore: s.fallenScore,
-    fallen_from_52w_high_pct: s.fallen_from_52w_high_pct,
-    rsi14: s.rsi14,
+    expectedReturn: s.expectedReturn,
+    confidence: s.confidence,
+    // Fundamentals — canonical names from /api/stocks/score
     pe: s.pe,
     pb: s.pb,
     peg: s.peg,
     roe: s.roe,
-    debtToEquity: s.debtToEquity,
+    debtToEq: s.debtToEq,
     opMargin: s.opMargin,
-    revGrowthYoY: s.revGrowthYoY,
-    epsGrowthYoY: s.epsGrowthYoY,
-    expectedReturn: s.expectedReturn,
-    flags: Array.isArray(s.flags) ? s.flags.slice(0, 8) : undefined,
-    riskFlags: Array.isArray(s.riskFlags) ? s.riskFlags.slice(0, 6) : undefined,
+    profMgn: s.profMgn,
+    revGrowth: s.revGrowth,
+    earGrowth: s.earGrowth,
+    // Technical structure — anchors for entry zone / stop / target
+    rsi: s.rsi,
+    pctFromHigh: s.pctFromHigh,
+    wk52Hi: s.wk52Hi,
+    wk52Lo: s.wk52Lo,
+    dma50: s.dma50,
+    dma200: s.dma200,
+    support: s.support,
+    resistance: s.resistance,
+    pivot: s.pivot,
+    pivotR1: s.pivotR1,
+    pivotS1: s.pivotS1,
+    // Volatility & trend context
+    annualVol: s.annualVol,        // used as ATR proxy for stop sizing
+    beta: s.beta,
+    volRatio: s.volRatio,
+    change1m: s.change1m,
+    change3m: s.change3m,
+    goldenCross: s.goldenCross,
+    dma200Trend: s.dma200Trend,
+    // Flags — risk flags live on per-bucket fields (fallenRiskFlags for
+    // rebound, compositeRiskFlags for momentum, riskFlags for longterm).
+    // Merge all three, dedupe by code, cap at 6 to keep the prompt compact.
+    riskFlags: (() => {
+      const all = []
+        .concat(Array.isArray(s.fallenRiskFlags)    ? s.fallenRiskFlags    : [])
+        .concat(Array.isArray(s.compositeRiskFlags) ? s.compositeRiskFlags : [])
+        .concat(Array.isArray(s.riskFlags)          ? s.riskFlags          : [])
+        .concat(Array.isArray(s.infoFlags)          ? s.infoFlags          : []);
+      const codes = Array.from(new Set(all.map((f) => f && f.code).filter(Boolean)));
+      return codes.slice(0, 6);
+    })(),
     pickBucketReason: s.pickBucketReason,
   });
 
