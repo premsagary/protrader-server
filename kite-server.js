@@ -8941,6 +8941,32 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
+// ── DayTrade reliability state (Commit 1 — preflight gates) ──────────────
+// All state here is INTRADAY-ONLY and resets on process bounce. That's fine:
+// the scanner is always running during market hours, and a restart mid-day
+// is rare enough that losing a 30-min cooldown is acceptable.
+
+// Whipsaw cooldown — symbols that hit their SL today are iced for N minutes
+// to prevent "pick → SL → pick same setup 10 min later → SL again" sequences.
+// Map<sym, { ts: number, reason: string }>.
+const _dayTradeSLCooldown = new Map();
+const SL_COOLDOWN_MS = +(process.env.DAYTRADE_SL_COOLDOWN_MIN || 30) * 60 * 1000;
+
+// Scanner kill switch — tracks today's paper-trade PnL across cached picks.
+// Halts NEW picks once combined drawdown on today's slate exceeds the limit.
+// { date: 'YYYY-MM-DD', realizedPnLPct: number, tripped: boolean }
+let _dayTradeKillSwitch = { date: null, realizedPnLPct: 0, tripped: false };
+const KILL_SWITCH_DD_PCT = +(process.env.DAYTRADE_KILL_SWITCH_DD || 3.0);
+
+// Setup hit-rate cache — rolled from outcome_metrics every ~30 min and
+// consulted inside scoreDayTrade as a multiplier on the base setup score.
+// Not ML — simple rolling win-rate over the last N paper-traded picks.
+// { VWAP_RECLAIM: { winRate: 0.58, n: 45, mult: 1.08 }, ... }
+let _setupHitRate = {};
+let _setupHitRateTs = 0;
+const SETUP_HITRATE_REFRESH_MS = 30 * 60 * 1000;
+const SETUP_HITRATE_MIN_SAMPLES = +(process.env.DAYTRADE_HITRATE_MIN_N || 20);
+
 // ── DayTrade cache durable persistence ─────────────────────────────────────
 // Writes the in-memory cache to a singleton row in `daytrade_cache` after
 // every successful scan. Hydrates from DB on boot so container restarts
@@ -8982,6 +9008,103 @@ async function _hydrateDayTradeCacheFromDB() {
     console.log('📊 DayTrade cache DB hydrate skipped:', e.message);
   }
   return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DAYTRADE RELIABILITY HELPERS (Commit 1 — preflight + kill switch + hit-rate)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Whipsaw cooldown ──────────────────────────────────────────────────────
+// Called by the paper-trade engine (or manually via admin) when a pick hits
+// its SL. Scanner skips the symbol for SL_COOLDOWN_MS afterwards.
+function markDayTradeSLTriggered(sym, reason = 'sl_hit') {
+  if (!sym) return;
+  _dayTradeSLCooldown.set(sym, { ts: Date.now(), reason });
+  // Opportunistic prune — keep the map small by dropping entries >2h old.
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [k, v] of _dayTradeSLCooldown) {
+    if (v.ts < cutoff) _dayTradeSLCooldown.delete(k);
+  }
+}
+function isDayTradeOnCooldown(sym) {
+  const hit = _dayTradeSLCooldown.get(sym);
+  if (!hit) return false;
+  if (Date.now() - hit.ts > SL_COOLDOWN_MS) { _dayTradeSLCooldown.delete(sym); return false; }
+  return true;
+}
+
+// ── Scanner kill switch ───────────────────────────────────────────────────
+// Called by the paper-trade engine (or periodic job) when a DayTrade pick
+// books realised PnL. Once today's combined drawdown exceeds KILL_SWITCH_DD_PCT
+// of the notional slate, scanner stops returning new picks until next session.
+function recordDayTradeRealizedPnL(pnlPct) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_dayTradeKillSwitch.date !== today) {
+    _dayTradeKillSwitch = { date: today, realizedPnLPct: 0, tripped: false };
+  }
+  _dayTradeKillSwitch.realizedPnLPct += (+pnlPct || 0);
+  if (_dayTradeKillSwitch.realizedPnLPct <= -Math.abs(KILL_SWITCH_DD_PCT)) {
+    _dayTradeKillSwitch.tripped = true;
+    console.log(`🛑 DayTrade kill switch TRIPPED: today PnL ${_dayTradeKillSwitch.realizedPnLPct.toFixed(2)}% <= -${KILL_SWITCH_DD_PCT}%`);
+  }
+}
+function isDayTradeKillSwitchTripped() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_dayTradeKillSwitch.date !== today) return false; // fresh day, auto-reset
+  return _dayTradeKillSwitch.tripped === true;
+}
+
+// ── Setup hit-rate refresh ────────────────────────────────────────────────
+// Reads outcome_metrics for the last N days, bucketed by bestSetup, computes
+// win rate and derives a multiplier clamped to [0.85 .. 1.15]. Purely
+// statistical — no ML. Degrades gracefully to empty (mult=1.0) if the table
+// is missing or has too few samples for a setup.
+async function refreshSetupHitRate(force = false) {
+  if (!force && (Date.now() - _setupHitRateTs) < SETUP_HITRATE_REFRESH_MS) return _setupHitRate;
+  try {
+    // outcome_metrics joins back to features_snapshot; we just need:
+    //   best_setup, realized 60-min return sign (win = ret > 0.2% on a bull setup).
+    const { rows } = await pool.query(`
+      SELECT fs.best_setup AS setup,
+             om.ret_60m_pct AS ret
+        FROM outcome_metrics om
+        JOIN features_snapshot fs ON fs.id = om.snapshot_id
+       WHERE fs.ts >= NOW() - INTERVAL '20 days'
+         AND om.ret_60m_pct IS NOT NULL
+         AND fs.best_setup IS NOT NULL
+       LIMIT 5000
+    `).catch(() => ({ rows: [] }));
+
+    const agg = {};
+    for (const r of rows) {
+      const s = r.setup;
+      if (!s) continue;
+      if (!agg[s]) agg[s] = { wins: 0, total: 0 };
+      agg[s].total += 1;
+      // Win = directional move in setup's favour >0.2% within 60m (post-slippage buffer).
+      if ((+r.ret || 0) > 0.2) agg[s].wins += 1;
+    }
+    const out = {};
+    for (const [setup, a] of Object.entries(agg)) {
+      if (a.total < SETUP_HITRATE_MIN_SAMPLES) { out[setup] = { winRate: null, n: a.total, mult: 1.0 }; continue; }
+      const wr = a.wins / a.total;
+      // Baseline 50%. Each 10 percentage points = 0.05 multiplier. Clamp [0.85, 1.15].
+      const mult = Math.max(0.85, Math.min(1.15, 1.0 + (wr - 0.50) * 0.5));
+      out[setup] = { winRate: +wr.toFixed(3), n: a.total, mult: +mult.toFixed(3) };
+    }
+    _setupHitRate = out;
+    _setupHitRateTs = Date.now();
+    console.log(`📊 DayTrade hit-rate refreshed: ${Object.keys(out).length} setups`);
+  } catch (e) {
+    // Table missing / no data — leave cache untouched.
+    if (Object.keys(_setupHitRate).length === 0) _setupHitRate = {};
+    _setupHitRateTs = Date.now();
+  }
+  return _setupHitRate;
+}
+function getSetupMultiplier(setup) {
+  const h = _setupHitRate[setup];
+  return h && typeof h.mult === 'number' ? h.mult : 1.0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9255,6 +9378,57 @@ function scoreDayTrade(candles, sym, ctx) {
   // Varsity M2: skip if latest 5-min candle range is extreme (>3% on a single bar = abnormal)
   const lastCandleRange = last.high > 0 ? (last.high - last.low) / last.close * 100 : 0;
   if (lastCandleRange > 3) return null;
+
+  // ── Commit 1: DayTrade reliability preflights ────────────────────────
+  // All of these are HARD rejects (return null) — the scanner should never
+  // surface these symbols, not just score them lower. Softer penalties live
+  // below in the setup-scoring body.
+
+  // (a) Whipsaw cooldown — symbol hit its SL in this session within the
+  //     cooldown window. Re-entering after stop-out is the textbook chase trap.
+  if (isDayTradeOnCooldown(sym)) return null;
+
+  // (b) Kill switch — today's realised paper-trade PnL across the slate
+  //     exceeded the daily-drawdown limit. Stop picking new trades.
+  if (isDayTradeKillSwitchTripped()) return null;
+
+  // (c) Earnings / results-day skip — if the stock has a BSE board meeting
+  //     or results event dated today, gap/volume surges are event-driven,
+  //     not setup-driven. Use the bseEvents payload already loaded into
+  //     stockFundamentals by the external-signals cache.
+  if (f && Array.isArray(f._bseEvents)) {
+    const today0 = new Date().toISOString().slice(0, 10);
+    for (const ev of f._bseEvents) {
+      if (!ev) continue;
+      const evDate = ev.date ? String(ev.date).slice(0, 10) : null;
+      const label = String(ev.type || ev.label || '').toLowerCase();
+      const isEarningsish = label.includes('board_meeting') || label.includes('board meeting')
+                         || label.includes('result') || label.includes('earnings');
+      if (isEarningsish && (evDate === today0 || ev.daysAway === 0)) return null;
+    }
+  }
+
+  // (d) Delivery % gate — low delivery (<10%) marks a stock as speculatively
+  //     traded; intraday traps cluster here. Read from _marketDataCache if
+  //     available; degrade gracefully when not.
+  const _mdc = (typeof _marketDataCache !== 'undefined') ? _marketDataCache : null;
+  const _delRec = _mdc && _mdc.deliveryData ? _mdc.deliveryData[sym] : null;
+  const _delPct = _delRec && _delRec.deliveryPct != null ? +_delRec.deliveryPct : null;
+  if (_delPct != null && _delPct < 10) return null;
+
+  // (e) Circuit-limit proximity — NSE stocks get locked at 5/10/20% bands.
+  //     Liquidity evaporates at the circuit, so stops can't fill. We only
+  //     know the band for stocks marked B-group etc. via fundamentals; for
+  //     the common case, treat absolute daily move >= 18% as "circuit risk".
+  const _prevCloseForCircuit = (_delRec && _delRec.prevClose) || (f && f.prevClose) || null;
+  if (_prevCloseForCircuit) {
+    const dayMovePct = Math.abs((px - _prevCloseForCircuit) / _prevCloseForCircuit * 100);
+    // 20% circuit: reject at 18%+
+    if (dayMovePct >= 18) return null;
+    // 10% circuit (T2T/B-group hint via f.group or f.surveillance): reject at 9%+
+    const isRestricted = f && (f.group === 'T' || f.group === 'Z' || f.surveillance === 'T2T');
+    if (isRestricted && dayMovePct >= 9) return null;
+  }
 
   // Varsity M9: avoid new entries in last 30 min before market close (3:00-3:30 PM IST)
   const now = new Date();
@@ -9685,6 +9859,15 @@ function scoreDayTrade(candles, sym, ctx) {
       adrUsedPct = adrAvg > 0 ? +((todayRangePct / adrAvg) * 100).toFixed(0) : 0;
     }
   }
+
+  // ── Commit 1: ADR-used hard gate ──────────────────────────────────────
+  // A "Strong Entry" when the stock has already consumed ~all its typical
+  // daily range is almost always wrong — there's no room left to run before
+  // ADR reversion kicks in. Hard reject at >=90%, soft penalty in each setup
+  // scoring block below via adrExhaustedPenalty.
+  if (adrUsedPct >= 90) return null;
+  const adrExhaustedPenalty = adrUsedPct >= 75 ? Math.min(20, (adrUsedPct - 75)) : 0;
+  const adrRoomBonus        = adrUsedPct > 0 && adrUsedPct < 40 ? 5 : 0;
 
   // ── Varsity M2 Ch 11: Role reversal (broken resistance becomes support) ──
   // "A level that was resistance becomes support once decisively broken."
@@ -10156,6 +10339,20 @@ function scoreDayTrade(candles, sym, ctx) {
   else if (ch19PassCount === 3) overall = Math.min(100, overall + _gain('MULTI', 4, 'M2 Ch 19 checklist: 3/5 passed'));
   else if (ch19PassCount <= 1) overall = Math.max(0, overall + _penalty('MULTI', 6, `M2 Ch 19 checklist: only ${ch19PassCount}/5 — weak setup`));
 
+  // ── Commit 1: ADR-used soft gates ─────────────────────────────────────
+  // Apply the exhaustion penalty / room bonus computed above. The hard >=90%
+  // reject already happened at preflight; this shapes the middle zone.
+  if (adrExhaustedPenalty > 0) {
+    overall = Math.max(0, overall + _penalty('MULTI', adrExhaustedPenalty, `ADR ${adrUsedPct}% used — limited room`));
+  }
+  if (adrRoomBonus > 0) {
+    overall = Math.min(100, overall + _gain('MULTI', adrRoomBonus, `ADR ${adrUsedPct}% used — room to run`));
+  }
+  // Delivery % soft penalty — low delivery (10-20%) = speculative, thinner conviction.
+  if (_delPct != null && _delPct < 20 && _delPct >= 10) {
+    overall = Math.max(0, overall + _penalty('MULTI', 5, `Delivery ${_delPct}% — speculative`));
+  }
+
   if (overall < 30) return null; // below threshold — not worth showing
 
   // Stop loss + target based on setup type
@@ -10193,8 +10390,40 @@ function scoreDayTrade(candles, sym, ctx) {
   tgt = +(px + (px - sl) * Math.max(1.5, rrRatio || 1.5)).toFixed(2);
   rrRatio = sl < px ? +((tgt - px) / (px - sl)).toFixed(1) : 0;
 
-  // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward
+  // ── Commit 1: slippage + brokerage applied to net RR ──────────────────
+  // The structural engine has a full slippage/brokerage sim (STRUCTURE_CONFIG)
+  // but DayTrade's rrRatio was computed on raw prices. At 5bps slip + 3bps
+  // brokerage each way (~16bps round-trip), a 0.4% stop loses ~40% of its
+  // risk to costs — rrRatio is materially different after adjustment.
+  // We compute and expose a NET rrRatio alongside the raw one; the net is
+  // what actually gates the trade.
+  let rrRatioNet = rrRatio;
+  try {
+    if (typeof STRUCTURE_CONFIG !== 'undefined' && STRUCTURE_CONFIG.slippageSimulationEnabled) {
+      const slipBps = +STRUCTURE_CONFIG.slippageBps || 0;
+      const brkBps  = +STRUCTURE_CONFIG.brokerageBps || 0;
+      // Buy entry: fill above mid by slipBps. Sell at SL or TGT: fill below mid by slipBps.
+      const entryNet = px  * (1 + slipBps / 10000);
+      const slNet    = sl  * (1 - slipBps / 10000);
+      const tgtNet   = tgt * (1 - slipBps / 10000);
+      // Round-trip brokerage as absolute %, subtracted from reward side.
+      const brkPct = (2 * brkBps) / 10000 * entryNet;
+      const netRisk   = entryNet - slNet + brkPct;
+      const netReward = tgtNet   - entryNet - brkPct;
+      if (netRisk > 0 && netReward > 0) rrRatioNet = +(netReward / netRisk).toFixed(2);
+      else rrRatioNet = 0;
+    }
+  } catch (e) { /* structure config not loaded — leave net = raw */ }
+
+  // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward.
+  // Commit 1: tighten to NET 1.3 — costs eat into thin-RR trades unacceptably.
   if (rrRatio < 1.0) return null;
+  if (rrRatioNet < 1.3) {
+    // Don't reject outright — still useful to surface as "Developing" so the
+    // user can see what almost qualified. Cap the score hard so it can never
+    // rank as Strong Entry (>=75) or Good Setup (>=60).
+    overall = Math.min(overall, 44);
+  }
 
   // Ch 19 checklist retroactive R:R correction. If the ATR-adjusted R:R
   // ended up < 1.5, the rrRatio check we placeholded above was too
@@ -10476,6 +10705,11 @@ function scoreDayTrade(candles, sym, ctx) {
     },
     // Varsity M2 Ch 4: session-trend context used to demote reversal patterns
     sessionTrend,
+    // Commit 1: net-of-cost RR + reliability flags
+    rrRatioNet,           // after ~5bps slip + ~3bps brokerage each way
+    rrTooTight: rrRatioNet < 1.3,
+    deliveryPct: _delPct,
+    adrExhausted: adrUsedPct >= 75,
     // Varsity M2 Ch 14: RSI midline state
     rsiAboveMidline, rsiCrossedMidlineUp,
     // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
@@ -16080,6 +16314,65 @@ app.post('/api/admin/stale-healthcheck', async (req, res) => {
   try {
     await staleDataHealthcheck({ force: true });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── DayTrade reliability admin endpoints (Commit 1) ─────────────────────
+// These let the paper-trade engine (or manual admin) feed realised outcomes
+// back into the scanner's safety logic. Not used by the UI directly.
+
+// Mark a symbol as SL-triggered — the scanner will skip it for the cooldown
+// window (default 30 min, override with DAYTRADE_SL_COOLDOWN_MIN).
+app.post('/api/admin/daytrade/sl-triggered', (req, res) => {
+  try {
+    const { sym, reason } = req.body || {};
+    if (!sym) return res.status(400).json({ ok: false, error: 'sym required' });
+    markDayTradeSLTriggered(String(sym).toUpperCase(), reason || 'manual');
+    res.json({ ok: true, cooldownMinutes: SL_COOLDOWN_MS / 60000, cooldownSyms: _dayTradeSLCooldown.size });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Record realised PnL on a closed paper-trade pick. Scanner auto-halts on
+// today's combined drawdown exceeding DAYTRADE_KILL_SWITCH_DD (default 3%).
+app.post('/api/admin/daytrade/record-pnl', (req, res) => {
+  try {
+    const { pnlPct } = req.body || {};
+    const n = Number(pnlPct);
+    if (!isFinite(n)) return res.status(400).json({ ok: false, error: 'numeric pnlPct required' });
+    recordDayTradeRealizedPnL(n);
+    res.json({
+      ok: true,
+      state: _dayTradeKillSwitch,
+      tripped: isDayTradeKillSwitchTripped(),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Inspect current reliability state — diagnostic only.
+app.get('/api/admin/daytrade/reliability', (req, res) => {
+  const cooldowns = {};
+  for (const [k, v] of _dayTradeSLCooldown) cooldowns[k] = { ...v, minutesLeft: Math.max(0, +((SL_COOLDOWN_MS - (Date.now() - v.ts)) / 60000).toFixed(1)) };
+  res.json({
+    cooldowns,
+    killSwitch: _dayTradeKillSwitch,
+    killSwitchTripped: isDayTradeKillSwitchTripped(),
+    setupHitRate: _setupHitRate,
+    setupHitRateUpdatedAt: _setupHitRateTs ? new Date(_setupHitRateTs).toISOString() : null,
+  });
+});
+
+// Force-refresh the setup hit-rate cache from outcome_metrics. Safe to call
+// any time — the scanner otherwise refreshes it every 30 min.
+app.post('/api/admin/daytrade/refresh-hit-rate', async (req, res) => {
+  try {
+    const out = await refreshSetupHitRate(true);
+    res.json({ ok: true, setupHitRate: out });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
