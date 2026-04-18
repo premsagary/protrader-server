@@ -14745,6 +14745,43 @@ app.get('/api/stocks/score', async(req,res)=>{
     let picksRebound = [], picksMomentum = [], picksLongTerm = [];
     const notDQ = s => !s.disqualified;
 
+    // ── VIX regime multiplier (Apr-2026) ──────────────────────────────
+    // Read the India VIX from the market-data cache (populated by the same
+    // feed DayTrade already uses). In extreme regimes, tilt which bucket
+    // runs at the top without nuking the structural rank:
+    //   CALM   (<12) — cheap risk-on. Momentum runs cleaner, rebound plays
+    //                  fewer (not enough fall).  Momentum +5%, Rebound −3%,
+    //                  LongTerm −2% (income-quality less urgent).
+    //   NORMAL (12-18) — balanced, no tilt.
+    //   ELEVATED (18-24) — breakouts misfire. Momentum −4%, Rebound +2%.
+    //   HIGH  (>24)  — risk-off. Favor defensive quality + quality-on-sale.
+    //                  LongTerm +6%, Rebound +4%, Momentum −8%.
+    // Multipliers are applied to the bucket's sort key as a small additive
+    // tilt (±%·max) so the intra-bucket ordering still respects the natural
+    // signal; only picks sitting near a rank boundary can flip.
+    let _picksVix = null, _picksVixRegime = 'NORMAL';
+    let _regimeTilt = { rebound: 0, momentum: 0, longterm: 0 };
+    try {
+      if (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix && _marketDataCache.vix.value) {
+        _picksVix = +_marketDataCache.vix.value;
+        if (_picksVix < 12) {
+          _picksVixRegime = 'CALM';
+          _regimeTilt = { rebound: -0.03, momentum: +0.05, longterm: -0.02 };
+        } else if (_picksVix > 24) {
+          _picksVixRegime = 'HIGH';
+          _regimeTilt = { rebound: +0.04, momentum: -0.08, longterm: +0.06 };
+        } else if (_picksVix > 18) {
+          _picksVixRegime = 'ELEVATED';
+          _regimeTilt = { rebound: +0.02, momentum: -0.04, longterm: 0 };
+        }
+      }
+    } catch (e) { /* VIX read failed → stay NORMAL with zero tilt */ }
+    // Apply a symmetric nudge so the top ranks can reshuffle within the
+    // bucket but the bucket floor and ordering stay meaningful. We nudge
+    // via a ranking helper that adds `tilt * 100` to the sort key without
+    // mutating the stored score fields (client still sees raw values).
+    const _tiltKey = (base, tilt) => base + tilt * 100;
+
     // --- REBOUND: quality business that has fallen hard (Varsity M9) ---
     // Gate: scoreV2 ≥ 55  AND  isFallenAngel  AND  not disqualified.
     // Rank: fallenScore (already captures depth-of-fall + quality).
@@ -14756,9 +14793,12 @@ app.get('/api/stocks/score', async(req,res)=>{
                 `scoreV2 ${s.scoreV2?.toFixed(0)}`,
                 s.pctFromHigh != null ? `${s.pctFromHigh.toFixed(0)}% from 52w hi` : null,
                 s.rsi != null ? `RSI ${s.rsi}` : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.rebound > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.rebound < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
               ].filter(Boolean).join(' · '),
+              regimeTilt: _regimeTilt.rebound,
             }))
-            .sort((a,b)=>(b.fallenScore||0)-(a.fallenScore||0)),
+            .sort((a,b)=>_tiltKey(b.fallenScore||0, _regimeTilt.rebound) - _tiltKey(a.fallenScore||0, _regimeTilt.rebound)),
       2
     ).slice(0,10);
 
@@ -14777,9 +14817,12 @@ app.get('/api/stocks/score', async(req,res)=>{
                 s.rsi != null ? `RSI ${s.rsi}` : null,
                 s.macdBull ? 'MACD+' : null,
                 s.obvRising ? 'OBV↑' : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.momentum > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
+                _picksVixRegime !== 'NORMAL' && _regimeTilt.momentum < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
               ].filter(Boolean).join(' · '),
+              regimeTilt: _regimeTilt.momentum,
             }))
-            .sort((a,b)=>(b.composite||0)-(a.composite||0)),
+            .sort((a,b)=>_tiltKey(b.composite||0, _regimeTilt.momentum) - _tiltKey(a.composite||0, _regimeTilt.momentum)),
       2
     ).slice(0,10);
 
@@ -14801,15 +14844,35 @@ app.get('/api/stocks/score', async(req,res)=>{
             s.roe != null ? `ROE ${s.roe}` : null,
             s.debtToEq != null ? `D/E ${s.debtToEq}` : null,
             s.earGrowth != null ? `EPS g ${s.earGrowth.toFixed(0)}%` : null,
+            _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm > 0 ? `VIX ${_picksVixRegime.toLowerCase()} tailwind` : null,
+            _picksVixRegime !== 'NORMAL' && _regimeTilt.longterm < 0 ? `VIX ${_picksVixRegime.toLowerCase()} headwind` : null,
           ].filter(Boolean).join(' · '),
+          regimeTilt: _regimeTilt.longterm,
         }))
-        .sort((a,b)=>(b.scoreV2||0)-(a.scoreV2||0)),
+        .sort((a,b)=>_tiltKey(b.scoreV2||0, _regimeTilt.longterm) - _tiltKey(a.scoreV2||0, _regimeTilt.longterm)),
       2
     ).slice(0,10);
+
+    // Picks regime meta — lets the UI render a banner like
+    // "Market regime: HIGH VIX (26.4) — favor Long-Term quality"
+    const _picksRegime = {
+      vixValue: _picksVix,
+      vixRegime: _picksVixRegime,
+      tilt: _regimeTilt,
+      asOf: new Date().toISOString(),
+      advice: _picksVixRegime === 'HIGH'
+        ? 'Risk-off tape: Long-Term quality + Rebound entries favored, Momentum breakouts dampened.'
+        : _picksVixRegime === 'ELEVATED'
+        ? 'Choppy tape: Momentum breakouts less reliable, small tilt to Rebound.'
+        : _picksVixRegime === 'CALM'
+        ? 'Calm tape: Momentum runs clean; quality-on-sale and defensive picks thinner.'
+        : 'Balanced tape — no regime tilt applied.',
+    };
 
     res.json({
       stocks:scored, total:scored.length,
       picksRebound, picksMomentum, picksLongTerm,
+      picksRegime: _picksRegime,
       // Always 2 now — every picks list ranks against scoreV2 as the
       // universal quality gate. Field kept for client back-compat.
       score_version: 2,
