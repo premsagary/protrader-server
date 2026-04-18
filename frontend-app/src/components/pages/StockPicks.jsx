@@ -198,7 +198,7 @@ export default function StockPicks() {
 
   useEffect(() => {
     setLoading(true);
-    apiGet('/api/stocks/score?scoreVersion=2')
+    apiGet('/api/stocks/score')
       .then((d) => { setData(d); setLoading(false); })
       .catch((e) => { setError(e.message || 'Failed to load picks'); setLoading(false); });
   }, []);

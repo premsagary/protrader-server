@@ -8493,7 +8493,7 @@ const stockFundamentals  = {};
 let   stockFundLastFetch = 0;
 let   stockFundLoading   = false;
 let   stockFundReady     = false;
-// Cache of the last `/api/stocks/score?scoreVersion=2` result — an array of
+// Cache of the last `/api/stocks/score` result — an array of
 // fully-scored row objects (with isFallenAngel / fallenScore / composite /
 // scoreV2 / grp / sector / ... all materialised). `stockFundamentals` stores
 // RAW fundamentals only; the scored rows are computed fresh per request and
@@ -23641,7 +23641,7 @@ What the user is asking from you: agree or disagree that these are VALID long-te
 // Pick the top-10 ROWS for a category using the SAME filter/sort the client
 // applies on the Stock Picks page, so the server review matches what the user
 // sees. Reads from `_lastScoredV2` — the cached output of the most recent
-// `/api/stocks/score?scoreVersion=2` call. That cache is populated whenever
+// `/api/stocks/score` call. That cache is populated whenever
 // the Stock Picks tab loads, so by the time the user clicks Deep AI Review
 // the data is there. Returns full row objects (not just symbols) so callers
 // can pass them into `_buildPickStockBlock` without re-hydrating.

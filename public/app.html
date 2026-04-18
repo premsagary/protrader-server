@@ -8107,13 +8107,13 @@ function renderStockRecPage(){
     srMomSortDir
   ), 2);
 
-  // Long-Term Trades column = quality stocks worth buying-and-holding. Now
-  // that the Stock Picks fetch uses ?scoreVersion=2, every row carries the
-  // authoritative Varsity 4-pillar `scoreV2` (Quality 40 + Growth 25 +
+  // Long-Term Trades column = quality stocks worth buying-and-holding.
+  // The server now always emits `scoreV2` on every row (no flag needed) —
+  // the authoritative Varsity 4-pillar score (Quality 40 + Growth 25 +
   // Valuation 20 + Business 15, fundamentals-only per the FA/TA separation
-  // invariant in test/v2-invariants.js). This is the SAME number Portfolio
-  // Manager → Long Term Portfolio uses, so a stock's LONG TERM SCORE is
-  // identical across every tab.
+  // invariant in test/v2-invariants.js). Same number Portfolio Manager →
+  // Long Term Portfolio uses, so a stock's LONG TERM SCORE is identical
+  // across every tab.
   var longTermPicks = _applySectorCap(_srSortBy(
     filtered.filter(function(s){
       if (!_notDQ(s)) return false;
