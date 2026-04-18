@@ -10667,6 +10667,18 @@ app.get('/api/admin/pipeline-test', async (req, res) => {
 // simultaneously. Also: TA rescore happens incrementally (score per batch, not wait
 // for all stocks) so picks update faster during market hours.
 
+// TA field names that computeTechnicals() emits + that stockFundamentals
+// should mirror. Module-level so both the unified pipeline (line ~10747)
+// and intradayRescoreTA (line ~15974) can reach it — previously only defined
+// inside the /api/stocks/score-test-ta request handler, causing every TA
+// score in both pipelines to throw ReferenceError silently.
+const TA_FIELDS = [
+  'pctAbove200', 'pctFromHigh', 'goldenCross', 'weeklyTrendConfirmed',
+  'weeklyTrend', 'rsi', 'macdBull', 'adx', 'dma200Trend', 'ichimokuSignal',
+  'dowTheoryTrend', 'bullishDiv', 'bearishDiv', 'change1m', 'change3m',
+  'change6m', 'annualVol', 'beta',
+];
+
 async function runUnifiedKitePipeline(force = false) {
   if (_unifiedPipelineRunning) { console.log('🔄 Unified pipeline already running, skipping'); return; }
   if (!force && !isMarketOpen()) { console.log('🔄 Pipeline skipped: market closed (force=false)'); return; }
@@ -10750,8 +10762,16 @@ async function runUnifiedKitePipeline(force = false) {
               sf.fetchedAt = Date.now();
             }
             okTA++;
-          } catch (e) { failTA++; }
-        } else { failTA++; }
+          } catch (e) {
+            failTA++;
+            // Sample first 3 failures per pipeline run so the cause is visible
+            // in logs without flooding (was silently swallowed → invisible).
+            if (failTA <= 3) console.warn(`⚠ TA score failed for ${sym}: ${e.message} (candles=${dailyCandles.length})`);
+          }
+        } else {
+          failTA++;
+          if (failTA <= 3) console.warn(`⚠ TA skipped ${sym}: no daily candles returned from Kite`);
+        }
 
         // ── DayTrade scoring path (5-min candles → setup detectors) ──
         if (fiveMinCandles && fiveMinCandles.length >= 30) {
