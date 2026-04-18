@@ -1007,7 +1007,19 @@ async function initDB() {
       )
     `);
 
-    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily tables included)");
+    // daytrade_cache: durable singleton copy of the in-memory _dayTradeCache.
+    // Persisted on every successful scan, hydrated on boot so Railway restarts
+    // don't leave the UI empty until the next Force Scan or market-hours cron.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS daytrade_cache (
+        id         INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        picks      JSONB NOT NULL,
+        cache_ts   BIGINT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily + daytrade_cache tables included)");
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -8929,6 +8941,49 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
+// ── DayTrade cache durable persistence ─────────────────────────────────────
+// Writes the in-memory cache to a singleton row in `daytrade_cache` after
+// every successful scan. Hydrates from DB on boot so container restarts
+// (Railway redeploys, memory bounces) don't leave the UI empty until the
+// next Force Scan or market-hours cron tick.
+//
+// Safety: failures are swallowed and logged — DB outages never break the
+// scan pipeline itself. JSONB column handles the full pick shape.
+async function _persistDayTradeCache() {
+  try {
+    await pool.query(
+      `INSERT INTO daytrade_cache (id, picks, cache_ts, updated_at)
+       VALUES (1, $1::jsonb, $2::bigint, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         picks      = EXCLUDED.picks,
+         cache_ts   = EXCLUDED.cache_ts,
+         updated_at = NOW()`,
+      [JSON.stringify(_dayTradeCache), _dayTradeCacheTs || Date.now()]
+    );
+  } catch (e) {
+    console.warn('⚠ daytrade_cache persist failed:', e.message);
+  }
+}
+
+async function _hydrateDayTradeCacheFromDB() {
+  try {
+    const { rows } = await pool.query(
+      'SELECT picks, cache_ts FROM daytrade_cache WHERE id = 1'
+    );
+    if (rows.length && Array.isArray(rows[0].picks) && rows[0].picks.length > 0) {
+      _dayTradeCache   = rows[0].picks;
+      _dayTradeCacheTs = Number(rows[0].cache_ts) || Date.now();
+      const ageMin = Math.round((Date.now() - _dayTradeCacheTs) / 60000);
+      console.log(`📊 DayTrade cache hydrated from DB: ${_dayTradeCache.length} picks (${ageMin}m old)`);
+      return true;
+    }
+  } catch (e) {
+    // Table may not exist on first boot after deploy — init() will create it.
+    console.log('📊 DayTrade cache DB hydrate skipped:', e.message);
+  }
+  return false;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // VARSITY M2 CANDLESTICK PATTERN DETECTION (Chapters 5-10)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -10514,6 +10569,7 @@ async function scanDayTrades(force = false) {
       _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
       console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
+      _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
     }
@@ -10828,6 +10884,7 @@ async function runUnifiedKitePipeline(force = false) {
       // Varsity M9 sector-correlation cap — same logic as scanDayTrades.
       _dayTradeCache   = applySectorCap(dayTradeResults, 2);
       _dayTradeCacheTs = Date.now();
+      _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
     }
@@ -20482,6 +20539,15 @@ async function start() {
     refreshAllFundamentals();                                                    // Kite candles → scores (background)
     refreshMissingFundamentals().catch(e=>console.log('Scraper:', e.message));  // Yahoo enrichment (background)
     setTimeout(scanAndTrade, 5000);
+    // ── DayTrade cache hydration from DB ──
+    // Runs immediately after Kite auth so restarts show last-session picks
+    // instantly, without waiting 3 min for the warm-up scan to complete.
+    // If the warm-up later produces real picks, it overwrites the hydrated
+    // copy. If it fails (token issue, rate limit), the hydrated cache sticks
+    // around thanks to the overwrite-guard that refuses empty results over
+    // a populated cache.
+    _hydrateDayTradeCacheFromDB().catch(e =>
+      console.warn('DayTrade hydrate error:', e.message));
     // ── DayTrade warm-up on startup ──
     // Cache is in-memory; every Railway restart wipes it. Force a scan on
     // boot so admins see last-session picks even if we come up outside
