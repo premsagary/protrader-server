@@ -14791,11 +14791,11 @@ async function doLogin() {
     _authToken = d.token;
     _authUser = { username: d.username, role: d.role };
     try { localStorage.setItem('pt_token', d.token); } catch(e){}
-    /* Clear admin-login hash */
-    if(window.location.hash === '#admin-login') history.replaceState(null, '', window.location.pathname);
-    _inited = false; /* force re-init to pick up admin role */
-    showApp();
-    _init();
+    /* React v2 is the canonical dashboard — redirect after login rather than
+     * rendering the legacy monolith UI. Token lives in pt_token localStorage
+     * which useAppStore.checkSession() reads on mount. */
+    window.location.href = '/dashboard.html';
+    return;
   } catch(e) {
     errEl.textContent = 'Connection error'; errEl.style.display = 'block';
   } finally {
@@ -14818,7 +14818,9 @@ async function doLogout() {
 function _resetInactivityTimer() {}
 function _clearInactivityTimer() {}
 
-// On page load — check for admin session, or enter free mode
+// On page load — app.html is now legacy. The React v2 dashboard at
+// /dashboard.html is the canonical app. app.html only serves the admin
+// login form (hash=#admin-login); every other visit redirects to React v2.
 (async function checkSession() {
   /* Handle #admin-login route — show admin login screen */
   if(window.location.hash === '#admin-login'){
@@ -14826,28 +14828,8 @@ function _clearInactivityTimer() {}
     return;
   }
 
-  /* Check for saved admin session */
-  var saved = null;
-  try { saved = localStorage.getItem('pt_token'); } catch(e){}
-  if (saved) {
-    try {
-      var r = await _origFetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + saved } });
-      if (r.ok) {
-        var d = await r.json();
-        _authToken = saved;
-        _authUser = { username: d.username, role: d.role };
-        showApp();
-        _init();
-        return;
-      }
-    } catch(e) {}
-    /* Token invalid — clear it */
-    try { localStorage.removeItem('pt_token'); } catch(e){}
-  }
-
-  /* No valid admin session — enter free mode directly.
-     Landing lives at / now (new React build); this file is only for the app. */
-  enterFreeMode();
+  /* Any other visit to app.html → redirect to React v2 dashboard. */
+  window.location.replace('/dashboard.html' + (window.location.hash || ''));
 })();
 </script>
 
