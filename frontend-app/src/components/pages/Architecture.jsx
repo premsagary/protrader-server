@@ -24,6 +24,7 @@ const SECTIONS = [
   { id: 'data',          label: 'Data Sources',      icon: '🗃' },
   { id: 'db',            label: 'Database',          icon: '💾' },
   { id: 'invariants',    label: 'Invariants',        icon: '🛡' },
+  { id: 'roadmap',       label: 'Build-Best Roadmap', icon: '🗺' },
   { id: 'stack',         label: 'Stack & Deploy',    icon: '🚀' },
 ];
 
@@ -459,6 +460,162 @@ const ADMIN_ENDPOINTS = [
   ['POST', '/api/admin/force-run-pipeline',       'Force Unified Kite Pipeline · force=true'],
   ['POST', '/api/admin/picks-ai-review/:category','Trigger Deep AI Review (council + judge)'],
 ];
+
+// ═════════════════════════════════════════════════════════════════════
+// Build-Best Roadmap — the approved 8-phase plan (Phase 0 → Phase 8).
+// Keep in sync with the commit log. Phase 0 shipped 2026-04-18 (cb229ec);
+// subsequent phases execute in order, gated by evidence from Phase 0's
+// tracker data — don't commit Phase N+1 until Phase N's hit-rate shows
+// the spend is earning its keep.
+// ═════════════════════════════════════════════════════════════════════
+const ROADMAP_PHASES = [
+  {
+    id: 0,
+    title: 'Measurement Infrastructure',
+    status: 'shipped',
+    when: 'Week 1 · shipped 2026-04-18 (balaji cb229ec)',
+    cost: '₹0',
+    goal: 'Paper-portfolio tracker + per-pick alpha vs NIFTY + 24h behavioral hold. The evidence substrate everything else rests on.',
+    includes: [
+      'picks_history — every Rebound/Momentum/LongTerm pick recorded daily',
+      'picks_outcomes — T+5/T+20/T+60 return + NIFTY alpha per pick',
+      'picks_journal — user intent log with 24h cooldown + outcome stamp',
+      '/api/picks-tracker/stats (byBucket · byFlag · rolling · winners/losers)',
+      'TrackerPanel UI (default-open) with per-bucket alpha + rolling grid',
+      '"My Journal" panel + 🗒 Log-interest button on every pick',
+    ],
+    why: 'Nothing downstream matters until we can measure. Without Phase 0, every later phase is a guess layered on a guess.',
+  },
+  {
+    id: 1,
+    title: 'Point-in-Time Fundamentals Data',
+    status: 'next',
+    when: 'Week 2',
+    cost: '₹4,000–12,000/mo ($50–150/mo)',
+    goal: 'Replace the current Screener snapshot (lookahead-contaminated) with a PIT fundamentals feed so we can walk-forward backtest any past date.',
+    includes: [
+      'Subscribe to Trendlyne Pro, Tijori, or Tikr (or OFB PIT-FA via NSE EOD)',
+      'Walk-forward harness: replay the full pipeline on any historical date',
+      'Backfill picks_history back 1-2 years for immediate evidence',
+      'Drop from a 90-day wait to a same-week verdict on every tweak',
+    ],
+    why: 'Highest-leverage spend in the whole plan — turns Phase 0\'s 90-day evidence wait into a hours-long backtest loop.',
+  },
+  {
+    id: 2,
+    title: 'Daily LLM Judge',
+    status: 'pending',
+    when: 'Week 2',
+    cost: '₹500–2,500/mo ($5–30/mo)',
+    goal: 'Claude Sonnet pass after the rule-based scan. Top-30 per bucket in, top-10 per bucket out, with structured reasoning citing specific flags.',
+    includes: [
+      'Hard constraint: can only REJECT — never promote a disqualified stock',
+      'Structured output (verdict + cited flags + 1-line reason)',
+      'Kill-switch gated by Phase 0 hit-rate (auto-disable if underperforming)',
+      'Per-bucket prompt tuned to Rebound / Momentum / LongTerm theses',
+    ],
+    why: 'Tier-1 judgment layer, but evidence-guarded — if the LLM isn\'t beating the rule engine on tracker data, we switch it off.',
+  },
+  {
+    id: 3,
+    title: 'Professional Signal Feeds',
+    status: 'pending',
+    when: 'Week 3–4',
+    cost: '₹8,000–16,000/mo ($100–200/mo)',
+    goal: 'Where retail screens stop and pro screens start. The information edge that separates smart money from the herd.',
+    includes: [
+      'FII/DII per-stock flows (NSE paid endpoint or Sensibull)',
+      'Bulk / block deals feed with counterparty names',
+      'Insider filings (SEBI PIT disclosure stream)',
+      'Corporate-action calendar (splits, bonuses, AGM, ex-dates)',
+      'Derivatives OI + PCR + max-pain per symbol',
+    ],
+    why: 'These are the signals that inform actual institutional positioning — ex-ante instead of ex-post.',
+  },
+  {
+    id: 4,
+    title: 'Deep Thesis per Top Pick',
+    status: 'pending',
+    when: 'Week 4–5',
+    cost: '₹4,000–8,000/mo ($50–100/mo)',
+    goal: 'For the top-3 per bucket (9 stocks/day) Claude reads last 4 earnings-call transcripts + 90 days of news + annual-report MD&A, and writes a 250-word thesis.',
+    includes: [
+      'Earnings-call transcript ingest (AlphaStreet / Screener)',
+      'Annual report MD&A + notes-to-accounts NLP extraction',
+      'Explicit thesis-breakers list (what would invalidate the pick)',
+      '1-5 confidence score with calibration feedback loop',
+      'Thesis rendered as expandable deep-dive under each top pick',
+    ],
+    why: 'Moves from "this stock has good numbers" to "here\'s the specific causal story and here\'s what kills it" — the kind of research that actually compounds.',
+  },
+  {
+    id: 5,
+    title: 'ML Refinement Layer',
+    status: 'pending',
+    when: 'Week 5–8',
+    cost: '₹0 (local compute)',
+    goal: 'Enabled by Phase 1 PIT data — a learned layer on top of the rule-based stack, not replacing it.',
+    includes: [
+      'Forward-return regression using PIT features (learned scoreV2)',
+      'Cash-flow anomaly detector (Benford-ish + working-capital divergence)',
+      'Regime classifier replacing the simple VIX tilt (4-6 states)',
+      'Stack order: disqualifiers (hard gate) → scoreV2 (quality floor) → ML (refine) → LLM (final rerank)',
+    ],
+    why: 'ML earns its place only after everything above it has been evidence-validated. Order matters: rules first, ML last.',
+  },
+  {
+    id: 6,
+    title: 'Portfolio-Aware Picks',
+    status: 'pending',
+    when: 'Week 8+',
+    cost: '₹0',
+    goal: 'The step that turns a "picks list" into a "personal portfolio plan."',
+    includes: [
+      'Pull Kite holdings · cross-check every pick against current book',
+      'De-prioritize picks correlated with existing overweights',
+      'Prefer picks that improve portfolio Sharpe / diversify sectors',
+      'Cash-aware position sizing (uses live funds + margin snapshot)',
+    ],
+    why: 'Generic picks are a commodity. Picks tuned to your current holdings and cash are the difference between a screener and an assistant.',
+  },
+  {
+    id: 7,
+    title: 'Risk Layer',
+    status: 'pending',
+    when: 'Week 9+',
+    cost: '₹0',
+    goal: 'Per-pick entry plan + aggregate portfolio risk monitoring.',
+    includes: [
+      'ATR-based stop-loss suggestion per pick',
+      'Position size auto-calculated at 1–2% portfolio risk',
+      'Expected holding period + trim/add levels',
+      'Portfolio heat map · rolling max-drawdown alert',
+      'Sector concentration cap across entire book (not just picks tab)',
+    ],
+    why: 'A pick without a stop and size is a meme. The risk layer is what makes a pick actionable.',
+  },
+  {
+    id: 8,
+    title: 'Self-Tuning Loop',
+    status: 'pending',
+    when: 'Ongoing',
+    cost: '₹0',
+    goal: 'Weekly cron reads Phase 0 outcomes and proposes penalty / threshold adjustments with significance scores.',
+    includes: [
+      'Per-flag outcome delta — flags that no longer predict alpha get demoted',
+      'Per-bucket score-band recalibration',
+      'Proposed tuning diffs rendered in an approve/reject UI',
+      '6-month target: pipeline self-tunes to what actually works for your universe',
+    ],
+    why: 'Every retail setup is different. Over 6 months of outcomes, the system earns its own thresholds instead of inheriting somebody else\'s.',
+  },
+];
+
+const ROADMAP_STATUS_STYLE = {
+  shipped: { label: 'SHIPPED',  fg: 'var(--green-text)', bg: 'rgba(34,197,94,0.12)', border: 'rgba(34,197,94,0.4)' },
+  next:    { label: 'NEXT UP',  fg: 'var(--brand-text)', bg: 'var(--brand-bg)',      border: 'rgba(99,102,241,0.4)' },
+  pending: { label: 'PENDING',  fg: 'var(--text3)',      bg: 'rgba(255,255,255,0.04)', border: 'var(--border)' },
+};
 
 // ═════════════════════════════════════════════════════════════════════
 // Main component
@@ -1132,6 +1289,97 @@ export default function Architecture() {
           </SectionCard>
 
           {/* ═══════════ STACK ═══════════ */}
+          {/* ═══════════ BUILD-BEST ROADMAP ═══════════ */}
+          <SectionCard id="roadmap" icon="🗺" title="Build-Best Roadmap"
+            subtitle="The approved 8-phase plan to turn ProTrader Stock Picks into a real-money edge. Phase 0 = measurement; every later phase is gated by Phase 0's outcome evidence. Full cost envelope: ₹16k–40k/mo at steady state, with a free on-ramp until Phase 0 proves itself."
+            accent="var(--purple-text)">
+
+            <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 14 }}>
+              This is the load-bearing plan behind every commit to the picks pipeline.
+              <b style={{ color: 'var(--text)' }}> Build order is deliberate:</b> each phase
+              exists because the phase before it makes it possible (PIT data unlocks
+              walk-forward backtests; tracker data unlocks LLM kill-switch; ML sits on top
+              of PIT features; self-tuning needs months of outcomes). Skipping ahead is how
+              retail setups fail — you end up with an ML model trained on lookahead-biased
+              data that nobody can audit.
+            </p>
+
+            <div style={{
+              marginBottom: 16, padding: '12px 14px',
+              background: 'linear-gradient(135deg, rgba(99,102,241,0.10) 0%, rgba(139,92,246,0.08) 100%)',
+              border: '1px solid var(--border)', borderRadius: 10,
+              fontSize: 12, color: 'var(--text2)', lineHeight: 1.65,
+            }}>
+              <b style={{ color: 'var(--brand-text)' }}>Cost envelope:</b>{' '}
+              Phase 0 free · Phases 1–4 ramp to <Code>~₹16k–40k/mo</Code> steady state ·
+              Phases 5–8 add zero incremental spend. Gating rule: no phase is committed to
+              until the previous phase's tracker data shows the spend is earning its keep.
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {ROADMAP_PHASES.map((p) => {
+                const s = ROADMAP_STATUS_STYLE[p.status] || ROADMAP_STATUS_STYLE.pending;
+                return (
+                  <div key={p.id} style={{
+                    background: 'var(--bg2)',
+                    border: `1px solid ${s.border}`,
+                    borderLeft: `3px solid ${s.fg}`,
+                    borderRadius: 10,
+                    padding: 16,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 8,
+                        background: s.bg, border: `1px solid ${s.border}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: 14, color: s.fg, flexShrink: 0,
+                      }}>{p.id}</div>
+                      <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', margin: 0, letterSpacing: '-0.2px' }}>
+                        Phase {p.id} — {p.title}
+                      </h3>
+                      <Chip color={s.fg} bg={s.bg} border={s.border}>{s.label}</Chip>
+                      <Chip>{p.when}</Chip>
+                      <Chip color="var(--amber-text)" bg="var(--amber-bg)" border="rgba(251,191,36,0.35)">{p.cost}</Chip>
+                    </div>
+                    <p style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.65, margin: '6px 0 10px' }}>
+                      <b style={{ color: 'var(--text)' }}>Goal:</b> {p.goal}
+                    </p>
+                    <div style={{
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      marginBottom: 10,
+                    }}>
+                      <div style={{
+                        fontSize: 10, fontWeight: 700, color: 'var(--text3)',
+                        letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6,
+                      }}>What it includes</div>
+                      <ul style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.65, margin: 0, paddingLeft: 18 }}>
+                        {p.includes.map((it, i) => (<li key={i}>{it}</li>))}
+                      </ul>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.6, fontStyle: 'italic' }}>
+                      <b style={{ color: 'var(--text2)', fontStyle: 'normal' }}>Why:</b> {p.why}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{
+              marginTop: 18, padding: '12px 14px',
+              background: 'linear-gradient(135deg, rgba(34,197,94,0.10) 0%, rgba(99,102,241,0.08) 100%)',
+              border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10,
+              fontSize: 12, color: 'var(--text2)', lineHeight: 1.65,
+            }}>
+              <b style={{ color: 'var(--green-text)' }}>North-star rule:</b>{' '}
+              Build Phases 0 + 1 and stop — you're already in the top 5% of retail setups because everyone else is flying blind.
+              Phases 2–4 add an institutional-grade information edge. Phases 5–8 add compounding self-improvement.
+              Explicitly NOT in scope: satellite imagery, crypto sentiment correlation, global macro signals — low signal for an Indian equity workbook.
+            </div>
+          </SectionCard>
+
           <SectionCard id="stack" icon="🚀" title="Stack & Deploy"
             subtitle="What runs where, deploy path, and operational runbook links."
             accent="var(--green-text)">
