@@ -10945,6 +10945,28 @@ function scoreDayTrade(candles, sym, ctx) {
     ].filter(Boolean),
   };
 
+  // ── Commit 4: Setup hit-rate feedback (paper-trade stats, NOT ML) ──
+  // _setupHitRate is refreshed every 30 min from outcome_metrics joined
+  // with features_snapshot. getSetupMultiplier returns a ratio clamped to
+  // [0.85, 1.15] derived from rolling win-rate vs prior of 50%. Unless
+  // we have >= SETUP_HITRATE_MIN_SAMPLES paper-trades recorded for this
+  // setup, mult = 1.0 and this is a no-op.
+  //
+  // Concretely: if BREAKOUT has been winning 65% in paper trading, every
+  // BREAKOUT pick today gets ~+15% conviction; if OVERSOLD_BOUNCE has
+  // been losing (42% hits), it gets ~-8%. The multiplier is applied AFTER
+  // all structural scoring so it modulates verdict tier without rewriting
+  // the underlying signal breakdown.
+  const setupMult = getSetupMultiplier(best.type);
+  const overallBeforeHitRate = overall;
+  if (setupMult !== 1.0) {
+    overall = Math.max(0, Math.min(100, Math.round(overall * setupMult)));
+    const deltaPts = overall - overallBeforeHitRate;
+    if (deltaPts > 0) _gain('MULTI', deltaPts, `Hit-rate mult ${(setupMult).toFixed(2)}x (${best.type} winning in paper trades)`);
+    else if (deltaPts < 0) _penalty('MULTI', Math.abs(deltaPts), `Hit-rate mult ${(setupMult).toFixed(2)}x (${best.type} losing in paper trades)`);
+  }
+  const setupHitRateRecord = _setupHitRate[best.type] || null;
+
   // Verdict
   let verdict, verdictColor;
   if (overall >= 75) { verdict = 'Strong Entry'; verdictColor = '#22c55e'; }
@@ -11092,6 +11114,10 @@ function scoreDayTrade(candles, sym, ctx) {
       orIncomplete,
       orBarsComplete: orBars,
     },
+    // Commit 4: paper-trade hit-rate feedback
+    setupMult: +setupMult.toFixed(2),
+    setupHitRate: setupHitRateRecord,  // { wins, losses, n, hitRate, mult } or null
+    scoreBeforeHitRate: overallBeforeHitRate,
     // Varsity M2 Ch 14: RSI midline state
     rsiAboveMidline, rsiCrossedMidlineUp,
     // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
@@ -11127,6 +11153,11 @@ async function scanDayTrades(force = false) {
   const results = [];
 
   try {
+    // Commit 4: refresh hit-rate table before scoring the slate. Non-blocking
+    // in practice — cache TTL is 30min so most runs no-op. Never block the
+    // scan if the DB round-trip hiccups.
+    await refreshSetupHitRate(false).catch(e => console.warn('hit-rate refresh failed:', e.message));
+
     const today   = new Date().toISOString().split('T')[0];
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -11379,6 +11410,10 @@ async function runUnifiedKitePipeline(force = false) {
   const dayTradeResults = [];
 
   try {
+    // Commit 4: refresh hit-rate table before scoring. Cached for 30min; runs
+    // only if stale. Failures are non-fatal — we just keep last known values.
+    await refreshSetupHitRate(false).catch(e => console.warn('hit-rate refresh failed:', e.message));
+
     // Pre-fetch Nifty benchmark (non-blocking, best-effort)
     try {
       const niftyCandles = await fetchKiteDaily('NIFTY 50');
