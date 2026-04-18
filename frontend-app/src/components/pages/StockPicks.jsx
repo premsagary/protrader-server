@@ -154,6 +154,33 @@ const TABS = [
 ];
 
 // ══════════════════════════════════════════════════════════════════════
+// buildBucketReason — short server-style string explaining why this stock
+// cleared the tab's filter. Mirrors the strings the server produces on its
+// own picksRebound/Momentum/LongTerm lists; we rebuild client-side because
+// this page derives its picks directly from /api/stocks/score's flat
+// `stocks` array rather than the server's per-bucket lists.
+// ══════════════════════════════════════════════════════════════════════
+function buildBucketReason(s, tabId) {
+  const parts = [];
+  if (s.scoreV2 != null) parts.push(`Q${Math.round(s.scoreV2)}`);
+  if (tabId === 'rebound') {
+    if (s.pctFromHigh != null) parts.push(`${Math.round(s.pctFromHigh)}% from 52w hi`);
+    if (s.rsi != null) parts.push(`RSI ${Math.round(s.rsi)}`);
+    if (s.debtToEq != null && s.debtToEq <= 2) parts.push(`D/E ${Number(s.debtToEq).toFixed(1)}`);
+  } else if (tabId === 'momentum') {
+    if (s.composite != null) parts.push(`comp ${Math.round(s.composite)}`);
+    if (s.rsi != null) parts.push(`RSI ${Math.round(s.rsi)}`);
+    if (s.macdBull) parts.push('MACD+');
+    if (s.obvRising) parts.push('OBV↑');
+  } else if (tabId === 'longterm') {
+    if (s.roe != null) parts.push(`ROE ${Math.round(s.roe)}`);
+    if (s.debtToEq != null) parts.push(`D/E ${Number(s.debtToEq).toFixed(1)}`);
+    if (s.earGrowth != null) parts.push(`EPS g ${Math.round(s.earGrowth)}%`);
+  }
+  return parts.join(' · ');
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Sort helper — null-safe, respects asc/desc, strings fall to locale compare
 // ══════════════════════════════════════════════════════════════════════
 function sortBy(arr, key, dir) {
@@ -274,7 +301,15 @@ export default function StockPicks() {
       const sortCfg = sorts[tab.id] || { key: tab.scoreField, dir: 'desc' };
       const sorted  = sortBy(filtered, sortCfg.key, sortCfg.dir);
       const capped  = applySectorCap(sorted, 2);
-      out[tab.id] = capped.slice(0, 25);
+      // Inject bucket-fit reason client-side. The server attaches this to
+      // its own `picksRebound/Momentum/LongTerm` arrays, but we re-derive
+      // from the flat `stocks` array, so we also build the reason here.
+      // Tab-specific: Rebound cites depth+RSI, Momentum cites tech signals,
+      // Long-Term cites compounder fundamentals.
+      out[tab.id] = capped.slice(0, 25).map((s) => ({
+        ...s,
+        pickBucketReason: buildBucketReason(s, tab.id),
+      }));
     }
     return out;
   }, [filteredByGrp, sorts]);
@@ -785,23 +820,45 @@ function PickRow({ stock: s, rank, tab, aiReviews, aiLoading, expanded, onToggle
           >
             {score != null ? score : '—'}
           </div>
-          {/* Unified scoreV2 quality sub-number for non-longterm tabs (longterm
+          {/* Label under the main score — tells users what the big number
+              actually measures in each bucket. Without this, 53 vs 92.3 vs 89
+              across 3 tabs looks arbitrary. */}
+          <div
+            title={
+              tab.id === 'rebound' ? 'FallenScore — depth-of-fall from 52w high × preserved fundamentals'
+              : tab.id === 'momentum' ? 'Composite — fundamentals 35% + valuation 15% + technicals 20% + momentum 15% + risk 15%'
+              : 'Quality Score — Varsity 4-pillar (ROE/growth/D-E/moat/mgmt)'
+            }
+            style={{
+              fontSize: 8.5,
+              color: 'var(--text4)',
+              marginTop: 2,
+              fontWeight: 600,
+              letterSpacing: '0.4px',
+              textTransform: 'uppercase',
+            }}
+          >
+            {tab.id === 'rebound' ? 'Fallen Score'
+             : tab.id === 'momentum' ? 'Momentum'
+             : 'Quality'}
+          </div>
+          {/* Quality (scoreV2) sub-number for non-longterm tabs (longterm
               ranks by scoreV2 itself, so this would be redundant there). */}
           {tab.id !== 'longterm' && s.scoreV2 != null && (
             <div
               className="tabular-nums"
-              title={`Unified scoreV2 quality gate (${tab.id === 'rebound' ? '≥55' : '≥50'} floor)`}
+              title={`Quality gate (scoreV2 ≥ ${tab.id === 'rebound' ? '55' : '50'} required to appear in this bucket). Varsity 4-pillar fundamental score 0-100.`}
               style={{
                 fontSize: 9.5,
                 color:
                   s.scoreV2 >= 70 ? 'var(--green-text)'
                   : s.scoreV2 >= (tab.id === 'rebound' ? 55 : 50) ? 'var(--amber-text)'
                   : 'var(--red-text)',
-                marginTop: 2,
+                marginTop: 4,
                 fontWeight: 700,
               }}
             >
-              Q:{Math.round(s.scoreV2)}
+              Quality {Math.round(s.scoreV2)}
             </div>
           )}
           {/* Expected 6M return from bucketStatsMap (post external-signal nudge) */}
@@ -1098,10 +1155,14 @@ function ExpandedAIReview({ council, judge, sym }) {
 // ══════════════════════════════════════════════════════════════════════
 // Quick-start bars — top 5 per strategy as one-click tiles → Deep Analyzer
 // ══════════════════════════════════════════════════════════════════════
+// NOTE: ids MUST match TABS[].id ('rebound' | 'momentum' | 'longterm').
+// Using 'investment' here — the pre-unification tab name — silently returns
+// no picks because tabPicks is keyed by tab.id, so QuickStartBars renders
+// null for Long-Term. Fixed to use 'longterm' to match TABS.
 const QS_STRATEGIES = [
   { id: 'rebound', label: 'Rebound', color: 'var(--amber-text)', bg: 'var(--amber-bg)', icon: '🔄' },
   { id: 'momentum', label: 'Momentum', color: 'var(--green-text)', bg: 'var(--green-bg)', icon: '⚡' },
-  { id: 'investment', label: 'Long-Term', color: 'var(--brand-text)', bg: 'var(--brand-bg)', icon: '🏛' },
+  { id: 'longterm', label: 'Long-Term', color: 'var(--brand-text)', bg: 'var(--brand-bg)', icon: '🏛' },
 ];
 
 function QuickStartBars({ tabPicks }) {
