@@ -61,6 +61,10 @@ const COLS = [
   { k: 'sl',            l: 'SL',        w: 75,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'tgt',           l: 'Target',    w: 75,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'rrRatio',       l: 'R:R',       w: 60,  align: 'right', fmt: (v) => v != null ? `${Number(v).toFixed(2)}` : '—' },
+  // Commit 1 addition: net-of-cost R:R. Shows the RR that survives ~5bps slip
+  // + ~3bps brokerage round-trip. When rrRatioNet < 1.3 the server caps the
+  // score at 44; we tint the cell red so users see why.
+  { k: 'rrRatioNet',    l: 'R:R Net',   w: 72,  align: 'right', fmt: (v) => v != null ? `${Number(v).toFixed(2)}` : '—' },
   { k: 'optionRec',     l: 'Option',    w: 160, align: 'left',  fmt: (v) => formatOption(v) },
 ];
 
@@ -150,7 +154,7 @@ export default function DayTrade() {
 
   const handleExportCSV = async () => {
     try {
-      const header = ['Rank', 'Symbol', 'Group', 'Sector', 'Score', 'Setup', 'Price', 'RSI', 'VWAP%', 'Vol', 'Gap%', 'SL', 'Target', 'R:R', 'Option'];
+      const header = ['Rank', 'Symbol', 'Group', 'Sector', 'Score', 'Setup', 'Price', 'RSI', 'VWAP%', 'Vol', 'Gap%', 'SL', 'Target', 'R:R', 'R:R Net', 'Option'];
       const rows = (Array.isArray(filtered) ? filtered : []).map((p, i) => [
         i + 1,
         p.sym || '',
@@ -166,6 +170,7 @@ export default function DayTrade() {
         p.sl != null ? Number(p.sl).toFixed(2) : '',
         p.tgt != null ? Number(p.tgt).toFixed(2) : '',
         p.rrRatio != null ? Number(p.rrRatio).toFixed(2) : '',
+        p.rrRatioNet != null ? Number(p.rrRatioNet).toFixed(2) : '',
         formatOption(p.optionRec),
       ]);
       const csv = [header, ...rows]
@@ -302,6 +307,12 @@ export default function DayTrade() {
           </div>
         )}
       </div>
+
+      {/* ═══ SYSTEMIC CONTEXT BANNER ═══
+          Shows the market-wide state that shapes every per-pick score
+          (VIX regime, breadth, sector rotation, beta-SL). Pulled from the
+          first pick — all picks share the same systemic fields. */}
+      <SystemicBanner picks={picks} />
 
       {/* ═══ SUMMARY PILLS ═══ */}
       <div style={{
@@ -465,6 +476,14 @@ export default function DayTrade() {
                           if (c.k === 'rrRatio' && raw != null) {
                             color = raw >= 2 ? 'var(--green-text)' : raw >= 1.5 ? 'var(--text)' : 'var(--red-text)';
                           }
+                          // Net R:R gets the same colour ladder as gross, with an
+                          // extra red tint when it crosses the 1.3 score-cap line.
+                          if (c.k === 'rrRatioNet' && raw != null) {
+                            color = raw >= 2 ? 'var(--green-text)'
+                                 : raw >= 1.5 ? 'var(--text)'
+                                 : raw >= 1.3 ? 'var(--amber-text)'
+                                 : 'var(--red-text)';
+                          }
                           if (c.k === 'gapPct' && raw != null) {
                             color = raw > 0 ? 'var(--green-text)' : raw < 0 ? 'var(--red-text)' : 'var(--text2)';
                           }
@@ -507,6 +526,17 @@ export default function DayTrade() {
                                 ))}
                               </div>
                             ) : null}
+                            {/* Score-journey (pre-hit-rate → ×mult → final) —
+                                only renders when the multiplier actually moved the score. */}
+                            <ScoreJourney pick={p} />
+                            {/* Reliability + microstructure chip row —
+                                surfaces the flags that server-side preflight
+                                gates or 5-min microstructure detectors set. */}
+                            <ReliabilityAndMicroChips pick={p} />
+                            {/* F&O OI / Pre-open auction / Paper-trade hit-rate
+                                info cards — each renders only if the server
+                                populated the corresponding field block. */}
+                            <ContextBlocks pick={p} />
                             {p.optionRec && (
                               <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text3)' }}>
                                 <b style={{ color: 'var(--brand-text)' }}>Options:</b> {formatOption(p.optionRec)}
@@ -672,6 +702,282 @@ function formatAgo(ms) {
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   return `${h}h ago`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Systemic context banner — surfaces the market-wide state the scorer uses
+// (VIX regime, breadth, top sector, beta-SL multiplier). These values are
+// duplicated per pick by the server because they shape per-pick scoring,
+// so we pull them off the first pick. They're the same across the slate.
+// ══════════════════════════════════════════════════════════════════════
+function SystemicBanner({ picks }) {
+  const sample = (Array.isArray(picks) ? picks : []).find((p) =>
+    p && (p.vixValue != null || p.breadthContext || p.sectorRank)
+  );
+  if (!sample) return null;
+
+  const { vixValue, vixRegime, breadthContext, sectorRank, betaSLMult } = sample;
+  const regimeColor =
+    vixRegime === 'CALM'     ? 'var(--green-text)'
+    : vixRegime === 'NORMAL' ? 'var(--text2)'
+    : vixRegime === 'ELEVATED' ? 'var(--amber-text)'
+    : vixRegime === 'HIGH'   ? 'var(--red-text)'
+    : 'var(--text2)';
+  const regimeBg =
+    vixRegime === 'CALM'     ? 'var(--green-bg)'
+    : vixRegime === 'NORMAL' ? 'rgba(255,255,255,0.03)'
+    : vixRegime === 'ELEVATED' ? 'var(--amber-bg)'
+    : vixRegime === 'HIGH'   ? 'var(--red-bg)'
+    : 'rgba(255,255,255,0.03)';
+
+  const chipStyle = {
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    padding: '6px 12px', borderRadius: 8,
+    fontSize: 11.5, fontWeight: 600,
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid var(--border)',
+    color: 'var(--text2)',
+    whiteSpace: 'nowrap',
+  };
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center',
+      padding: '10px 14px',
+      background: 'linear-gradient(135deg, rgba(99,102,241,0.05), rgba(248,113,113,0.04))',
+      border: '1px solid var(--border)',
+      borderRadius: 12,
+    }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'var(--text3)', marginRight: 4 }}>
+        Market Context
+      </span>
+      {vixValue != null && (
+        <span
+          style={{ ...chipStyle, background: regimeBg, color: regimeColor, borderColor: `${regimeColor}44` }}
+          title="India VIX from NSE. CALM<12 · NORMAL 12-18 · ELEVATED 18-24 · HIGH>24. Scorer dampens breakouts & widens SL as VIX rises."
+        >
+          📉 VIX {Number(vixValue).toFixed(1)} · <b>{vixRegime || '—'}</b>
+        </span>
+      )}
+      {breadthContext && breadthContext.aboveVWAPPct != null && (
+        <span
+          style={chipStyle}
+          title={`${breadthContext.n || 0} stocks scanned this window. Share above VWAP tracks intraday breadth — low breadth demotes breakouts.`}
+        >
+          🌐 Breadth <b style={{ color: breadthContext.aboveVWAPPct >= 55 ? 'var(--green-text)' : breadthContext.aboveVWAPPct >= 45 ? 'var(--text)' : 'var(--red-text)' }}>
+            {Number(breadthContext.aboveVWAPPct).toFixed(0)}%
+          </b> above VWAP
+          {breadthContext.avgGapPct != null && <> · avg gap {breadthContext.avgGapPct >= 0 ? '+' : ''}{Number(breadthContext.avgGapPct).toFixed(2)}%</>}
+        </span>
+      )}
+      {sectorRank && sectorRank.sector && (
+        <span
+          style={chipStyle}
+          title={`Your pick's sector (avg score ${sectorRank.avgScore != null ? Number(sectorRank.avgScore).toFixed(0) : '—'} across ${sectorRank.total || '?'} sectors). Top-3 sectors get a rotation tailwind.`}
+        >
+          🏷 Sector <b style={{ color: 'var(--brand-text)' }}>{sectorRank.sector}</b>
+          {sectorRank.rank != null && sectorRank.total != null && <> · #{sectorRank.rank}/{sectorRank.total}</>}
+        </span>
+      )}
+      {betaSLMult != null && betaSLMult !== 1 && (
+        <span
+          style={chipStyle}
+          title="Beta-adjusted SL multiplier. High-beta names get wider stops in volatile regimes so noise doesn't trigger them."
+        >
+          📐 Beta-SL ×{Number(betaSLMult).toFixed(2)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// In-row chip row — reliability flags + microstructure flags. Rendered
+// inside the expanded detail section so the main table stays readable.
+// ══════════════════════════════════════════════════════════════════════
+function ReliabilityAndMicroChips({ pick: p }) {
+  const chips = [];
+  // Reliability flags (red — these reduce scoring weight server-side)
+  if (p.rrTooTight) chips.push({ k: 'rr', text: `R:R net ${p.rrRatioNet != null ? Number(p.rrRatioNet).toFixed(2) : '—'} (score capped 44)`, tone: 'red', title: 'Net-of-cost R:R below 1.3 — the server caps overall at 44 because after slippage + brokerage there isn\'t enough edge to justify the risk.' });
+  if (p.adrExhausted) chips.push({ k: 'adr', text: 'ADR exhausted', tone: 'red', title: 'Average daily range ≥ 75% used — limited room left for target without paying for trailing risk.' });
+  if (p.deliveryPct != null && p.deliveryPct < 25) chips.push({ k: 'del', text: `Delivery ${Math.round(p.deliveryPct)}%`, tone: 'amber', title: 'Low delivery % means speculative (intraday-only) activity dominates. Breakout signals are weaker when most volume is squared off.' });
+  // Microstructure (neutral/brand — context, not warnings)
+  const ms = p.microstructure || {};
+  if (ms.isNR7) chips.push({ k: 'nr7', text: 'NR7', tone: 'brand', title: 'Narrowest range of last 7 bars — coiled, breakout likely soon.' });
+  if (ms.isInsideBar) chips.push({ k: 'inside', text: 'Inside bar', tone: 'brand', title: 'Current bar fully inside prior bar — compression setup.' });
+  if (ms.coiledBar) chips.push({ k: 'coil', text: 'Coiled', tone: 'brand', title: 'NR7 + inside-bar both — maximum compression, highest-probability breakout.' });
+  if (ms.nearAVWAPFromPDH) chips.push({ k: 'avwap-h', text: `aVWAP PDH ${ms.avwapFromPDH != null ? '₹'+ms.avwapFromPDH.toFixed(1) : ''}`, tone: 'brand', title: 'Near anchored VWAP from prior-day high — supply/distribution zone from yesterday\'s swing.' });
+  if (ms.nearAVWAPFromPDL) chips.push({ k: 'avwap-l', text: `aVWAP PDL ${ms.avwapFromPDL != null ? '₹'+ms.avwapFromPDL.toFixed(1) : ''}`, tone: 'brand', title: 'Near anchored VWAP from prior-day low — accumulation zone from yesterday\'s swing.' });
+  if (ms.orIncomplete) chips.push({ k: 'or', text: `Partial OR (${ms.orBarsComplete || 0}/6)`, tone: 'amber', title: 'Opening range not fully formed — wait for OR completion before full-size entry.' });
+  if (ms.wideSpreadLikely) chips.push({ k: 'spread', text: 'Wide spread', tone: 'amber', title: `Bid-ask proxy ${ms.spreadProxy != null ? (ms.spreadProxy*10000).toFixed(0)+' bps' : ''} — thin liquidity, slippage will be higher than baseline.` });
+
+  if (chips.length === 0) return null;
+
+  const toneStyle = (tone) => ({
+    red:    { color: 'var(--red-text)',   bg: 'var(--red-bg)',   border: 'rgba(239,68,68,0.30)' },
+    amber:  { color: 'var(--amber-text)', bg: 'var(--amber-bg)', border: 'rgba(245,158,11,0.30)' },
+    brand:  { color: 'var(--brand-text)', bg: 'var(--brand-bg)', border: 'rgba(99,102,241,0.30)' },
+  }[tone] || { color: 'var(--text2)', bg: 'rgba(255,255,255,0.03)', border: 'var(--border)' });
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 6 }}>
+        Reliability &amp; microstructure
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {chips.map((c) => {
+          const t = toneStyle(c.tone);
+          return (
+            <span key={c.k} title={c.title} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '3px 9px', borderRadius: 6,
+              background: t.bg, color: t.color, border: `1px solid ${t.border}`,
+              fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap', letterSpacing: '0.2px',
+            }}>
+              {c.text}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// F&O / pre-open / hit-rate info blocks — shown in the expanded detail
+// when the corresponding server field is present. Grid of compact cards,
+// hidden entirely if the server didn't populate any of them.
+// ══════════════════════════════════════════════════════════════════════
+function ContextBlocks({ pick: p }) {
+  const cards = [];
+
+  if (p.fnoContext) {
+    const f = p.fnoContext;
+    cards.push({
+      id: 'fno', label: 'F&O context', tone: 'brand',
+      rows: [
+        ['PCR', f.pcr != null ? Number(f.pcr).toFixed(2) : '—', f.pcr != null ? (f.pcr > 1.2 ? 'var(--red-text)' : f.pcr < 0.8 ? 'var(--green-text)' : 'var(--text)') : 'var(--text3)'],
+        ['Max Pain', f.maxPain != null ? `₹${Number(f.maxPain).toFixed(0)}` : '—', 'var(--text)'],
+        ['Dist from Max Pain', f.maxPainDistPct != null ? `${f.maxPainDistPct >= 0 ? '+' : ''}${Number(f.maxPainDistPct).toFixed(1)}%` : '—', 'var(--text2)'],
+        ['ATM IV', f.atmIV != null ? `${Number(f.atmIV).toFixed(1)}%` : '—', f.atmIV != null ? (f.atmIV > 35 ? 'var(--red-text)' : f.atmIV > 22 ? 'var(--amber-text)' : 'var(--green-text)') : 'var(--text3)'],
+      ],
+      hint: 'PCR > 1.2 = put-skew (bearish), < 0.8 = call-skew (bullish). Near Max Pain = expiry-magnet range. ATM IV = expected daily move.',
+    });
+  }
+
+  if (p.preOpenContext) {
+    const po = p.preOpenContext;
+    cards.push({
+      id: 'po', label: 'Pre-open auction', tone: 'amber',
+      rows: [
+        ['IEP', po.iep != null ? `₹${Number(po.iep).toFixed(1)}` : '—', 'var(--text)'],
+        ['Pre-open gap', po.gapPct != null ? `${po.gapPct >= 0 ? '+' : ''}${Number(po.gapPct).toFixed(2)}%` : '—', po.gapPct != null ? (po.gapPct > 0 ? 'var(--green-text)' : 'var(--red-text)') : 'var(--text3)'],
+        ['Imbalance', po.imbalance != null ? `${po.imbalance >= 0 ? '+' : ''}${Number(po.imbalance).toFixed(2)}%` : '—', po.imbalance != null ? (Math.abs(po.imbalance) > 1 ? 'var(--amber-text)' : 'var(--text2)') : 'var(--text3)'],
+        ['Buy/Sell qty', po.totalBuyQty != null && po.totalSellQty != null ? `${formatK(po.totalBuyQty)}/${formatK(po.totalSellQty)}` : '—', 'var(--text2)'],
+      ],
+      hint: 'Indicative Equilibrium Price from the 9:00–9:07 auction. Positive imbalance = more buy pressure entering the session.',
+    });
+  }
+
+  if (p.setupHitRate && p.setupHitRate.n != null && p.setupHitRate.n > 0) {
+    const h = p.setupHitRate;
+    const multTone = p.setupMult == null || p.setupMult === 1 ? 'var(--text2)'
+                    : p.setupMult > 1 ? 'var(--green-text)'
+                    : 'var(--red-text)';
+    cards.push({
+      id: 'hr', label: 'Paper-trade hit-rate', tone: 'green',
+      rows: [
+        ['Hit rate', h.hitRate != null ? `${Number(h.hitRate * 100).toFixed(0)}%` : '—', h.hitRate != null ? (h.hitRate >= 0.55 ? 'var(--green-text)' : h.hitRate >= 0.45 ? 'var(--text)' : 'var(--red-text)') : 'var(--text3)'],
+        ['Wins / Losses', `${h.wins || 0} / ${h.losses || 0}`, 'var(--text)'],
+        ['Sample size', `${h.n} trades`, 'var(--text2)'],
+        ['Multiplier', p.setupMult != null ? `×${Number(p.setupMult).toFixed(2)}` : '×1.00', multTone],
+      ],
+      hint: `Paper-trade outcomes for this setup type. Multiplier is clamped to [0.85, 1.15] and applied to the raw score. Requires ≥ 20 trades before firing — under-sampled setups get ×1.00.`,
+    });
+  }
+
+  if (cards.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
+      {cards.map((card) => (
+        <div key={card.id} style={{
+          padding: 12,
+          background: 'rgba(255,255,255,0.02)',
+          border: '1px solid var(--border)',
+          borderLeft: `3px solid var(--${card.tone}-text, var(--border))`,
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 8 }}>
+            {card.label}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 4, columnGap: 10, fontSize: 11.5 }}>
+            {card.rows.map(([k, v, color], i) => (
+              <React.Fragment key={i}>
+                <div style={{ color: 'var(--text3)' }}>{k}</div>
+                <div className="tabular-nums" style={{ color, fontWeight: 700, textAlign: 'right' }}>{v}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          {card.hint && (
+            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text4)', fontStyle: 'italic', lineHeight: 1.4 }}>
+              {card.hint}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Score-journey line — shows raw score → ×hit-rate multiplier → final.
+// Only rendered when the multiplier actually moved the score.
+function ScoreJourney({ pick: p }) {
+  if (p.setupMult == null || p.setupMult === 1) return null;
+  if (p.scoreBeforeHitRate == null || p.dayTradeScore == null) return null;
+  const before = Math.round(p.scoreBeforeHitRate);
+  const after  = Math.round(p.dayTradeScore);
+  const delta  = after - before;
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: '8px 12px',
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        fontSize: 11.5,
+        color: 'var(--text2)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}
+      title="Score journey: raw setup score × paper-trade hit-rate multiplier = final displayed score."
+    >
+      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase', color: 'var(--text3)' }}>
+        Score journey
+      </span>
+      <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--text)' }}>{before}</span>
+      <span style={{ color: 'var(--text4)' }}>×</span>
+      <span className="tabular-nums" style={{ fontWeight: 700, color: p.setupMult > 1 ? 'var(--green-text)' : 'var(--red-text)' }}>
+        {Number(p.setupMult).toFixed(2)}
+      </span>
+      <span style={{ color: 'var(--text4)' }}>=</span>
+      <span className="tabular-nums" style={{ fontWeight: 800, color: 'var(--text)' }}>{after}</span>
+      <span style={{ color: delta >= 0 ? 'var(--green-text)' : 'var(--red-text)', fontSize: 11, fontWeight: 600 }}>
+        ({delta >= 0 ? '+' : ''}{delta})
+      </span>
+    </div>
+  );
+}
+
+function formatK(n) {
+  if (n == null) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e7) return `${(n / 1e7).toFixed(1)}Cr`;
+  if (abs >= 1e5) return `${(n / 1e5).toFixed(1)}L`;
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(Math.round(n));
 }
 
 const thStyle = {
