@@ -313,13 +313,13 @@ function AnalysisResult({ data }) {
   }, [score]);
 
   // -- Price-chart timeframe state ----------------------------------------
-  // Default timeframe picks the richest dataset available, matching the old
-  // vanilla analyzer (app.html ~7226): prefer MAX → 10Y → 3Y → 1Y.
+  // Kite historical API only goes back ~3Y for daily candles, so we expose
+  // 3M / 1Y / 3Y only. 10Y and MAX removed 2026-04-18 — they were always
+  // empty placeholders. Default picks the richest available.
   const charts = a.charts || {};
   const initialTf = (() => {
-    if (dataAvail.kiteMax && charts.MAX && charts.MAX.length > 24) return 'MAX';
-    if (dataAvail.kite10w && charts['10Y'] && charts['10Y'].length > 50) return '10Y';
     if (dataAvail.kite3y && charts['3Y'] && charts['3Y'].length > 50) return '3Y';
+    if (dataAvail.kite1y && charts['1Y'] && charts['1Y'].length > 50) return '1Y';
     return '1Y';
   })();
   const [chartTf, setChartTf] = useState(initialTf);
@@ -460,8 +460,6 @@ function AnalysisResult({ data }) {
           {[
             ['1Y', !!dataAvail.kite1y],
             ['3Y', !!dataAvail.kite3y],
-            ['10Y', !!dataAvail.kite10w],
-            ['MAX ' + (dataAvail.maxCandles ? dataAvail.maxCandles + 'mo' : ''), !!dataAvail.kiteMax],
             ['Hourly', !!dataAvail.kite1h],
             ['News', !!dataAvail.news],
             ['Fundamentals', !!dataAvail.fundamentals],
@@ -1079,12 +1077,11 @@ function PriceChart({ charts, tf, setTf, supports, resistances, buyZone, tech, f
   const data = Array.isArray(charts?.[tf]) ? charts[tf] : [];
 
   // Which timeframes actually have data — disable others so clicks don't dead-end.
+  // Kite daily history caps ~3Y, so we only offer 3M / 1Y / 3Y.
   const tfAvail = {
-    '3M':  !!dataAvail?.kite3m  || (Array.isArray(charts['3M'])  && charts['3M'].length > 0),
-    '1Y':  !!dataAvail?.kite1y  || (Array.isArray(charts['1Y'])  && charts['1Y'].length > 0),
-    '3Y':  !!dataAvail?.kite3y  || (Array.isArray(charts['3Y'])  && charts['3Y'].length > 0),
-    '10Y': !!dataAvail?.kite10w || (Array.isArray(charts['10Y']) && charts['10Y'].length > 0),
-    'MAX': !!dataAvail?.kiteMax || (Array.isArray(charts['MAX']) && charts['MAX'].length > 0),
+    '3M': !!dataAvail?.kite3m || (Array.isArray(charts['3M']) && charts['3M'].length > 0),
+    '1Y': !!dataAvail?.kite1y || (Array.isArray(charts['1Y']) && charts['1Y'].length > 0),
+    '3Y': !!dataAvail?.kite3y || (Array.isArray(charts['3Y']) && charts['3Y'].length > 0),
   };
 
   useEffect(() => {
@@ -1283,11 +1280,9 @@ function PriceChart({ charts, tf, setTf, supports, resistances, buyZone, tech, f
       const t = data[idx]?.t;
       if (!t) continue;
       const d2 = new Date(t);
-      const lbl = (tf === 'MAX' || tf === '10Y')
-        ? String(d2.getFullYear())
-        : tf === '3Y'
-          ? d2.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
-          : d2.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+      const lbl = tf === '3Y'
+        ? d2.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
+        : d2.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
       ctx.fillText(lbl, xOf(idx), cssH - 6);
     }
 
@@ -1355,7 +1350,7 @@ function PriceChart({ charts, tf, setTf, supports, resistances, buyZone, tech, f
           </div>
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
-          {['3M', '1Y', '3Y', '10Y', 'MAX'].map((t) => {
+          {['3M', '1Y', '3Y'].map((t) => {
             const active = t === tf;
             const disabled = !tfAvail[t];
             return (
