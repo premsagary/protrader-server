@@ -513,22 +513,25 @@ export default function StockPicks() {
     return out;
   }, [filteredByGrp, sorts]);
 
-  // Kick off a fresh AI review. Sends top-9 of each bucket (already sorted
-  // + sector-capped client-side) and the market meta strip. Backend calls
-  // Claude, persists to picks_ai_buy_plan, returns the ranked plan.
+  // Kick off a fresh AI review. Sends top-15 of each bucket (already sorted
+  // + sector-capped client-side) and the market meta strip. Backend selects
+  // 9 DISTINCT symbols per bucket (priority rebound > momentum > longterm,
+  // backfills past duplicates) → exactly 27 go to Claude. Persists to
+  // picks_ai_buy_plan, returns the ranked plan.
   const runAiPlan = useCallback(async () => {
     if (aiPlanRunning) return;
     setAiPlanRunning(true);
     setAiPlanError(null);
     try {
-      // Top 9 per bucket (27 total pre-dedup). Server _aiBuildTop30 dedupes
-      // across buckets with priority rebound > momentum > longterm.
-      const top9 = (arr) => (arr || []).slice(0, 9).map(_aiSlim);
+      // Send top-15 per bucket so the server has headroom to backfill when
+      // a higher-priority bucket already claimed a symbol. Server still
+      // caps each bucket at exactly 9 distinct symbols → 27 input total.
+      const topN = (arr) => (arr || []).slice(0, 15).map(_aiSlim);
       const body = {
         picks: {
-          rebound:  top9(tabPicks.rebound),
-          momentum: top9(tabPicks.momentum),
-          longterm: top9(tabPicks.longterm),
+          rebound:  topN(tabPicks.rebound),
+          momentum: topN(tabPicks.momentum),
+          longterm: topN(tabPicks.longterm),
         },
         meta: {
           vixRegime:  data?.meta?.vixRegime,
@@ -645,12 +648,14 @@ export default function StockPicks() {
         ))}
       </div>
 
-      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-27 candidates ═══
+      {/* ═══ AI BUY PLAN — LLM-curated suggestions from 27 distinct candidates ═══
           Placed ABOVE the market-cap filter so it's the first actionable thing
-          the user sees. Reviews top-9 of each bucket (rebound/momentum/longterm),
-          drops the weak setups, and ranks ONLY the approved ones with a full
-          exit plan (entry zone / target / stop / horizon / sell-if).
-          Manual trigger only — user clicks "Run AI Review", executes in Kite. */}
+          the user sees. Reviews 9 distinct picks from each bucket — rebound /
+          momentum / longterm — for exactly 27 total (server backfills past
+          cross-bucket duplicates so the count is deterministic). Drops the
+          weak setups and ranks ONLY the approved ones with a full exit plan
+          (entry zone / target / stop / horizon / sell-if). Manual trigger
+          only — user clicks "Run AI Review", executes in Kite. */}
       {!loading && !error && (
         <div style={{ marginBottom: 18 }}>
           <AIReviewPanel
@@ -1609,7 +1614,7 @@ function QuickStartBars({ tabPicks }) {
 // ══════════════════════════════════════════════════════════════════════
 // AI BUY PLAN PANEL — LLM-curated picks + exit plans
 // Consumes /api/ai-picks/run (manual trigger) + /api/ai-picks/latest (cache).
-// The model reviews top-9 of each bucket (27 total), filters weak setups, and ranks
+// The model reviews 9 distinct picks from each bucket (27 total), filters weak setups, and ranks
 // ONLY the approved ones with full exit plans (entry/target/stop/sell-if).
 // Manual execution: user buys in Kite themselves.
 // ══════════════════════════════════════════════════════════════════════
@@ -1703,7 +1708,7 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
             </span>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.45 }}>
-            Takes top-9 of each bucket (up to 27 stocks after cross-bucket dedup), drops the weak setups, and ranks the keepers with entry zones,
+            Takes 9 distinct picks from each bucket (27 total, backfilled past cross-bucket duplicates), drops the weak setups, and ranks the keepers with entry zones,
             targets, stops, horizons, and sell-if triggers. Buy them yourself in Kite.
           </div>
           {runAt && (

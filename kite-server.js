@@ -17602,35 +17602,46 @@ function _aiPickCandidate(p, bucket, rank) {
 }
 
 function _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm) {
-  // Top 9 per bucket (27 candidates total pre-dedup). Chosen over top-10 so
-  // that cross-bucket dedup generally doesn't push the input count below the
-  // round-number 27 the user expects — the LLM sees a predictable input size.
-  const reb  = (picksRebound  || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'rebound',  i + 1)).filter(Boolean);
-  const mom  = (picksMomentum || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'momentum', i + 1)).filter(Boolean);
-  const lt   = (picksLongTerm || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'longterm', i + 1)).filter(Boolean);
-
-  // Dedupe across buckets by symbol — a stock that shows up in both rebound
-  // and momentum gets claimed by the first bucket it appears in (priority:
-  // rebound → momentum → longterm, matching how the model treats them:
-  // rebound has the strictest entry-structure requirement, so give it first
-  // dibs). Without this dedup, inputN in the UI counted duplicates while
-  // validSyms (symbol-keyed Set) silently merged them, so "10 of 29" could
-  // actually reconcile to 27 internally — leaving 2 stocks unaccounted in
-  // the rendered skipped list. After this change, rebound.length +
-  // momentum.length + longterm.length === validSyms.size exactly.
+  // Target: exactly 9 DISTINCT symbols per bucket → exactly 27 total input
+  // candidates sent to the LLM, deterministically, regardless of cross-bucket
+  // overlap. Earlier versions sliced a fixed top-9 per bucket and then
+  // dropped duplicates, producing a variable 25-27 count depending on how
+  // many symbols happened to qualify for multiple buckets.
+  //
+  // Priority rebound → momentum → longterm: when a symbol is already claimed
+  // by a higher-priority bucket, we skip it here and reach for the
+  // next-ranked candidate in the source list — "backfill" instead of "drop".
+  // Rebound goes first because its entry-structure requirements are the
+  // strictest and the thesis needs the oversold setup to still be intact.
+  //
+  // Requires the client to send at least ~15 per bucket so we have headroom
+  // to backfill; the client now passes 15 per bucket (see StockPicks.jsx
+  // runAiPlan).
+  const TARGET_PER_BUCKET = 9;
   const seen = new Set();
-  const dedupe = (list) => list.filter((c) => {
-    const key = String(c.sym || '').toUpperCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return { rebound: dedupe(reb), momentum: dedupe(mom), longterm: dedupe(lt) };
+  const fillBucket = (src, bucket) => {
+    const list = Array.isArray(src) ? src : [];
+    const out = [];
+    for (let i = 0; i < list.length && out.length < TARGET_PER_BUCKET; i++) {
+      const p = list[i];
+      const sym = String(p?.sym || '').toUpperCase();
+      if (!sym || seen.has(sym)) continue;
+      const cand = _aiPickCandidate(p, bucket, out.length + 1);
+      if (!cand) continue;
+      seen.add(sym);
+      out.push(cand);
+    }
+    return out;
+  };
+  const rebound  = fillBucket(picksRebound,  'rebound');
+  const momentum = fillBucket(picksMomentum, 'momentum');
+  const longterm = fillBucket(picksLongTerm, 'longterm');
+  return { rebound, momentum, longterm };
 }
 
 function _aiBuildPrompt(top30, ctx) {
   const totalIn = (top30.rebound?.length || 0) + (top30.momentum?.length || 0) + (top30.longterm?.length || 0);
-  const sys = `You are a senior Indian equity analyst reviewing a short list of ${totalIn} pre-screened stocks — up to 9 from each of three buckets: rebound (oversold bounce candidates), momentum (trend continuation), longterm (fundamental compounders). (Buckets may have fewer than 9 each after cross-bucket deduplication.)
+  const sys = `You are a senior Indian equity analyst reviewing a short list of ${totalIn} pre-screened stocks — 9 from each of three buckets: rebound (oversold bounce candidates), momentum (trend continuation), longterm (fundamental compounders). All ${totalIn} are distinct symbols (no duplicates across buckets).
 
 Your job: decide which of these ${totalIn} are ACTUALLY worth buying today for a retail investor using Zerodha Kite. Then rank ONLY the ones you approve. Do NOT force a fixed count. If only 3 are genuinely good, return 3. If all ${totalIn} are good, return ${totalIn}. If zero meet your bar, return 0.
 
