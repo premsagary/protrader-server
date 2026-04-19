@@ -20,6 +20,7 @@ const SECTIONS = [
   { id: 'llm',           label: 'LLM Classifier',    icon: '🤖' },
   { id: 'kite',          label: 'Kite Integration',  icon: '🔌' },
   { id: 'mirofish',      label: 'MiroFish AI',       icon: '🐟' },
+  { id: 'robotrade-guards', label: 'RoboTrade Guards', icon: '🛡' },
   { id: 'cron',          label: 'Cron Schedule',     icon: '⏰' },
   { id: 'data',          label: 'Data Sources',      icon: '🗃' },
   { id: 'db',            label: 'Database',          icon: '💾' },
@@ -174,7 +175,7 @@ function FlagRow({ code, severity, penalty, label, triggers }) {
 const TAB_MAP = [
   ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-9 of each bucket (up to 27 stocks after cross-bucket dedup), sends to Claude (Opus 4.7 via OpenRouter when OPENROUTER_API_KEY is set, else direct Anthropic API) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers — stops sized from daily σ + anchored to real S/R / DMAs / pivots. Retries once on parse failure. Admin-only trigger; persisted per-user in picks_ai_buy_plan and publicly readable so non-admin viewers see the latest ranked plan.', 'var(--brand-text)'],
   ['Day Trade',     '5-min intraday setups. Separate cache + scoring engine via Unified Pipeline.', '#ef4444'],
-  ['Stocks RoboTrade', 'Paper + live execution engine. Pass 1.5 Structure Filter + LLM sub-tab.', 'var(--green-text)'],
+  ['Stocks RoboTrade', 'Paper + live execution engine. Two-pass scan: Pass 1 collects BUY candidates, Pass 2 ranks and enters. Guards: Drawdown circuit-breaker (10/15/20%), Daily-loss cap (2% of equity), Varsity 14-point gate (dayTradeScore≥65), Per-insert MAX_TRADES_PER_DAY=8 (binds mid-scan), Same-day dedup per symbol, MIN_EXPECTED_PROFIT_INR=₹200 floor on top of R:R=2.0, MAX_POSITIONS=10, 30-min post-SL cooldown.', 'var(--green-text)'],
   ['Crypto RoboTrade', '24×7 crypto scanner + trade execution.', '#f59e0b'],
   ['MF Picks',      'Small / Mid / Flexi Cap. AI panel + top 5 cards. Council ranks top-3 with why_choose/why_not.', '#C4B5FD'],
   ['Holdings',      'Personal portfolio · Live P&L · Holdings AI reviews.', 'var(--green-text)'],
@@ -1172,6 +1173,68 @@ export default function Architecture() {
               <Code>mf_ai_rankings</Code> (per-model ordered rankings),{' '}
               <Code>holdings_ai_reviews</Code>,{' '}
               <Code>ai_disagree_log</Code> (judge vs council divergence audit).
+            </div>
+          </SectionCard>
+
+          {/* ═══════════ ROBOTRADE GUARDS ═══════════ */}
+          <SectionCard id="robotrade-guards" icon="🛡" title="RoboTrade Execution Guards"
+            subtitle="Risk checks wrapped around the Stocks RoboTrade Pass 1/Pass 2 scan loop. Each guard exists because a specific failure mode was observed on prod paper-trading. Order is deliberate: portfolio-level halts first, per-candidate filters next, per-insert budget last."
+            accent="var(--red-text)">
+            <Table
+              headers={['Guard', 'Binding', 'Trip Condition', 'Rationale']}
+              colWidths={['220px', '130px', null, null]}
+              rows={[
+                [<b style={{ color: 'var(--red-text)' }}>Drawdown Circuit Breaker</b>,
+                  <Code>scan-start</Code>,
+                  'REDUCE_SIZE at 10% / PAUSE at 15% / HALT at 20% from rolling equity high-water mark',
+                  'Varsity M9 Ch 6 — hard floor on capital erosion across sessions'],
+                [<b style={{ color: 'var(--red-text)' }}>Daily Loss Cap</b>,
+                  <Code>scan-start</Code>,
+                  'Realized PnL today ≤ −2% of live equity → canEnterNew = false',
+                  'Cuts death-by-many-small-losses on choppy days without waiting for DD%'],
+                [<b style={{ color: 'var(--red-text)' }}>Per-insert Trade Cap (NEW 2026-04-18)</b>,
+                  <Code>per-insert</Code>,
+                  <>remainingTradeBudget = <Code>MAX_TRADES_PER_DAY</Code> − countToday; decrements after every INSERT</>,
+                  'Scan-start check was binding per-scan, not per-insert — a cold-start scan could push 10 rows before the guard could re-trip. Now binds live inside Pass 2 loop.'],
+                [<b style={{ color: 'var(--amber-text)' }}>MAX_POSITIONS</b>,
+                  <Code>per-candidate</Code>,
+                  'Open trades ≥ 10 → skip remainder as "max_positions"',
+                  'Cap on concurrent open exposure; the rest of the ranked list is recorded as slot-capped for UI visibility'],
+                [<b style={{ color: 'var(--amber-text)' }}>Varsity Gate</b>,
+                  <Code>per-candidate</Code>,
+                  <>dayTradeScore &lt; <Code>MIN_VARSITY_SCORE</Code> (default 65) → skip</>,
+                  'Varsity M2 14-point checklist + CPR + OBV + S/R + candlestick + VPA. Compresses marginal setups that passed strategy consensus.'],
+                [<b style={{ color: 'var(--amber-text)' }}>Correlation Block</b>,
+                  <Code>per-candidate</Code>,
+                  'Pearson correlation with any open position > 0.7, or same-sector count ≥ 3',
+                  'Varsity M9 Ch 8 — concentration limit; avoids doubling down on one factor'],
+                [<b style={{ color: 'var(--red-text)' }}>Same-day Dedup (WIDENED 2026-04-18)</b>,
+                  <Code>per-candidate</Code>,
+                  <>Any paper_trades row with <Code>entry_time::date = CURRENT_DATE</Code> for this symbol</>,
+                  'Old 60-second window let APARINDS/LGEINDIA re-enter ×3 within minutes after a stop-out. Once-per-day is safer default; override via env ROBOTRADE_DEDUP_WINDOW=minutes:N.'],
+                [<b style={{ color: 'var(--red-text)' }}>Min Expected Profit (NEW 2026-04-18)</b>,
+                  <Code>per-candidate</Code>,
+                  <>(target − entry) × qty &lt; <Code>MIN_EXPECTED_PROFIT_INR</Code> (default ₹200)</>,
+                  'R:R=2.0 is a ratio — on low-ATR stocks the target can project ₹30-50, which does not clear brokerage + slippage. This floor stacks on top of R:R and rejects tiny-edge trades.'],
+                [<b style={{ color: 'var(--amber-text)' }}>Cooldown after SL</b>,
+                  <Code>symbol</Code>,
+                  '30 minutes since last stop-loss hit for this symbol',
+                  'Prevents immediate re-entry on whipsaw; pairs with same-day dedup now for belt-and-suspenders'],
+              ]}
+            />
+            <div style={{
+              marginTop: 14, padding: '10px 12px', background: 'var(--red-bg)',
+              border: '1px solid rgba(248,113,113,0.3)', borderRadius: 8,
+              fontSize: 11, color: 'var(--text3)', lineHeight: 1.6,
+            }}>
+              <b style={{ color: 'var(--red-text)' }}>Why these three changed on 2026-04-18:</b>{' '}
+              2026-04-17 paper session opened 41 trades in 25 minutes against an 8-trade cap
+              and 10-position limit. Root cause: the trade-count cap checked once per scan
+              (cold-start allowed 10 immediate inserts), dedup only blocked a 60-second
+              window (stop-outs re-entered an hour later), and a few inserts sized to ₹40
+              expected profit — below broker costs. The three new guards close all three
+              holes without reducing the hot-day upside: a real 6-trade session proceeds
+              untouched.
             </div>
           </SectionCard>
 

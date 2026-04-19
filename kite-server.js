@@ -2313,6 +2313,19 @@ const CONFIG = {
   // had no such limit → death-by-1000-cuts on choppy days. 8 is generous but
   // finite; reduce to 5-6 if over-trading continues.
   MAX_TRADES_PER_DAY: 8,
+  // NEW 2026-04-18 — Expected-profit floor in INR after entry/target sizing.
+  // R:R=2.0 is a *ratio*, so on low-ATR stocks the absolute ₹ at target can be
+  // tiny (₹40-50) and won't clear brokerage + slippage. Reject at Pass 2 if
+  // (target - entry) * qty < MIN_EXPECTED_PROFIT_INR. ₹200 covers a typical
+  // round-trip on Zerodha paper trades and leaves headroom. Tune up to 300-400
+  // if broker costs bite harder. Override with env ROBOTRADE_MIN_PROFIT_INR.
+  MIN_EXPECTED_PROFIT_INR: parseInt(process.env.ROBOTRADE_MIN_PROFIT_INR || '200', 10),
+  // NEW 2026-04-18 — Same-symbol re-entry window. Previous 60-second query
+  // let APARINDS/LGEINDIA slip through ×3 within minutes on 2026-04-17. Switch
+  // to once-per-calendar-day per symbol (status-agnostic) so a stop-out on
+  // symbol X at 10:30 can't re-enter at 12:15 under a fresh signal. Set to
+  // 'minutes:N' via env ROBOTRADE_DEDUP_WINDOW if a softer window is needed.
+  DEDUP_WINDOW: (process.env.ROBOTRADE_DEDUP_WINDOW || 'day').toLowerCase(),
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
@@ -3181,6 +3194,8 @@ let _latestPass2Debug = {
   skippedDup:   0,
   skippedFilter: 0,
   skippedVarsity: 0,   // Phase 5 — dayTradeScore < MIN_VARSITY_SCORE
+  skippedTradeCap: 0,  // NEW 2026-04-18 — MAX_TRADES_PER_DAY binds per-insert
+  skippedLowProfit: 0, // NEW 2026-04-18 — (tgt-entry)*qty < MIN_EXPECTED_PROFIT_INR
   rejectedStructure: 0,
   rejectedLLM:  0,
 };
@@ -4251,9 +4266,26 @@ async function scanAndTrade() {
     skippedDup:        0,
     skippedFilter:     0,
     skippedVarsity:    0,
+    skippedTradeCap:   0,  // per-insert MAX_TRADES_PER_DAY binding
+    skippedLowProfit:  0,  // MIN_EXPECTED_PROFIT_INR floor
     rejectedStructure: filterStats.rejectedByStructure || 0,
     rejectedLLM:       filterStats.rejectedByLLM || 0,
   };
+
+  // ── NEW 2026-04-18 — per-insert trade-count budget ─────────────────────────
+  // `checkTradeCountCap` is called once at scan start and only flips
+  // canEnterNew if already tripped. On a cold start (count=0) Pass 2 could
+  // push up to MAX_POSITIONS new rows in a single scan, which is how we ended
+  // up with 41 trades in 25 minutes on 2026-04-17. Initialize a live budget
+  // here and decrement after every successful INSERT so the cap binds per
+  // entry, not per scan.
+  let remainingTradeBudget = Math.max(
+    0,
+    (CONFIG.MAX_TRADES_PER_DAY || Infinity) - (tradeCap.countToday || 0)
+  );
+  if (buyCandidates.length > 0) {
+    console.log(`  🧮 Trade budget for this scan: ${remainingTradeBudget} (today:${tradeCap.countToday || 0}/${CONFIG.MAX_TRADES_PER_DAY})`);
+  }
 
   if (buyCandidates.length > 0) {
     const live = buyCandidates.filter(c => !c.rejected);
@@ -4328,6 +4360,22 @@ async function scanAndTrade() {
       break;
     }
 
+    // NEW 2026-04-18 — per-insert trade-count cap. Addresses the scan that
+    // inserted 10+ rows before `checkTradeCountCap` could re-trip on the next
+    // cron tick. `remainingTradeBudget` was computed at Pass 2 entry and is
+    // decremented after every successful INSERT below.
+    if (remainingTradeBudget <= 0) {
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — daily trade cap reached mid-scan (${CONFIG.MAX_TRADES_PER_DAY})`);
+      _latestPass2Debug.skippedTradeCap += 1;
+      recordPass2(candidate, 'SKIPPED', 'daily_trade_cap');
+      for (const rest of buyCandidates.slice(buyCandidates.indexOf(candidate) + 1)) {
+        if (rest.rejected) continue;
+        recordPass2(rest, 'SKIPPED', 'daily_trade_cap');
+        _latestPass2Debug.skippedTradeCap += 1;
+      }
+      break;
+    }
+
     // Correlation guard — Phase 3 real Pearson w/ sector fallback
     const corrCheck = await checkCorrelationBlock(stock.sym, openTrades.filter(t=>t.status==='OPEN'));
     if (corrCheck.blocked) {
@@ -4360,13 +4408,41 @@ async function scanAndTrade() {
       result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
     }
 
-    // ── Dedup guard — skip if same symbol bought within last 60 seconds ──
-    const { rows: recentDup } = await pool.query(
-      `SELECT id FROM paper_trades WHERE symbol=$1 AND status='OPEN' AND entry_time > NOW() - INTERVAL '60 seconds' LIMIT 1`,
-      [stock.sym]
-    );
+    // NEW 2026-04-18 — absolute expected-profit floor. R:R=2.0 is a ratio;
+    // on low-ATR stocks the target projects ₹30-50 which can't clear broker
+    // costs after slippage. Reject here (not earlier) because qty/target come
+    // from computePositionSize. Gate sits on top of R:R=2.0.
+    const minProfitInr = Number(CONFIG.MIN_EXPECTED_PROFIT_INR || 0);
+    if (minProfitInr > 0) {
+      const expProfit = (Number(tgt) - Number(price)) * Number(qty);
+      if (!Number.isFinite(expProfit) || expProfit < minProfitInr) {
+        console.log(`  ⊘ SKIP ${stock.sym} — expected profit ₹${expProfit.toFixed(0)} < floor ₹${minProfitInr} (qty:${qty} tgt:${tgt} entry:${price})`);
+        _latestPass2Debug.skippedLowProfit += 1;
+        recordPass2(candidate, 'SKIPPED', `low_expected_profit_${expProfit.toFixed(0)}`);
+        continue;
+      }
+    }
+
+    // ── Dedup guard — widened 2026-04-18 ──
+    // Old behavior was "status=OPEN AND entry_time > NOW() - 60s", which let
+    // APARINDS/LGEINDIA re-enter 3× within minutes on 2026-04-17 because the
+    // first leg had already stop-lossed (status=CLOSED) before the re-entry
+    // signal fired. CONFIG.DEDUP_WINDOW=='day' (default) means once per
+    // calendar day per symbol, regardless of close status. Override with
+    // ROBOTRADE_DEDUP_WINDOW=minutes:N if a softer window is needed.
+    const dedupWindow = String(CONFIG.DEDUP_WINDOW || 'day').toLowerCase();
+    let dedupSql, dedupLabel;
+    if (dedupWindow.startsWith('minutes:')) {
+      const mins = Math.max(1, parseInt(dedupWindow.split(':')[1], 10) || 60);
+      dedupSql = `SELECT id FROM paper_trades WHERE symbol=$1 AND entry_time > NOW() - INTERVAL '${mins} minutes' LIMIT 1`;
+      dedupLabel = `already traded within ${mins}m`;
+    } else {
+      dedupSql = `SELECT id FROM paper_trades WHERE symbol=$1 AND entry_time::date = CURRENT_DATE LIMIT 1`;
+      dedupLabel = `already traded today`;
+    }
+    const { rows: recentDup } = await pool.query(dedupSql, [stock.sym]);
     if (recentDup.length > 0) {
-      console.log(`  ⊘ SKIP ${stock.sym} — duplicate (already bought within 60s)`);
+      console.log(`  ⊘ SKIP ${stock.sym} — duplicate (${dedupLabel})`);
       _latestPass2Debug.skippedDup += 1;
       recordPass2(candidate, 'SKIPPED', 'dedup');
       continue;
@@ -4454,6 +4530,9 @@ async function scanAndTrade() {
        experimentJson ? JSON.stringify(experimentJson) : null,
        rankingJson    ? JSON.stringify(rankingJson)    : null]
     );
+    // NEW 2026-04-18 — decrement live trade budget so MAX_TRADES_PER_DAY binds
+    // per-insert, not per-scan.
+    remainingTradeBudget = Math.max(0, remainingTradeBudget - 1);
 
     // Live order
     if (LIVE_TRADING && kite) {
@@ -4499,6 +4578,12 @@ async function scanAndTrade() {
   }
   if (CONFIG.VARSITY_GATE_ENABLED && _latestPass2Debug.skippedVarsity > 0) {
     scanMsg += ` | Varsity-gate skipped ${_latestPass2Debug.skippedVarsity} (score<${CONFIG.MIN_VARSITY_SCORE})`;
+  }
+  if (_latestPass2Debug.skippedTradeCap > 0) {
+    scanMsg += ` | TradeCap-skipped ${_latestPass2Debug.skippedTradeCap}`;
+  }
+  if (_latestPass2Debug.skippedLowProfit > 0) {
+    scanMsg += ` | LowProfit-skipped ${_latestPass2Debug.skippedLowProfit} (<₹${CONFIG.MIN_EXPECTED_PROFIT_INR})`;
   }
 
   // Phase 3 · Part 8 — record scan latency + warn if it exceeded threshold
@@ -7601,6 +7686,8 @@ app.get("/api/analytics", async (req, res) => {
       pass2SkippedCorr:    _latestPass2Debug.skippedCorr,
       pass2SkippedDup:     _latestPass2Debug.skippedDup,
       pass2SkippedFilter:  _latestPass2Debug.skippedFilter,
+      pass2SkippedTradeCap:  _latestPass2Debug.skippedTradeCap,
+      pass2SkippedLowProfit: _latestPass2Debug.skippedLowProfit,
       pass2RejectedStruct: _latestPass2Debug.rejectedStructure,
       pass2RejectedLLM:    _latestPass2Debug.rejectedLLM,
     };
