@@ -1613,13 +1613,42 @@ function QuickStartBars({ tabPicks }) {
 // ══════════════════════════════════════════════════════════════════════
 function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, onRefresh }) {
   const picks    = Array.isArray(plan?.plan?.picks)   ? plan.plan.picks   : [];
-  const skipped  = Array.isArray(plan?.plan?.skipped) ? plan.plan.skipped : [];
+  const rawSkipped = Array.isArray(plan?.plan?.skipped) ? plan.plan.skipped : [];
   const mread    = plan?.plan?.market_read || null;
   const summary  = plan?.plan?.summary || null;
   const runAt    = plan?.run_at ? new Date(plan.run_at) : null;
-  const pickN    = plan?.picks_count || picks.length;
-  const skipN    = plan?.skipped_count || skipped.length;
-  const inputN   = (plan?.top30_input
+
+  // Client-side defensive reconciliation. Old cached plans (generated before the
+  // server-side step-5 padding landed in 3e6d4a3) can have picks_count +
+  // skipped_count < inputN — the "still missing 2 stocks" gap. Here we rebuild
+  // validSyms from top30_input, diff against picks + skipped, and pad any
+  // orphan back into the rejected list so the count always reconciles. Fresh
+  // plans from the patched server are already reconciled, so this is a no-op
+  // for them.
+  const buckets = ['rebound', 'momentum', 'longterm'];
+  const symToBucket = new Map();
+  const topIn = plan?.top30_input || {};
+  for (const b of buckets) {
+    const list = Array.isArray(topIn[b]) ? topIn[b] : [];
+    for (const p of list) {
+      const sym = String(p?.sym || '').trim().toUpperCase();
+      if (sym && !symToBucket.has(sym)) symToBucket.set(sym, b);
+    }
+  }
+  const validSyms = new Set(symToBucket.keys());
+  const approvedSet = new Set(picks.map(p => String(p?.sym || '').toUpperCase()));
+  const skippedSet  = new Set(rawSkipped.map(s => String(s?.sym || '').toUpperCase()));
+  const orphans = [];
+  for (const sym of validSyms) {
+    if (!approvedSet.has(sym) && !skippedSet.has(sym)) {
+      orphans.push({ sym, bucket: symToBucket.get(sym) || '', reason: 'Not reviewed by model (cached plan — re-run to reconcile)' });
+    }
+  }
+  const skipped = orphans.length ? [...rawSkipped, ...orphans] : rawSkipped;
+
+  const pickN    = picks.length;
+  const skipN    = skipped.length;
+  const inputN   = validSyms.size || (plan?.top30_input
                       ? ( (plan.top30_input.rebound?.length  || 0)
                         + (plan.top30_input.momentum?.length || 0)
                         + (plan.top30_input.longterm?.length || 0) )
@@ -1782,7 +1811,26 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
           </div>
         )}
 
-        {plan && pickN === 0 && (
+        {running && (
+          <div style={{
+            padding: 14,
+            background: 'rgba(139,92,246,0.10)',
+            border: '1px solid rgba(139,92,246,0.35)',
+            borderRadius: 8,
+            color: 'var(--brand-text)',
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1.5,
+            marginBottom: plan && pickN > 0 ? 12 : 0,
+          }}>
+            🧠 Reviewing 30 picks with Claude Opus 4.7 — this usually takes 30–60s.{' '}
+            <span style={{ color: 'var(--text3)', fontWeight: 500, fontStyle: 'italic' }}>
+              The plan below is the last run; fresh results will replace it when the review lands.
+            </span>
+          </div>
+        )}
+
+        {plan && pickN === 0 && !running && (
           <div style={{
             padding: 14,
             background: 'rgba(251,191,36,0.10)',
