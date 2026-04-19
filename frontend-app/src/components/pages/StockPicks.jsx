@@ -330,7 +330,7 @@ export default function StockPicks() {
   const [aiRunning, setAiRunning] = useState({}); // { category: bool }
   const [aiExpanded, setAiExpanded] = useState({}); // { "category:sym": true }
 
-  // ═══ AI Buy Plan — single-model review of the merged top-30 picks ═══
+  // ═══ AI Buy Plan — single-model review of the merged top-27 picks ═══
   // Manual trigger only. `aiPlan` holds the most-recent plan (either freshly
   // run or loaded from /api/ai-picks/latest on mount). `aiPlanLoading` covers
   // both the initial fetch and the Run Review click. `aiPlanAuthed` degrades
@@ -513,7 +513,7 @@ export default function StockPicks() {
     return out;
   }, [filteredByGrp, sorts]);
 
-  // Kick off a fresh AI review. Sends top-10 of each bucket (already sorted
+  // Kick off a fresh AI review. Sends top-9 of each bucket (already sorted
   // + sector-capped client-side) and the market meta strip. Backend calls
   // Claude, persists to picks_ai_buy_plan, returns the ranked plan.
   const runAiPlan = useCallback(async () => {
@@ -521,12 +521,14 @@ export default function StockPicks() {
     setAiPlanRunning(true);
     setAiPlanError(null);
     try {
-      const top10 = (arr) => (arr || []).slice(0, 10).map(_aiSlim);
+      // Top 9 per bucket (27 total pre-dedup). Server _aiBuildTop30 dedupes
+      // across buckets with priority rebound > momentum > longterm.
+      const top9 = (arr) => (arr || []).slice(0, 9).map(_aiSlim);
       const body = {
         picks: {
-          rebound:  top10(tabPicks.rebound),
-          momentum: top10(tabPicks.momentum),
-          longterm: top10(tabPicks.longterm),
+          rebound:  top9(tabPicks.rebound),
+          momentum: top9(tabPicks.momentum),
+          longterm: top9(tabPicks.longterm),
         },
         meta: {
           vixRegime:  data?.meta?.vixRegime,
@@ -643,9 +645,9 @@ export default function StockPicks() {
         ))}
       </div>
 
-      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-30 candidates ═══
+      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-27 candidates ═══
           Placed ABOVE the market-cap filter so it's the first actionable thing
-          the user sees. Reviews top-10 of each bucket (rebound/momentum/longterm),
+          the user sees. Reviews top-9 of each bucket (rebound/momentum/longterm),
           drops the weak setups, and ranks ONLY the approved ones with a full
           exit plan (entry zone / target / stop / horizon / sell-if).
           Manual trigger only — user clicks "Run AI Review", executes in Kite. */}
@@ -1607,7 +1609,7 @@ function QuickStartBars({ tabPicks }) {
 // ══════════════════════════════════════════════════════════════════════
 // AI BUY PLAN PANEL — LLM-curated picks + exit plans
 // Consumes /api/ai-picks/run (manual trigger) + /api/ai-picks/latest (cache).
-// The model reviews top-10 of each bucket, filters weak setups, and ranks
+// The model reviews top-9 of each bucket (27 total), filters weak setups, and ranks
 // ONLY the approved ones with full exit plans (entry/target/stop/sell-if).
 // Manual execution: user buys in Kite themselves.
 // ══════════════════════════════════════════════════════════════════════
@@ -1701,7 +1703,7 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
             </span>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.45 }}>
-            Takes top-10 of each bucket (30 stocks), drops the weak setups, and ranks the keepers with entry zones,
+            Takes top-9 of each bucket (up to 27 stocks after cross-bucket dedup), drops the weak setups, and ranks the keepers with entry zones,
             targets, stops, horizons, and sell-if triggers. Buy them yourself in Kite.
           </div>
           {runAt && (
@@ -1754,7 +1756,7 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
           disabled={running || !isAdmin}
           title={
             !isAdmin  ? 'Coming soon — admins trigger runs, the ranked plan is shared with everyone once it lands.'
-                      : 'Send top-30 to Claude and get a ranked buy plan.'
+                      : 'Send top-27 to Claude and get a ranked buy plan.'
           }
           style={{
             background: !isAdmin
@@ -1778,7 +1780,7 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
         >
           {!isAdmin
             ? '🔒 Run AI Review · Coming soon'
-            : running ? '🧠 Reviewing 30 picks…' : '🧠 Run AI Review'}
+            : running ? '🧠 Reviewing 27 picks…' : '🧠 Run AI Review'}
         </button>
       </div>
 
@@ -1822,8 +1824,8 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
             lineHeight: 1.5,
           }}>
             {isAdmin
-              ? <>No AI plan yet. Click <b>Run AI Review</b> above to have Claude review today's top-30 picks
-                 (10 per bucket), drop weak setups, and rank the keepers with exit plans.</>
+              ? <>No AI plan yet. Click <b>Run AI Review</b> above to have Claude review today's top-27 picks
+                 (9 per bucket), drop weak setups, and rank the keepers with exit plans.</>
               : <>No AI plan available yet — the latest ranked plan will appear here once an admin runs the review.
                  Public runs are <b>coming soon</b>. You'll still see every plan they generate in the meantime.</>
             }
@@ -1842,7 +1844,7 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
             lineHeight: 1.5,
             marginBottom: plan && pickN > 0 ? 12 : 0,
           }}>
-            🧠 Reviewing 30 picks with Claude Opus 4.7 — this usually takes 30–60s.{' '}
+            🧠 Reviewing 27 picks with Claude Opus 4.7 — this usually takes 30–60s.{' '}
             <span style={{ color: 'var(--text3)', fontWeight: 500, fontStyle: 'italic' }}>
               The plan below is the last run; fresh results will replace it when the review lands.
             </span>

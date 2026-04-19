@@ -524,8 +524,8 @@ async function initDB() {
     `);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PICKS AI BUY PLAN — single-model LLM review of the merged top-30 picks
-    // (10 rebound + 10 momentum + 10 longterm). Input: the 30 candidates; the
+    // PICKS AI BUY PLAN — single-model LLM review of the merged top-27 picks
+    // (9 rebound + 9 momentum + 9 longterm). Input: up to 27 candidates; the
     // LLM decides which are genuinely buy-worthy, ranks only the approved ones,
     // and emits a complete exit plan per pick (target, stop, horizon, sell-if).
     // Manual trigger only (POST /api/ai-picks/run). Not cron-driven.
@@ -17511,16 +17511,17 @@ app.post('/api/admin/forward-returns/run', async (req, res) => {
 
 // =============================================================================
 // PICKS AI BUY PLAN (retired Phase 0 paper-tracker + journal — replaced by
-// a single-model LLM review of the merged top-30 list). The AI runtime lives
+// a single-model LLM review of the merged top-27 list). The AI runtime lives
 // below BUCKET STATS; this marker is kept so audit greps still land somewhere.
 // =============================================================================
 // =============================================================================
-// AI BUY PLAN — single-model LLM review of the merged top-30 picks
+// AI BUY PLAN — single-model LLM review of the merged top-27 picks
 // =============================================================================
-// Takes the top 10 rebound + top 10 momentum + top 10 longterm picks from the
+// Takes the top 9 rebound + top 9 momentum + top 9 longterm picks from the
 // current /api/stocks/score response and sends them to a single LLM for a buy/
-// reject decision. The model is free to approve 0-30 and ranks ONLY the
-// approved ones. Each approved pick gets a complete exit plan:
+// reject decision. The model is free to approve 0-27 (minus any cross-bucket
+// duplicates) and ranks ONLY the approved ones. Each approved pick gets a
+// complete exit plan:
 //   - entry_zone (low/high)
 //   - target_price
 //   - stop_loss
@@ -17601,9 +17602,12 @@ function _aiPickCandidate(p, bucket, rank) {
 }
 
 function _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm) {
-  const reb  = (picksRebound  || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'rebound',  i + 1)).filter(Boolean);
-  const mom  = (picksMomentum || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'momentum', i + 1)).filter(Boolean);
-  const lt   = (picksLongTerm || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'longterm', i + 1)).filter(Boolean);
+  // Top 9 per bucket (27 candidates total pre-dedup). Chosen over top-10 so
+  // that cross-bucket dedup generally doesn't push the input count below the
+  // round-number 27 the user expects — the LLM sees a predictable input size.
+  const reb  = (picksRebound  || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'rebound',  i + 1)).filter(Boolean);
+  const mom  = (picksMomentum || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'momentum', i + 1)).filter(Boolean);
+  const lt   = (picksLongTerm || []).slice(0, 9).map((p, i) => _aiPickCandidate(p, 'longterm', i + 1)).filter(Boolean);
 
   // Dedupe across buckets by symbol — a stock that shows up in both rebound
   // and momentum gets claimed by the first bucket it appears in (priority:
@@ -17625,9 +17629,10 @@ function _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm) {
 }
 
 function _aiBuildPrompt(top30, ctx) {
-  const sys = `You are a senior Indian equity analyst reviewing a short list of 30 pre-screened stocks — 10 from each of three buckets: rebound (oversold bounce candidates), momentum (trend continuation), longterm (fundamental compounders).
+  const totalIn = (top30.rebound?.length || 0) + (top30.momentum?.length || 0) + (top30.longterm?.length || 0);
+  const sys = `You are a senior Indian equity analyst reviewing a short list of ${totalIn} pre-screened stocks — up to 9 from each of three buckets: rebound (oversold bounce candidates), momentum (trend continuation), longterm (fundamental compounders). (Buckets may have fewer than 9 each after cross-bucket deduplication.)
 
-Your job: decide which of these 30 are ACTUALLY worth buying today for a retail investor using Zerodha Kite. Then rank ONLY the ones you approve. Do NOT force a fixed count. If only 3 are genuinely good, return 3. If all 30 are good, return 30. If zero meet your bar, return 0.
+Your job: decide which of these ${totalIn} are ACTUALLY worth buying today for a retail investor using Zerodha Kite. Then rank ONLY the ones you approve. Do NOT force a fixed count. If only 3 are genuinely good, return 3. If all ${totalIn} are good, return ${totalIn}. If zero meet your bar, return 0.
 
 For every approved pick you MUST provide a complete exit plan:
   - entry_zone: {low, high} in rupees — where it's buyable now. Anchor to visible structure (near support / DMA50 / pivot / prior base), not round numbers.
@@ -17725,7 +17730,7 @@ OUTPUT: strict JSON only. NO markdown fences, no prose outside JSON, no trailing
   ]
 }
 
-Rules: picks[] is ONLY approved stocks, ranked 1..N (1=highest conviction). skipped[] must list EVERY rejected candidate with its bucket. Total approved+skipped MUST equal the number of candidates in the input (30 when lists are full). No duplicate sym across picks and skipped.`;
+Rules: picks[] is ONLY approved stocks, ranked 1..N (1=highest conviction). skipped[] must list EVERY rejected candidate with its bucket. Total approved+skipped MUST equal ${totalIn} (the exact number of input candidates). No duplicate sym across picks and skipped.`;
 
   return { sys, user };
 }

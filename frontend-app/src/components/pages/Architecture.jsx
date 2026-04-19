@@ -172,7 +172,7 @@ function FlagRow({ code, severity, penalty, label, triggers }) {
 // ═════════════════════════════════════════════════════════════════════
 
 const TAB_MAP = [
-  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-10 of each bucket (30 stocks), sends to Claude (Opus 4.7 via OpenRouter when OPENROUTER_API_KEY is set, else direct Anthropic API) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers — stops sized from daily σ + anchored to real S/R / DMAs / pivots. Retries once on parse failure. Admin-only trigger; persisted per-user in picks_ai_buy_plan and publicly readable so non-admin viewers see the latest ranked plan.', 'var(--brand-text)'],
+  ['Stock Picks',   'Three columns — Rebound / Momentum / Long-Term. Market-cap filter + client-side sector cap + risk-flag badges per card. "AI Buy Plan" panel takes top-9 of each bucket (up to 27 stocks after cross-bucket dedup), sends to Claude (Opus 4.7 via OpenRouter when OPENROUTER_API_KEY is set, else direct Anthropic API) for single-model review, drops weak setups, and ranks ONLY the approved ones with entry zone · target · stop · horizon · risk-reward · sell-if triggers — stops sized from daily σ + anchored to real S/R / DMAs / pivots. Retries once on parse failure. Admin-only trigger; persisted per-user in picks_ai_buy_plan and publicly readable so non-admin viewers see the latest ranked plan.', 'var(--brand-text)'],
   ['Day Trade',     '5-min intraday setups. Separate cache + scoring engine via Unified Pipeline.', '#ef4444'],
   ['Stocks RoboTrade', 'Paper + live execution engine. Pass 1.5 Structure Filter + LLM sub-tab.', 'var(--green-text)'],
   ['Crypto RoboTrade', '24×7 crypto scanner + trade execution.', '#f59e0b'],
@@ -427,7 +427,7 @@ const DB_TABLES = [
     ['news_classification_cache', 'LLM verdicts by headline hash'],
     ['llm_budget_daily',          'Daily LLM spend tracking'],
     ['picks_ai_reviews',          'Deep AI Review council verdicts (per-category council + judge)'],
-    ['picks_ai_buy_plan',         'AI Buy Plan runs: ranked LLM picks + exit plans (entry/target/stop/sell-if) from top-30 candidates'],
+    ['picks_ai_buy_plan',         'AI Buy Plan runs: ranked LLM picks + exit plans (entry/target/stop/sell-if) from top-27 candidates (9 per bucket)'],
     ['features_snapshot',         '~100-column ML feature row per scan'],
     ['outcome_metrics',           'Forward MFE/MAE metrics'],
     ['writer_dead_letter',        'DLQ for failed DB writes'],
@@ -474,10 +474,10 @@ const ROADMAP_PHASES = [
     status: 'shipped',
     when: 'Week 1 · shipped 2026-04-18 (balaji) · superseded Phase 0 paper-tracker',
     cost: '~₹5-8/run (Opus 4.7 via OpenRouter default; falls back to Anthropic direct · 16k max output · one retry on parse failure)',
-    goal: 'Single-model Claude review of the merged top-30 (10 per bucket) that drops weak setups and ranks ONLY the keepers with full exit plans: entry zone · target · stop · horizon · risk-reward · sell-if triggers.',
+    goal: 'Single-model Claude review of the merged top-27 (9 per bucket, up to 27 after cross-bucket dedup) that drops weak setups and ranks ONLY the keepers with full exit plans: entry zone · target · stop · horizon · risk-reward · sell-if triggers.',
     includes: [
       'picks_ai_buy_plan — persisted per-user LLM plan history (top30_input + ranked plan + skipped)',
-      'POST /api/ai-picks/run — ADMIN-ONLY manual trigger; body carries top-10 per bucket + market meta',
+      'POST /api/ai-picks/run — ADMIN-ONLY manual trigger; body carries top-9 per bucket + market meta (up to 27 after cross-bucket dedup)',
       'GET /api/ai-picks/latest — PUBLIC-readable cached plan; defaults to most recent run with picks_count>0 so a fresh rejection run does not blank the buy plan (strict=1 forces absolute latest). Attaches latest_attempt when latest approved plan is older than most recent run.',
       'AIReviewPanel UI — ranked cards with rank/sym/bucket/confidence/rationale, expandable exit plan, collapsible rejected list',
       'Strict JSON normalisation (stop < entryLo ≤ entryHi < target; auto re-rank; auto-skip unknowns)',
@@ -1290,7 +1290,7 @@ export default function Architecture() {
           {/* ═══════════ STACK ═══════════ */}
           {/* ═══════════ BUILD-BEST ROADMAP ═══════════ */}
           <SectionCard id="roadmap" icon="🗺" title="Build-Best Roadmap"
-            subtitle="The approved 8-phase plan to turn ProTrader Stock Picks into a real-money edge. Phase 0 (AI Buy Plan) is shipped — manual LLM curation of the top-30; later phases layer PIT data, professional signal feeds, deep thesis, ML, and portfolio-aware refinement on top. Full cost envelope: ₹16k–40k/mo at steady state."
+            subtitle="The approved 8-phase plan to turn ProTrader Stock Picks into a real-money edge. Phase 0 (AI Buy Plan) is shipped — manual LLM curation of the top-27 (9 per bucket); later phases layer PIT data, professional signal feeds, deep thesis, ML, and portfolio-aware refinement on top. Full cost envelope: ₹16k–40k/mo at steady state."
             accent="var(--purple-text)">
 
             <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 14 }}>
