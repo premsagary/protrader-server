@@ -1827,8 +1827,16 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
               </div>
             )}
 
-            {/* Ranked cards */}
-            <div style={{ display: 'grid', gap: 10 }}>
+            {/* Ranked cards — 4-column grid (auto-fill so it reflows to 2/1 on
+                narrower screens). Rationale clamps to 3 lines when collapsed;
+                click a card to expand the full exit plan inline in its cell. */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+              gridAutoRows: 'min-content',
+              gap: 10,
+              alignItems: 'start',
+            }}>
               {picks.map((p, i) => {
                 const acc = bucketAccent(p.bucket);
                 const isOpen = !!expanded[p.sym];
@@ -1838,72 +1846,87 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
                     key={p.sym || i}
                     onClick={() => toggle(p.sym)}
                     style={{
-                      padding: 14,
+                      padding: 12,
                       background: acc.bg,
                       border: `1px solid ${acc.border}`,
                       borderRadius: 10,
                       cursor: 'pointer',
                       transition: 'all 180ms ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    {/* Top row: rank bubble + symbol + chevron */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{
-                        minWidth: 28,
-                        height: 28,
+                        minWidth: 26,
+                        height: 26,
                         borderRadius: '50%',
                         background: acc.color,
                         color: '#000',
                         fontWeight: 900,
-                        fontSize: 13,
+                        fontSize: 12.5,
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         letterSpacing: '-0.5px',
+                        flexShrink: 0,
                       }}>
                         {p.rank || (i + 1)}
                       </div>
-                      <div style={{ flex: 1, minWidth: 160 }}>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px' }}>
-                          {p.sym}
-                          <span style={{
-                            fontSize: 9.5,
-                            color: acc.color,
-                            fontWeight: 700,
-                            marginLeft: 8,
-                            padding: '2px 8px',
-                            border: `1px solid ${acc.border}`,
-                            borderRadius: 9999,
-                            letterSpacing: '0.5px',
-                            textTransform: 'uppercase',
-                          }}>
-                            {p.bucket}
-                          </span>
-                          {conf != null && (
-                            <span style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 600, marginLeft: 8 }}>
-                              · {conf}% conf
-                            </span>
-                          )}
-                        </div>
-                        {p.rationale && (
-                          <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4, lineHeight: 1.45 }}>
-                            {p.rationale}
-                          </div>
-                        )}
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.sym}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, flexShrink: 0 }}>
                         {isOpen ? '▾' : '▸'}
                       </div>
                     </div>
 
+                    {/* Meta row: bucket chip + confidence */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontSize: 9,
+                        color: acc.color,
+                        fontWeight: 700,
+                        padding: '2px 7px',
+                        border: `1px solid ${acc.border}`,
+                        borderRadius: 9999,
+                        letterSpacing: '0.4px',
+                        textTransform: 'uppercase',
+                      }}>
+                        {p.bucket}
+                      </span>
+                      {conf != null && (
+                        <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600 }}>
+                          {conf}% conf
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Rationale — 3-line clamp when collapsed, full when open */}
+                    {p.rationale && (
+                      <div style={{
+                        fontSize: 10.5,
+                        color: 'var(--text2)',
+                        lineHeight: 1.45,
+                        display: '-webkit-box',
+                        WebkitLineClamp: isOpen ? 'unset' : 3,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}>
+                        {p.rationale}
+                      </div>
+                    )}
+
                     {isOpen && (
                       <div style={{
-                        marginTop: 12,
-                        paddingTop: 12,
+                        paddingTop: 8,
                         borderTop: `1px dashed ${acc.border}`,
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                        gap: 10,
-                        fontSize: 11.5,
+                        gridTemplateColumns: 'repeat(2, 1fr)',
+                        gap: 8,
+                        fontSize: 11,
                       }}>
                         {p.entry_zone && (p.entry_zone.low != null || p.entry_zone.high != null) && (
                           <div>

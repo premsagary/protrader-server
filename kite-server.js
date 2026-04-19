@@ -17604,7 +17604,24 @@ function _aiBuildTop30(picksRebound, picksMomentum, picksLongTerm) {
   const reb  = (picksRebound  || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'rebound',  i + 1)).filter(Boolean);
   const mom  = (picksMomentum || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'momentum', i + 1)).filter(Boolean);
   const lt   = (picksLongTerm || []).slice(0, 10).map((p, i) => _aiPickCandidate(p, 'longterm', i + 1)).filter(Boolean);
-  return { rebound: reb, momentum: mom, longterm: lt };
+
+  // Dedupe across buckets by symbol — a stock that shows up in both rebound
+  // and momentum gets claimed by the first bucket it appears in (priority:
+  // rebound → momentum → longterm, matching how the model treats them:
+  // rebound has the strictest entry-structure requirement, so give it first
+  // dibs). Without this dedup, inputN in the UI counted duplicates while
+  // validSyms (symbol-keyed Set) silently merged them, so "10 of 29" could
+  // actually reconcile to 27 internally — leaving 2 stocks unaccounted in
+  // the rendered skipped list. After this change, rebound.length +
+  // momentum.length + longterm.length === validSyms.size exactly.
+  const seen = new Set();
+  const dedupe = (list) => list.filter((c) => {
+    const key = String(c.sym || '').toUpperCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { rebound: dedupe(reb), momentum: dedupe(mom), longterm: dedupe(lt) };
 }
 
 function _aiBuildPrompt(top30, ctx) {
@@ -17738,28 +17755,41 @@ function _aiExtractJSON(raw) {
 // rejecting the whole response, so one bad pick row doesn't kill the run.
 function _aiNormalizePlan(parsed, top30) {
   if (!parsed || typeof parsed !== 'object') throw new Error('plan is not an object');
-  const validSyms = new Set([
-    ...top30.rebound.map(p => p.sym),
-    ...top30.momentum.map(p => p.sym),
-    ...top30.longterm.map(p => p.sym),
-  ]);
+  // Build symbol → bucket map from input (post-dedup in _aiBuildTop30).
+  // We use this to (a) validate model output, (b) fill in any stock the model
+  // forgot to mention with its true input bucket, and (c) guarantee
+  // picks + skipped === validSyms.size so the UI count reconciles.
+  const symToBucket = new Map();
+  for (const p of top30.rebound)  symToBucket.set(p.sym, 'rebound');
+  for (const p of top30.momentum) symToBucket.set(p.sym, 'momentum');
+  for (const p of top30.longterm) symToBucket.set(p.sym, 'longterm');
+  const validSyms = new Set(symToBucket.keys());
   const validBuckets = new Set(['rebound', 'momentum', 'longterm']);
   const validConf = new Set(['high', 'medium', 'low']);
 
+  // Collect reasons for picks we had to drop, so they land in `skipped` with a
+  // real explanation rather than silently vanishing.
+  const droppedPicks = new Map();  // sym -> reason
   const picksIn = Array.isArray(parsed.picks) ? parsed.picks : [];
   const picks = [];
   for (const raw of picksIn) {
     if (!raw || typeof raw !== 'object') continue;
     const sym = String(raw.sym || '').trim().toUpperCase();
     const bucket = String(raw.bucket || '').trim().toLowerCase();
-    if (!validSyms.has(sym)) continue;
-    if (!validBuckets.has(bucket)) continue;
+    if (!validSyms.has(sym)) continue;        // unknown symbol — not in input
+    if (!validBuckets.has(bucket)) { droppedPicks.set(sym, 'Dropped: invalid bucket tag from model');  continue; }
     const ez = raw.entry_zone || {};
     const entryLo = +ez.low, entryHi = +ez.high;
     const target  = +raw.target_price;
     const stop    = +raw.stop_loss;
-    if (!Number.isFinite(entryLo) || !Number.isFinite(entryHi) || !Number.isFinite(target) || !Number.isFinite(stop)) continue;
-    if (!(stop < entryLo && entryLo <= entryHi && entryHi < target)) continue;
+    if (!Number.isFinite(entryLo) || !Number.isFinite(entryHi) || !Number.isFinite(target) || !Number.isFinite(stop)) {
+      droppedPicks.set(sym, 'Dropped: entry/target/stop missing or non-numeric');
+      continue;
+    }
+    if (!(stop < entryLo && entryLo <= entryHi && entryHi < target)) {
+      droppedPicks.set(sym, `Dropped: invalid ordering (need stop<entryLo<=entryHi<target; got ${stop}<${entryLo}<=${entryHi}<${target})`);
+      continue;
+    }
     const conf = validConf.has(String(raw.confidence || '').toLowerCase()) ? String(raw.confidence).toLowerCase() : 'medium';
     const horizonDays = Math.max(1, Math.min(400, parseInt(raw.horizon_days, 10) || 30));
     const sellIf = Array.isArray(raw.sell_if)
@@ -17791,23 +17821,33 @@ function _aiNormalizePlan(parsed, top30) {
   const approvedSyms = new Set(picks.map(p => p.sym));
   const skippedIn = Array.isArray(parsed.skipped) ? parsed.skipped : [];
   const skipped = [];
+  const skippedSeen = new Set();
+  const pushSkipped = (sym, bucket, reason) => {
+    if (!sym || skippedSeen.has(sym) || approvedSyms.has(sym)) return;
+    skippedSeen.add(sym);
+    skipped.push({
+      sym,
+      bucket: validBuckets.has(bucket) ? bucket : (symToBucket.get(sym) || ''),
+      reason: String(reason || '').slice(0, 300) || 'No reason provided',
+    });
+  };
   for (const raw of skippedIn) {
     if (!raw || typeof raw !== 'object') continue;
     const sym = String(raw.sym || '').trim().toUpperCase();
-    if (!validSyms.has(sym) || approvedSyms.has(sym)) continue;
+    if (!validSyms.has(sym)) continue;
     const bucket = String(raw.bucket || '').trim().toLowerCase();
-    skipped.push({
-      sym,
-      bucket: validBuckets.has(bucket) ? bucket : '',
-      reason: String(raw.reason || '').slice(0, 300) || 'No reason provided',
-    });
+    pushSkipped(sym, bucket, raw.reason);
+  }
+  // Include any approved-but-dropped picks (failed numeric/ordering validation
+  // at line ~17760) with their concrete rejection reason.
+  for (const [sym, reason] of droppedPicks.entries()) {
+    pushSkipped(sym, '', reason);
   }
   // Fill in any candidates the model forgot to mention — treat as skipped with
-  // default reason, so the UI never shows phantom untagged picks.
+  // their true input bucket, so the UI never shows phantom untagged picks AND
+  // picks + skipped always reconciles to validSyms.size exactly.
   for (const sym of validSyms) {
-    if (!approvedSyms.has(sym) && !skipped.find(s => s.sym === sym)) {
-      skipped.push({ sym, bucket: '', reason: 'Not reviewed by model' });
-    }
+    pushSkipped(sym, '', 'Not reviewed by model');
   }
 
   return {
