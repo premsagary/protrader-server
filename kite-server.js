@@ -4625,6 +4625,7 @@ const PUBLIC_ROUTE_PREFIXES = [
   '/universe/',           // Universe list — stock dropdown for Analyzer, Picks
   '/mf/',                 // MF Picks data (but not import/rebuild which are admin POST)
   '/picks/ai-review',     // GET cached AI review results (public can VIEW but not trigger)
+  '/ai-picks/',           // GET latest/history — AI Buy Plan DB results are publicly readable; POST run still auth-gated
   '/ai/reviews',          // GET cached AI reviews
   '/ai/disagrees',        // GET cached AI disagreements
   '/ai/status',           // AI status
@@ -17915,6 +17916,10 @@ app.post('/api/ai-picks/run', async (req, res) => {
   if (!pool) return res.status(500).json({ ok: false, error: 'no-pool' });
   const username = (req.user && req.user.username) ? req.user.username : 'public';
   if (username === 'public') return res.status(401).json({ ok: false, error: 'auth required' });
+  // Admin-only: LLM runs cost real money and the plan is public-readable, so
+  // we only let admins trigger a new run. Non-admins still see the latest
+  // cached plan via GET /api/ai-picks/latest (public prefix above).
+  if (req.user.role !== 'admin') return res.status(403).json({ ok: false, error: 'admin only' });
 
   try {
     const body = req.body || {};
@@ -24776,8 +24781,13 @@ FINAL CHECK BEFORE RESPONDING: Count your signal_reviews array. It must be exact
 }
 
 // POST /api/picks/ai-review?category=rebound|momentum|longterm
+// Admin-only — the 5-model council is expensive. Non-admins can still read
+// the cached verdicts via GET /api/picks/ai-review (public prefix).
 app.post('/api/picks/ai-review', async (req, res) => {
   try {
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'admin only' });
+    }
     const category = (req.query.category || req.body?.category || '').toLowerCase();
     if (!['rebound', 'momentum', 'longterm'].includes(category)) {
       return res.status(400).json({ error: 'category must be rebound, momentum, or longterm' });

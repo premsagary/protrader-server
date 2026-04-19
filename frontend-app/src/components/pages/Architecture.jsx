@@ -456,7 +456,8 @@ const ADMIN_ENDPOINTS = [
   ['GET',  '/api/admin/debug-stock/:sym',         'Full pipeline state for one stock'],
   ['GET',  '/api/admin/llm-budget',               'LLM classifier budget status'],
   ['POST', '/api/admin/force-run-pipeline',       'Force Unified Kite Pipeline · force=true'],
-  ['POST', '/api/admin/picks-ai-review/:category','Trigger Deep AI Review (council + judge)'],
+  ['POST', '/api/picks/ai-review?category=…',     'Trigger Deep AI Review (council + judge) — ADMIN-ONLY; GET of same path is public'],
+  ['POST', '/api/ai-picks/run',                   'Trigger AI Buy Plan (single-model Opus 4.7) — ADMIN-ONLY; GET /latest + /history are public'],
 ];
 
 // ═════════════════════════════════════════════════════════════════════
@@ -476,8 +477,8 @@ const ROADMAP_PHASES = [
     goal: 'Single-model Claude review of the merged top-30 (10 per bucket) that drops weak setups and ranks ONLY the keepers with full exit plans: entry zone · target · stop · horizon · risk-reward · sell-if triggers.',
     includes: [
       'picks_ai_buy_plan — persisted per-user LLM plan history (top30_input + ranked plan + skipped)',
-      'POST /api/ai-picks/run — manual trigger; body carries top-10 per bucket + market meta',
-      'GET /api/ai-picks/latest — cached plan for stale-tab rehydration',
+      'POST /api/ai-picks/run — ADMIN-ONLY manual trigger; body carries top-10 per bucket + market meta',
+      'GET /api/ai-picks/latest — PUBLIC-readable cached plan (non-admins see "Coming soon" on the button but still see the latest plan)',
       'AIReviewPanel UI — ranked cards with rank/sym/bucket/confidence/rationale, expandable exit plan, collapsible rejected list',
       'Strict JSON normalisation (stop < entryLo ≤ entryHi < target; auto re-rank; auto-skip unknowns)',
       'Filter-then-rank flow: AI approves genuine picks first, THEN ranks only the approved ones (no artificial cap)',

@@ -306,6 +306,12 @@ function sortBy(arr, key, dir) {
 // Main component
 // ══════════════════════════════════════════════════════════════════════
 export default function StockPicks() {
+  // Admin detection — LLM run triggers are admin-only (real-money cost, and
+  // the ranked plan is public-readable so everyone benefits anyway). Non-admins
+  // see "Coming soon" disabled buttons but still see the latest cached plan.
+  const user = useAppStore((s) => s.user);
+  const isAdmin = user?.role === 'admin';
+
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -650,6 +656,7 @@ export default function StockPicks() {
             loading={aiPlanLoading}
             running={aiPlanRunning}
             authed={aiPlanAuthed}
+            isAdmin={isAdmin}
             error={aiPlanError}
             onRun={runAiPlan}
             onRefresh={fetchAiPlan}
@@ -767,6 +774,7 @@ export default function StockPicks() {
                 aiLoading={!!aiLoading[tab.id]}
                 aiRunning={!!aiRunning[tab.id]}
                 onRunReview={() => runDeepReview(tab.id)}
+                isAdmin={isAdmin}
                 aiExpanded={aiExpanded}
                 onToggleExpand={toggleExpand}
               />
@@ -824,7 +832,7 @@ export default function StockPicks() {
 function PicksColumn({
   tab, picks, totalAvailable, scopeLbl,
   sort, onSort,
-  aiReviews, aiLoading, aiRunning, onRunReview,
+  aiReviews, aiLoading, aiRunning, onRunReview, isAdmin,
   aiExpanded, onToggleExpand,
 }) {
   return (
@@ -865,29 +873,39 @@ function PicksColumn({
           {tab.desc}
         </div>
 
-        {/* Deep AI Review button */}
+        {/* Deep AI Review button — admin-only. Public viewers still see every
+            cached model verdict from picks_ai_reviews, they just can't trigger a
+            fresh council run (5 models × top 10 picks is a real spend). */}
         <button
-          onClick={onRunReview}
-          disabled={aiRunning}
-          title={`Run Deep AI Review on the top 10 ${tab.label} across all 5 AI models (full Varsity payload per stock).`}
+          onClick={isAdmin ? onRunReview : undefined}
+          disabled={aiRunning || !isAdmin}
+          title={
+            !isAdmin
+              ? 'Coming soon — admins trigger the 5-model council; the results show up for everyone once it finishes.'
+              : `Run Deep AI Review on the top 10 ${tab.label} across all 5 AI models (full Varsity payload per stock).`
+          }
           style={{
-            background: aiRunning
-              ? 'rgba(124,58,237,0.25)'
-              : `linear-gradient(135deg, #8B5CF6, ${tab.accent})`,
-            color: '#fff',
-            border: 'none',
+            background: !isAdmin
+              ? 'rgba(148,163,184,0.18)'
+              : aiRunning
+                ? 'rgba(124,58,237,0.25)'
+                : `linear-gradient(135deg, #8B5CF6, ${tab.accent})`,
+            color: !isAdmin ? 'var(--text3)' : '#fff',
+            border: !isAdmin ? '1px dashed var(--border)' : 'none',
             borderRadius: 9999,
             padding: '6px 14px',
             fontSize: 11.5,
             fontWeight: 700,
-            cursor: aiRunning ? 'wait' : 'pointer',
-            opacity: aiRunning ? 0.7 : 1,
-            boxShadow: '0 2px 8px rgba(99,102,241,0.25)',
+            cursor: aiRunning || !isAdmin ? 'not-allowed' : 'pointer',
+            opacity: aiRunning || !isAdmin ? 0.7 : 1,
+            boxShadow: !isAdmin ? 'none' : '0 2px 8px rgba(99,102,241,0.25)',
             fontFamily: 'inherit',
             transition: 'all 180ms ease',
           }}
         >
-          {aiRunning ? '🧠 Running…' : '🧠 Deep AI Review'}
+          {!isAdmin
+            ? '🔒 Deep AI Review · Coming soon'
+            : aiRunning ? '🧠 Running…' : '🧠 Deep AI Review'}
         </button>
       </div>
 
@@ -1593,7 +1611,7 @@ function QuickStartBars({ tabPicks }) {
 // ONLY the approved ones with full exit plans (entry/target/stop/sell-if).
 // Manual execution: user buys in Kite themselves.
 // ══════════════════════════════════════════════════════════════════════
-function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh }) {
+function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, onRefresh }) {
   const picks    = Array.isArray(plan?.plan?.picks)   ? plan.plan.picks   : [];
   const skipped  = Array.isArray(plan?.plan?.skipped) ? plan.plan.skipped : [];
   const mread    = plan?.plan?.market_read || null;
@@ -1684,47 +1702,42 @@ function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh
         </div>
 
         <button
-          onClick={onRun}
-          disabled={running || !authed}
-          title={!authed ? 'Log in to run AI Buy Plan.' : 'Send top-30 to Claude and get a ranked buy plan.'}
+          onClick={isAdmin ? onRun : undefined}
+          disabled={running || !isAdmin}
+          title={
+            !isAdmin  ? 'Coming soon — admins trigger runs, the ranked plan is shared with everyone once it lands.'
+                      : 'Send top-30 to Claude and get a ranked buy plan.'
+          }
           style={{
-            background: running
-              ? 'rgba(139,92,246,0.25)'
-              : 'linear-gradient(135deg, #8B5CF6, #6366F1)',
-            color: '#fff',
-            border: 'none',
+            background: !isAdmin
+              ? 'rgba(148,163,184,0.18)'
+              : running
+                ? 'rgba(139,92,246,0.25)'
+                : 'linear-gradient(135deg, #8B5CF6, #6366F1)',
+            color: !isAdmin ? 'var(--text3)' : '#fff',
+            border: !isAdmin ? '1px dashed var(--border)' : 'none',
             borderRadius: 9999,
             padding: '9px 18px',
             fontSize: 12,
             fontWeight: 800,
-            cursor: running || !authed ? 'not-allowed' : 'pointer',
-            opacity: running || !authed ? 0.6 : 1,
-            boxShadow: '0 4px 14px rgba(139,92,246,0.3)',
+            cursor: running || !isAdmin ? 'not-allowed' : 'pointer',
+            opacity: running || !isAdmin ? 0.7 : 1,
+            boxShadow: !isAdmin ? 'none' : '0 4px 14px rgba(139,92,246,0.3)',
             letterSpacing: '0.3px',
             fontFamily: 'inherit',
             transition: 'all 200ms ease',
           }}
         >
-          {running ? '🧠 Reviewing 30 picks…' : '🧠 Run AI Review'}
+          {!isAdmin
+            ? '🔒 Run AI Review · Coming soon'
+            : running ? '🧠 Reviewing 30 picks…' : '🧠 Run AI Review'}
         </button>
       </div>
 
-      {/* Body */}
+      {/* Body — plan is PUBLIC-readable now, so anyone (logged in or not) sees
+          the latest ranked plan from the DB. Only the "Run" trigger is admin-gated. */}
       <div style={{ padding: '16px 20px' }}>
-        {!authed && (
-          <div style={{
-            padding: 14,
-            background: 'rgba(239,68,68,0.08)',
-            border: '1px solid rgba(239,68,68,0.25)',
-            borderRadius: 8,
-            color: 'var(--red-text)',
-            fontSize: 12,
-          }}>
-            Log in to run the AI Buy Plan. The review uses your Claude credits and is cached per user.
-          </div>
-        )}
-
-        {authed && error && (
+        {error && isAdmin && (
           <div style={{
             padding: 12,
             marginBottom: 12,
@@ -1738,7 +1751,7 @@ function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh
           </div>
         )}
 
-        {authed && loading && !plan && (
+        {loading && !plan && (
           <div style={{
             padding: 24,
             textAlign: 'center',
@@ -1750,7 +1763,7 @@ function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh
           </div>
         )}
 
-        {authed && !loading && !plan && (
+        {!loading && !plan && (
           <div style={{
             padding: 18,
             background: 'rgba(99,102,241,0.06)',
@@ -1760,12 +1773,16 @@ function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh
             color: 'var(--text2)',
             lineHeight: 1.5,
           }}>
-            No AI plan yet. Click <b>Run AI Review</b> above to have Claude review today's top-30 picks
-            (10 per bucket), drop weak setups, and rank the keepers with exit plans.
+            {isAdmin
+              ? <>No AI plan yet. Click <b>Run AI Review</b> above to have Claude review today's top-30 picks
+                 (10 per bucket), drop weak setups, and rank the keepers with exit plans.</>
+              : <>No AI plan available yet — the latest ranked plan will appear here once an admin runs the review.
+                 Public runs are <b>coming soon</b>. You'll still see every plan they generate in the meantime.</>
+            }
           </div>
         )}
 
-        {authed && plan && pickN === 0 && (
+        {plan && pickN === 0 && (
           <div style={{
             padding: 14,
             background: 'rgba(251,191,36,0.10)',
@@ -1784,7 +1801,7 @@ function AIReviewPanel({ plan, loading, running, authed, error, onRun, onRefresh
           </div>
         )}
 
-        {authed && plan && pickN > 0 && (
+        {plan && pickN > 0 && (
           <>
             {/* Summary + market read */}
             {(summary || mread) && (
