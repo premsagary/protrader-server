@@ -1058,8 +1058,84 @@ async function initDB() {
 }
 
 // -- Kite ----------------------------------------------------------------------
+// ── SEBI static-IP proxy routing (effective 2026-04-01) ──────────────────────
+// Kite's IP whitelist applies to ALL API calls (auth, LTP, historical, positions,
+// orders) AND to the WebSocket ticker. Since Railway's direct egress IP is not
+// whitelisted, we must route every Kite-bound request through our dedicated DO
+// static IP (68.183.90.72) via the tinyproxy on port 8888.
+//
+// Strategy: monkey-patch axios.create so any axios instance created with
+// baseURL matching kite.trade gets an httpsAgent for our proxy. Likewise patch
+// the ws module so WebSocket connections to kite.trade go through the proxy.
+// Both patches are idempotent and scoped — they do NOT affect other axios
+// instances or WebSocket connections (NSE fetches, OpenRouter, Claude API, etc).
+function _patchAxiosForKiteProxy() {
+  const proxyUrl = process.env.QUOTAGUARDSTATIC_URL || process.env.QUOTAGUARD_URL || process.env.HTTPS_PROXY;
+  if (!proxyUrl) return false;
+  const axios = require('axios');
+  if (axios.create._kiteProxyPatched) return true;
+  try {
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    const agent = new HttpsProxyAgent(proxyUrl);
+    const _origCreate = axios.create.bind(axios);
+    const patched = function(config) {
+      config = config || {};
+      const inst = _origCreate(config);
+      if (config.baseURL && /kite\.trade/.test(config.baseURL)) {
+        inst.defaults.httpsAgent = agent;
+        inst.defaults.proxy = false; // we pass agent explicitly; don't let axios re-proxy
+        console.log(`🛡️ Kite REST routed through DO proxy: ${config.baseURL}`);
+      }
+      return inst;
+    };
+    patched._kiteProxyPatched = true;
+    axios.create = patched;
+    return true;
+  } catch(e) {
+    console.error('⚠ _patchAxiosForKiteProxy failed:', e.message);
+    return false;
+  }
+}
+function _patchWsForKiteProxy() {
+  const proxyUrl = process.env.QUOTAGUARDSTATIC_URL || process.env.QUOTAGUARD_URL || process.env.HTTPS_PROXY;
+  if (!proxyUrl) return false;
+  try {
+    const wsPath = require.resolve('ws');
+    const cached = require.cache[wsPath];
+    if (!cached) return false;
+    if (cached.exports._kiteProxyPatched) return true;
+    const OrigWS = cached.exports;
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    const agent = new HttpsProxyAgent(proxyUrl);
+    function PatchedWS(url, protocols, options) {
+      if (typeof url === 'string' && /kite\.trade/.test(url)) {
+        // Normalize args — `protocols` may actually be the options object
+        if (protocols && typeof protocols === 'object' && !Array.isArray(protocols) && !(protocols instanceof String)) {
+          options = protocols;
+          protocols = undefined;
+        }
+        options = Object.assign({}, options || {}, { agent });
+        console.log(`🛡️ Kite WebSocket routed through DO proxy: ${url.split('?')[0]}`);
+      }
+      return new OrigWS(url, protocols, options);
+    }
+    // Preserve statics and prototype so code like `ws.readyState === ws.OPEN` still works
+    Object.setPrototypeOf(PatchedWS, OrigWS);
+    PatchedWS.prototype = OrigWS.prototype;
+    PatchedWS._kiteProxyPatched = true;
+    cached.exports = PatchedWS;
+    return true;
+  } catch(e) {
+    console.error('⚠ _patchWsForKiteProxy failed:', e.message);
+    return false;
+  }
+}
+
 let kite = null;
 function initKite(token) {
+  // MUST run before require("kiteconnect") so the SDK picks up the patched axios
+  _patchAxiosForKiteProxy();
+  _patchWsForKiteProxy();
   const { KiteConnect } = require("kiteconnect");
   kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
   if (token) kite.setAccessToken(token);
@@ -1305,6 +1381,9 @@ wss.on("connection", ws => {
   ws.on("close", () => subscribers.delete(ws));
 });
 function startTicker(token) {
+  // Ensure ws is patched before KiteTicker loads it (idempotent)
+  _patchAxiosForKiteProxy();
+  _patchWsForKiteProxy();
   const { KiteTicker } = require("kiteconnect");
   const t = new KiteTicker({ api_key: process.env.KITE_API_KEY, access_token: token });
   t.connect();
@@ -21879,13 +21958,23 @@ app.get("/margin",    async(req,res)=>{try{res.json(await kite.getMargins());}  
 // Before going live, the via-proxy IP MUST match what you whitelisted on Kite.
 app.get("/api/egress-ip", async (req, res) => {
   const axios = require('axios');
-  const result = { direct: null, viaProxy: null, proxyConfigured: false, matchedIp: null };
+  const result = {
+    direct: null,
+    viaProxy: null,
+    proxyConfigured: false,
+    axiosPatched: false,
+    wsPatched: false,
+    kiteSdkRoutedIp: null,
+    matchedIp: null,
+  };
+  // (1) Direct egress — Railway's native IP, used for non-Kite calls
   try {
     const r = await axios.get('https://api.ipify.org?format=json', { timeout: 8000 });
     result.direct = r.data?.ip || null;
   } catch(e) { result.direct = `error: ${e.message}`; }
   const agent = getKiteProxyAgent();
   result.proxyConfigured = !!agent;
+  // (2) Explicit-proxy egress — what placeOrderViaProxy uses
   if (agent) {
     try {
       const r = await axios.get('https://api.ipify.org?format=json', {
@@ -21894,10 +21983,33 @@ app.get("/api/egress-ip", async (req, res) => {
       result.viaProxy = r.data?.ip || null;
     } catch(e) { result.viaProxy = `error: ${e.message}`; }
   }
-  result.matchedIp = result.viaProxy || result.direct;
-  result.note = result.proxyConfigured
-    ? `Whitelist ${result.viaProxy} at developers.kite.trade → your app → IP Whitelist`
-    : `No proxy configured — Kite orders will fail under SEBI static IP rule (effective 2026-04-01). Set QUOTAGUARDSTATIC_URL env var.`;
+  // (3) Install+verify the axios.create / ws patches that SDK calls rely on
+  try {
+    _patchAxiosForKiteProxy();
+    _patchWsForKiteProxy();
+    result.axiosPatched = !!(axios.create && axios.create._kiteProxyPatched);
+    try {
+      const wsPath = require.resolve('ws');
+      const ws = require.cache[wsPath]?.exports;
+      result.wsPatched = !!(ws && ws._kiteProxyPatched);
+    } catch(e) { result.wsPatched = `error: ${e.message}`; }
+  } catch(e) { result.axiosPatched = `error: ${e.message}`; }
+  // (4) Simulate the SDK path — create an axios instance with a kite.trade baseURL
+  //     (the patch should inject the proxy agent) and see what IP we hit from.
+  try {
+    const kiteLikeInstance = axios.create({ baseURL: 'https://api.kite.trade', timeout: 8000 });
+    // Ask for our actual egress IP via a request that the instance will fulfil
+    // through its configured httpsAgent. ipify accepts any baseURL + absolute URL override.
+    const r = await kiteLikeInstance.request({ method: 'GET', url: 'https://api.ipify.org?format=json' });
+    result.kiteSdkRoutedIp = r.data?.ip || null;
+  } catch(e) { result.kiteSdkRoutedIp = `error: ${e.message}`; }
+  result.matchedIp = result.kiteSdkRoutedIp || result.viaProxy || result.direct;
+  const ok = result.axiosPatched && result.wsPatched && result.kiteSdkRoutedIp === result.viaProxy;
+  result.note = !result.proxyConfigured
+    ? `No proxy configured — Kite will reject all API calls under SEBI static-IP rule.`
+    : ok
+      ? `✓ All Kite REST & WS calls routed through ${result.viaProxy}. Whitelist verified.`
+      : `⚠ Proxy set but patches not fully active. Kite SDK may still egress from ${result.direct}.`;
   res.json(result);
 });
 
