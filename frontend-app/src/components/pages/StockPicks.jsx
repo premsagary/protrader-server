@@ -637,6 +637,26 @@ export default function StockPicks() {
         ))}
       </div>
 
+      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-30 candidates ═══
+          Placed ABOVE the market-cap filter so it's the first actionable thing
+          the user sees. Reviews top-10 of each bucket (rebound/momentum/longterm),
+          drops the weak setups, and ranks ONLY the approved ones with a full
+          exit plan (entry zone / target / stop / horizon / sell-if).
+          Manual trigger only — user clicks "Run AI Review", executes in Kite. */}
+      {!loading && !error && (
+        <div style={{ marginBottom: 18 }}>
+          <AIReviewPanel
+            plan={aiPlan}
+            loading={aiPlanLoading}
+            running={aiPlanRunning}
+            authed={aiPlanAuthed}
+            error={aiPlanError}
+            onRun={runAiPlan}
+            onRefresh={fetchAiPlan}
+          />
+        </div>
+      )}
+
       {/* ═══ MARKET-CAP FILTER PILLS ═══ */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
         {filterPills.map((f) => (
@@ -753,24 +773,6 @@ export default function StockPicks() {
             );
           })}
         </div>
-      )}
-
-      {/* ═══ AI BUY PLAN — LLM-curated suggestions from top-30 candidates ═══
-          Replaces the old Phase 0 paper-tracker + 24h-hold journal. The model
-          reviews top-10 of each bucket (rebound/momentum/longterm), filters
-          out the weak setups, and ranks ONLY the approved ones with a full
-          exit plan (entry zone / target / stop / horizon / sell-if).
-          Manual trigger only — user clicks "Run AI Review", executes in Kite. */}
-      {!loading && !error && (
-        <AIReviewPanel
-          plan={aiPlan}
-          loading={aiPlanLoading}
-          running={aiPlanRunning}
-          authed={aiPlanAuthed}
-          error={aiPlanError}
-          onRun={runAiPlan}
-          onRefresh={fetchAiPlan}
-        />
       )}
 
       {/* ═══ SCORING METHODOLOGY ═══ */}
