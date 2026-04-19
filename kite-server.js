@@ -17817,19 +17817,68 @@ function _aiNormalizePlan(parsed, top30) {
   };
 }
 
-// Thin single-model LLM call. Anthropic direct. Claude Haiku 4.5 by default —
-// fast, cheap, strong at structured JSON under strict schema. Override via
-// AI_PICKS_MODEL env.
+// Thin single-model LLM call. Two providers supported:
+//   - Anthropic direct        (default; needs ANTHROPIC_API_KEY)
+//   - OpenRouter (OpenAI-compat gateway; needs OPENROUTER_API_KEY)
+// Pick provider via AI_PICKS_PROVIDER env: "anthropic" | "openrouter".
+// If unset, auto-detects: OpenRouter wins when its key is present, else Anthropic.
+// Opus 4.7 is the default for real-money quality. 16K max output is well above
+// what a 30-pick plan actually emits (~4K on full-approval days); only pays for
+// tokens actually generated.
+function _aiProvider() {
+  const explicit = String(process.env.AI_PICKS_PROVIDER || '').toLowerCase().trim();
+  if (explicit === 'openrouter' || explicit === 'anthropic') return explicit;
+  if (process.env.OPENROUTER_API_KEY) return 'openrouter';
+  return 'anthropic';
+}
+function _aiDefaultModel() {
+  if (process.env.AI_PICKS_MODEL) return process.env.AI_PICKS_MODEL;
+  return _aiProvider() === 'openrouter' ? 'anthropic/claude-opus-4.7' : 'claude-opus-4-6';
+}
+
 async function _aiCallClaude(sys, user) {
-  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
-  // Opus 4.6 is the default for real-money quality: tightest rejections on
-  // borderline picks, best at grounding stops/targets in the structure anchors
-  // we ship (DMAs, S/R, pivots, annualVol). Override to Haiku / Sonnet via env.
-  // 16K max output is well above what a 30-pick plan actually emits (~4K on
-  // full-approval days); only pays for tokens actually generated.
-  const model = process.env.AI_PICKS_MODEL || 'claude-opus-4-6';
+  const provider = _aiProvider();
+  const model = _aiDefaultModel();
   const maxTokens = parseInt(process.env.AI_PICKS_MAX_TOKENS || '16000', 10);
   const t0 = Date.now();
+
+  if (provider === 'openrouter') {
+    if (!process.env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not configured');
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        // Optional-but-recommended headers for OpenRouter analytics/ranking
+        'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://protrader.railway.app',
+        'X-Title': 'ProTrader AI Buy Plan',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: sys },
+          { role: 'user',   content: user },
+        ],
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!resp.ok) {
+      const text = (await resp.text()).slice(0, 300);
+      throw new Error(`OpenRouter ${resp.status}: ${text}`);
+    }
+    const data = await resp.json();
+    const raw = data.choices?.[0]?.message?.content || '';
+    const tokens = {
+      input:  data.usage?.prompt_tokens     || 0,
+      output: data.usage?.completion_tokens || 0,
+    };
+    return { raw, tokens, model, durationMs: Date.now() - t0 };
+  }
+
+  // Anthropic direct
+  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -17898,7 +17947,7 @@ app.post('/api/ai-picks/run', async (req, res) => {
       await pool.query(
         `INSERT INTO picks_ai_buy_plan (run_date, run_by, model, top30_input, plan, picks_count, skipped_count, duration_ms, error)
          VALUES (CURRENT_DATE, $1, $2, $3, $4, 0, 0, $5, $6)`,
-        [username, process.env.AI_PICKS_MODEL || 'claude-opus-4-6',
+        [username, _aiDefaultModel(),
          JSON.stringify(top30), JSON.stringify({ summary: '', market_read: '', picks: [], skipped: [] }),
          0, e.message.slice(0, 500)]
       ).catch(()=>{});
