@@ -182,7 +182,7 @@ const TAB_MAP = [
   ['Deep Analyzer', 'Single-stock deep dive via /api/stocks/analyze/:sym/ai.', 'var(--brand-text)'],
   ['Stock Data',    'Full universe table — every stock carries 3 scores.', 'var(--text2)'],
   ['MiroFish Lab',  'Wealth projection — ₹1 Lakh → 7Y/10Y/20Y/30Y/40Y per MF.', '#C4B5FD'],
-  ['Admin',         'Pipeline controls, force-refresh buttons, LLM budget, users, logs.', 'var(--amber-text)'],
+  ['Admin',         'PAPER ↔ LIVE trading mode toggle (type-to-confirm modal + pre-flight checks on Kite connection, static-IP proxy, whitelist match), capital editor, pipeline controls, force-refresh buttons, LLM budget, users, logs.', 'var(--amber-text)'],
   ['Architecture',  'This page — load-bearing docs kept current with every code change.', '#f0abfc'],
 ];
 
