@@ -21874,6 +21874,33 @@ app.get("/positions", async(req,res)=>{try{res.json(await kite.getPositions());}
 app.get("/holdings",  async(req,res)=>{try{res.json(await kite.getHoldings());} catch(e){res.status(500).json({error:e.message});}});
 app.get("/margin",    async(req,res)=>{try{res.json(await kite.getMargins());}  catch(e){res.status(500).json({error:e.message});}});
 
+// ── /api/egress-ip — returns the IP Kite will see. Compare against whitelist at developers.kite.trade ──
+// Two checks: direct Railway egress (data endpoints) vs via-proxy egress (order endpoints).
+// Before going live, the via-proxy IP MUST match what you whitelisted on Kite.
+app.get("/api/egress-ip", async (req, res) => {
+  const axios = require('axios');
+  const result = { direct: null, viaProxy: null, proxyConfigured: false, matchedIp: null };
+  try {
+    const r = await axios.get('https://api.ipify.org?format=json', { timeout: 8000 });
+    result.direct = r.data?.ip || null;
+  } catch(e) { result.direct = `error: ${e.message}`; }
+  const agent = getKiteProxyAgent();
+  result.proxyConfigured = !!agent;
+  if (agent) {
+    try {
+      const r = await axios.get('https://api.ipify.org?format=json', {
+        httpsAgent: agent, proxy: false, timeout: 8000,
+      });
+      result.viaProxy = r.data?.ip || null;
+    } catch(e) { result.viaProxy = `error: ${e.message}`; }
+  }
+  result.matchedIp = result.viaProxy || result.direct;
+  result.note = result.proxyConfigured
+    ? `Whitelist ${result.viaProxy} at developers.kite.trade → your app → IP Whitelist`
+    : `No proxy configured — Kite orders will fail under SEBI static IP rule (effective 2026-04-01). Set QUOTAGUARDSTATIC_URL env var.`;
+  res.json(result);
+});
+
 app.get("/history/:symbol", async(req,res)=>{
   try {
     const{interval="5minute"}=req.query;
