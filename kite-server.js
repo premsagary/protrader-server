@@ -18089,21 +18089,64 @@ app.get('/api/ai-picks/latest', async (req, res) => {
   if (!pool) return res.json({ ok: false, error: 'no-pool' });
   const username = (req.user && req.user.username) ? req.user.username : null;
   const mineOnly = String(req.query.mine || '') === '1' && username;
+  // ?strict=1 returns the absolute latest row (even if picks_count=0). Default
+  // behaviour is "last APPROVED plan" — we prefer the most recent run that
+  // actually returned buys, so the user's buy plan doesn't get blanked out by
+  // a fresh rejection run. If the latest approved row is older than the
+  // absolute latest, we attach `latest_attempt` so the UI can surface the
+  // status ("most recent run passed on all 30 candidates Xh ago").
+  const strict = String(req.query.strict || '') === '1';
   try {
-    const q = mineOnly
-      ? `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
-                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
-           FROM picks_ai_buy_plan
-          WHERE run_by = $1 AND error IS NULL
-          ORDER BY run_at DESC LIMIT 1`
-      : `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
-                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
-           FROM picks_ai_buy_plan
-          WHERE error IS NULL
-          ORDER BY run_at DESC LIMIT 1`;
-    const r = mineOnly ? await pool.query(q, [username]) : await pool.query(q);
-    if (!r.rows.length) return res.json({ ok: true, latest: null });
-    const row = r.rows[0];
+    const whereMine   = mineOnly ? 'AND run_by = $1 ' : '';
+    const params      = mineOnly ? [username] : [];
+    const approvedQ   = `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
+                                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
+                           FROM picks_ai_buy_plan
+                          WHERE error IS NULL AND picks_count > 0 ${whereMine}
+                          ORDER BY run_at DESC LIMIT 1`;
+    const absoluteQ   = `SELECT plan_id, run_at, run_date, run_by, model, top30_input, plan,
+                                picks_count, skipped_count, duration_ms, input_tokens, output_tokens, error
+                           FROM picks_ai_buy_plan
+                          WHERE error IS NULL ${whereMine}
+                          ORDER BY run_at DESC LIMIT 1`;
+    const attemptQ    = `SELECT plan_id, run_at, picks_count, skipped_count
+                           FROM picks_ai_buy_plan
+                          WHERE error IS NULL ${whereMine}
+                          ORDER BY run_at DESC LIMIT 1`;
+
+    const mainQ  = strict ? absoluteQ : approvedQ;
+    const r      = await pool.query(mainQ, params);
+
+    // If no approved plan exists yet (cold start, or every run genuinely
+    // rejected), fall back to the absolute latest so the user sees SOMETHING
+    // instead of an empty state.
+    let row = r.rows[0];
+    let fallbackUsed = false;
+    if (!row && !strict) {
+      const r2 = await pool.query(absoluteQ, params);
+      row = r2.rows[0];
+      fallbackUsed = true;
+    }
+    if (!row) return res.json({ ok: true, latest: null });
+
+    // Fetch the absolute latest attempt too (for "most recent run" status
+    // chip when the approved plan we're showing is stale).
+    let latestAttempt = null;
+    if (!strict && !fallbackUsed) {
+      const rAtt = await pool.query(attemptQ, params);
+      const att = rAtt.rows[0];
+      if (att && att.plan_id !== row.plan_id) {
+        const ms = Date.now() - new Date(att.run_at).getTime();
+        latestAttempt = {
+          plan_id:       att.plan_id,
+          run_at:        att.run_at,
+          picks_count:   att.picks_count,
+          skipped_count: att.skipped_count,
+          age_hours:     +(ms / (3600 * 1000)).toFixed(2),
+        };
+      }
+    }
+
     const ageMs = Date.now() - new Date(row.run_at).getTime();
     res.json({
       ok: true,
@@ -18121,6 +18164,9 @@ app.get('/api/ai-picks/latest', async (req, res) => {
         age_hours:     +(ageMs / (3600 * 1000)).toFixed(2),
         top30_input:   row.top30_input,
         plan:          row.plan,
+        // When non-null, the UI should render a chip like
+        // "Most recent run (Xh ago) passed on all N candidates — showing last approved plan"
+        latest_attempt: latestAttempt,
       },
     });
   } catch (e) {

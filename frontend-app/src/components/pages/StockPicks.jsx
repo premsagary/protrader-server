@@ -1728,6 +1728,25 @@ function AIReviewPanel({ plan, loading, running, authed, isAdmin, error, onRun, 
               </button>
             </div>
           )}
+          {/* When the server falls back to the last APPROVED plan because the
+              latest run rejected everything, surface that fact so the user
+              understands why they're seeing an older timestamp. */}
+          {plan?.latest_attempt && plan.latest_attempt.picks_count === 0 && (
+            <div style={{
+              fontSize: 10.5,
+              color: 'var(--amber-text)',
+              marginTop: 6,
+              padding: '5px 9px',
+              background: 'rgba(251,191,36,0.10)',
+              border: '1px solid rgba(251,191,36,0.32)',
+              borderRadius: 6,
+              display: 'inline-block',
+              fontWeight: 600,
+              letterSpacing: '0.1px',
+            }}>
+              ⚠ Most recent run ({hoursAgo(new Date(plan.latest_attempt.run_at))}) passed on all candidates — showing last approved plan instead.
+            </div>
+          )}
         </div>
 
         <button

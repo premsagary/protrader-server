@@ -478,7 +478,7 @@ const ROADMAP_PHASES = [
     includes: [
       'picks_ai_buy_plan — persisted per-user LLM plan history (top30_input + ranked plan + skipped)',
       'POST /api/ai-picks/run — ADMIN-ONLY manual trigger; body carries top-10 per bucket + market meta',
-      'GET /api/ai-picks/latest — PUBLIC-readable cached plan (non-admins see "Coming soon" on the button but still see the latest plan)',
+      'GET /api/ai-picks/latest — PUBLIC-readable cached plan; defaults to most recent run with picks_count>0 so a fresh rejection run does not blank the buy plan (strict=1 forces absolute latest). Attaches latest_attempt when latest approved plan is older than most recent run.',
       'AIReviewPanel UI — ranked cards with rank/sym/bucket/confidence/rationale, expandable exit plan, collapsible rejected list',
       'Strict JSON normalisation (stop < entryLo ≤ entryHi < target; auto re-rank; auto-skip unknowns)',
       'Filter-then-rank flow: AI approves genuine picks first, THEN ranks only the approved ones (no artificial cap)',
