@@ -11,7 +11,7 @@
 
 'use strict';
 
-const CONFIG_VERSION = '1.2.0-ab-trial-baseline';
+const CONFIG_VERSION = '1.3.0-varsity-binary-gate';
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // off     — agent does nothing (DEFAULT — safe)
@@ -98,7 +98,12 @@ const PAPER_CAPITAL_RUPEES = parseInt(process.env.AGENT_PAPER_CAPITAL || '100000
 
 // ── Filter-chain thresholds (Layer 2 — Agent) ────────────────────────────────
 const FILTERS = Object.freeze({
-  MIN_DAY_TRADE_SCORE: 65,          // pick quality floor
+  // 2026-04-20: score-based gating DROPPED — scoreDayTrade now returns null
+  // unless the Varsity M2 Ch20 binary checklist (11 items) passes. Score is
+  // still emitted as a diagnostic field but is NOT the gate. Kept at 0 so
+  // this filter is effectively a no-op and every Varsity-qualified candidate
+  // flows through to the remaining filter-chain thresholds.
+  MIN_DAY_TRADE_SCORE: 0,           // no-op — Varsity checklist is the gate now
   MIN_VOL_RATIO: 1.5,               // current 5m vol vs 20-bar avg (reverted 2026-04-20 to 1.5 to match pre-hardening ₹14K paper baseline for A/B trial; was briefly 1.2 on Day-1 live)
   MIN_ATR_PCT: 0.4,                 // avoid sideways / low-vol
   MAX_ATR_PCT: 3.0,                 // avoid wild vol (already filtered in scoreDayTrade but belt-and-suspenders)

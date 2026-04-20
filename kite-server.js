@@ -11381,6 +11381,51 @@ function scoreDayTrade(candles, sym, ctx) {
   }
   const setupHitRateRecord = _setupHitRate[best.type] || null;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VARSITY BINARY CHECKLIST — HARD GATE (2026-04-20 pivot)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Per user direction: "just follow varsity knowledge blindly" — drop score
+  // ranking, rely on Varsity's own binary pass/fail checklist.
+  //
+  // This is Varsity M2 Ch20 "The Finale" as Varsity itself teaches it — not
+  // a gradient, not a score. Every item must pass. Any fail = do not trade.
+  // Downstream ranking is handled by the Agent filter chain + natural
+  // trigger-time FIFO (first to fire its candle-confirmation wins the slot).
+  // ═══════════════════════════════════════════════════════════════════════════
+  const varsityChecklist = {
+    // M2 Ch20 #1 — Candlestick pattern on trigger bar
+    priceAction:        ch19.priceAction,
+    // M2 Ch20 #2 — S/R confirms the trade (at CPR / Fib / OR / PDH / PDL / round)
+    srContext:          ch19.srContext,
+    // M2 Ch20 #3 — Volume above average
+    volumeConfirms:     volRatio >= 1.5,
+    // M2 Ch13 + Ch20 #4 — Price above daily trend (using 200DMA as proxy for 20EMA)
+    aboveDailyTrend:    !dailyF2 || dailyF2.pctAbove200 == null || dailyF2.pctAbove200 > 0,
+    // M2 Ch20 #5 — R:R ≥ 1:1.5
+    rrAcceptable:       rrRatio >= 1.5,
+    // M9 — costs: net R:R after brokerage/STT/GST/slippage ≥ 1.3
+    rrNetAcceptable:    rrRatioNet >= 1.3,
+    // M2 Ch18-19 — Dow trend not explicitly down
+    dowTrendNotDown:    !dailyF2 || dailyF2.dowTheoryTrend !== 'DOWNTREND',
+    // M2 volatility — stock tradeable (not dead, not wild)
+    atrInTradeableBand: atrPct >= 0.4 && atrPct <= 3.0,
+    // M5 volatility regime — VIX sane
+    vixAcceptable:      vixValue == null || vixValue < 22,
+    // Session discipline — no opening noise, no close-time entries
+    validSessionWindow: sessionPhase !== 'CLOSED' && sessionPhase !== 'LATE' && minsSinceOpen >= 10 && minsSinceOpen < 345,
+    // M2 indicator alignment — at least 2 of 4 (EMA9>EMA20, MACD bull, Supertrend, Stoch mid)
+    indicatorsAlign:    ch19.indicators,
+  };
+  const varsityPassCount = Object.values(varsityChecklist).filter(Boolean).length;
+  const varsityTotal     = Object.keys(varsityChecklist).length;
+  const varsityPassed    = varsityPassCount === varsityTotal;
+  const varsityFailed    = Object.entries(varsityChecklist).filter(([, v]) => !v).map(([k]) => k);
+
+  // Binary gate — if any Varsity item fails, the stock does not surface.
+  // Returning null keeps the existing null-check contract at every caller
+  // (`if (scored) { ... }`) — same as all other hard rejects in this function.
+  if (!varsityPassed) return null;
+
   // v2-varsity-aligned (2026-04-20): PENALTY FLOOR.
   // No matter how many context/systemic/structural penalties stacked, the
   // final score cannot drop below 70% of the base setup score. This is the
@@ -11420,9 +11465,15 @@ function scoreDayTrade(candles, sym, ctx) {
   return {
     sym, name: f?.name || sym, grp: f?.grp || 'Unknown', sector: f?.sector || 'Other',
     price: +px.toFixed(2),
-    // Overall
+    // Varsity binary verdict (primary — see Ch20 "The Finale" checklist)
+    varsityPassed: true,
+    varsityChecklist,
+    varsityPassCount,
+    varsityTotal,
+    // Score kept as informational legacy field for UI diagnostics — no longer a gate
     dayTradeScore: overall,
-    verdict, verdictColor,
+    verdict: 'QUALIFIED',
+    verdictColor: '#22c55e',
     bestSetup: best.type, bestSetupEmoji: best.emoji, bestSetupScore: best.score,
     bestDetail: best.detail.join(' · '),
     // All setup scores
