@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { apiGet, apiPost } from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
 import GatesActiveBanner from '../common/GatesActiveBanner';
+import TradingModeCard from '../common/TradingModeCard';
 import Agent from './Agent';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -83,7 +84,15 @@ export default function StocksRoboTrade() {
       <SubTabNav active={sub} onChange={(id) => setCurrentTab(`stocks/${id}`)} />
       <div style={{ marginTop: 18 }}>
         {sub === 'overview'   && <OverviewTab />}
-        {sub === 'agent'      && <Agent embedded />}
+        {sub === 'agent'      && (
+          <>
+            {/* Master PAPER↔LIVE kill-switch + capital editor + Kite test-buy.
+                Moved here from Admin 2026-04-20 — Agent owns the decision to
+                fire real orders, so this card lives with the agent controls. */}
+            <TradingModeCard />
+            <Agent embedded />
+          </>
+        )}
         {sub === 'positions'  && <PositionsTab />}
         {sub === 'trades'     && <TradesTab />}
         {sub === 'candidates' && <CandidatesTab />}
