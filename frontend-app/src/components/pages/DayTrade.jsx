@@ -60,6 +60,10 @@ function scoreVerdict(v) {
   return           { label: 'Weak',             color: 'var(--text3)',      dot: 'var(--text3)' };
 }
 
+// VerdictCell renders the setup-quality verdict as a coloured chip ONLY —
+// we deliberately hide the raw numeric because the Varsity 12-item binary
+// gate is what decides inclusion. The number is kept server-side for sort
+// and CSV export, but should never be surfaced on the UI as a threshold.
 function VerdictCell({ v }) {
   if (v == null) return <span style={{ color: 'var(--text3)' }}>—</span>;
   const { label, color, dot } = scoreVerdict(v);
@@ -67,7 +71,6 @@ function VerdictCell({ v }) {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
       <span style={{ color: dot, fontSize: 9, lineHeight: 1 }}>●</span>
       <span style={{ color, fontWeight: 700 }}>{label}</span>
-      <span className="tabular-nums" style={{ color: 'var(--text3)', fontWeight: 600, fontSize: 10.5 }}>· {Math.round(v)}</span>
     </span>
   );
 }
@@ -76,10 +79,12 @@ function VerdictCell({ v }) {
 const COLS = [
   { k: 'sym',           l: 'Stock',     w: 110, align: 'left',   sticky: true, bold: true },
   { k: 'grp',           l: 'Grp',       w: 75,  align: 'left' },
-  // Score column keeps key='dayTradeScore' so sort-by-score still works, but
-  // renders a verdict chip + small numeric so users stop reading it as a
-  // threshold filter. Every visible row already cleared the binary gate.
-  { k: 'dayTradeScore', l: 'Score',     w: 150, align: 'left',  fmt: (v) => <VerdictCell v={v} /> },
+  // Column keeps internal key 'dayTradeScore' so sort-by-quality still works,
+  // but the header reads "Verdict" and the cell renders a coloured label
+  // (Strong Entry / Good Setup / Developing / Weak) with no number. The
+  // Varsity 12-item binary gate is what decides inclusion; the score is a
+  // ranking of survivors and should never show up as a user-facing threshold.
+  { k: 'dayTradeScore', l: 'Verdict',   w: 140, align: 'left',  fmt: (v) => <VerdictCell v={v} /> },
   { k: 'bestSetup',     l: 'Setup',     w: 115, align: 'left',  fmt: (v, s) => v ? `${s.bestSetupEmoji || ''} ${String(v).replace(/_/g, ' ')}` : '—' },
   { k: 'price',         l: 'Price',     w: 80,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'rsi',           l: 'RSI',       w: 60,  align: 'right', fmt: (v) => v != null ? Math.round(v) : '—' },
@@ -281,8 +286,8 @@ export default function DayTrade() {
               <span className="gradient-fill">Scan · Intraday Signals</span>
             </h1>
             <p style={{ fontSize: 14, color: 'var(--text2)', marginTop: 8, lineHeight: 1.5, maxWidth: 720 }}>
-              Every row below cleared the <b style={{ color: 'var(--text)' }}>12-item Varsity M2 Ch20+21 binary gate</b> —
-              score ranks survivors, it's not a filter threshold. Covers VWAP Reclaim, Gap &amp; Go, Breakout, and Oversold Bounce.
+              Every row below cleared the <b style={{ color: 'var(--text)' }}>12-item Varsity M2 Ch20+21 binary gate</b>.
+              The Verdict column is a quality label, not a threshold. Covers VWAP Reclaim, Gap &amp; Go, Breakout, and Oversold Bounce.
               Auto-refreshes every 5s. Last scanned: <b style={{ color: 'var(--text)' }}>{scannedAgo}</b>.
             </p>
             <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5, maxWidth: 680 }}>
@@ -344,8 +349,8 @@ export default function DayTrade() {
       </div>
 
       {/* ═══ GATE-STACK LEGEND ═══
-          Compact one-liner so users understand the Score column is a
-          ranking over survivors, not a threshold filter. */}
+          Compact one-liner so users understand the Verdict chip labels
+          survivors; it is not a threshold filter. */}
       <div style={{
         marginBottom: 16,
         padding: '8px 14px',
@@ -375,7 +380,6 @@ export default function DayTrade() {
       }}>
         <StatCard l="Total" v={counts.total} c="var(--text)" />
         <StatCard l="Varsity ✓ (12/12)" v={counts.varsity || counts.total} c="var(--green-text)" />
-        <StatCard l="Score ≥70 (diag)" v={counts.strong} c="var(--amber-text)" />
         {SETUPS.map((s) => (
           <StatCard key={s.type} l={s.label} v={counts[s.type] || 0} c={s.color} icon={s.icon} />
         ))}
@@ -388,7 +392,7 @@ export default function DayTrade() {
             variant="full"
             accent="green"
             title="DayTrade — Varsity Binary Gate + Book-Rules Gate active"
-            subtitle="Every pick below has passed all 5 layers of the pipeline. Score is diagnostic — no score threshold is applied."
+            subtitle="Every pick below cleared all 5 pipeline layers. The Verdict chip is a label, not a threshold — the 12-item Varsity binary gate decides inclusion."
           />
         </div>
       )}
@@ -589,9 +593,11 @@ export default function DayTrade() {
                                 ))}
                               </div>
                             ) : null}
-                            {/* Score-journey (pre-hit-rate → ×mult → final) —
-                                only renders when the multiplier actually moved the score. */}
-                            <ScoreJourney pick={p} />
+                            {/* Score-journey was removed from the UI 2026-04-20.
+                                The binary Varsity gate decides inclusion; the
+                                raw number (and its hit-rate multiplier) stays
+                                server-side for ranking only. <ScoreJourney/>
+                                is still defined below for future debug use. */}
                             {/* Reliability + microstructure chip row —
                                 surfaces the flags that server-side preflight
                                 gates or 5-min microstructure detectors set. */}
@@ -661,7 +667,7 @@ function SetupMiniTable({ setup, rows }) {
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
                 <th style={miniTh}>Stock</th>
-                <th style={{ ...miniTh, textAlign: 'right' }}>Score</th>
+                <th style={{ ...miniTh, textAlign: 'left' }}>Verdict</th>
                 <th style={{ ...miniTh, textAlign: 'right' }}>Price</th>
                 <th style={{ ...miniTh, textAlign: 'right' }}>SL</th>
                 <th style={{ ...miniTh, textAlign: 'right' }}>TGT</th>
@@ -673,7 +679,7 @@ function SetupMiniTable({ setup, rows }) {
               {list.map((p) => (
                 <tr key={p.sym} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ ...miniTd, fontWeight: 700, color: 'var(--text)' }}>{p.sym}</td>
-                  <td style={{ ...miniTd, textAlign: 'right' }}>
+                  <td style={{ ...miniTd, textAlign: 'left' }}>
                     <VerdictCell v={p.dayTradeScore} />
                   </td>
                   <td className="tabular-nums" style={{ ...miniTd, textAlign: 'right', color: 'var(--text2)' }}>
