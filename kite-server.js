@@ -1370,6 +1370,8 @@ const livePrices  = {};
 const subscribers = new Set();
 let   tickerOn      = false;
 let   tokenValid  = false; // set true when ticker connects, false when error/disconnect
+let   lastTickTs  = 0;     // epoch ms of last tick batch (any symbol) — for health probe
+let   tickerSubscribedCount = 0; // number of instrument tokens subscribed on last connect
 
 function broadcast(data) {
   const msg = JSON.stringify(data);
@@ -1392,10 +1394,12 @@ function startTicker(token) {
     tokenValid = true;
     const tokens = Object.values(INSTRUMENTS);
     t.subscribe(tokens); t.setMode(t.modeFull, tokens);
+    tickerSubscribedCount = tokens.length;
     broadcast({ type:"status", connected:true });
     console.log("✅ Ticker live");
   });
   t.on("ticks", ticks => {
+    if (ticks && ticks.length) lastTickTs = Date.now();
     ticks.forEach(tick => {
       const sym = Object.keys(INSTRUMENTS).find(k => INSTRUMENTS[k] === tick.instrument_token);
       if (!sym) return;
@@ -7365,6 +7369,60 @@ app.get("/api/token/status", (req,res)=>{
     marketOpen: isMarketOpen(),
     livePrices: Object.keys(livePrices).length,
     loginUrl: kite ? kite.getLoginURL() : null,
+  });
+});
+
+// Diagnostic: one-stop health probe for the live-data pipeline.
+// Use this when RoboTrade is quiet and you're trying to tell whether
+//   (a) the WebSocket is even alive,
+//   (b) ticks are still arriving, or
+//   (c) the 1-min candle ingest is producing rows in the DB.
+// Added 2026-04-20 to debug the Day-1 starved-signals incident.
+app.get("/api/ticker-health", async (req, res) => {
+  const now = Date.now();
+  let candles1mTodayCount = null;
+  let candles1mLastTs = null;
+  try {
+    if (pool) {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS n, MAX(ts) AS last_ts
+           FROM candles_1m
+          WHERE ts::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date`
+      );
+      candles1mTodayCount = rows[0]?.n ?? 0;
+      candles1mLastTs     = rows[0]?.last_ts || null;
+    }
+  } catch (e) {
+    candles1mTodayCount = { error: e.message };
+  }
+  res.json({
+    t: new Date().toISOString(),
+    marketOpen: isMarketOpen(),
+    ticker: {
+      connected:        tickerOn,
+      tokenValid,
+      subscribedCount:  tickerSubscribedCount,
+      livePricesCount:  Object.keys(livePrices).length,
+      lastTickTs:       lastTickTs || null,
+      lastTickAgeMs:    lastTickTs ? (now - lastTickTs) : null,
+      lastTickAgeSec:   lastTickTs ? Math.round((now - lastTickTs) / 1000) : null,
+    },
+    candles1m: {
+      todayCount:   candles1mTodayCount,
+      lastTs:       candles1mLastTs,
+      ingestRunning: _nifty1mRunning,
+    },
+    pipeline: _pipelineLastRun || null,
+    livePricesSample: (() => {
+      // 5 random symbols to eyeball
+      const keys = Object.keys(livePrices);
+      const sample = {};
+      for (let i = 0; i < Math.min(5, keys.length); i++) {
+        const k = keys[Math.floor(Math.random() * keys.length)];
+        sample[k] = livePrices[k]?.price ?? null;
+      }
+      return sample;
+    })(),
   });
 });
 
