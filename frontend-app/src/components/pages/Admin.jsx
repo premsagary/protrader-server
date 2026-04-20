@@ -37,6 +37,14 @@ export default function Admin() {
   const [newCapital, setNewCapital] = useState('');          // capital edit input
   const [toggleBusy, setToggleBusy] = useState(false);
   const [toggleMsg, setToggleMsg] = useState('');
+  // ── Test-buy (smoke test) state ────────────────────────────────────
+  // Fires a REAL 1-share order via POST /api/test-buy. Used Monday
+  // mornings to verify the SEBI static-IP proxy + Kite auth end-to-end
+  // before letting RoboTrade run. Defaults to YESBANK (cheap, liquid).
+  const [testBuySymbol, setTestBuySymbol] = useState('YESBANK');
+  const [testBuyQty, setTestBuyQty] = useState(1);
+  const [testBuyBusy, setTestBuyBusy] = useState(false);
+  const [testBuyMsg, setTestBuyMsg] = useState('');
 
   useEffect(() => {
     apiGet('/api/admin/users').then((d) => setUsers(Array.isArray(d?.users) ? d.users : Array.isArray(d) ? d : [])).catch(() => {});
@@ -121,6 +129,41 @@ export default function Admin() {
     }
     setToggleBusy(false);
     setTimeout(() => setToggleMsg(''), 4000);
+  };
+
+  // ── Test-buy handler ───────────────────────────────────────────────
+  // Calls POST /api/test-buy which places a REAL limit order via the
+  // static-IP proxy. Use ONLY for pre-market smoke-testing the Kite
+  // auth + SEBI proxy path. Respects the existing backend default
+  // (YESBANK, qty 1) but exposes both fields so we can point it at a
+  // different cheap liquid symbol if YESBANK circuit-limits.
+  const handleTestBuy = async () => {
+    const symbol = (testBuySymbol || 'YESBANK').toUpperCase().trim();
+    const qty = Math.max(1, parseInt(testBuyQty, 10) || 1);
+    const warn =
+      `⚠️  This will place a REAL LIMIT order on Kite:\n\n` +
+      `    ${qty} × ${symbol}   (≈ ₹${qty * 25} at current LTP for YESBANK)\n\n` +
+      `Routed via the static-IP proxy (68.183.90.72).\n` +
+      `Make sure Kite is LOGGED IN and market is open.\n\n` +
+      `Continue?`;
+    if (!window.confirm(warn)) return;
+    setTestBuyBusy(true);
+    setTestBuyMsg(`Placing ${qty}× ${symbol}…`);
+    try {
+      const res = await apiPost('/api/test-buy', { symbol, quantity: qty });
+      if (res && res.success) {
+        setTestBuyMsg(
+          `✅ Filled ${res.quantity || qty}× ${res.symbol || symbol} ` +
+          `@ ₹${res.price ?? '?'}  ·  orderId=${res.orderId || '—'}`
+        );
+      } else {
+        setTestBuyMsg(`❌ ${(res && (res.error || res.message)) || 'Order rejected'}`);
+      }
+    } catch (e) {
+      setTestBuyMsg(`❌ Error: ${e.message}`);
+    }
+    setTestBuyBusy(false);
+    setTimeout(() => setTestBuyMsg(''), 10000);
   };
 
   useEffect(() => {
@@ -423,6 +466,79 @@ export default function Admin() {
               fontWeight:600,
             }}>
               {toggleMsg}
+            </div>
+          )}
+        </div>
+
+        {/* ── Test-buy (smoke test) ─────────────────────────────────
+            Places a REAL 1-share limit order on Kite via the static-IP
+            proxy. Use before market open to verify auth + proxy are
+            alive. Amber styling signals "real money, small risk". */}
+        <div style={{
+          padding:'14px 26px 18px',
+          borderTop:'1px dashed var(--border)',
+          display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
+          background: 'linear-gradient(135deg, rgba(245,158,11,0.06), rgba(245,158,11,0.02))',
+        }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+            <div style={{ fontSize:12, color:'var(--amber-text)', fontWeight:700, letterSpacing:'0.3px' }}>
+              🧪 Kite smoke test
+            </div>
+            <div style={{ fontSize:11, color:'var(--text3)' }}>
+              Places a REAL limit order via the SEBI static-IP proxy.
+            </div>
+          </div>
+          <input
+            type="text"
+            value={testBuySymbol}
+            onChange={e => setTestBuySymbol(e.target.value)}
+            placeholder="YESBANK"
+            style={{
+              height:34, width:120, padding:'0 12px', borderRadius:8,
+              border:'1px solid var(--border)', background:'var(--bg-elev)', color:'var(--text)',
+              fontSize:13, fontFamily:'inherit', textTransform:'uppercase',
+            }}
+            title="NSE trading symbol"
+          />
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={testBuyQty}
+            onChange={e => setTestBuyQty(e.target.value)}
+            style={{
+              height:34, width:70, padding:'0 10px', borderRadius:8,
+              border:'1px solid var(--border)', background:'var(--bg-elev)', color:'var(--text)',
+              fontSize:13, fontFamily:'inherit',
+            }}
+            title="Quantity (default 1)"
+          />
+          <button
+            onClick={handleTestBuy}
+            disabled={testBuyBusy || !tradingMode?.kiteConnected}
+            className="btn"
+            style={{
+              height:34, fontSize:12.5, fontWeight:700, padding:'0 16px',
+              background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+              color:'#1a1207',
+              border:'1px solid rgba(245,158,11,0.55)',
+              borderRadius:8,
+              opacity: testBuyBusy || !tradingMode?.kiteConnected ? 0.55 : 1,
+              cursor:  testBuyBusy || !tradingMode?.kiteConnected ? 'not-allowed' : 'pointer',
+            }}
+            title={!tradingMode?.kiteConnected ? 'Login to Kite first' : 'Place 1-share test order'}
+          >
+            {testBuyBusy ? '…' : '🧪 Test Buy'}
+          </button>
+          {testBuyMsg && (
+            <div style={{
+              marginLeft:'auto', fontSize:12.5, maxWidth:520, textAlign:'right',
+              color: testBuyMsg.startsWith('❌') ? 'var(--red-text)'
+                   : testBuyMsg.startsWith('✅') ? 'var(--green-text)'
+                   : 'var(--text2)',
+              fontWeight:600,
+            }}>
+              {testBuyMsg}
             </div>
           )}
         </div>
