@@ -152,8 +152,11 @@ export default function Admin() {
     try {
       const res = await apiPost('/api/test-buy', { symbol, quantity: qty });
       if (res && res.success) {
+        // "Placed" not "Filled" — /api/test-buy returns as soon as Kite accepts
+        // the order; it does NOT wait for the fill confirmation. Check
+        // /live-trades or Kite dashboard to see actual fill status.
         setTestBuyMsg(
-          `✅ Filled ${res.quantity || qty}× ${res.symbol || symbol} ` +
+          `✅ Placed ${res.quantity || qty}× ${res.symbol || symbol} ` +
           `@ ₹${res.price ?? '?'}  ·  orderId=${res.orderId || '—'}`
         );
       } else {

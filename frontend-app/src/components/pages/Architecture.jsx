@@ -388,13 +388,16 @@ const DATA_SOURCES = [
 ];
 
 const CRON_MARKET = [
-  ['*/5 9-15 * * 1-5',    'Unified Kite Pipeline', 'Daily + 5-min candles per symbol. Populates stockFundamentals, _fiveMinCandlesCache, _dayTradeCache. Runs DayTrade scoring.'],
-  ['*/3.75 9-15 * * 1-5', 'Smart Scan (RoboTrade)', 'Reads 5-min candles from Unified cache (50% Kite call reduction). Exit mgmt + buy collection.'],
-  ['*/30 8-16 * * 1-5',   'Fundamentals refresh',   'refreshMissingFundamentals + refreshAllFundamentals'],
-  ['*/30 8-16 * * 1-5',   'News cron',              'Google News RSS → Haiku classifier → external_signals_cache'],
-  ['5 8-16 * * 1-5',      'BSE corp actions',       'Hourly at :05 — api.bseindia.com JSON per symbol'],
-  ['7,22,37,52 8-16',     'Stale healthcheck',      'Every 15 min — refetch top 30 stalest (fetchedAt > 90 min)'],
-  ['45 15 * * 1-5',       'EOD snapshot',           'savePortfolioSnapshot at 3:45 PM IST after market close'],
+  // 2026-04-20 — pipeline split. Unified moved to every 30 min (TA/fundamentals focus);
+  // DT scoring now runs every 5 min on its own lock so scan picks refresh reliably.
+  ['1,6,11,…,56 9-15 * * 1-5', 'DayTrade scan',         '5-min candles + setup detectors → _dayTradeCache. Independent lock (_dayTradeScanning). Drives Pass-2 BUY eligibility.'],
+  ['0,30 9-15 * * 1-5',        'Unified Kite Pipeline', 'Daily candles + TA rescore + fundamentals + ML snapshots + Nifty benchmark. Slow path (~12 min under rate limits).'],
+  ['*/3.75 9-15 * * 1-5',      'Smart Scan (RoboTrade)', 'Reads 5-min candles from Unified cache. Exit mgmt + buy collection. 2026-04-20: BUY candidates now require a matching _dayTradeCache entry (unified picks → scan).'],
+  ['*/30 8-16 * * 1-5',        'Fundamentals refresh',   'refreshMissingFundamentals + refreshAllFundamentals'],
+  ['*/30 8-16 * * 1-5',        'News cron',              'Google News RSS → Haiku classifier → external_signals_cache'],
+  ['5 8-16 * * 1-5',           'BSE corp actions',       'Hourly at :05 — api.bseindia.com JSON per symbol'],
+  ['7,22,37,52 8-16',          'Stale healthcheck',      'Every 15 min — refetch top 30 stalest (fetchedAt > 90 min)'],
+  ['45 15 * * 1-5',            'EOD snapshot',           'savePortfolioSnapshot at 3:45 PM IST after market close'],
 ];
 
 const CRON_DAILY = [
@@ -1115,6 +1118,9 @@ export default function Architecture() {
               <li><b>Scan concurrency guard</b> — <Code>_scanAndTradeRunning</Code> flag + 10-min watchdog force-release prevent overlap stackup.</li>
               <li><b>Stale self-healing</b> — every 15 min at :07/:22/:37/:52, refetch top-30 stalest (fetchedAt &gt; 90 min). <Code>/api/admin/stale-healthcheck</Code> bypasses market guard.</li>
               <li><b>Token handling</b> — stored in <Code>app_config</Code> DB table. Auto-recovered on container restart. Daily 8 AM IST re-auth cron.</li>
+              <li><b>WebSocket — full UNIVERSE (2026-04-20)</b> — Ticker now subscribes to every UNIVERSE symbol with a Kite token (~568), not just hardcoded INSTRUMENTS (~145). <Code>refreshInstruments()</Code> calls <Code>resubscribeTickerToUniverse()</Code> after validTokens repopulates, so adding symbols to UNIVERSE expands coverage on the next token refresh without a ticker restart.</li>
+              <li><b>Phantom-P&amp;L guard (2026-04-20)</b> — MARKET entries poll <Code>getOrderHistory</Code> for up to 5s and only INSERT into <Code>live_trades</Code> once <Code>filled_quantity ≥ 1</Code>. Rejected/cancelled MARKET orders (margin, freeze, circuit) no longer leave phantom rows with qty&gt;0.</li>
+              <li><b>Pipeline split (2026-04-20)</b> — DayTrade scoring decoupled from slow TA rescore. <Code>scanDayTrades</Code> runs every 5 min on its own <Code>_dayTradeScanning</Code> lock; <Code>runUnifiedKitePipeline</Code> dropped to every 30 min. Agent no longer starves on long pipeline runs.</li>
             </ol>
           </SectionCard>
 

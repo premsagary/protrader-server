@@ -37,10 +37,28 @@ const SUB_TABS = [
 const INR = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 const pc = (n) => `${Number(n || 0) >= 0 ? '+' : ''}${Number(n || 0).toFixed(2)}%`;
 const clr = (n) => (Number(n) >= 0 ? 'var(--green-text)' : 'var(--red-text)');
+// 2026-04-20 — fixed timestamp display. Postgres TIMESTAMP columns come back
+// from `pg` as bare strings like "2026-04-20 09:30:00" WITHOUT a timezone
+// suffix. The browser's Date() then interprets them as LOCAL time, so a 9:30
+// IST fill on a UTC-server database displayed as "15:00" in IST (server UTC
+// treated as local, then "re-converted" to IST). Fix: if the string has no
+// explicit tz, assume UTC (server writes are UTC via NOW()) and always
+// display in Asia/Kolkata so the user sees IST regardless of browser locale.
 const fmtT = (ts) => {
   if (!ts) return '—';
-  try { return new Date(ts).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', month: 'short', day: '2-digit' }); }
-  catch { return String(ts); }
+  try {
+    let d;
+    if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(ts)) {
+      // No tz suffix → treat as UTC (all server writes use NOW() which is UTC).
+      d = new Date(ts.replace(' ', 'T') + 'Z');
+    } else {
+      d = new Date(ts);
+    }
+    return d.toLocaleString('en-IN', {
+      hour: '2-digit', minute: '2-digit', month: 'short', day: '2-digit',
+      timeZone: 'Asia/Kolkata',
+    });
+  } catch { return String(ts); }
 };
 
 // ══════════════════════════════════════════════════════════════════════
