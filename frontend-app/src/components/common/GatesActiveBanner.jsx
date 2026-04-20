@@ -26,10 +26,14 @@ export default function GatesActiveBanner({
   title,
   subtitle,
 }) {
+  // Dark-theme palette. `text` is used for the banner title — it must stay
+  // readable on the gradient background (which sits on top of the dark page
+  // background). Prior hex codes (#065f46 / #3730a3 / #1f2937) were tuned for
+  // a light theme and came out near-black on dark mode.
   const accentMap = {
-    green:  { border: '#10b981', bg: 'rgba(16,185,129,0.08)', glow: 'rgba(16,185,129,0.35)', text: '#065f46' },
-    indigo: { border: '#6366f1', bg: 'rgba(99,102,241,0.08)', glow: 'rgba(99,102,241,0.35)', text: '#3730a3' },
-    slate:  { border: '#475569', bg: 'rgba(71,85,105,0.08)',  glow: 'rgba(71,85,105,0.30)',  text: '#1f2937' },
+    green:  { border: '#10b981', bg: 'rgba(16,185,129,0.10)', glow: 'rgba(16,185,129,0.25)', text: '#6ee7b7' },
+    indigo: { border: '#6366f1', bg: 'rgba(99,102,241,0.10)', glow: 'rgba(99,102,241,0.25)', text: '#a5b4fc' },
+    slate:  { border: '#475569', bg: 'rgba(71,85,105,0.10)',  glow: 'rgba(71,85,105,0.22)',  text: '#cbd5e1' },
   };
   const C = accentMap[accent] || accentMap.green;
 
@@ -99,7 +103,7 @@ export default function GatesActiveBanner({
             key={l.n}
             title={`${l.name}: ${l.blurb}`}
             style={{
-              background: '#fff',
+              background: `${l.color}1a`,
               border: `1px solid ${l.color}55`,
               color: l.color,
               padding: '2px 8px',
@@ -120,7 +124,7 @@ export default function GatesActiveBanner({
     <div
       style={{
         border: `1px solid ${C.border}`,
-        background: `linear-gradient(135deg, ${C.bg}, rgba(255,255,255,0))`,
+        background: `linear-gradient(135deg, ${C.bg}, var(--bg-elev))`,
         borderRadius: 14,
         padding: 16,
         boxShadow: `0 8px 24px ${C.glow}`,
@@ -132,11 +136,11 @@ export default function GatesActiveBanner({
           <div style={{ fontWeight: 800, fontSize: 15, color: C.text, letterSpacing: 0.2 }}>
             ✅ {title || defaultTitle}
           </div>
-          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
             {subtitle || defaultSubtitle}
           </div>
         </div>
-        <div style={{ fontSize: 11, opacity: 0.7 }}>
+        <div style={{ fontSize: 11, color: 'var(--text3)' }}>
           scoreV: Varsity M2 Ch20+21 · book-rules v1.1.0 · agent-config 1.4.0
         </div>
       </div>
@@ -150,8 +154,8 @@ export default function GatesActiveBanner({
               gridTemplateColumns: '34px 1fr',
               gap: 10,
               alignItems: 'start',
-              padding: '8px 10px',
-              background: '#fff',
+              padding: '10px 12px',
+              background: 'var(--bg-elev)',
               borderRadius: 10,
               border: `1px solid ${l.color}33`,
               boxShadow: `inset 3px 0 0 ${l.color}`,
@@ -166,15 +170,16 @@ export default function GatesActiveBanner({
                 background: l.color, color: '#fff',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontWeight: 800, fontSize: 13,
+                boxShadow: `0 2px 8px ${l.color}55`,
               }}
             >
               {l.n}
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#111827' }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>
                 {l.name}
               </div>
-              <div style={{ fontSize: 12, opacity: 0.78, marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2, lineHeight: 1.5 }}>
                 {l.blurb}
               </div>
               <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -185,9 +190,9 @@ export default function GatesActiveBanner({
                       fontSize: 11,
                       padding: '2px 8px',
                       borderRadius: 999,
-                      background: `${l.color}14`,
+                      background: `${l.color}1a`,
                       color: l.color,
-                      border: `1px solid ${l.color}33`,
+                      border: `1px solid ${l.color}44`,
                       fontWeight: 600,
                     }}
                   >
@@ -200,7 +205,7 @@ export default function GatesActiveBanner({
         ))}
       </div>
 
-      <div style={{ marginTop: 10, fontSize: 11, opacity: 0.7, textAlign: 'right' }}>
+      <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text3)', textAlign: 'right' }}>
         Balaji build · promoted 2026-04-20 · shiva-ui still at pre-gate baseline for LIVE rollout
       </div>
     </div>
