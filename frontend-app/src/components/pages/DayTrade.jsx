@@ -251,11 +251,14 @@ export default function DayTrade() {
               )}
             </div>
             <h1 style={{ fontSize: 36, fontWeight: 800, letterSpacing: '-1px', color: 'var(--text)' }}>
-              <span className="gradient-fill">DayTrade Scanner</span>
+              <span className="gradient-fill">Scan · Intraday Signals</span>
             </h1>
             <p style={{ fontSize: 14, color: 'var(--text2)', marginTop: 8, lineHeight: 1.5, maxWidth: 680 }}>
               VWAP Reclaim + Gap & Go + Breakout + Oversold Bounce, scored in real-time.
               Auto-refreshes every 5s. Last scanned: <b style={{ color: 'var(--text)' }}>{scannedAgo}</b>.
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5, maxWidth: 680 }}>
+              Looking for swing / positional signals? See <b style={{ color: 'var(--text2)' }}>Trade &gt; Candidates</b> — the structure-filter + LLM-reviewed scan that feeds the RoboTrade Agent.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

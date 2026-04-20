@@ -7,6 +7,15 @@ import { create } from 'zustand';
 //   - Standalone 'agent' tab removed from the nav. The route still works as
 //     a backwards-compat alias (see App.jsx) so bookmarks/hash-links don't
 //     404 during the paper soak.
+//   - Admin's master PAPER↔LIVE kill-switch, capital editor, Kite test-buy,
+//     and ENABLE LIVE confirmation modal moved to Trade > Agent sub-tab
+//     (see components/common/TradingModeCard.jsx). Admin is now strictly
+//     read-only ops (pipelines, logs, uptime, LLM budget, users).
+//   - 'DayTrade' relabeled 'Scan' — the user's mental model is that this
+//     tab is the intraday signal-generation surface. The swing-scan output
+//     (Trade > Candidates sub-tab) stays where it is because the Agent needs
+//     candidate context to decide what to execute; splitting that away would
+//     hurt the workflow more than the tab-count savings would help.
 const TABS = [
   { id: 'stockanalyzer', label: 'Deep Analyzer', migrated: true },
   { id: 'stockrec', label: 'Stock Picks', migrated: true },
@@ -16,7 +25,7 @@ const TABS = [
   { id: 'holdings', label: 'Holdings', migrated: true, admin: true },
   { id: 'mirofish', label: 'MiroFish Lab', migrated: true, admin: true },
   { id: 'stockdata', label: 'Stock Data', migrated: true },
-  { id: 'daytrade', label: 'DayTrade', migrated: true, accent: 'red' },
+  { id: 'daytrade', label: 'Scan', migrated: true, accent: 'red' },
   { id: 'architecture', label: 'Architecture', migrated: true, admin: true },
   { id: 'admin', label: 'Admin', migrated: true, admin: true },
 ];
