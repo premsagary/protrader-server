@@ -193,12 +193,15 @@ export default function DayTrade() {
 
   // ── Summary counts per setup type (pre-filter) ────────────────────
   const counts = useMemo(() => {
-    const o = { total: picks.length, strong: 0 };
+    // 2026-04-20 pivot: every surfaced pick has passed the 11-item Varsity
+    // M2 Ch20 binary checklist — `strong` is kept only for legacy diagnostics.
+    const o = { total: picks.length, strong: 0, varsity: 0 };
     for (const st of SETUPS) o[st.type] = 0;
     for (const p of picks) {
       const setup = String(p.bestSetup || '').toUpperCase();
       if (o[setup] != null) o[setup]++;
       if ((p.dayTradeScore || 0) >= 70) o.strong++;
+      if (p.varsityPassed) o.varsity++;
     }
     return o;
   }, [picks]);
@@ -322,11 +325,33 @@ export default function DayTrade() {
         marginBottom: 20,
       }}>
         <StatCard l="Total" v={counts.total} c="var(--text)" />
-        <StatCard l="Strong (≥70)" v={counts.strong} c="var(--green-text)" />
+        <StatCard l="Varsity ✓ (11/11)" v={counts.varsity || counts.total} c="var(--green-text)" />
+        <StatCard l="Score ≥70 (diag)" v={counts.strong} c="var(--amber-text)" />
         {SETUPS.map((s) => (
           <StatCard key={s.type} l={s.label} v={counts[s.type] || 0} c={s.color} icon={s.icon} />
         ))}
       </div>
+
+      {/* ═══ VARSITY BINARY GATE NOTICE (2026-04-20 pivot) ═══ */}
+      {!loading && !error && picks.length > 0 && (
+        <div style={{
+          marginBottom: 14,
+          padding: '10px 12px',
+          background: 'var(--green-bg)',
+          border: '1px solid rgba(34,197,94,0.35)',
+          borderRadius: 8,
+          fontSize: 11.5,
+          color: 'var(--text2)',
+          lineHeight: 1.55,
+        }}>
+          <b style={{ color: 'var(--green-text)' }}>Varsity M2 Ch20 Binary Gate active.</b>{' '}
+          Every pick below has passed all 11 Varsity checklist items
+          (priceAction · srContext · volume · aboveDailyTrend · R:R · netR:R ·
+          Dow · ATR band · VIX · session window · indicators). Score is a
+          diagnostic only — no score threshold is applied. Anything failing
+          Varsity never surfaces here.
+        </div>
+      )}
 
       {/* ═══ PER-SETUP MINI-TABLES (top 10 per setup — 2×2 grid) ═══ */}
       {!loading && !error && picks.length > 0 && (
