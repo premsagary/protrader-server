@@ -11,7 +11,7 @@
 
 'use strict';
 
-const CONFIG_VERSION = '1.1.0-live-day1-tune';
+const CONFIG_VERSION = '1.2.0-ab-trial-baseline';
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // off     — agent does nothing (DEFAULT — safe)
@@ -99,7 +99,7 @@ const PAPER_CAPITAL_RUPEES = parseInt(process.env.AGENT_PAPER_CAPITAL || '100000
 // ── Filter-chain thresholds (Layer 2 — Agent) ────────────────────────────────
 const FILTERS = Object.freeze({
   MIN_DAY_TRADE_SCORE: 65,          // pick quality floor
-  MIN_VOL_RATIO: 1.2,               // current 5m vol vs 20-bar avg (tuned 2026-04-20: was 1.5, too strict for quiet tapes — e.g. Day 1 live blocked KIRLOSENG:91 + MEIL:75)
+  MIN_VOL_RATIO: 1.5,               // current 5m vol vs 20-bar avg (reverted 2026-04-20 to 1.5 to match pre-hardening ₹14K paper baseline for A/B trial; was briefly 1.2 on Day-1 live)
   MIN_ATR_PCT: 0.4,                 // avoid sideways / low-vol
   MAX_ATR_PCT: 3.0,                 // avoid wild vol (already filtered in scoreDayTrade but belt-and-suspenders)
   STRUCTURE_MIN_ATR_DISTANCE: 0.5,  // |price - nearest_level| / atr ≥ this
