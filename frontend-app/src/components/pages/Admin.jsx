@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import GatesActiveBanner from '../common/GatesActiveBanner';
 
 // ══════════════════════════════════════════════════════════════════════
 // Pipeline sync buttons — core data refresh endpoints
@@ -354,6 +355,16 @@ export default function Admin() {
             {forceRefreshMsg}
           </div>
         )}
+      </div>
+
+      {/* ═══ GATES PIPELINE — shared Varsity + Book-Rules banner across tabs ═══ */}
+      <div style={{ marginBottom: 20 }}>
+        <GatesActiveBanner
+          variant="full"
+          accent="slate"
+          title="Admin — Operational view of the 5-layer gate pipeline"
+          subtitle="Flipping modes, running pipelines, or firing test buys does NOT bypass these gates. Every order passes through them."
+        />
       </div>
 
       {/* ═══ PAPER ↔ LIVE TRADING MODE — master kill-switch ═══ */}

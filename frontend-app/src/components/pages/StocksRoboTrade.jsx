@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { apiGet, apiPost } from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
+import GatesActiveBanner from '../common/GatesActiveBanner';
 
 // ══════════════════════════════════════════════════════════════════════
 // Stocks RoboTrade — unified page for all stocks/* sub-tabs
@@ -297,6 +298,16 @@ function OverviewTab() {
 
   return (
     <div>
+      {/* Gates pipeline banner — Varsity + Book-Rules consistency across tabs */}
+      <div style={{ marginBottom: 16 }}>
+        <GatesActiveBanner
+          variant="full"
+          accent="indigo"
+          title="Stocks RoboTrade — Paper & Live feed from the same 5-layer pipeline"
+          subtitle="Every P&L row below originated from a pick that cleared all 5 gates. No manual overrides."
+        />
+      </div>
+
       {/* Stat grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 18 }}>
         <StatCard l="Total P&L (closed)" v={`${pnl >= 0 ? '+' : ''}${INR(pnl)}`} c={clr(pnl)} sub={`${trades.filter((t) => t?.status === 'CLOSED').length} closed trades`} />

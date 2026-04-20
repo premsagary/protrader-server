@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import GatesActiveBanner from '../common/GatesActiveBanner';
 
 // ══════════════════════════════════════════════════════════════════════
 // Agent — rule-based auto-trading control panel (React v2)
@@ -216,6 +217,14 @@ export default function Agent() {
           )}
         </div>
       </div>
+
+      {/* Gates pipeline banner — shared across DayTrade, RoboTrade, Agent, Admin */}
+      <GatesActiveBanner
+        variant="full"
+        accent="indigo"
+        title="Agent — operates on the same 5-layer gate pipeline"
+        subtitle="Each minute, the agent re-evaluates DayTrade picks through these gates before emitting a BUY. Decisions are logged to agent_decisions."
+      />
 
       {/* Mode + actions row */}
       <div className="card" style={{ padding: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

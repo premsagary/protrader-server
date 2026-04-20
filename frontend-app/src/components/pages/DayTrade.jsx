@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import GatesActiveBanner from '../common/GatesActiveBanner';
 
 // ══════════════════════════════════════════════════════════════════════
 // Setup type config — mirrors scoreDayTrade() output in kite-server.js
@@ -334,28 +335,13 @@ export default function DayTrade() {
 
       {/* ═══ VARSITY BINARY GATE NOTICE (2026-04-20 pivot) ═══ */}
       {!loading && !error && picks.length > 0 && (
-        <div style={{
-          marginBottom: 14,
-          padding: '10px 12px',
-          background: 'var(--green-bg)',
-          border: '1px solid rgba(34,197,94,0.35)',
-          borderRadius: 8,
-          fontSize: 11.5,
-          color: 'var(--text2)',
-          lineHeight: 1.55,
-        }}>
-          <b style={{ color: 'var(--green-text)' }}>Varsity Binary Gate + Book-Rules Gate active.</b>{' '}
-          Every pick below has passed (1) all 12 Varsity M2 Ch20+21 checklist items
-          (priceAction · srContext · volume · aboveDailyTrend · R:R · netR:R ·
-          Dow · ATR band · VIX · session window · indicators · ADX trend) AND
-          (2) the net-new book-rules subset — regime ≠ NO_TRADE, no losing
-          patterns (chasing · vertical spike · counter-EMA stack · big-gap-fade
-          · round-number trap), structural non-negotiables (SL set, 15:15
-          squareoff, avg-down &amp; widen-SL disabled, kill-switch not overridden).
-          Score is diagnostic only — no score threshold is applied. Gap type
-          (Common / Breakaway / Runaway / Exhaustion) is labelled per M2 Ch10.
-          Chart patterns (Flag / Pennant / Triangles / Wedges / Double-Top /
-          Bottom / H&amp;S — Ch19) corroborate with soft score nudges.
+        <div style={{ marginBottom: 14 }}>
+          <GatesActiveBanner
+            variant="full"
+            accent="green"
+            title="DayTrade — Varsity Binary Gate + Book-Rules Gate active"
+            subtitle="Every pick below has passed all 5 layers of the pipeline. Score is diagnostic — no score threshold is applied."
+          />
         </div>
       )}
 
