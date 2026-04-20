@@ -4614,11 +4614,18 @@ async function scanAndTrade() {
     remainingTradeBudget = Math.max(0, remainingTradeBudget - 1);
 
     // Live order
+    // 2026-04-20 — switched from LIMIT to MARKET. LIMIT entries were missing
+    // fast momentum moves (e.g., VOLTAS @ 1445.10 LIMIT stayed OPEN while price
+    // ran to 1460 within minutes on Day 1 of live trading). Exits already use
+    // MARKET (see SELL path above), so entries now match. Kite ignores `price`
+    // on MARKET orders; we store the signal price in live_trades.price as the
+    // intended entry — actual fill may differ slightly (slippage). Reconcile
+    // to true fill price via kite.getOrderHistory when outcome cron runs.
     if (LIVE_TRADING && kite) {
       try {
         const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
-          quantity: qty, product: 'CNC', order_type: 'LIMIT', price: price, validity: 'DAY',
+          quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
         });
         const orderId = order.order_id || order.orderId || '';
         await pool.query(
@@ -4627,7 +4634,7 @@ async function scanAndTrade() {
           [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
            +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
         );
-        console.log(`  🔴 LIVE BUY ${stock.sym} @ ₹${price} | Order ID: ${orderId}`);
+        console.log(`  🔴 LIVE BUY ${stock.sym} @ MARKET (signal ₹${price}) | Order ID: ${orderId}`);
       } catch(liveErr) {
         console.error(`  ✗ LIVE BUY FAILED ${stock.sym}: ${liveErr.message}`);
       }
