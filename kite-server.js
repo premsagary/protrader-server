@@ -9346,41 +9346,6 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
-// ── DayTrade systemic context (Commit 2 — VIX / breadth / sector rotation) ──
-// All three are rolled at the END of each full scan and read by the NEXT
-// scan. One-cycle lag (5 min) is fine — intraday sector leadership + breadth
-// do not flip within a single scan cycle.
-let _dayTradeBreadth = { aboveVWAPPct: 50, pctAboveYestClose: 50, n: 0, ts: 0 };
-// sector -> { avgIntradayPct, n, rank } — rank 1 = best performing sector today
-let _dayTradeSectorMomentum = {};
-let _dayTradeSectorMomentumTs = 0;
-
-// ── DayTrade reliability state (Commit 1 — preflight gates) ──────────────
-// All state here is INTRADAY-ONLY and resets on process bounce. That's fine:
-// the scanner is always running during market hours, and a restart mid-day
-// is rare enough that losing a 30-min cooldown is acceptable.
-
-// Whipsaw cooldown — symbols that hit their SL today are iced for N minutes
-// to prevent "pick → SL → pick same setup 10 min later → SL again" sequences.
-// Map<sym, { ts: number, reason: string }>.
-const _dayTradeSLCooldown = new Map();
-const SL_COOLDOWN_MS = +(process.env.DAYTRADE_SL_COOLDOWN_MIN || 30) * 60 * 1000;
-
-// Scanner kill switch — tracks today's paper-trade PnL across cached picks.
-// Halts NEW picks once combined drawdown on today's slate exceeds the limit.
-// { date: 'YYYY-MM-DD', realizedPnLPct: number, tripped: boolean }
-let _dayTradeKillSwitch = { date: null, realizedPnLPct: 0, tripped: false };
-const KILL_SWITCH_DD_PCT = +(process.env.DAYTRADE_KILL_SWITCH_DD || 3.0);
-
-// Setup hit-rate cache — rolled from outcome_metrics every ~30 min and
-// consulted inside scoreDayTrade as a multiplier on the base setup score.
-// Not ML — simple rolling win-rate over the last N paper-traded picks.
-// { VWAP_RECLAIM: { winRate: 0.58, n: 45, mult: 1.08 }, ... }
-let _setupHitRate = {};
-let _setupHitRateTs = 0;
-const SETUP_HITRATE_REFRESH_MS = 30 * 60 * 1000;
-const SETUP_HITRATE_MIN_SAMPLES = +(process.env.DAYTRADE_HITRATE_MIN_N || 20);
-
 // ── DayTrade cache durable persistence ─────────────────────────────────────
 // Writes the in-memory cache to a singleton row in `daytrade_cache` after
 // every successful scan. Hydrates from DB on boot so container restarts
@@ -9422,103 +9387,6 @@ async function _hydrateDayTradeCacheFromDB() {
     console.log('📊 DayTrade cache DB hydrate skipped:', e.message);
   }
   return false;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DAYTRADE RELIABILITY HELPERS (Commit 1 — preflight + kill switch + hit-rate)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── Whipsaw cooldown ──────────────────────────────────────────────────────
-// Called by the paper-trade engine (or manually via admin) when a pick hits
-// its SL. Scanner skips the symbol for SL_COOLDOWN_MS afterwards.
-function markDayTradeSLTriggered(sym, reason = 'sl_hit') {
-  if (!sym) return;
-  _dayTradeSLCooldown.set(sym, { ts: Date.now(), reason });
-  // Opportunistic prune — keep the map small by dropping entries >2h old.
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-  for (const [k, v] of _dayTradeSLCooldown) {
-    if (v.ts < cutoff) _dayTradeSLCooldown.delete(k);
-  }
-}
-function isDayTradeOnCooldown(sym) {
-  const hit = _dayTradeSLCooldown.get(sym);
-  if (!hit) return false;
-  if (Date.now() - hit.ts > SL_COOLDOWN_MS) { _dayTradeSLCooldown.delete(sym); return false; }
-  return true;
-}
-
-// ── Scanner kill switch ───────────────────────────────────────────────────
-// Called by the paper-trade engine (or periodic job) when a DayTrade pick
-// books realised PnL. Once today's combined drawdown exceeds KILL_SWITCH_DD_PCT
-// of the notional slate, scanner stops returning new picks until next session.
-function recordDayTradeRealizedPnL(pnlPct) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (_dayTradeKillSwitch.date !== today) {
-    _dayTradeKillSwitch = { date: today, realizedPnLPct: 0, tripped: false };
-  }
-  _dayTradeKillSwitch.realizedPnLPct += (+pnlPct || 0);
-  if (_dayTradeKillSwitch.realizedPnLPct <= -Math.abs(KILL_SWITCH_DD_PCT)) {
-    _dayTradeKillSwitch.tripped = true;
-    console.log(`🛑 DayTrade kill switch TRIPPED: today PnL ${_dayTradeKillSwitch.realizedPnLPct.toFixed(2)}% <= -${KILL_SWITCH_DD_PCT}%`);
-  }
-}
-function isDayTradeKillSwitchTripped() {
-  const today = new Date().toISOString().slice(0, 10);
-  if (_dayTradeKillSwitch.date !== today) return false; // fresh day, auto-reset
-  return _dayTradeKillSwitch.tripped === true;
-}
-
-// ── Setup hit-rate refresh ────────────────────────────────────────────────
-// Reads outcome_metrics for the last N days, bucketed by bestSetup, computes
-// win rate and derives a multiplier clamped to [0.85 .. 1.15]. Purely
-// statistical — no ML. Degrades gracefully to empty (mult=1.0) if the table
-// is missing or has too few samples for a setup.
-async function refreshSetupHitRate(force = false) {
-  if (!force && (Date.now() - _setupHitRateTs) < SETUP_HITRATE_REFRESH_MS) return _setupHitRate;
-  try {
-    // outcome_metrics joins back to features_snapshot; we just need:
-    //   best_setup, realized 60-min return sign (win = ret > 0.2% on a bull setup).
-    const { rows } = await pool.query(`
-      SELECT fs.best_setup AS setup,
-             om.ret_60m_pct AS ret
-        FROM outcome_metrics om
-        JOIN features_snapshot fs ON fs.id = om.snapshot_id
-       WHERE fs.ts >= NOW() - INTERVAL '20 days'
-         AND om.ret_60m_pct IS NOT NULL
-         AND fs.best_setup IS NOT NULL
-       LIMIT 5000
-    `).catch(() => ({ rows: [] }));
-
-    const agg = {};
-    for (const r of rows) {
-      const s = r.setup;
-      if (!s) continue;
-      if (!agg[s]) agg[s] = { wins: 0, total: 0 };
-      agg[s].total += 1;
-      // Win = directional move in setup's favour >0.2% within 60m (post-slippage buffer).
-      if ((+r.ret || 0) > 0.2) agg[s].wins += 1;
-    }
-    const out = {};
-    for (const [setup, a] of Object.entries(agg)) {
-      if (a.total < SETUP_HITRATE_MIN_SAMPLES) { out[setup] = { winRate: null, n: a.total, mult: 1.0 }; continue; }
-      const wr = a.wins / a.total;
-      // Baseline 50%. Each 10 percentage points = 0.05 multiplier. Clamp [0.85, 1.15].
-      const mult = Math.max(0.85, Math.min(1.15, 1.0 + (wr - 0.50) * 0.5));
-      out[setup] = { winRate: +wr.toFixed(3), n: a.total, mult: +mult.toFixed(3) };
-    }
-    _setupHitRate = out;
-    _setupHitRateTs = Date.now();
-    console.log(`📊 DayTrade hit-rate refreshed: ${Object.keys(out).length} setups`);
-  } catch (e) {
-    // Table missing / no data — leave cache untouched.
-    if (Object.keys(_setupHitRate).length === 0) _setupHitRate = {};
-    _setupHitRateTs = Date.now();
-  }
-  return _setupHitRate;
-}
-function getSetupMultiplier(setup) {
-  const h = _setupHitRate[setup];
-  return h && typeof h.mult === 'number' ? h.mult : 1.0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9767,70 +9635,6 @@ function applySectorCap(sortedPicks, maxPerSector = 2) {
 // needing Kite index fetches inside the per-stock scoring loop.
 let _niftyDailyChangePct = null;
 
-// ── Commit 2: systemic-context rollup ─────────────────────────────────────
-// Runs at the end of each DayTrade scan with the populated `results` array
-// (already ranked, pre-sector-cap). Computes market breadth + sector-momentum
-// tables that the NEXT scan reads when scoring individual stocks. One-cycle
-// lag (5 min) is acceptable — breadth + sector leadership don't flip inside
-// one scan cycle, and staying stateless inside scoreDayTrade keeps that
-// function fast + pure.
-//
-// Breadth signals used:
-//   - % above VWAP: classic intraday breadth. < 30% = weak; > 70% = strong.
-//   - Avg gap %:    whether the tape opened risk-on or risk-off overall.
-// Sector momentum = avg dayTradeScore per sector, ranked. Top-3 sectors get
-// a small bonus in the next scan; bottom-3 get a small penalty.
-function _rollupSystemicContext(results) {
-  try {
-    if (!Array.isArray(results) || results.length < 5) return;
-    // Breadth — VWAP side of the tape
-    let aboveVWAP = 0, sumGap = 0;
-    for (const r of results) {
-      if ((r.vwapDist || 0) > 0) aboveVWAP++;
-      if (typeof r.gapPct === 'number') sumGap += r.gapPct;
-    }
-    _dayTradeBreadth = {
-      aboveVWAPPct: Math.round(100 * aboveVWAP / results.length),
-      avgGapPct: +(sumGap / results.length).toFixed(2),
-      n: results.length,
-      ts: Date.now(),
-    };
-    // Sector momentum — rank sectors by avg score
-    const bySector = Object.create(null);
-    for (const r of results) {
-      const s = canonicalSector(r.sector) || 'Other';
-      if (!bySector[s]) bySector[s] = { sum: 0, n: 0, sumGap: 0 };
-      bySector[s].sum    += r.dayTradeScore || 0;
-      bySector[s].sumGap += r.gapPct || 0;
-      bySector[s].n      += 1;
-    }
-    const ranked = Object.entries(bySector)
-      .filter(([, v]) => v.n >= 2)
-      .map(([s, v]) => ({
-        sector: s,
-        avgScore: v.sum / v.n,
-        avgGapPct: v.sumGap / v.n,
-        n: v.n,
-      }))
-      .sort((a, b) => b.avgScore - a.avgScore);
-    const table = {};
-    ranked.forEach((e, idx) => {
-      table[e.sector] = {
-        avgScore: +e.avgScore.toFixed(1),
-        avgGapPct: +e.avgGapPct.toFixed(2),
-        n: e.n,
-        rank: idx + 1,
-        total: ranked.length,
-      };
-    });
-    _dayTradeSectorMomentum = table;
-    _dayTradeSectorMomentumTs = Date.now();
-  } catch (e) {
-    // Never let context rollup break a scan
-    console.warn('⚠️ _rollupSystemicContext error:', e.message);
-  }
-}
-
 function scoreDayTrade(candles, sym, ctx) {
   ctx = ctx || {};
   // Prefer per-scan injection via ctx, otherwise fall back to module snapshot.
@@ -9856,57 +9660,6 @@ function scoreDayTrade(candles, sym, ctx) {
   // Varsity M2: skip if latest 5-min candle range is extreme (>3% on a single bar = abnormal)
   const lastCandleRange = last.high > 0 ? (last.high - last.low) / last.close * 100 : 0;
   if (lastCandleRange > 3) return null;
-
-  // ── Commit 1: DayTrade reliability preflights ────────────────────────
-  // All of these are HARD rejects (return null) — the scanner should never
-  // surface these symbols, not just score them lower. Softer penalties live
-  // below in the setup-scoring body.
-
-  // (a) Whipsaw cooldown — symbol hit its SL in this session within the
-  //     cooldown window. Re-entering after stop-out is the textbook chase trap.
-  if (isDayTradeOnCooldown(sym)) return null;
-
-  // (b) Kill switch — today's realised paper-trade PnL across the slate
-  //     exceeded the daily-drawdown limit. Stop picking new trades.
-  if (isDayTradeKillSwitchTripped()) return null;
-
-  // (c) Earnings / results-day skip — if the stock has a BSE board meeting
-  //     or results event dated today, gap/volume surges are event-driven,
-  //     not setup-driven. Use the bseEvents payload already loaded into
-  //     stockFundamentals by the external-signals cache.
-  if (f && Array.isArray(f._bseEvents)) {
-    const today0 = new Date().toISOString().slice(0, 10);
-    for (const ev of f._bseEvents) {
-      if (!ev) continue;
-      const evDate = ev.date ? String(ev.date).slice(0, 10) : null;
-      const label = String(ev.type || ev.label || '').toLowerCase();
-      const isEarningsish = label.includes('board_meeting') || label.includes('board meeting')
-                         || label.includes('result') || label.includes('earnings');
-      if (isEarningsish && (evDate === today0 || ev.daysAway === 0)) return null;
-    }
-  }
-
-  // (d) Delivery % gate — low delivery (<10%) marks a stock as speculatively
-  //     traded; intraday traps cluster here. Read from _marketDataCache if
-  //     available; degrade gracefully when not.
-  const _mdc = (typeof _marketDataCache !== 'undefined') ? _marketDataCache : null;
-  const _delRec = _mdc && _mdc.deliveryData ? _mdc.deliveryData[sym] : null;
-  const _delPct = _delRec && _delRec.deliveryPct != null ? +_delRec.deliveryPct : null;
-  if (_delPct != null && _delPct < 10) return null;
-
-  // (e) Circuit-limit proximity — NSE stocks get locked at 5/10/20% bands.
-  //     Liquidity evaporates at the circuit, so stops can't fill. We only
-  //     know the band for stocks marked B-group etc. via fundamentals; for
-  //     the common case, treat absolute daily move >= 18% as "circuit risk".
-  const _prevCloseForCircuit = (_delRec && _delRec.prevClose) || (f && f.prevClose) || null;
-  if (_prevCloseForCircuit) {
-    const dayMovePct = Math.abs((px - _prevCloseForCircuit) / _prevCloseForCircuit * 100);
-    // 20% circuit: reject at 18%+
-    if (dayMovePct >= 18) return null;
-    // 10% circuit (T2T/B-group hint via f.group or f.surveillance): reject at 9%+
-    const isRestricted = f && (f.group === 'T' || f.group === 'Z' || f.surveillance === 'T2T');
-    if (isRestricted && dayMovePct >= 9) return null;
-  }
 
   // Varsity M9: avoid new entries in last 30 min before market close (3:00-3:30 PM IST)
   const now = new Date();
@@ -10128,85 +9881,6 @@ function scoreDayTrade(candles, sym, ctx) {
   const aboveCpr = cpr && px > cpr.cprHi;
   const belowCpr = cpr && px < cpr.cprLo;
 
-  // ── Commit 3: Microstructure signals (NR7 · inside bar · aVWAP · bid-ask · partial OR) ──
-  // Small-sample structural signals that fire on specific bar patterns. Used
-  // as conviction modifiers (not primary setups). Varsity M2 Ch 11: "coiling
-  // price memory precedes expansion" — NR7/inside-bar are the coil; aVWAP is
-  // the institutional defense line; partial OR means the usual levels aren't
-  // yet authoritative.
-  const last2 = todayCandles.slice(-2);
-  const currBar = last2[1] || last2[0];
-  const prevBar = last2[0];
-  const currRange = currBar ? (currBar.high - currBar.low) : 0;
-  // NR7: current 5-min range is the narrowest of the last 7 bars
-  const last7Ranges = todayCandles.slice(-7).map(c => c.high - c.low);
-  const isNR7 = last7Ranges.length >= 7 &&
-    currRange > 0 &&
-    currRange === Math.min(...last7Ranges);
-  // Inside bar: current entirely within prev bar's range (compression)
-  const isInsideBar = !!(currBar && prevBar &&
-    currBar.high <= prevBar.high && currBar.low >= prevBar.low &&
-    (currBar.high - currBar.low) < (prevBar.high - prevBar.low));
-  // NR7 + inside bar together = classic Varsity "coil" — strongest pre-expansion signal
-  const coiledBar = isNR7 && isInsideBar;
-
-  // Anchored VWAP from previous day high and low — intraday institutional
-  // reference lines. Much more meaningful than a naive session VWAP when
-  // price is testing a recent pivot. If we're bouncing off aVWAP from PDL,
-  // that's buyers defending the prior day's base.
-  let avwapFromPDH = null, avwapFromPDL = null;
-  try {
-    if (prevDayCandles.length && todayCandles.length >= 2) {
-      // Find the bar where PDH/PDL were set (last bar at those extremes)
-      let pdhIdx = 0, pdlIdx = 0;
-      for (let i = 0; i < prevDayCandles.length; i++) {
-        if (prevDayCandles[i].high >= pdHigh) pdhIdx = i;
-        if (prevDayCandles[i].low  <= pdLow)  pdlIdx = i;
-      }
-      // Anchor from PDH/PDL forward through today
-      const anchorBars = prevDayCandles.concat(todayCandles);
-      const pdhAnchor = anchorBars.slice(prevDayCandles.length - (prevDayCandles.length - pdhIdx));
-      const pdlAnchor = anchorBars.slice(prevDayCandles.length - (prevDayCandles.length - pdlIdx));
-      const _aVWAP = bars => {
-        let numer = 0, denom = 0;
-        for (const b of bars) {
-          const tp = (b.high + b.low + b.close) / 3;
-          const v = b.volume || 0;
-          numer += tp * v; denom += v;
-        }
-        return denom > 0 ? numer / denom : null;
-      };
-      avwapFromPDH = _aVWAP(pdhAnchor);
-      avwapFromPDL = _aVWAP(pdlAnchor);
-    }
-  } catch (e) { /* aVWAP best-effort */ }
-  const nearAVWAPFromPDL = avwapFromPDL && Math.abs(px - avwapFromPDL) / px < 0.005; // within 0.5%
-  const nearAVWAPFromPDH = avwapFromPDH && Math.abs(px - avwapFromPDH) / px < 0.005;
-
-  // Bid-ask spread proxy — we don't have tick-level quotes but can approximate
-  // liquidity from recent wick/body symmetry + ATR. A "clean" candle (small
-  // wicks, tight range vs ATR) implies tight spreads. Messy candle with long
-  // wicks and huge range = wide spreads / thin book. Used to penalize illiquid
-  // setups where slippage will eat RR.
-  const recent10 = todayCandles.slice(-10);
-  let msSpreadProxy = null;
-  if (recent10.length >= 5) {
-    const avgRange = recent10.reduce((a, c) => a + (c.high - c.low), 0) / recent10.length;
-    const avgWick  = recent10.reduce((a, c) => {
-      const bodyHi = Math.max(c.open, c.close), bodyLo = Math.min(c.open, c.close);
-      return a + (c.high - bodyHi) + (bodyLo - c.low);
-    }, 0) / recent10.length;
-    // Ratio: wick-to-range. High = messy, wide spreads. Low = clean, tight.
-    msSpreadProxy = avgRange > 0 ? +(avgWick / avgRange).toFixed(2) : null;
-  }
-  const wideSpreadLikely = msSpreadProxy != null && msSpreadProxy > 0.75;
-
-  // Partial OR flag: during OPENING phase (first 30 min, < 6 bars), OR is
-  // still forming. BREAKOUT signals built on an incomplete OR are provisional;
-  // we surface the flag + lower the breakout confidence.
-  const orBars = todayFirst6.length;
-  const orIncomplete = orBars < 6;
-
   // ── Varsity M2 Ch 5-10: Candlestick pattern detection on 5-min ──
   // Use today's candles so pattern reflects the current session's psychology.
   // Declared with `let` because Ch 4 prior-trend filter below may demote weight.
@@ -10416,15 +10090,6 @@ function scoreDayTrade(candles, sym, ctx) {
       adrUsedPct = adrAvg > 0 ? +((todayRangePct / adrAvg) * 100).toFixed(0) : 0;
     }
   }
-
-  // ── Commit 1: ADR-used hard gate ──────────────────────────────────────
-  // A "Strong Entry" when the stock has already consumed ~all its typical
-  // daily range is almost always wrong — there's no room left to run before
-  // ADR reversion kicks in. Hard reject at >=90%, soft penalty in each setup
-  // scoring block below via adrExhaustedPenalty.
-  if (adrUsedPct >= 90) return null;
-  const adrExhaustedPenalty = adrUsedPct >= 75 ? Math.min(20, (adrUsedPct - 75)) : 0;
-  const adrRoomBonus        = adrUsedPct > 0 && adrUsedPct < 40 ? 5 : 0;
 
   // ── Varsity M2 Ch 11: Role reversal (broken resistance becomes support) ──
   // "A level that was resistance becomes support once decisively broken."
@@ -10685,21 +10350,6 @@ function scoreDayTrade(candles, sym, ctx) {
   // Narrow CPR confirms trending-day breakout bias
   if (cpr && cpr.type === 'NARROW' && breakoutScore >= 30) { breakoutScore += _gain('BRK', 6, `Narrow CPR (${cpr.widthPct.toFixed(2)}%) — trending day`); breakoutDetail.push('Narrow CPR'); }
   else if (cpr && cpr.type === 'WIDE') { breakoutScore += _penalty('BRK', 8, `Wide CPR (${cpr.widthPct.toFixed(2)}%) — range day fade risk`); breakoutDetail.push('Wide CPR range day'); }
-  // Commit 3: partial OR — breakout above an unfinished range is provisional
-  if (orIncomplete && aboveOR) {
-    breakoutScore += _penalty('BRK', 8, `OR still forming (${orBars}/6 bars) — breakout provisional`);
-    breakoutDetail.push(`OR incomplete (${orBars}/6)`);
-  }
-  // Commit 3: coiled bar (NR7 + inside) preceding the breakout = pre-expansion
-  if (coiledBar) {
-    breakoutScore += _gain('BRK', 6, 'NR7 inside-bar coil — pre-expansion pattern');
-    breakoutDetail.push('Coiled bar (NR7+inside)');
-  }
-  // Commit 3: wide bid-ask proxy penalty on breakouts (slippage risk)
-  if (wideSpreadLikely) {
-    breakoutScore += _penalty('BRK', 4, `Wide spread proxy (wick/range ${msSpreadProxy}) — slippage risk`);
-    breakoutDetail.push('Wide-spread proxy');
-  }
   // Varsity M2 Ch 5-10: bullish pattern confirming the breakout
   if (bullPattern && bullPattern.weight >= 12 && breakoutScore >= 30) {
     const bonus = Math.round(bullPattern.weight * 0.5);
@@ -10870,184 +10520,6 @@ function scoreDayTrade(candles, sym, ctx) {
     // Varsity M2: "never fight the higher timeframe trend"
     if (dailyF2.pctAbove200 < -5 && dailyF2.rsi < 35) overall = Math.max(0, overall + _penalty('MULTI', 10, 'Daily trend bearish (price below 200DMA, RSI extreme)'));
     if (dailyF2.dowTheoryTrend === 'DOWNTREND') overall = Math.max(0, overall + _penalty('MULTI', 5, 'Dow Theory downtrend on daily'));
-    // Commit 2: tighten counter-trend penalty. All 4 intraday setups are LONG,
-    // so a bearish daily structure is ALWAYS a headwind. Layered penalties by
-    // severity — bottom case (price < 200DMA AND dowTrend=DOWN AND supertrend=SELL)
-    // can never rank Strong Entry regardless of how clean the 5-min setup looks.
-    const counterTrendFlags = [
-      dailyF2.pctAbove200 != null && dailyF2.pctAbove200 < 0,
-      dailyF2.dowTheoryTrend === 'DOWNTREND',
-      dailyF2.supertrendSig === 'SELL' || dailyF2.supertrendSig === 'bearish',
-      dailyF2.goldenCross === false && dailyF2.dma50 != null && dailyF2.dma200 != null,
-    ].filter(Boolean).length;
-    if (counterTrendFlags >= 3) {
-      overall = Math.max(0, overall + _penalty('MULTI', 8, `Counter-trend: ${counterTrendFlags}/4 daily headwinds`));
-      overall = Math.min(overall, 59); // cap below "Good Setup" threshold
-    } else if (counterTrendFlags === 2) {
-      overall = Math.max(0, overall + _penalty('MULTI', 4, 'Counter-trend: 2/4 daily headwinds'));
-    }
-  }
-
-  // ── Commit 2: Systemic context modulators (VIX · breadth · sector rotation) ──
-  // These are light-touch adjustments (±2-8 points) applied AFTER the daily-TF
-  // alignment block so they modulate conviction without overwhelming the
-  // per-stock structural signals.
-  //
-  // • VIX:   regime-dependent amplification/dampening. Low VIX → momentum
-  //   setups are cleaner. High VIX → whipsaw risk ↑, false breakouts ↑.
-  // • Breadth: if < 30% of scanned stocks are above VWAP, every long is
-  //   swimming upstream. Varsity M2 Ch22: "trade with the tape."
-  // • Sector momentum: top-3 sectors today usually trend through the close;
-  //   bottom-3 tend to fade further. Varsity M9: "ride the leaders."
-  let vixValue = null, vixRegime = 'NORMAL';
-  try {
-    if (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix && _marketDataCache.vix.value) {
-      vixValue = +_marketDataCache.vix.value;
-      if (vixValue < 12) {
-        vixRegime = 'CALM';
-        // Calm VIX → breakouts and momentum run clean; give a small boost
-        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
-          overall = Math.min(100, overall + _gain('MULTI', 3, `VIX calm (${vixValue.toFixed(1)}) — momentum setups run cleaner`));
-        }
-      } else if (vixValue > 24) {
-        vixRegime = 'HIGH';
-        // High VIX → whipsaw. Hard dampener on breakouts, gentler on bounces.
-        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
-          overall = Math.max(0, overall + _penalty('MULTI', 8, `VIX high (${vixValue.toFixed(1)}) — momentum whipsaws frequent`));
-        } else if (best.type === 'OVERSOLD_BOUNCE') {
-          overall = Math.min(100, overall + _gain('MULTI', 2, `VIX high (${vixValue.toFixed(1)}) — bounces favored over breakouts`));
-        } else {
-          overall = Math.max(0, overall + _penalty('MULTI', 4, `VIX high (${vixValue.toFixed(1)}) — widen expectations of drawdown`));
-        }
-      } else if (vixValue > 18) {
-        vixRegime = 'ELEVATED';
-        if (best.type === 'BREAKOUT' || best.type === 'GAP_AND_GO') {
-          overall = Math.max(0, overall + _penalty('MULTI', 3, `VIX elevated (${vixValue.toFixed(1)}) — breakouts less reliable`));
-        }
-      }
-    }
-  } catch (e) { /* VIX read failed — fall through with NORMAL regime */ }
-
-  // Breadth — rolled from the previous scan. All 4 intraday setups are LONG,
-  // so weak breadth is a universal headwind.
-  let breadthContext = null;
-  try {
-    if (_dayTradeBreadth && _dayTradeBreadth.n >= 5) {
-      const bPct = _dayTradeBreadth.aboveVWAPPct;
-      breadthContext = { aboveVWAPPct: bPct, avgGapPct: _dayTradeBreadth.avgGapPct, n: _dayTradeBreadth.n };
-      if (bPct < 25) {
-        overall = Math.max(0, overall + _penalty('MULTI', 6, `Weak breadth: only ${bPct}% of names above VWAP`));
-      } else if (bPct < 40) {
-        overall = Math.max(0, overall + _penalty('MULTI', 3, `Soft breadth: ${bPct}% above VWAP`));
-      } else if (bPct > 70) {
-        overall = Math.min(100, overall + _gain('MULTI', 3, `Strong breadth: ${bPct}% above VWAP — tape is risk-on`));
-      }
-    }
-  } catch (e) { /* breadth unavailable */ }
-
-  // Sector rotation — ride the leaders, fade the laggards.
-  let sectorRank = null;
-  try {
-    const sec = canonicalSector(stockFundamentals[sym]?.sector) || 'Other';
-    const row = _dayTradeSectorMomentum && _dayTradeSectorMomentum[sec];
-    if (row && row.total >= 4) {
-      sectorRank = { sector: sec, rank: row.rank, total: row.total, avgScore: row.avgScore };
-      if (row.rank <= 3) {
-        overall = Math.min(100, overall + _gain('MULTI', 3, `Sector ${sec} ranked #${row.rank}/${row.total} today — leading`));
-      } else if (row.rank >= row.total - 2 && row.total >= 6) {
-        overall = Math.max(0, overall + _penalty('MULTI', 3, `Sector ${sec} ranked #${row.rank}/${row.total} today — lagging`));
-      }
-    }
-  } catch (e) { /* sector momentum unavailable */ }
-
-  // ── Commit 3: F&O OI context (for F&O stocks only) ─────────────────────
-  // When the stock is in F&O, options-market positioning is load-bearing
-  // context. PCR > 1.3 = put-heavy (bearish skew, but also contrarian floor);
-  // PCR < 0.7 = call-heavy (bullish but potential exhaustion). Max pain
-  // attraction: price tends to drift toward max pain on expiry week; if
-  // we're > 3% away from max pain with expiry < 3d, there's mean-reversion
-  // gravity pulling against momentum.
-  let fnoContext = null;
-  try {
-    const od = (typeof _marketDataCache !== 'undefined' && _marketDataCache.optionData)
-      ? _marketDataCache.optionData[sym] : null;
-    if (od && od.pcr) {
-      const pcr = +od.pcr;
-      const maxPain = od.maxPain;
-      const maxPainDistPct = (maxPain && px)
-        ? +(((px - maxPain) / px) * 100).toFixed(2) : null;
-      fnoContext = {
-        pcr, maxPain, maxPainDistPct,
-        atmIV: od.atmIV,
-        totalCEOI: od.totalCEOI, totalPEOI: od.totalPEOI,
-      };
-      // PCR extremes — contrarian bias
-      if (pcr > 1.5) {
-        // Very bearish positioning → contrarian bullish floor for longs
-        overall = Math.min(100, overall + _gain('MULTI', 3, `PCR ${pcr.toFixed(2)} — put-heavy, contrarian floor`));
-      } else if (pcr < 0.6) {
-        // Excessive call-heavy → exhaustion risk on longs
-        overall = Math.max(0, overall + _penalty('MULTI', 4, `PCR ${pcr.toFixed(2)} — call-heavy, exhaustion risk`));
-      }
-      // Max pain gravity — only apply if expiry is near (approx by non-zero OI magnitude + distance)
-      if (maxPainDistPct != null && Math.abs(maxPainDistPct) > 3) {
-        // Price above max pain = downward pull; below = upward pull
-        if (maxPainDistPct > 3) {
-          // Price well above max pain → gravity pulls down (bad for longs)
-          overall = Math.max(0, overall + _penalty('MULTI', 3, `Px ${maxPainDistPct.toFixed(1)}% above max pain ${maxPain} — gravity pulls down`));
-        } else if (maxPainDistPct < -3 && best.type === 'OVERSOLD_BOUNCE') {
-          // Price well below max pain + bounce setup → gravity aligns with thesis
-          overall = Math.min(100, overall + _gain('MULTI', 4, `Px ${Math.abs(maxPainDistPct).toFixed(1)}% below max pain ${maxPain} — bounce aligned with gravity`));
-        }
-      }
-      // Elevated ATM IV → expect wider swings; mild warn
-      if (od.atmIV && od.atmIV > 35) {
-        overall = Math.max(0, overall + _penalty('MULTI', 2, `ATM IV elevated (${od.atmIV}%) — expect wider swings`));
-      }
-    }
-  } catch (e) { /* F&O context best-effort */ }
-
-  // ── Commit 3: Pre-open auction context (meaningful only early session) ──
-  // Pre-open IEP + buy/sell imbalance tells us whether the 9:15 gap was
-  // institutionally conviction-backed. A +3% gap with +0.6 buy imbalance
-  // and big ATO buy orders = real gap-and-go. A +3% gap with -0.2 imbalance
-  // means sellers were dominating pre-open → gap-fill risk.
-  let preOpenContext = null;
-  try {
-    const pod = (typeof _marketDataCache !== 'undefined' && _marketDataCache.preOpenData)
-      ? _marketDataCache.preOpenData[sym] : null;
-    // Only apply during OPENING/MORNING phases when pre-open is still relevant
-    if (pod && (sessionPhase === 'OPENING' || sessionPhase === 'MORNING')) {
-      preOpenContext = {
-        iep: pod.iep, gapPct: pod.gapPct,
-        imbalance: pod.imbalance, totalBuyQty: pod.totalBuyQty, totalSellQty: pod.totalSellQty,
-      };
-      // Pre-open conviction: gap-and-go + strong buy imbalance = big boost
-      if (best.type === 'GAP_AND_GO' && pod.gapPct != null && pod.gapPct > 1.0) {
-        if (pod.imbalance > 0.3) {
-          overall = Math.min(100, overall + _gain('MULTI', 5, `Pre-open: +${pod.gapPct}% gap with ${(pod.imbalance*100).toFixed(0)}% buy imbalance`));
-        } else if (pod.imbalance < -0.2) {
-          overall = Math.max(0, overall + _penalty('MULTI', 6, `Pre-open: +${pod.gapPct}% gap but ${Math.abs(pod.imbalance*100).toFixed(0)}% sell imbalance — gap-fill risk`));
-        }
-      }
-      // Large-gap pre-open conviction check applies to ALL setups on gap-up days
-      if (pod.gapPct != null && Math.abs(pod.gapPct) > 2.0 && Math.abs(pod.imbalance) < 0.1) {
-        // Big gap with flat imbalance = uncertain — mild dampener
-        overall = Math.max(0, overall + _penalty('MULTI', 2, `Pre-open gap ${pod.gapPct}% with flat imbalance — low conviction`));
-      }
-    }
-  } catch (e) { /* pre-open context best-effort */ }
-
-  // ── Commit 3: Microstructure bonuses (aVWAP bounce · coil) ──────────────
-  // Broadly applicable to any long setup.
-  if (nearAVWAPFromPDL && best.type === 'OVERSOLD_BOUNCE') {
-    overall = Math.min(100, overall + _gain('MULTI', 4, 'Near anchored VWAP from PDL — institutional defense line'));
-  } else if (nearAVWAPFromPDH && best.type === 'BREAKOUT') {
-    overall = Math.min(100, overall + _gain('MULTI', 3, 'Near anchored VWAP from PDH — pivot level re-test'));
-  }
-  if (coiledBar && best.type !== 'BREAKOUT') {
-    // Already credited inside breakoutScore for BREAKOUT; credit here for others
-    overall = Math.min(100, overall + _gain('MULTI', 2, 'Coiled bar (NR7+inside) — pre-expansion'));
   }
 
   // Late session penalty
@@ -11089,20 +10561,6 @@ function scoreDayTrade(candles, sym, ctx) {
   else if (ch19PassCount === 3) overall = Math.min(100, overall + _gain('MULTI', 4, 'M2 Ch 19 checklist: 3/5 passed'));
   else if (ch19PassCount <= 1) overall = Math.max(0, overall + _penalty('MULTI', 6, `M2 Ch 19 checklist: only ${ch19PassCount}/5 — weak setup`));
 
-  // ── Commit 1: ADR-used soft gates ─────────────────────────────────────
-  // Apply the exhaustion penalty / room bonus computed above. The hard >=90%
-  // reject already happened at preflight; this shapes the middle zone.
-  if (adrExhaustedPenalty > 0) {
-    overall = Math.max(0, overall + _penalty('MULTI', adrExhaustedPenalty, `ADR ${adrUsedPct}% used — limited room`));
-  }
-  if (adrRoomBonus > 0) {
-    overall = Math.min(100, overall + _gain('MULTI', adrRoomBonus, `ADR ${adrUsedPct}% used — room to run`));
-  }
-  // Delivery % soft penalty — low delivery (10-20%) = speculative, thinner conviction.
-  if (_delPct != null && _delPct < 20 && _delPct >= 10) {
-    overall = Math.max(0, overall + _penalty('MULTI', 5, `Delivery ${_delPct}% — speculative`));
-  }
-
   if (overall < 30) return null; // below threshold — not worth showing
 
   // Stop loss + target based on setup type
@@ -11134,61 +10592,14 @@ function scoreDayTrade(candles, sym, ctx) {
   // Varsity M9: ATR-based stop loss — SL must be at least 1 ATR away from entry
   const atrSlice = candles.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close)));
   const atr14val = atrSlice.slice(-14).reduce((a, b) => a + b, 0) / 14;
-  // Commit 2: beta-adjusted SL widening. High-beta stocks routinely move
-  // 1.5-2x the market on a normal bar — a tight ATR stop that works on a
-  // beta=0.8 FMCG name gets wicked constantly on a beta=1.8 small-cap.
-  // Widen the minimum SL by a beta factor so volatile names get room to
-  // breathe without blowing the risk budget (the Kelly/vol sizing block
-  // already scales qty down for high-ATR names, so capital risk is stable).
-  const _beta = stockFundamentals[sym]?.beta;
-  let betaSLMult = 1.0;
-  if (typeof _beta === 'number' && isFinite(_beta)) {
-    if (_beta >= 1.8) betaSLMult = 1.25;
-    else if (_beta >= 1.3) betaSLMult = 1.15;
-    else if (_beta >= 1.0) betaSLMult = 1.05;
-    else if (_beta >= 0.7) betaSLMult = 1.00;
-    else betaSLMult = 0.95; // very low-beta defensive — tighter SL OK
-  }
-  const minSLDist = atr14val * betaSLMult;
+  const minSLDist = atr14val;
   if (px - sl < minSLDist) sl = +(px - minSLDist).toFixed(2);
   // Recalc targets and RR after ATR adjustment
   tgt = +(px + (px - sl) * Math.max(1.5, rrRatio || 1.5)).toFixed(2);
   rrRatio = sl < px ? +((tgt - px) / (px - sl)).toFixed(1) : 0;
 
-  // ── Commit 1: slippage + brokerage applied to net RR ──────────────────
-  // The structural engine has a full slippage/brokerage sim (STRUCTURE_CONFIG)
-  // but DayTrade's rrRatio was computed on raw prices. At 5bps slip + 3bps
-  // brokerage each way (~16bps round-trip), a 0.4% stop loses ~40% of its
-  // risk to costs — rrRatio is materially different after adjustment.
-  // We compute and expose a NET rrRatio alongside the raw one; the net is
-  // what actually gates the trade.
-  let rrRatioNet = rrRatio;
-  try {
-    if (typeof STRUCTURE_CONFIG !== 'undefined' && STRUCTURE_CONFIG.slippageSimulationEnabled) {
-      const slipBps = +STRUCTURE_CONFIG.slippageBps || 0;
-      const brkBps  = +STRUCTURE_CONFIG.brokerageBps || 0;
-      // Buy entry: fill above mid by slipBps. Sell at SL or TGT: fill below mid by slipBps.
-      const entryNet = px  * (1 + slipBps / 10000);
-      const slNet    = sl  * (1 - slipBps / 10000);
-      const tgtNet   = tgt * (1 - slipBps / 10000);
-      // Round-trip brokerage as absolute %, subtracted from reward side.
-      const brkPct = (2 * brkBps) / 10000 * entryNet;
-      const netRisk   = entryNet - slNet + brkPct;
-      const netReward = tgtNet   - entryNet - brkPct;
-      if (netRisk > 0 && netReward > 0) rrRatioNet = +(netReward / netRisk).toFixed(2);
-      else rrRatioNet = 0;
-    }
-  } catch (e) { /* structure config not loaded — leave net = raw */ }
-
-  // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward.
-  // Commit 1: tighten to NET 1.3 — costs eat into thin-RR trades unacceptably.
+  // Varsity M9: minimum R:R of 1:1 — never take a trade where risk > reward
   if (rrRatio < 1.0) return null;
-  if (rrRatioNet < 1.3) {
-    // Don't reject outright — still useful to surface as "Developing" so the
-    // user can see what almost qualified. Cap the score hard so it can never
-    // rank as Strong Entry (>=75) or Good Setup (>=60).
-    overall = Math.min(overall, 44);
-  }
 
   // Ch 19 checklist retroactive R:R correction. If the ATR-adjusted R:R
   // ended up < 1.5, the rrRatio check we placeholded above was too
@@ -11350,28 +10761,6 @@ function scoreDayTrade(candles, sym, ctx) {
     ].filter(Boolean),
   };
 
-  // ── Commit 4: Setup hit-rate feedback (paper-trade stats, NOT ML) ──
-  // _setupHitRate is refreshed every 30 min from outcome_metrics joined
-  // with features_snapshot. getSetupMultiplier returns a ratio clamped to
-  // [0.85, 1.15] derived from rolling win-rate vs prior of 50%. Unless
-  // we have >= SETUP_HITRATE_MIN_SAMPLES paper-trades recorded for this
-  // setup, mult = 1.0 and this is a no-op.
-  //
-  // Concretely: if BREAKOUT has been winning 65% in paper trading, every
-  // BREAKOUT pick today gets ~+15% conviction; if OVERSOLD_BOUNCE has
-  // been losing (42% hits), it gets ~-8%. The multiplier is applied AFTER
-  // all structural scoring so it modulates verdict tier without rewriting
-  // the underlying signal breakdown.
-  const setupMult = getSetupMultiplier(best.type);
-  const overallBeforeHitRate = overall;
-  if (setupMult !== 1.0) {
-    overall = Math.max(0, Math.min(100, Math.round(overall * setupMult)));
-    const deltaPts = overall - overallBeforeHitRate;
-    if (deltaPts > 0) _gain('MULTI', deltaPts, `Hit-rate mult ${(setupMult).toFixed(2)}x (${best.type} winning in paper trades)`);
-    else if (deltaPts < 0) _penalty('MULTI', Math.abs(deltaPts), `Hit-rate mult ${(setupMult).toFixed(2)}x (${best.type} losing in paper trades)`);
-  }
-  const setupHitRateRecord = _setupHitRate[best.type] || null;
-
   // Verdict
   let verdict, verdictColor;
   if (overall >= 75) { verdict = 'Strong Entry'; verdictColor = '#22c55e'; }
@@ -11492,37 +10881,6 @@ function scoreDayTrade(candles, sym, ctx) {
     },
     // Varsity M2 Ch 4: session-trend context used to demote reversal patterns
     sessionTrend,
-    // Commit 1: net-of-cost RR + reliability flags
-    rrRatioNet,           // after ~5bps slip + ~3bps brokerage each way
-    rrTooTight: rrRatioNet < 1.3,
-    deliveryPct: _delPct,
-    adrExhausted: adrUsedPct >= 75,
-    // Commit 2: systemic context exposed for UI + audit
-    vixValue, vixRegime,
-    breadthContext,        // { aboveVWAPPct, avgGapPct, n } or null
-    sectorRank,            // { sector, rank, total, avgScore } or null
-    betaUsed: _beta != null ? +(+_beta).toFixed(2) : null,
-    betaSLMult: +betaSLMult.toFixed(2),
-    // Commit 3: F&O OI + pre-open + microstructure
-    fnoContext,            // { pcr, maxPain, maxPainDistPct, atmIV, totalCEOI, totalPEOI } or null
-    preOpenContext,        // { iep, gapPct, imbalance, totalBuyQty, totalSellQty } or null
-    microstructure: {
-      isNR7,
-      isInsideBar,
-      coiledBar,
-      avwapFromPDH: avwapFromPDH ? +avwapFromPDH.toFixed(2) : null,
-      avwapFromPDL: avwapFromPDL ? +avwapFromPDL.toFixed(2) : null,
-      nearAVWAPFromPDH,
-      nearAVWAPFromPDL,
-      spreadProxy: msSpreadProxy,
-      wideSpreadLikely,
-      orIncomplete,
-      orBarsComplete: orBars,
-    },
-    // Commit 4: paper-trade hit-rate feedback
-    setupMult: +setupMult.toFixed(2),
-    setupHitRate: setupHitRateRecord,  // { wins, losses, n, hitRate, mult } or null
-    scoreBeforeHitRate: overallBeforeHitRate,
     // Varsity M2 Ch 14: RSI midline state
     rsiAboveMidline, rsiCrossedMidlineUp,
     // Varsity M2 Ch 12: volume trend (3-bar expansion/contraction)
@@ -11566,11 +10924,6 @@ async function scanDayTrades(force = false) {
   const results = [];
 
   try {
-    // Commit 4: refresh hit-rate table before scoring the slate. Non-blocking
-    // in practice — cache TTL is 30min so most runs no-op. Never block the
-    // scan if the DB round-trip hiccups.
-    await refreshSetupHitRate(false).catch(e => console.warn('hit-rate refresh failed:', e.message));
-
     const today   = new Date().toISOString().split('T')[0];
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -11628,9 +10981,7 @@ async function scanDayTrades(force = false) {
       // no single sector dominates the top 10 with more than 2 picks.
       _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
-      // Commit 2: roll systemic context (breadth + sector momentum) for next scan
-      _rollupSystemicContext(results);
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached · breadth ${_dayTradeBreadth.aboveVWAPPct}% >VWAP`);
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
@@ -11823,10 +11174,6 @@ async function runUnifiedKitePipeline(force = false) {
   const dayTradeResults = [];
 
   try {
-    // Commit 4: refresh hit-rate table before scoring. Cached for 30min; runs
-    // only if stale. Failures are non-fatal — we just keep last known values.
-    await refreshSetupHitRate(false).catch(e => console.warn('hit-rate refresh failed:', e.message));
-
     // Pre-fetch Nifty benchmark (non-blocking, best-effort)
     try {
       const niftyCandles = await fetchKiteDaily('NIFTY 50');
@@ -11956,8 +11303,6 @@ async function runUnifiedKitePipeline(force = false) {
       // Varsity M9 sector-correlation cap — same logic as scanDayTrades.
       _dayTradeCache   = applySectorCap(dayTradeResults, 2);
       _dayTradeCacheTs = Date.now();
-      // Commit 2: roll systemic context (breadth + sector momentum) for next scan
-      _rollupSystemicContext(dayTradeResults);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
@@ -12999,8 +12344,7 @@ async function fetchFromNSE(sym) {
 
 let _marketDataCache = {
   vix: null, fiiDii: null, crude: null, usdInr: null, rbiRepoRate: null,
-  deliveryData: {}, optionData: {}, preOpenData: {},   // Commit 3: pre-open auction data
-  quarterlyResults: {}, fetchedAt: 0
+  deliveryData: {}, optionData: {}, quarterlyResults: {}, fetchedAt: 0
 };
 
 // Get NSE session cookies (reusable)
@@ -13090,32 +12434,6 @@ async function fetchAIMarketData(stockSymbols) {
           prevClose: trade.previousClose,
           isFnO: secInfo.surveillance?.isFNO === 'true' || false,
         };
-
-        // Commit 3: persist pre-open auction data (9:00-9:08 IST window).
-        // Unlike the 9:15 open price, pre-open IEP reflects institutional
-        // order-book imbalance *before* retail shows up. Strong pre-open
-        // upside gap + high buy/sell imbalance + large ATO order = high
-        // conviction gap-and-go; weak/reversed pre-open = gap-fill risk.
-        if (preOpen && (preOpen.IEP || preOpen.iep || preOpen.finalPrice)) {
-          const iep = preOpen.IEP || preOpen.iep || preOpen.finalPrice;
-          const prev = trade.previousClose;
-          const totalBuy  = preOpen.totalBuyQuantity  || preOpen.totalBuy  || 0;
-          const totalSell = preOpen.totalSellQuantity || preOpen.totalSell || 0;
-          const imbalance = (totalBuy + totalSell) > 0
-            ? ((totalBuy - totalSell) / (totalBuy + totalSell))
-            : 0;
-          _marketDataCache.preOpenData = _marketDataCache.preOpenData || {};
-          _marketDataCache.preOpenData[sym] = {
-            iep: iep ? +(+iep).toFixed(2) : null,
-            gapPct: (iep && prev) ? +(((iep - prev) / prev) * 100).toFixed(2) : null,
-            totalBuyQty: totalBuy,
-            totalSellQty: totalSell,
-            imbalance: +imbalance.toFixed(2),   // -1..+1, >0 = buy-heavy
-            atoBuy: preOpen.atoBuyQty || preOpen.atoBuy || 0,
-            atoSell: preOpen.atoSellQty || preOpen.atoSell || 0,
-            fetchedAt: Date.now(),
-          };
-        }
 
         if (secInfo.surveillance?.isFNO === 'true') fnoStocks.add(sym);
       } catch (e) { /* skip this stock */ }
@@ -17436,78 +16754,6 @@ app.post('/api/admin/stale-healthcheck', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
-});
-
-// ── DayTrade reliability admin endpoints (Commit 1) ─────────────────────
-// These let the paper-trade engine (or manual admin) feed realised outcomes
-// back into the scanner's safety logic. Not used by the UI directly.
-
-// Mark a symbol as SL-triggered — the scanner will skip it for the cooldown
-// window (default 30 min, override with DAYTRADE_SL_COOLDOWN_MIN).
-app.post('/api/admin/daytrade/sl-triggered', (req, res) => {
-  try {
-    const { sym, reason } = req.body || {};
-    if (!sym) return res.status(400).json({ ok: false, error: 'sym required' });
-    markDayTradeSLTriggered(String(sym).toUpperCase(), reason || 'manual');
-    res.json({ ok: true, cooldownMinutes: SL_COOLDOWN_MS / 60000, cooldownSyms: _dayTradeSLCooldown.size });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Record realised PnL on a closed paper-trade pick. Scanner auto-halts on
-// today's combined drawdown exceeding DAYTRADE_KILL_SWITCH_DD (default 3%).
-app.post('/api/admin/daytrade/record-pnl', (req, res) => {
-  try {
-    const { pnlPct } = req.body || {};
-    const n = Number(pnlPct);
-    if (!isFinite(n)) return res.status(400).json({ ok: false, error: 'numeric pnlPct required' });
-    recordDayTradeRealizedPnL(n);
-    res.json({
-      ok: true,
-      state: _dayTradeKillSwitch,
-      tripped: isDayTradeKillSwitchTripped(),
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Inspect current reliability state — diagnostic only.
-app.get('/api/admin/daytrade/reliability', (req, res) => {
-  const cooldowns = {};
-  for (const [k, v] of _dayTradeSLCooldown) cooldowns[k] = { ...v, minutesLeft: Math.max(0, +((SL_COOLDOWN_MS - (Date.now() - v.ts)) / 60000).toFixed(1)) };
-  res.json({
-    cooldowns,
-    killSwitch: _dayTradeKillSwitch,
-    killSwitchTripped: isDayTradeKillSwitchTripped(),
-    setupHitRate: _setupHitRate,
-    setupHitRateUpdatedAt: _setupHitRateTs ? new Date(_setupHitRateTs).toISOString() : null,
-  });
-});
-
-// Force-refresh the setup hit-rate cache from outcome_metrics. Safe to call
-// any time — the scanner otherwise refreshes it every 30 min.
-app.post('/api/admin/daytrade/refresh-hit-rate', async (req, res) => {
-  try {
-    const out = await refreshSetupHitRate(true);
-    res.json({ ok: true, setupHitRate: out });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Commit 2: inspect the systemic-context tables (VIX / breadth / sector rank)
-// rolled by the previous scan and used by the next one. Useful for diagnosing
-// "why is every stock penalized today" — usually weak breadth or high VIX.
-app.get('/api/admin/daytrade/systemic-context', (req, res) => {
-  res.json({
-    vix: (typeof _marketDataCache !== 'undefined' && _marketDataCache.vix) ? _marketDataCache.vix : null,
-    breadth: _dayTradeBreadth,
-    breadthUpdatedAt: _dayTradeBreadth.ts ? new Date(_dayTradeBreadth.ts).toISOString() : null,
-    sectorMomentum: _dayTradeSectorMomentum,
-    sectorMomentumUpdatedAt: _dayTradeSectorMomentumTs ? new Date(_dayTradeSectorMomentumTs).toISOString() : null,
-  });
 });
 
 // BSE: hourly during IST market hours, Mon-Fri (at 5 past the hour so it
