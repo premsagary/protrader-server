@@ -224,10 +224,16 @@ export default function Admin() {
       }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>
-            <div className="label-xs" style={{ marginBottom: 8 }}>Admin · Pipeline · Monitoring · Data Ingestion</div>
+            <div className="label-xs" style={{ marginBottom: 8 }}>Admin · Read-only Ops · Diagnostics · Data Ingestion</div>
             <h1 style={{ fontSize: 36, fontWeight: 800, letterSpacing: '-1px', color: 'var(--text)' }}>
               <span className="gradient-fill">ProTrader Admin</span>
             </h1>
+            <p style={{ fontSize: 13, color: 'var(--text2)', marginTop: 10, maxWidth: 760, lineHeight: 1.55 }}>
+              Read-only ops &amp; diagnostics. Monitors the pipelines that feed the 5-layer gate stack
+              (Preflight → Varsity Binary → Book-Rules v1.1.0 → Constraints → Trade Management).
+              The master PAPER↔LIVE kill-switch, capital editor, and Kite test-buy now live in{' '}
+              <span style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Trade &gt; Agent</span>.
+            </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <div className="chip" style={{ background: 'var(--green-bg)', color: 'var(--green-text)', border: '1px solid rgba(52,211,153,0.3)' }}>
@@ -309,6 +315,15 @@ export default function Admin() {
       </div>
 
       {/* ═══ PIPELINE SYNC + LLM BUDGET STATUS ═══ */}
+      <div style={{
+        fontSize: 12, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.5,
+        padding: '8px 12px', background: 'rgba(99,102,241,0.06)',
+        border: '1px solid rgba(99,102,241,0.18)', borderRadius: 8,
+      }}>
+        These pipelines feed the 5-layer gate stack. A stale <strong style={{ color: 'var(--amber-text)' }}>Fundamentals</strong> cache
+        means Scoring uses old ROE/margins; a failed <strong style={{ color: 'var(--brand-text)' }}>Unified Pipeline</strong> means
+        DayTrade setups run on yesterday's 5-min candles.
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 20 }}>
         {PIPELINE.map((p) => (
           <div key={p.key} className="card" style={{ padding: '16px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -489,7 +504,7 @@ export default function Admin() {
 
       {/* ═══ LIVE LOGS ═══ */}
       <div className="card" style={{ padding: 24 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)' }}>Live Server Logs</h2>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <div className="chip chip-brand" style={{ gap: 4 }}>
@@ -506,6 +521,14 @@ export default function Admin() {
               Clear
             </button>
           </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.55 }}>
+          Tail of server logs. Watch for:{' '}
+          <code style={{ color: 'var(--red-text)', background: 'rgba(248,113,113,0.08)', padding: '1px 5px', borderRadius: 4 }}>varsityFailed=</code>,{' '}
+          <code style={{ color: 'var(--red-text)', background: 'rgba(248,113,113,0.08)', padding: '1px 5px', borderRadius: 4 }}>bookRulesGate.pass=false</code>,{' '}
+          <code style={{ color: 'var(--red-text)', background: 'rgba(248,113,113,0.08)', padding: '1px 5px', borderRadius: 4 }}>preflight rejected</code>,{' '}
+          <code style={{ color: 'var(--red-text)', background: 'rgba(248,113,113,0.08)', padding: '1px 5px', borderRadius: 4 }}>circuit breaker</code>.
+          These are your gate-level rejection signals.
         </div>
         <div ref={logRef} style={{
           background: '#0A0A10', borderRadius: 12, padding: 16, maxHeight: 380, overflowY: 'auto',

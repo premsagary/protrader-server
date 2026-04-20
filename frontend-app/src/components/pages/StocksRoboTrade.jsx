@@ -86,6 +86,27 @@ export default function StocksRoboTrade() {
         {sub === 'overview'   && <OverviewTab />}
         {sub === 'agent'      && (
           <>
+            {/* Agent intro — reinforces that the auto-trader only acts on
+                gate-cleared signals and has no manual-override path. */}
+            <div
+              style={{
+                background: 'var(--bg-elev)',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                padding: '12px 16px',
+                marginBottom: 12,
+                fontSize: 12.5,
+                lineHeight: 1.55,
+                color: 'var(--text2)',
+              }}
+            >
+              <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>
+                Agent executes only on signals that cleared the 5-layer gate pipeline.
+              </div>
+              <div>
+                No manual-override path exists — every order traces back to Preflight → Varsity → Book-Rules → Constraints → Management. The kill-switch card below controls mode (OFF / PAPER / LIVE).
+              </div>
+            </div>
             {/* Master PAPER↔LIVE kill-switch + capital editor + Kite test-buy.
                 Moved here from Admin 2026-04-20 — Agent owns the decision to
                 fire real orders, so this card lives with the agent controls. */}
@@ -135,7 +156,9 @@ function PageHeader({ sub }) {
             <span className="gradient-fill">Trade</span>
           </h1>
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text2)' }}>
-            Auto-trader + paper/live ledger + analytics · unified from the old Agent + RoboTrade tabs · {SUB_TABS.find((t) => t.id === sub)?.label || sub}
+            {sub === 'agent'
+              ? 'Auto-trader — executes on 5-gate-cleared signals only'
+              : `Auto-trader + paper/live ledger + analytics · unified from the old Agent + RoboTrade tabs · ${SUB_TABS.find((t) => t.id === sub)?.label || sub}`}
           </div>
         </div>
       </div>
@@ -323,6 +346,9 @@ function OverviewTab() {
           title="Stocks RoboTrade — Paper & Live feed from the same 5-layer pipeline"
           subtitle="Every P&L row below originated from a pick that cleared all 5 gates. No manual overrides."
         />
+        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--text3)', letterSpacing: 0.2 }}>
+          Preflight → Varsity → Book-Rules → Constraints → Management — identical on Paper and Live.
+        </div>
       </div>
 
       {/* Stat grid */}
@@ -771,6 +797,9 @@ function CandidatesTab() {
 
   return (
     <div>
+      <div style={{ color: 'var(--text2)', fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+        Candidates below are pre-filtered by the structure filter (pivot zones + VWAP + PDH/PDL) and optional LLM review. The 5-layer trade gate runs when the Agent picks one to execute — a candidate here has NOT yet cleared Constraints or Management.
+      </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <p style={{ fontSize: 12.5, color: 'var(--text2)', flex: 1, margin: 0, lineHeight: 1.5, minWidth: 260 }}>
           Live view of the last scan's BUY candidates after the Structure Filter (pivot zones, VWAP, PDH/PDL) and optional LLM review. Updates every scan (~5 min during market hours).

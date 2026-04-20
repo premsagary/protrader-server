@@ -48,11 +48,38 @@ const SETUP_FILTER_PILLS = [
   { id: 'OVERSOLD_BOUNCE', label: 'Oversold' },
 ];
 
+// Verdict thresholds mirror kite-server.js scoreDayTrade() line ~11741.
+// The 12-item Varsity binary gate decides inclusion; the score below is
+// only a diagnostic ranking of survivors, NOT a threshold filter.
+function scoreVerdict(v) {
+  if (v == null) return { label: '—', color: 'var(--text3)', dot: 'var(--text3)' };
+  const n = Math.round(v);
+  if (n >= 75) return { label: 'Strong Entry',  color: 'var(--green-text)', dot: 'var(--green-text)' };
+  if (n >= 60) return { label: 'Good Setup',    color: 'var(--green-text)', dot: 'var(--green-text)' };
+  if (n >= 45) return { label: 'Developing',    color: 'var(--amber-text)', dot: 'var(--amber-text)' };
+  return           { label: 'Weak',             color: 'var(--text3)',      dot: 'var(--text3)' };
+}
+
+function VerdictCell({ v }) {
+  if (v == null) return <span style={{ color: 'var(--text3)' }}>—</span>;
+  const { label, color, dot } = scoreVerdict(v);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+      <span style={{ color: dot, fontSize: 9, lineHeight: 1 }}>●</span>
+      <span style={{ color, fontWeight: 700 }}>{label}</span>
+      <span className="tabular-nums" style={{ color: 'var(--text3)', fontWeight: 600, fontSize: 10.5 }}>· {Math.round(v)}</span>
+    </span>
+  );
+}
+
 // Column definitions for the main sortable table
 const COLS = [
   { k: 'sym',           l: 'Stock',     w: 110, align: 'left',   sticky: true, bold: true },
   { k: 'grp',           l: 'Grp',       w: 75,  align: 'left' },
-  { k: 'dayTradeScore', l: 'Score',     w: 80,  align: 'right', fmt: (v) => v != null ? Math.round(v) : '—' },
+  // Score column keeps key='dayTradeScore' so sort-by-score still works, but
+  // renders a verdict chip + small numeric so users stop reading it as a
+  // threshold filter. Every visible row already cleared the binary gate.
+  { k: 'dayTradeScore', l: 'Score',     w: 150, align: 'left',  fmt: (v) => <VerdictCell v={v} /> },
   { k: 'bestSetup',     l: 'Setup',     w: 115, align: 'left',  fmt: (v, s) => v ? `${s.bestSetupEmoji || ''} ${String(v).replace(/_/g, ' ')}` : '—' },
   { k: 'price',         l: 'Price',     w: 80,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'rsi',           l: 'RSI',       w: 60,  align: 'right', fmt: (v) => v != null ? Math.round(v) : '—' },
@@ -253,8 +280,9 @@ export default function DayTrade() {
             <h1 style={{ fontSize: 36, fontWeight: 800, letterSpacing: '-1px', color: 'var(--text)' }}>
               <span className="gradient-fill">Scan · Intraday Signals</span>
             </h1>
-            <p style={{ fontSize: 14, color: 'var(--text2)', marginTop: 8, lineHeight: 1.5, maxWidth: 680 }}>
-              VWAP Reclaim + Gap & Go + Breakout + Oversold Bounce, scored in real-time.
+            <p style={{ fontSize: 14, color: 'var(--text2)', marginTop: 8, lineHeight: 1.5, maxWidth: 720 }}>
+              Every row below cleared the <b style={{ color: 'var(--text)' }}>12-item Varsity M2 Ch20+21 binary gate</b> —
+              score ranks survivors, it's not a filter threshold. Covers VWAP Reclaim, Gap &amp; Go, Breakout, and Oversold Bounce.
               Auto-refreshes every 5s. Last scanned: <b style={{ color: 'var(--text)' }}>{scannedAgo}</b>.
             </p>
             <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5, maxWidth: 680 }}>
@@ -313,6 +341,23 @@ export default function DayTrade() {
             {copyMsg}
           </div>
         )}
+      </div>
+
+      {/* ═══ GATE-STACK LEGEND ═══
+          Compact one-liner so users understand the Score column is a
+          ranking over survivors, not a threshold filter. */}
+      <div style={{
+        marginBottom: 16,
+        padding: '8px 14px',
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        fontSize: 11.5,
+        color: 'var(--text3)',
+        lineHeight: 1.5,
+      }}>
+        <b style={{ color: 'var(--text2)' }}>Gate stack:</b> Preflight → Varsity Binary (12) → Book-Rules v1.1.0 → Constraints → Management.
+        <span style={{ color: 'var(--text2)' }}> Every surviving row passed all 5.</span>
       </div>
 
       {/* ═══ SYSTEMIC CONTEXT BANNER ═══
@@ -489,9 +534,7 @@ export default function DayTrade() {
                           const raw = p[c.k];
                           const val = c.fmt ? c.fmt(raw, p) : raw != null ? String(raw) : '—';
                           let color = c.k === 'sym' ? 'var(--text)' : 'var(--text2)';
-                          if (c.k === 'dayTradeScore' && raw != null) {
-                            color = raw >= 70 ? 'var(--green-text)' : raw >= 50 ? 'var(--amber-text)' : 'var(--text2)';
-                          }
+                          // dayTradeScore colour is owned by <VerdictCell/>; don't override here.
                           if (c.k === 'bestSetup' && setup) color = setup.color;
                           if (c.k === 'rrRatio' && raw != null) {
                             color = raw >= 2 ? 'var(--green-text)' : raw >= 1.5 ? 'var(--text)' : 'var(--red-text)';
@@ -630,11 +673,8 @@ function SetupMiniTable({ setup, rows }) {
               {list.map((p) => (
                 <tr key={p.sym} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ ...miniTd, fontWeight: 700, color: 'var(--text)' }}>{p.sym}</td>
-                  <td className="tabular-nums" style={{
-                    ...miniTd, textAlign: 'right', fontWeight: 700,
-                    color: (p.dayTradeScore || 0) >= 70 ? 'var(--green-text)' : (p.dayTradeScore || 0) >= 50 ? 'var(--amber-text)' : 'var(--text2)',
-                  }}>
-                    {p.dayTradeScore != null ? Math.round(p.dayTradeScore) : '—'}
+                  <td style={{ ...miniTd, textAlign: 'right' }}>
+                    <VerdictCell v={p.dayTradeScore} />
                   </td>
                   <td className="tabular-nums" style={{ ...miniTd, textAlign: 'right', color: 'var(--text2)' }}>
                     {p.price != null ? `₹${Number(p.price).toFixed(1)}` : '—'}

@@ -439,6 +439,9 @@ export default function Agent({ embedded = false } = {}) {
           <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)', marginBottom: 10 }}>
             Recent decisions (last 20)
           </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 10, fontStyle: 'italic' }}>
+            Decisions below originated from candidates that already passed all 5 gates (Preflight → Varsity → Book-Rules → Constraints → Management). Rejections happen earlier in the pipeline and are not listed here — see the Scan tab for intraday gate-reject counts.
+          </div>
           {recent.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', border: '1px dashed var(--border)', borderRadius: 10, fontSize: 12 }}>
               No decisions yet today. Cycle runs every minute during market hours when mode ≠ off.
