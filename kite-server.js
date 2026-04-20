@@ -10514,6 +10514,45 @@ function scoreDayTrade(candles, sym, ctx) {
 
   // ADX on 5-min
   const adxVal = adx(candles, 14);
+  // ADX pass threshold for Varsity binary gate: Varsity M2 Ch21 uses 25 as a
+  // hard "trending" floor, but 5-min ADX is noisier than daily ADX and needs
+  // ~14 bars to stabilise. We use 18 to avoid rejecting every early-session
+  // momentum setup. The adx() helper returns 25 by default when there are
+  // fewer than 16 bars, so pre-warmup windows pass naturally.
+  const adxTrendOk = adxVal >= 18;
+
+  // ── Varsity M2 Ch10: Gap classification ─────────────────────────────────────
+  // Varsity teaches four gap archetypes:
+  //   Common      — small gap inside recent range, low volume — usually fills.
+  //   Breakaway   — gap out of consolidation, high volume — trend starts.
+  //   Runaway     — gap WITHIN an established trend, mid-move — trend continues.
+  //   Exhaustion  — large gap at the END of a long trend, often with reversal
+  //                 candle — fade risk.
+  // We attach the named label to the pick for UI clarity; the underlying signals
+  // (magnitude, prior trend, ADR context, bearish-pattern-on-gap-up) already
+  // flow into the GAP setup scorer.
+  let gapType = 'None';
+  if (Math.abs(gapPct) >= 0.5) {
+    const dowUp   = _df && _df.dowTheoryTrend === 'UPTREND';
+    const dowDn   = _df && _df.dowTheoryTrend === 'DOWNTREND';
+    const bigGap  = Math.abs(gapPct) >= 2.0;
+    const tinyGap = Math.abs(gapPct) < 1.0;
+    // Exhaustion: big gap in same direction as an established trend + bearish
+    // reversal candle on the gap bar (for gap-ups).
+    if (bigGap && ((gapPct > 0 && dowUp) || (gapPct < 0 && dowDn)) &&
+        ((gapPct > 0 && typeof bearPattern !== 'undefined' && bearPattern && bearPattern.weight >= 12) ||
+         (gapPct < 0 && typeof bullPattern !== 'undefined' && bullPattern && bullPattern.weight >= 12))) {
+      gapType = 'Exhaustion';
+    } else if ((gapPct > 0 && dowUp) || (gapPct < 0 && dowDn)) {
+      gapType = 'Runaway';
+    } else if (Math.abs(gapPct) >= 1.5 && volRatio >= 1.5) {
+      gapType = 'Breakaway';
+    } else if (tinyGap) {
+      gapType = 'Common';
+    } else {
+      gapType = 'Common';
+    }
+  }
 
   // ── SETUP 1: VWAP RECLAIM (Varsity M2 Ch13: institutional reference price) ──
   // Price was below VWAP recently and is now reclaiming it from below with volume.
@@ -11415,6 +11454,9 @@ function scoreDayTrade(candles, sym, ctx) {
     validSessionWindow: sessionPhase !== 'CLOSED' && sessionPhase !== 'LATE' && minsSinceOpen >= 10 && minsSinceOpen < 345,
     // M2 indicator alignment — at least 2 of 4 (EMA9>EMA20, MACD bull, Supertrend, Stoch mid)
     indicatorsAlign:    ch19.indicators,
+    // M2 Ch21 — ADX shows a trend exists (adx >= 18 on 5-min, default 25 pre-warmup).
+    // Kills sideways-market breakouts where no directional edge exists.
+    trendStrengthOk:    adxTrendOk,
   };
   const varsityPassCount = Object.values(varsityChecklist).filter(Boolean).length;
   const varsityTotal     = Object.keys(varsityChecklist).length;
@@ -11487,6 +11529,8 @@ function scoreDayTrade(candles, sym, ctx) {
     dayHigh: +dayHigh.toFixed(2), dayLow: +dayLow.toFixed(2),
     pdHigh: +pdHigh.toFixed(2), pdLow: +pdLow.toFixed(2),
     bbPct: +bbPct.toFixed(2), gapUnfilled,
+    // Varsity M2 Ch10 — named gap classification (Common / Breakaway / Runaway / Exhaustion / None)
+    gapType,
     // Varsity M2 Ch 5-10: candlestick pattern on latest 5-min candle (if any)
     candlePattern: bullPattern ? bullPattern.name : (bearPattern ? bearPattern.name : null),
     candlePatternBull: bullPattern ? true : (bearPattern ? false : null),

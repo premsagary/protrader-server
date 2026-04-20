@@ -325,7 +325,7 @@ export default function DayTrade() {
         marginBottom: 20,
       }}>
         <StatCard l="Total" v={counts.total} c="var(--text)" />
-        <StatCard l="Varsity ✓ (11/11)" v={counts.varsity || counts.total} c="var(--green-text)" />
+        <StatCard l="Varsity ✓ (12/12)" v={counts.varsity || counts.total} c="var(--green-text)" />
         <StatCard l="Score ≥70 (diag)" v={counts.strong} c="var(--amber-text)" />
         {SETUPS.map((s) => (
           <StatCard key={s.type} l={s.label} v={counts[s.type] || 0} c={s.color} icon={s.icon} />
@@ -344,12 +344,13 @@ export default function DayTrade() {
           color: 'var(--text2)',
           lineHeight: 1.55,
         }}>
-          <b style={{ color: 'var(--green-text)' }}>Varsity M2 Ch20 Binary Gate active.</b>{' '}
-          Every pick below has passed all 11 Varsity checklist items
+          <b style={{ color: 'var(--green-text)' }}>Varsity M2 Ch20+21 Binary Gate active.</b>{' '}
+          Every pick below has passed all 12 Varsity checklist items
           (priceAction · srContext · volume · aboveDailyTrend · R:R · netR:R ·
-          Dow · ATR band · VIX · session window · indicators). Score is a
-          diagnostic only — no score threshold is applied. Anything failing
-          Varsity never surfaces here.
+          Dow · ATR band · VIX · session window · indicators · ADX trend).
+          Score is a diagnostic only — no score threshold is applied. Anything
+          failing Varsity never surfaces here. Gap type (Common / Breakaway /
+          Runaway / Exhaustion) is labelled per Varsity M2 Ch10.
         </div>
       )}
 
