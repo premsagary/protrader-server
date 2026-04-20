@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { apiGet, apiPost } from '../../api/client';
-import GatesActiveBanner from '../common/GatesActiveBanner';
 
 // ══════════════════════════════════════════════════════════════════════
 // Pipeline sync buttons — core data refresh endpoints
@@ -29,8 +28,8 @@ export default function Admin() {
   const screenerFileRef = useRef(null);
   const tickertapeFilesRef = useRef(null);
 
-  // Trading Mode state + Test Buy state moved to Trade > Agent sub-tab
-  // 2026-04-20 (see components/common/TradingModeCard.jsx).
+  // Trading Mode state + Test Buy state moved to Stocks RoboTrade > Agent
+  // sub-tab 2026-04-20 (see components/common/TradingModeCard.jsx).
   // Admin only polls trading-mode when the paper-soak tools below need it.
 
   useEffect(() => {
@@ -232,7 +231,7 @@ export default function Admin() {
               Read-only ops &amp; diagnostics. Monitors the pipelines that feed the 5-layer gate stack
               (Preflight → Varsity Binary → Book-Rules v1.1.0 → Constraints → Trade Management).
               The master PAPER↔LIVE kill-switch, capital editor, and Kite test-buy now live in{' '}
-              <span style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Trade &gt; Agent</span>.
+              <span style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Stocks RoboTrade &gt; Agent</span>.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -255,19 +254,11 @@ export default function Admin() {
         )}
       </div>
 
-      {/* ═══ GATES PIPELINE — shared Varsity + Book-Rules banner across tabs ═══ */}
-      <div style={{ marginBottom: 20 }}>
-        <GatesActiveBanner
-          variant="full"
-          accent="slate"
-          title="Admin — Operational view of the 5-layer gate pipeline"
-          subtitle="Flipping modes, running pipelines, or firing test buys does NOT bypass these gates. Every order passes through them."
-        />
-      </div>
-
-      {/* Trading Mode master kill-switch + Capital editor + Kite Test Buy
-          were moved to Trade > Agent sub-tab on 2026-04-20. See
-          components/common/TradingModeCard.jsx. */}
+      {/* Gates-pipeline banner removed from Admin on 2026-04-20 — it already
+          renders in Stocks RoboTrade > Overview and duplicating it here was
+          visual clutter. Trading Mode master kill-switch + Capital editor +
+          Kite Test Buy also live in Stocks RoboTrade > Agent sub-tab now
+          (components/common/TradingModeCard.jsx). */}
 
 
       {/* ═══ FORCE-RUN UNIFIED PIPELINE — big prominent card ═══ */}
@@ -553,11 +544,13 @@ export default function Admin() {
       </div>
 
       {/*
-        NOTE (2026-04-20 tab consolidation):
+        NOTE (2026-04-20 tab consolidation, final state):
         The PAPER↔LIVE master kill-switch, capital editor, Kite test-buy smoke
         test, and ENABLE LIVE confirmation modal (with PreflightRow helper) all
         moved to `components/common/TradingModeCard.jsx` and now live in the
-        Trade tab's Agent sub-tab. Admin is strictly read-only ops/diagnostics.
+        Stocks RoboTrade > Agent sub-tab. The shared GatesActiveBanner was
+        also removed from this page — it renders once in Stocks RoboTrade >
+        Overview. Admin is strictly read-only ops/diagnostics.
       */}
     </div>
   );

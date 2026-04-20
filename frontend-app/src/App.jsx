@@ -9,11 +9,13 @@ import MFPicks from './components/pages/MFPicks';
 import Architecture from './components/pages/Architecture';
 import StocksRoboTrade from './components/pages/StocksRoboTrade';
 import CryptoRoboTrade from './components/pages/CryptoRoboTrade';
-import DayTrade from './components/pages/DayTrade';
 import MiroFishLab from './components/pages/MiroFishLab';
 import Admin from './components/pages/Admin';
-// Agent is still imported by StocksRoboTrade and rendered as the 'stocks/agent' sub-tab.
-// Standalone <Agent /> route was removed 2026-04-20 tab consolidation.
+// DayTrade and Agent are both imported inside StocksRoboTrade and rendered as
+// 'stocks/scan' and 'stocks/agent' sub-tabs respectively. Their standalone
+// top-level routes were removed during the 2026-04-20 tab consolidation,
+// but the '#daytrade' and '#agent' hash aliases still resolve to the
+// matching sub-tab (see StocksRoboTrade dispatch).
 import ComingSoon from './components/pages/ComingSoon';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -87,12 +89,13 @@ export default function App() {
     if (currentTab === 'architecture') return <Architecture />;
     if (currentTab === 'stocks/overview' || currentTab.startsWith('stocks/')) return <StocksRoboTrade />;
     if (currentTab === 'crypto/overview' || currentTab.startsWith('crypto/')) return <CryptoRoboTrade />;
-    if (currentTab === 'daytrade') return <DayTrade />;
     if (currentTab === 'mirofish') return <MiroFishLab />;
     if (currentTab === 'admin') return <Admin />;
-    // Backwards-compat: the standalone 'agent' tab was removed from the nav
-    // 2026-04-20. Old bookmarks land on the new Trade tab's Agent sub-tab.
-    if (currentTab === 'agent') return <StocksRoboTrade />;
+    // Backwards-compat: the standalone 'agent' and 'daytrade' tabs were
+    // removed from the nav 2026-04-20. Old bookmarks land on the matching
+    // Stocks RoboTrade sub-tab (stocks/agent, stocks/scan) via the alias
+    // resolver inside StocksRoboTrade.
+    if (currentTab === 'agent' || currentTab === 'daytrade') return <StocksRoboTrade />;
     return <ComingSoon tab={currentTab} />;
   };
 

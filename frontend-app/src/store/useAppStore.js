@@ -1,31 +1,30 @@
 import { create } from 'zustand';
 
-// 2026-04-20 tab consolidation:
-//   - 'Stocks RoboTrade' relabeled 'Trade' — the Agent page got absorbed as a
-//     sub-tab (stocks/agent) so there's one home for mode/schedule/decisions/
-//     positions/P&L/analytics instead of the old Agent + RoboTrade split.
-//   - Standalone 'agent' tab removed from the nav. The route still works as
-//     a backwards-compat alias (see App.jsx) so bookmarks/hash-links don't
-//     404 during the paper soak.
-//   - Admin's master PAPER↔LIVE kill-switch, capital editor, Kite test-buy,
-//     and ENABLE LIVE confirmation modal moved to Trade > Agent sub-tab
-//     (see components/common/TradingModeCard.jsx). Admin is now strictly
-//     read-only ops (pipelines, logs, uptime, LLM budget, users).
-//   - 'DayTrade' relabeled 'Scan' — the user's mental model is that this
-//     tab is the intraday signal-generation surface. The swing-scan output
-//     (Trade > Candidates sub-tab) stays where it is because the Agent needs
-//     candidate context to decide what to execute; splitting that away would
-//     hurt the workflow more than the tab-count savings would help.
+// 2026-04-20 tab consolidation (iterated through the day):
+//   Round 1 — 'Stocks RoboTrade' relabeled 'Trade' when the Agent page got
+//     absorbed as a sub-tab (stocks/agent); standalone 'agent' tab was
+//     removed from the nav (route kept as a backwards-compat alias).
+//   Round 2 — Admin's master PAPER↔LIVE kill-switch, capital editor, Kite
+//     test-buy, and ENABLE LIVE confirmation modal moved to the Agent
+//     sub-tab (components/common/TradingModeCard.jsx). Admin is now
+//     strictly read-only ops (pipelines, logs, uptime, LLM budget, users).
+//   Round 3 — 'DayTrade' relabeled 'Scan' and kept as a top-level nav item.
+//   Round 4 (this change) — 'Scan' folded INTO Stocks RoboTrade as a
+//     sub-tab (stocks/scan), and the parent tab renamed back to 'Stocks
+//     RoboTrade'. Rationale: Scan / Candidates / Agent / Positions /
+//     Trades / Analytics are all facets of one auto-trading workflow —
+//     surfacing Scan as a separate top-level tab was splitting a unified
+//     mental model. The '#daytrade' route is kept as a backwards-compat
+//     alias that lands users on stocks/scan (see App.jsx).
 const TABS = [
   { id: 'stockanalyzer', label: 'Deep Analyzer', migrated: true },
   { id: 'stockrec', label: 'Stock Picks', migrated: true },
   { id: 'mf', label: 'MF Picks', migrated: true },
-  { id: 'stocks/overview', label: 'Trade', migrated: true, admin: true, accent: 'purple' },
+  { id: 'stocks/overview', label: 'Stocks RoboTrade', migrated: true, admin: true, accent: 'purple' },
   { id: 'crypto/overview', label: 'Crypto RoboTrade', migrated: true, admin: true },
   { id: 'holdings', label: 'Holdings', migrated: true, admin: true },
   { id: 'mirofish', label: 'MiroFish Lab', migrated: true, admin: true },
   { id: 'stockdata', label: 'Stock Data', migrated: true },
-  { id: 'daytrade', label: 'Scan', migrated: true, accent: 'red' },
   { id: 'architecture', label: 'Architecture', migrated: true, admin: true },
   { id: 'admin', label: 'Admin', migrated: true, admin: true },
 ];

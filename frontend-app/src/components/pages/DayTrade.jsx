@@ -291,7 +291,7 @@ export default function DayTrade() {
               Auto-refreshes every 5s. Last scanned: <b style={{ color: 'var(--text)' }}>{scannedAgo}</b>.
             </p>
             <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.5, maxWidth: 680 }}>
-              Looking for swing / positional signals? See <b style={{ color: 'var(--text2)' }}>Trade &gt; Candidates</b> — the structure-filter + LLM-reviewed scan that feeds the RoboTrade Agent.
+              Looking for swing / positional signals? See <b style={{ color: 'var(--text2)' }}>Stocks RoboTrade &gt; Candidates</b> — the structure-filter + LLM-reviewed scan that feeds the Agent.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

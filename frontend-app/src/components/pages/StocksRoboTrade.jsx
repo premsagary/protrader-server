@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import GatesActiveBanner from '../common/GatesActiveBanner';
 import TradingModeCard from '../common/TradingModeCard';
 import Agent from './Agent';
+import DayTrade from './DayTrade';
 
 // ══════════════════════════════════════════════════════════════════════
 // Stocks RoboTrade — unified page for all stocks/* sub-tabs
@@ -13,6 +14,10 @@ import Agent from './Agent';
 //
 // Sub-tabs:
 //   stocks/overview    — stat grid + cumulative P&L + recent trades
+//   stocks/scan        — intraday signal generator (formerly top-level
+//                        'Scan' / 'DayTrade'; folded in here 2026-04-20
+//                        so Scan ↔ Candidates ↔ Agent ↔ Positions all
+//                        live under one unified workflow).
 //   stocks/positions   — open/closed paper + live positions with SL/TGT
 //   stocks/trades      — full trade history (live + paper) with filters
 //   stocks/candidates  — Pass 1.5 structure filter + Pass 2 ranked list
@@ -27,9 +32,10 @@ import Agent from './Agent';
 const SUB_TABS = [
   { id: 'overview',   label: '◎ Overview' },
   { id: 'agent',      label: '⟳ Agent' },        // auto-trader: mode/schedule/decisions (merged from standalone Agent tab, 2026-04-20)
+  { id: 'scan',       label: '◎ Scan' },          // intraday signal generator (was top-level, folded in 2026-04-20)
+  { id: 'candidates', label: '◉ Candidates' },
   { id: 'positions',  label: '○ Positions' },
   { id: 'trades',     label: '⇅ Trade History' },
-  { id: 'candidates', label: '◉ Candidates' },
   { id: 'analytics',  label: '◐ Analytics' },
   { id: 'market',     label: '▦ Live Market' },
   { id: 'chart',      label: '↗ Chart' },
@@ -71,12 +77,16 @@ const fmtT = (ts) => {
 export default function StocksRoboTrade() {
   const currentTab = useAppStore((s) => s.currentTab);
   const setCurrentTab = useAppStore((s) => s.setCurrentTab);
-  // Legacy '#agent' → 'stocks/agent' (nav was consolidated 2026-04-20).
+  // Legacy aliases after the 2026-04-20 consolidation:
+  //   '#agent'    → stocks/agent  (standalone Agent tab folded in)
+  //   '#daytrade' → stocks/scan   (standalone Scan/DayTrade tab folded in)
   const sub = currentTab === 'agent'
     ? 'agent'
-    : currentTab.startsWith('stocks/')
-      ? currentTab.slice('stocks/'.length)
-      : 'overview';
+    : currentTab === 'daytrade'
+      ? 'scan'
+      : currentTab.startsWith('stocks/')
+        ? currentTab.slice('stocks/'.length)
+        : 'overview';
 
   return (
     <div className="animate-fadeIn">
@@ -84,6 +94,7 @@ export default function StocksRoboTrade() {
       <SubTabNav active={sub} onChange={(id) => setCurrentTab(`stocks/${id}`)} />
       <div style={{ marginTop: 18 }}>
         {sub === 'overview'   && <OverviewTab />}
+        {sub === 'scan'       && <DayTrade />}
         {sub === 'agent'      && (
           <>
             {/* Agent intro — reinforces that the auto-trader only acts on
@@ -153,12 +164,14 @@ function PageHeader({ sub }) {
             <span className="chip" style={{ height: 20, fontSize: 10, fontWeight: 700, background: 'var(--red-bg)', color: 'var(--red-text)' }}>ADMIN</span>
           </div>
           <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-1px', lineHeight: 1.1, color: 'var(--text)' }}>
-            <span className="gradient-fill">Trade</span>
+            <span className="gradient-fill">Stocks RoboTrade</span>
           </h1>
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text2)' }}>
             {sub === 'agent'
               ? 'Auto-trader — executes on 5-gate-cleared signals only'
-              : `Auto-trader + paper/live ledger + analytics · unified from the old Agent + RoboTrade tabs · ${SUB_TABS.find((t) => t.id === sub)?.label || sub}`}
+              : sub === 'scan'
+                ? 'Intraday signal generator — VWAP Reclaim / Gap & Go / Breakout / Oversold Bounce (Varsity M2 Ch20+21 binary gate)'
+                : `Scan → Candidates → Agent → Positions → P&L — one workflow · ${SUB_TABS.find((t) => t.id === sub)?.label || sub}`}
           </div>
         </div>
       </div>
