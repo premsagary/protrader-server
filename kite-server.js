@@ -9652,6 +9652,208 @@ function detectBearishCandlePattern(candles) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// VARSITY M2 CH 19 — CHART PATTERN RECOGNITION
+// ═══════════════════════════════════════════════════════════════════════════════
+// Recognises the major multi-bar chart patterns that Varsity M2 Ch19 teaches:
+//   - Flag / Pennant (continuation after a strong impulse)
+//   - Symmetrical / Ascending / Descending Triangle (coiling before a break)
+//   - Rising Wedge (bearish) / Falling Wedge (bullish)
+//   - Double Top / Double Bottom (two-pivot reversal)
+//   - Head and Shoulders / Inverse Head and Shoulders (three-pivot reversal)
+//
+// All patterns use 3-bar fractal pivots (a high is a pivot if candles[i-1]..[i+1]
+// are all lower), linear regression on pivot series to infer trendline slope,
+// and ATR-scaled thresholds so the logic is symbol-agnostic. Returns an array
+// of { name, bull, reliability, description } — caller decides how to apply.
+//
+// Chart patterns are CORROBORATIVE, not gating: they soft-boost scores in the
+// BREAKOUT / BOUNCE setups when the direction aligns, and soft-penalise
+// contra-trend trades when a bearish pattern is present. They are NOT added to
+// the Varsity binary gate — false positives would unnecessarily block trades.
+function _findPivots(candles, kind /* 'high' | 'low' */, fractalN = 3) {
+  const pivots = [];
+  const priceKey = kind === 'high' ? 'high' : 'low';
+  const cmp = kind === 'high' ? (a, b) => a > b : (a, b) => a < b;
+  for (let i = fractalN; i < candles.length - fractalN; i++) {
+    const center = candles[i][priceKey];
+    let isPivot = true;
+    for (let j = 1; j <= fractalN; j++) {
+      if (!cmp(center, candles[i - j][priceKey]) || !cmp(center, candles[i + j][priceKey])) {
+        isPivot = false; break;
+      }
+    }
+    if (isPivot) pivots.push({ idx: i, price: center });
+  }
+  return pivots;
+}
+
+function _linearSlope(points) {
+  // Simple linear-regression slope (price vs index). Returns price-per-bar.
+  if (!points || points.length < 2) return 0;
+  const n = points.length;
+  const sumX = points.reduce((s, p) => s + p.idx, 0);
+  const sumY = points.reduce((s, p) => s + p.price, 0);
+  const sumXY = points.reduce((s, p) => s + p.idx * p.price, 0);
+  const sumX2 = points.reduce((s, p) => s + p.idx * p.idx, 0);
+  const denom = n * sumX2 - sumX * sumX;
+  return denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+}
+
+function detectChartPatterns(candles, atrVal, options = {}) {
+  if (!candles || candles.length < 20) return [];
+  const patterns = [];
+  const flatThresh = Math.max((atrVal || 0) * 0.05, 0.0001);  // "flat" slope tolerance
+  const n = candles.length;
+  const lookback = Math.min(n, options.lookback || 60); // scan last ~60 bars (5h of 5-min)
+  const window = candles.slice(n - lookback);
+
+  const pivotHighs = _findPivots(window, 'high', 3);
+  const pivotLows  = _findPivots(window, 'low',  3);
+
+  // ── Flag / Pennant ─────────────────────────────────────────────────────────
+  // Varsity Ch19: sharp impulse (flagpole) → tight consolidation → continuation.
+  // Impulse = first third of window moved > 2×ATR in one direction.
+  // Consolidation = last third range < 50% of impulse magnitude.
+  if (window.length >= 18 && atrVal > 0) {
+    const third = Math.floor(window.length / 3);
+    const impulseSeg = window.slice(0, third);
+    const consoSeg   = window.slice(-third);
+    const impOpen    = impulseSeg[0].open;
+    const impClose   = impulseSeg[impulseSeg.length - 1].close;
+    const impMove    = impClose - impOpen;
+    const impMoveAbs = Math.abs(impMove);
+    const consoHi    = Math.max(...consoSeg.map(c => c.high));
+    const consoLo    = Math.min(...consoSeg.map(c => c.low));
+    const consoRange = consoHi - consoLo;
+    if (impMoveAbs > atrVal * 2 && consoRange < impMoveAbs * 0.5) {
+      // Pennant if consolidation is narrowing (pivot slopes converge), Flag if
+      // it's a parallel channel (slopes roughly equal).
+      const consoHighs = _findPivots(consoSeg, 'high', 2);
+      const consoLows  = _findPivots(consoSeg, 'low',  2);
+      let narrowing = false;
+      if (consoHighs.length >= 2 && consoLows.length >= 2) {
+        const sH = _linearSlope(consoHighs);
+        const sL = _linearSlope(consoLows);
+        narrowing = sH < -flatThresh && sL > flatThresh;
+      }
+      patterns.push({
+        name: narrowing ? (impMove > 0 ? 'Bullish Pennant' : 'Bearish Pennant')
+                        : (impMove > 0 ? 'Bull Flag' : 'Bear Flag'),
+        bull: impMove > 0,
+        reliability: 3,
+        bars: window.length,
+        description: `${impMoveAbs > atrVal * 3 ? 'Strong' : 'Moderate'} ${impMove > 0 ? 'up' : 'down'}-impulse (${impMoveAbs.toFixed(2)}) → tight consolidation (${consoRange.toFixed(2)})`,
+      });
+    }
+  }
+
+  // ── Triangles / Wedges ─────────────────────────────────────────────────────
+  // Need at least 2 pivot highs and 2 pivot lows; examine slopes.
+  if (pivotHighs.length >= 2 && pivotLows.length >= 2) {
+    const hi = pivotHighs.slice(-3);
+    const lo = pivotLows.slice(-3);
+    const sH = _linearSlope(hi);
+    const sL = _linearSlope(lo);
+    const flatH = Math.abs(sH) <= flatThresh;
+    const flatL = Math.abs(sL) <= flatThresh;
+
+    if (sH < -flatThresh && sL > flatThresh) {
+      patterns.push({
+        name: 'Symmetrical Triangle', bull: null, reliability: 2, bars: hi[hi.length-1].idx - lo[0].idx,
+        description: 'Highs descending, lows rising — volatility coil, break direction decides',
+      });
+    } else if (flatH && sL > flatThresh) {
+      patterns.push({
+        name: 'Ascending Triangle', bull: true, reliability: 3, bars: hi[hi.length-1].idx - lo[0].idx,
+        description: 'Flat resistance, rising support — buyers absorbing supply, bullish break likely',
+      });
+    } else if (sH < -flatThresh && flatL) {
+      patterns.push({
+        name: 'Descending Triangle', bull: false, reliability: 3, bars: hi[hi.length-1].idx - lo[0].idx,
+        description: 'Descending highs, flat support — sellers distributing, bearish break likely',
+      });
+    } else if (sH > flatThresh && sL > flatThresh && sH < sL * 0.9) {
+      // Both rising but highs rising slower than lows → converging upward = rising wedge (bearish)
+      patterns.push({
+        name: 'Rising Wedge', bull: false, reliability: 2, bars: hi[hi.length-1].idx - lo[0].idx,
+        description: 'Highs and lows both rising but converging — bearish reversal pattern',
+      });
+    } else if (sH < -flatThresh && sL < -flatThresh && Math.abs(sH) < Math.abs(sL) * 0.9) {
+      // Both falling but highs falling slower than lows → converging downward = falling wedge (bullish)
+      patterns.push({
+        name: 'Falling Wedge', bull: true, reliability: 2, bars: hi[hi.length-1].idx - lo[0].idx,
+        description: 'Highs and lows both falling but converging — bullish reversal pattern',
+      });
+    }
+  }
+
+  // ── Double Top / Double Bottom ─────────────────────────────────────────────
+  // Two recent pivots at similar price with meaningful separation (>= 5 bars).
+  if (pivotHighs.length >= 2) {
+    const h1 = pivotHighs[pivotHighs.length - 2];
+    const h2 = pivotHighs[pivotHighs.length - 1];
+    const separation = h2.idx - h1.idx;
+    const priceDiffPct = h1.price > 0 ? Math.abs(h1.price - h2.price) / h1.price : 1;
+    if (priceDiffPct < 0.005 && separation >= 5 && separation <= 30) {
+      // Check there's an intervening low between them (otherwise it's a plateau)
+      const interveningLows = pivotLows.filter(p => p.idx > h1.idx && p.idx < h2.idx);
+      if (interveningLows.length >= 1) {
+        patterns.push({
+          name: 'Double Top', bull: false, reliability: 3, bars: separation,
+          description: `Two peaks at ≈${h2.price.toFixed(2)} with ${separation}-bar gap — failure to break = bearish reversal`,
+        });
+      }
+    }
+  }
+  if (pivotLows.length >= 2) {
+    const l1 = pivotLows[pivotLows.length - 2];
+    const l2 = pivotLows[pivotLows.length - 1];
+    const separation = l2.idx - l1.idx;
+    const priceDiffPct = l1.price > 0 ? Math.abs(l1.price - l2.price) / l1.price : 1;
+    if (priceDiffPct < 0.005 && separation >= 5 && separation <= 30) {
+      const interveningHighs = pivotHighs.filter(p => p.idx > l1.idx && p.idx < l2.idx);
+      if (interveningHighs.length >= 1) {
+        patterns.push({
+          name: 'Double Bottom', bull: true, reliability: 3, bars: separation,
+          description: `Two troughs at ≈${l2.price.toFixed(2)} with ${separation}-bar gap — successful defence = bullish reversal`,
+        });
+      }
+    }
+  }
+
+  // ── Head and Shoulders / Inverse Head and Shoulders ────────────────────────
+  // Three consecutive pivot highs (or lows) where the middle one is the most
+  // extreme and the two outer ones are roughly equal (≤ 1%). Neckline = avg of
+  // the two troughs (or peaks) between them.
+  if (pivotHighs.length >= 3) {
+    const last3 = pivotHighs.slice(-3);
+    const [ls, head, rs] = last3;
+    const shoulderEq = ls.price > 0 ? Math.abs(ls.price - rs.price) / ls.price < 0.01 : false;
+    if (shoulderEq && head.price > ls.price && head.price > rs.price &&
+        (head.price - Math.max(ls.price, rs.price)) / head.price > 0.005) {
+      patterns.push({
+        name: 'Head and Shoulders', bull: false, reliability: 4, bars: rs.idx - ls.idx,
+        description: `L-shoulder ${ls.price.toFixed(2)} / head ${head.price.toFixed(2)} / R-shoulder ${rs.price.toFixed(2)} — bearish reversal on neckline break`,
+      });
+    }
+  }
+  if (pivotLows.length >= 3) {
+    const last3 = pivotLows.slice(-3);
+    const [ls, head, rs] = last3;
+    const shoulderEq = ls.price > 0 ? Math.abs(ls.price - rs.price) / ls.price < 0.01 : false;
+    if (shoulderEq && head.price < ls.price && head.price < rs.price &&
+        (Math.min(ls.price, rs.price) - head.price) / head.price > 0.005) {
+      patterns.push({
+        name: 'Inverse Head and Shoulders', bull: true, reliability: 4, bars: rs.idx - ls.idx,
+        description: `L-shoulder ${ls.price.toFixed(2)} / head ${head.price.toFixed(2)} / R-shoulder ${rs.price.toFixed(2)} — bullish reversal on neckline break`,
+      });
+    }
+  }
+
+  return patterns;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // VARSITY M2 CH 22 — CENTRAL PIVOT RANGE (CPR)
 // ═══════════════════════════════════════════════════════════════════════════════
 // CPR = three intraday levels (Pivot Point, Bottom Central, Top Central) computed
@@ -10521,6 +10723,38 @@ function scoreDayTrade(candles, sym, ctx) {
   // fewer than 16 bars, so pre-warmup windows pass naturally.
   const adxTrendOk = adxVal >= 18;
 
+  // ── Varsity M2 Ch19: multi-bar chart pattern recognition ────────────────────
+  // Detects Flag/Pennant, Triangle (sym/asc/desc), Wedge (rising/falling),
+  // Double Top/Bottom, Head-and-Shoulders (and inverse). Returned as a simple
+  // array of { name, bull, reliability, description } — used as SOFT scoring
+  // nudges and surfaced in the pick payload. NOT added to the Varsity binary
+  // gate: chart pattern detection is inherently fuzzy and false positives
+  // would unnecessarily block good trades.
+  //
+  // ATR is recomputed here (not reused from the Supertrend block) because that
+  // `atr14` is scoped inside a try {} block. `atr14val` is also only defined
+  // later in scoreDayTrade. Cheaper to recompute than to restructure scopes.
+  let atrForPatterns = 1;
+  try {
+    if (candles && candles.length >= 15) {
+      const _trs = candles.slice(1).map((c, i) => Math.max(
+        c.high - c.low,
+        Math.abs(c.high - candles[i].close),
+        Math.abs(c.low  - candles[i].close)
+      ));
+      atrForPatterns = _trs.slice(-14).reduce((a, b) => a + b, 0) / 14;
+      if (!(atrForPatterns > 0)) atrForPatterns = 1;
+    }
+  } catch (_) { atrForPatterns = 1; }
+  let chartPatterns = [];
+  try {
+    chartPatterns = detectChartPatterns(candles, atrForPatterns, { lookback: 60 });
+  } catch (_) { chartPatterns = []; }
+  const bullChartPatterns = chartPatterns.filter(p => p.bull === true);
+  const bearChartPatterns = chartPatterns.filter(p => p.bull === false);
+  const topBullPattern    = bullChartPatterns.sort((a, b) => b.reliability - a.reliability)[0] || null;
+  const topBearPattern    = bearChartPatterns.sort((a, b) => b.reliability - a.reliability)[0] || null;
+
   // ── Varsity M2 Ch10: Gap classification ─────────────────────────────────────
   // Varsity teaches four gap archetypes:
   //   Common      — small gap inside recent range, low volume — usually fills.
@@ -10892,6 +11126,25 @@ function scoreDayTrade(candles, sym, ctx) {
   // prevents stacked context penalties from collapsing scores to 30s — the
   // Day-1 failure mode we're explicitly guarding against.
   const _baseOverall = overall;
+
+  // ── Varsity M2 Ch19: chart pattern soft nudges ─────────────────────────────
+  // Chart patterns are corroborative, not gating. When a bull pattern aligns
+  // with a BREAKOUT / GAP_AND_GO / OVERSOLD_BOUNCE (all long setups), nudge
+  // the overall score up by 2-6 pts scaled to pattern reliability (2..4).
+  // Conversely, a high-reliability BEAR pattern in scope is a soft headwind
+  // since every setup in scoreDayTrade is a long — fade the conviction.
+  if (topBullPattern) {
+    const bonus = 2 + (topBullPattern.reliability || 2);     // 4..6 pts
+    overall = Math.min(100, overall + _gain('MULTI', bonus, `Chart pattern: ${topBullPattern.name}`));
+  }
+  if (topBearPattern) {
+    // Only penalise bear patterns that are at least moderately reliable (>=3)
+    // so the common noisy symmetrical-triangle reading doesn't bite.
+    if ((topBearPattern.reliability || 0) >= 3) {
+      const hit = 2 + (topBearPattern.reliability || 3);     // 5..6 pts
+      overall = Math.max(0, overall + _penalty('MULTI', hit, `Chart pattern headwind: ${topBearPattern.name}`));
+    }
+  }
 
   // Multi-timeframe: daily trend alignment (Varsity M2 Ch22: "daily must align with weekly")
   // Intraday long setups that align with the daily trend have much higher win rates.
@@ -11531,6 +11784,19 @@ function scoreDayTrade(candles, sym, ctx) {
     bbPct: +bbPct.toFixed(2), gapUnfilled,
     // Varsity M2 Ch10 — named gap classification (Common / Breakaway / Runaway / Exhaustion / None)
     gapType,
+    // Varsity M2 Ch19 — multi-bar chart pattern recognition. Array of
+    // { name, bull, reliability, bars, description }. Corroborative, not gating.
+    chartPatterns: (chartPatterns || []).map(p => ({
+      name: p.name, bull: p.bull, reliability: p.reliability,
+      bars: p.bars, description: p.description,
+    })),
+    chartPatternTop: topBullPattern ? {
+      name: topBullPattern.name, bull: true, reliability: topBullPattern.reliability,
+      description: topBullPattern.description,
+    } : (topBearPattern ? {
+      name: topBearPattern.name, bull: false, reliability: topBearPattern.reliability,
+      description: topBearPattern.description,
+    } : null),
     // Varsity M2 Ch 5-10: candlestick pattern on latest 5-min candle (if any)
     candlePattern: bullPattern ? bullPattern.name : (bearPattern ? bearPattern.name : null),
     candlePatternBull: bullPattern ? true : (bearPattern ? false : null),

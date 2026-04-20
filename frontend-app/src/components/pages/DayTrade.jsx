@@ -350,7 +350,9 @@ export default function DayTrade() {
           Dow · ATR band · VIX · session window · indicators · ADX trend).
           Score is a diagnostic only — no score threshold is applied. Anything
           failing Varsity never surfaces here. Gap type (Common / Breakaway /
-          Runaway / Exhaustion) is labelled per Varsity M2 Ch10.
+          Runaway / Exhaustion) is labelled per Varsity M2 Ch10. Chart patterns
+          (Flag / Pennant / Triangles / Wedges / Double-Top/Bottom / H&S — Ch19)
+          are detected and used as soft nudges to overall score.
         </div>
       )}
 
