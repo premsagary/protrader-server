@@ -1373,6 +1373,40 @@ let   tokenValid  = false; // set true when ticker connects, false when error/di
 let   lastTickTs  = 0;     // epoch ms of last tick batch (any symbol) — for health probe
 let   tickerSubscribedCount = 0; // number of instrument tokens subscribed on last connect
 
+// 2026-04-20 — expanded ticker subscription to full UNIVERSE instead of hardcoded INSTRUMENTS.
+// Reverse map (token → sym) is cached so the ticks handler doesn't scan an object each tick.
+let _tokenToSym = {};
+let _tickerRef  = null; // holds live KiteTicker so we can re-subscribe after refreshInstruments()
+
+// Build the {token: sym} reverse map AND the token list from whichever source
+// has the best coverage. validTokens is populated from kite.getInstruments("NSE")
+// which covers the full UNIVERSE (~568 syms). We fall back to hardcoded
+// INSTRUMENTS (~145 syms) at boot before the instruments API has run.
+function _buildTickerSubscription() {
+  const tokenToSym = {};
+  const tokenList  = [];
+  const src = (typeof UNIVERSE !== 'undefined' ? UNIVERSE : []);
+  for (const s of src) {
+    const tok = (typeof validTokens !== 'undefined' && validTokens && validTokens[s.sym])
+              || (INSTRUMENTS && INSTRUMENTS[s.sym])
+              || null;
+    if (!tok) continue;
+    if (!tokenToSym[tok]) {                 // guard dupes
+      tokenToSym[tok] = s.sym;
+      tokenList.push(tok);
+    }
+  }
+  // Also include legacy INSTRUMENTS entries that are NOT in UNIVERSE (if any)
+  // so we don't lose coverage of hand-added tokens.
+  for (const [sym, tok] of Object.entries(INSTRUMENTS || {})) {
+    if (!tokenToSym[tok]) {
+      tokenToSym[tok] = sym;
+      tokenList.push(tok);
+    }
+  }
+  return { tokenToSym, tokenList };
+}
+
 function broadcast(data) {
   const msg = JSON.stringify(data);
   subscribers.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
@@ -1382,33 +1416,57 @@ wss.on("connection", ws => {
   ws.send(JSON.stringify({ type:"snapshot", prices:livePrices, connected:tickerOn }));
   ws.on("close", () => subscribers.delete(ws));
 });
+
+// Public: called from refreshInstruments() after validTokens is repopulated so
+// the live ticker picks up newly-resolved tokens without a reconnect.
+function resubscribeTickerToUniverse() {
+  if (!_tickerRef || !tickerOn) return { resubscribed: false, reason: 'ticker_not_live' };
+  const { tokenToSym, tokenList } = _buildTickerSubscription();
+  try {
+    // Kite's KiteTicker has no explicit "replace subscription" call, so we
+    // subscribe the new set (it's idempotent — already-subscribed tokens are no-ops).
+    _tickerRef.subscribe(tokenList);
+    _tickerRef.setMode(_tickerRef.modeFull, tokenList);
+    _tokenToSym = tokenToSym;
+    tickerSubscribedCount = tokenList.length;
+    console.log(`🔁 Ticker resubscribed to ${tokenList.length} tokens (full UNIVERSE)`);
+    return { resubscribed: true, count: tokenList.length };
+  } catch (e) {
+    console.error('resubscribeTickerToUniverse failed:', e.message);
+    return { resubscribed: false, reason: e.message };
+  }
+}
+
 function startTicker(token) {
   // Ensure ws is patched before KiteTicker loads it (idempotent)
   _patchAxiosForKiteProxy();
   _patchWsForKiteProxy();
   const { KiteTicker } = require("kiteconnect");
   const t = new KiteTicker({ api_key: process.env.KITE_API_KEY, access_token: token });
+  _tickerRef = t;
   t.connect();
   t.on("connect", () => {
     tickerOn = true;
     tokenValid = true;
-    const tokens = Object.values(INSTRUMENTS);
-    t.subscribe(tokens); t.setMode(t.modeFull, tokens);
-    tickerSubscribedCount = tokens.length;
+    const { tokenToSym, tokenList } = _buildTickerSubscription();
+    _tokenToSym = tokenToSym;
+    t.subscribe(tokenList); t.setMode(t.modeFull, tokenList);
+    tickerSubscribedCount = tokenList.length;
     broadcast({ type:"status", connected:true });
-    console.log("✅ Ticker live");
+    console.log(`✅ Ticker live — subscribed to ${tokenList.length} tokens`);
   });
   t.on("ticks", ticks => {
     if (ticks && ticks.length) lastTickTs = Date.now();
     ticks.forEach(tick => {
-      const sym = Object.keys(INSTRUMENTS).find(k => INSTRUMENTS[k] === tick.instrument_token);
+      // Fast O(1) reverse lookup instead of Object.keys().find() each tick.
+      const sym = _tokenToSym[tick.instrument_token];
       if (!sym) return;
       livePrices[sym] = { price:tick.last_price, open:tick.ohlc?.open, high:tick.ohlc?.high, low:tick.ohlc?.low, volume:tick.volume_traded, change:tick.change };
     });
     broadcast({ type:"tick", prices:livePrices });
   });
   t.on("error", () => { console.log("Ticker error"); tokenValid = false; });
-  t.on("close", () => { tickerOn = false; broadcast({ type:"status", connected:false }); });
+  t.on("close", () => { tickerOn = false; _tickerRef = null; broadcast({ type:"status", connected:false }); });
 }
 
 // -- Universe - Nifty 50 + Next 50 + Midcap 150 (250 stocks) ------------------
@@ -1498,7 +1556,7 @@ let UNIVERSE = [
   {sym:"MPHASIS",     n:"Mphasis Ltd",              grp:"NEXT50"},
   {sym:"TATAPOWER",   n:"Tata Power",               grp:"NEXT50"},
   {sym:"ADANIGREEN",  n:"Adani Green Energy",       grp:"NEXT50"},
-  {sym:"ADANITRANS",  n:"Adani Transmission",       grp:"NEXT50"},
+  // ADANITRANS removed 2026-04-20 — delisted/merged (Adani Energy Solutions from 2023). Was producing yahoo_scraper errors every cycle.
   {sym:"VEDL",        n:"Vedanta Ltd",              grp:"NEXT50"},
   {sym:"NMDC",        n:"NMDC Ltd",                 grp:"NEXT50"},
   {sym:"SAIL",        n:"Steel Authority of India", grp:"NEXT50"},
@@ -1628,7 +1686,7 @@ let UNIVERSE = [
   {sym:"SUZLON",      n:"Suzlon Energy",            grp:"MIDCAP"},
   {sym:"CESC",        n:"CESC Ltd",                 grp:"MIDCAP"},
   {sym:"TORNTPOWER",  n:"Torrent Power",            grp:"MIDCAP"},
-  {sym:"JSPL",        n:"Jindal Steel & Power",     grp:"MIDCAP"},
+  // JSPL removed 2026-04-20 — renamed to JINDALSTEL (NSE symbol change). Ticker no longer resolves.
   {sym:"NATIONALUM",  n:"National Aluminium",       grp:"MIDCAP"},
   {sym:"NIACL",       n:"New India Assurance",      grp:"MIDCAP"},
   {sym:"GICRE",       n:"General Insurance Corp",   grp:"MIDCAP"},
@@ -1700,7 +1758,7 @@ const INSTRUMENTS = {
   "LUPIN":2672641,"AUROPHARMA":61441,"BANKBARODA":1195009,"CANBK":2763777,
   "PNB":2730497,"UNIONBANK":2760193,"ICICIGI":3389185,"NAUKRI":3880193,
   "PERSISTENT":3074305,"COFORGE":2955009,"MPHASIS":4641793,"TATAPOWER":877985,
-  "ADANIGREEN":2480721,"ADANITRANS":3661009,"VEDL":784977,"NMDC":3526401,
+  "ADANIGREEN":2480721,/* ADANITRANS removed 2026-04-20 - delisted */"VEDL":784977,"NMDC":3526401,
   "SAIL":758529,"HINDPETRO":359937,"IOC":415745,"GAIL":175873,
   "RECLTD":3244289,"PFC":3329793,"IRCTC":3424833,"CONCOR":4029185,
   "MOTHERSON":4285697,"BALKRISIND":85513,"MFSL":3563521,"INDHOTEL":500209,
@@ -1716,7 +1774,7 @@ const INSTRUMENTS = {
   "ESCORTS":2013185,"MOTHERSON":4285697,"EXIDEIND":232961,"BOSCHLTD":2413697,
   "CROMPTON":3081537,"POLYCAB":4000513,"PRAJ":685569,"SUZLON":3302785,
   "INOXWIND":4592129,"TATAPOWER":877985,"TORNTPOWER":3281409,"CESC":174657,
-  "JSPL":3001345,"NYKAA":5065601,"STARHEALTH":3940673,"GICRE":3378433,
+  /* JSPL removed 2026-04-20 - renamed to JINDALSTEL */"NYKAA":5065601,"STARHEALTH":3940673,"GICRE":3378433,
   "PNBHOUSING":3984897,"AAVAS":3717377,"CREDITACC":3425281,"HAPPSTMNDS":3825921,
   "MINDAIND":2277377,"SONACOMS":5215233,"SOLARINDS":3240449,"AIAENG":14849,
 };
@@ -4008,6 +4066,23 @@ async function scanAndTrade() {
   _fiveMinCacheHits   = 0;
   _fiveMinCacheMisses = 0;
 
+  // 2026-04-20 — unify picks → scan. Build a sym→pick lookup from
+  // _dayTradeCache so Pass-2 only considers entries that ALSO appear in the
+  // DayTrade picks slate. Previously scanAndTrade iterated UNIVERSE via its
+  // older EMA_CROSSOVER / BB_SQUEEZE / VWAP_MOMENTUM detectors — a separate
+  // signal from the varsity DayTrade scorer, which meant the picks tab and
+  // Pass-2 entries could disagree. Now: a stock must be scored by the
+  // DayTrade scanner (and have a valid bestSetup) before it's eligible for
+  // a BUY candidate, AND its `strategy` is promoted to the pick's bestSetup
+  // (VWAP_RECLAIM / GAP_AND_GO / BREAKOUT / OVERSOLD_BOUNCE). Exits and
+  // ranking logic are unchanged.
+  const _pickBySym = {};
+  try {
+    for (const p of (_dayTradeCache || [])) {
+      if (p && p.sym) _pickBySym[p.sym] = p;
+    }
+  } catch (_) {}
+
   for (const stock of UNIVERSE) {
     try {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
@@ -4141,13 +4216,34 @@ async function scanAndTrade() {
         // stock.sym for relative-strength context. Returns null for penny
         // stocks, illiquid names, abnormal 5-min bars — all of which we
         // already want to skip. Attach to candidate for audit trail.
-        let dts = null;
-        try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
-        buyCandidates.push({
-          stock, result, candles, last,
-          dayTradeScore: dts ? dts.dayTradeScore : null,
-          varsityBestSetup: dts ? dts.bestSetup : null,
-        });
+        // Prefer the freshly-computed DayTrade cache entry (scoreDayTrade's
+        // canonical output — already passed applySectorCap, reviewed by the
+        // picks pipeline) over a local rescore. Fall back to a one-off call
+        // only when the cache is empty/stale.
+        let dts = _pickBySym[stock.sym] || null;
+        if (!dts) {
+          try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
+        }
+
+        // 2026-04-20 — unify-picks gate. Without a matching DayTrade pick
+        // (either from the live cache or a local rescore that produced a
+        // bestSetup), the older strategy detectors disagree with the slate
+        // the user sees in the Picks tab. Skip to keep the two in sync.
+        if (!dts || !dts.bestSetup) {
+          _latestPass2Debug.skippedFilter = (_latestPass2Debug.skippedFilter||0) + 1;
+        } else {
+          // Promote the pick's bestSetup as the canonical strategy name so
+          // live_trades / paper_trades / logs reflect the unified taxonomy.
+          const origStrategy = result.strategy;
+          result.strategy = dts.bestSetup;
+          result._origStrategy = origStrategy; // kept for debug / analytics
+          buyCandidates.push({
+            stock, result, candles, last,
+            dayTradeScore: dts.dayTradeScore || null,
+            varsityBestSetup: dts.bestSetup,
+            pickRef: dts,
+          });
+        }
       }
 
       await delay(CONFIG.SCAN_DELAY_MS);
@@ -4632,15 +4728,48 @@ async function scanAndTrade() {
           quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
         });
         const orderId = order.order_id || order.orderId || '';
+
+        // 2026-04-20 — PHANTOM P&L FIX. Previously we inserted into live_trades
+        // immediately after placeOrderViaProxy() returned. That's when Kite
+        // ACKNOWLEDGED the order — NOT when it filled. MARKET orders can still
+        // be REJECTED (margin, circuit, freeze period) and would leave a row
+        // with qty>0 and a nonsense P&L trail. Now we poll getOrderHistory for
+        // up to 5s and only insert if filled_quantity ≥ 1.
+        let filledQty = 0;
+        let avgFillPrice = price;
+        let finalStatus = 'UNKNOWN';
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const hist = await kite.getOrderHistory(orderId);
+            const latest = Array.isArray(hist) && hist.length ? hist[hist.length - 1] : null;
+            if (latest) {
+              finalStatus = String(latest.status || finalStatus).toUpperCase();
+              filledQty   = Number(latest.filled_quantity || 0);
+              const avg   = Number(latest.average_price || 0);
+              if (avg > 0) avgFillPrice = avg;
+              if (finalStatus === 'COMPLETE' || finalStatus === 'REJECTED' || finalStatus === 'CANCELLED') break;
+            }
+          } catch (_pollErr) { /* transient — keep polling */ }
+          await new Promise(r => setTimeout(r, 500));
+        }
+
+        if (filledQty < 1) {
+          console.error(`  ✗ LIVE BUY ${stock.sym} orderId=${orderId} status=${finalStatus} filledQty=${filledQty} — NO live_trades row inserted (phantom-P&L guard)`);
+          // Don't add to openTrades or bump signalCount — treat as a rejected entry.
+          recordPass2(candidate, 'REJECTED_BY_BROKER', `status=${finalStatus}`);
+          continue;
+        }
+
         await pool.query(
           `INSERT INTO live_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,order_id)
            VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12)`,
-          [stock.sym,stock.n,price,qty,+(qty*price).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
+          [stock.sym,stock.n,avgFillPrice,filledQty,+(filledQty*avgFillPrice).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
            +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
         );
-        console.log(`  🔴 LIVE BUY ${stock.sym} @ MARKET (signal ₹${price}) | Order ID: ${orderId}`);
+        console.log(`  🔴 LIVE BUY ${stock.sym} FILLED ${filledQty}@₹${avgFillPrice} (signal ₹${price}) | Order: ${orderId} | Status: ${finalStatus}`);
       } catch(liveErr) {
         console.error(`  ✗ LIVE BUY FAILED ${stock.sym}: ${liveErr.message}`);
+        continue;
       }
     }
 
@@ -5035,6 +5164,16 @@ async function refreshInstruments() {
       } catch(e) { /* ignore individual errors */ }
     }
     console.log(`📋 Instrument tokens saved to DB`);
+
+    // 2026-04-20 — now that validTokens is freshly populated, expand the live
+    // ticker subscription from the hardcoded INSTRUMENTS (~145) to the full
+    // UNIVERSE (~568). Safe to call even if ticker hasn't connected yet — the
+    // resubscribe helper returns silently in that case and startTicker will
+    // pick up validTokens automatically on its next connect.
+    try {
+      const r = resubscribeTickerToUniverse();
+      if (r && r.resubscribed) console.log(`📡 Ticker coverage expanded → ${r.count} tokens`);
+    } catch (e) { console.error('Ticker resubscribe threw:', e.message); }
   } catch(e) {
     console.error("Could not fetch instruments:", e.message);
     validTokens = {...INSTRUMENTS};
@@ -11404,6 +11543,14 @@ function scoreDayTrade(candles, sym, ctx) {
 }
 
 let _unifiedPipelineRunning = false;
+// 2026-04-20 — separated locks so TA rescore (slow) does not block DayTrade
+// scoring (fast, high-cadence). Before this split, _unifiedPipelineRunning
+// held for the full ~14 min of a unified run, so the 5-min cron for DT
+// scoring was only seeing ~2-3 completions/hour. Now DT scoring runs every
+// 5 min independently; unified pipeline remains as a back-compat wrapper
+// invoked by the admin endpoint.
+let _taRescoreRunning   = false;   // Daily candles + TA fields + ML snapshot
+let _dtScoringRunning   = false;   // 5-min candles + setup detectors + cache refresh
 
 // Scan all UNIVERSE stocks on 5-min candles and populate _dayTradeCache.
 // force=true allows off-hours scans (startup warm-up, manual admin refresh)
@@ -11783,8 +11930,14 @@ async function runUnifiedKitePipeline(force = false) {
         } else { failDT++; }
       }));
 
-      // Respect Kite rate limits — 5 stocks × 2 requests each = 10 req per batch
-      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 350));
+      // Respect Kite rate limits — 5 stocks × 2 requests each = 10 req per batch.
+      // 2026-04-20: tightened from 350ms → 250ms. Kite's historical-data rate
+      // limit is 3 req/sec; with 10 req/batch we need ≥333ms spacing to stay
+      // under theoretical cap, BUT each actual request takes 80-150ms network
+      // time, so wall-clock req/sec is much lower than 10/0.35. 250ms gets us
+      // closer to the rate limit without blowing past. If we see 429s, bump
+      // back to 350.
+      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 250));
     }
 
     // ── Finalize DayTrade cache with the same guard as scanDayTrades ──
@@ -12660,9 +12813,13 @@ async function fetchFromYahoo(sym) {
     : null;
 
   // -- P/E: trailing twelve months
-  const pe = summ.trailingPE?.raw != null
-    ? +summ.trailingPE.raw.toFixed(1)
-    : (stat.forwardPE?.raw != null ? +stat.forwardPE.raw.toFixed(1) : null);
+  // Defensive: Yahoo sometimes returns trailingPE.raw as non-numeric (observed on NIVABUPA 2026-04-xx).
+  // Use Number.isFinite + Number() coercion rather than trusting raw to be a number.
+  const _peTrail = Number(summ.trailingPE?.raw);
+  const _peFwd   = Number(stat.forwardPE?.raw);
+  const pe = Number.isFinite(_peTrail)
+    ? +_peTrail.toFixed(1)
+    : (Number.isFinite(_peFwd) ? +_peFwd.toFixed(1) : null);
 
   // -- Revenue Growth: YoY (from financialData or income statement)
   let revGr = fin.revenueGrowth?.raw != null
@@ -22623,17 +22780,32 @@ async function start() {
     { timezone: "Asia/Kolkata" }
   );
 
-  // ── Unified Kite Pipeline — every 5 min during market hours ──
-  // Replaces separate intradayRescoreTA() + scanDayTrades() with a single pass:
-  //   1) TA Rescore — merges fresh TA into stockFundamentals + rebuilds _lastScoredV2
-  //   2) DayTrade Scanner — runs 4 setup detectors on 5-min candles
-  // Benefits:
-  //   - Kite API hit once per stock, not twice (halved rate limit pressure)
-  //   - Both caches update together — no stale gap
-  //   - TA rescore now runs every 5 min (was 30 min) since it piggybacks on
-  //     the DayTrade scan's Kite calls for free
-  //   - Score cache rebuild and DayTrade sort run in parallel at the end
+  // ── Pipeline split (2026-04-20) ─────────────────────────────────────────
+  // Previously one unified cron did TA + DayTrade scoring every 5 min. Because
+  // the full pass takes ~14 min under Kite rate-limits, subsequent cron ticks
+  // were swallowed by _unifiedPipelineRunning — DT cache effectively refreshed
+  // only 2-3×/hour on Day 1 of live trading, starving the scan loop of picks.
+  //
+  // Split into:
+  //   (a) scanDayTrades — 5-min candles + setup detection, runs every 5 min
+  //   (b) runUnifiedKitePipeline — daily TA rescore + fundamentals, runs every
+  //       30 min on a different lock (_unifiedPipelineRunning), also refreshes
+  //       DT cache as a side benefit for its own in-flight 5-min fetches.
+  //
+  // Locks are independent (_dayTradeScanning vs _unifiedPipelineRunning) so
+  // the slow 30-min run never blocks the fast 5-min cadence. In the rare
+  // window where both finish at once, applySectorCap is deterministic — last
+  // write wins on _dayTradeCache which is acceptable (both writes produce
+  // equivalent top-of-slate).
   cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
+    // DT scoring — fast path, independent lock, drives the agent.
+    scanDayTrades(false).catch(e => console.error('📊 DayTrade scan error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+
+  cron.schedule("0,30 9-15 * * 1-5", () => {
+    // Full pipeline — TA rescore + fundamentals + ML snapshots + Nifty benchmark.
+    // Slower cadence prevents rate-limit starvation; DT scoring is handled by
+    // the separate 5-min cron above, so a 30-min gap here is fine.
     runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
   }, { timezone: "Asia/Kolkata" });
 
