@@ -344,15 +344,18 @@ export default function DayTrade() {
           color: 'var(--text2)',
           lineHeight: 1.55,
         }}>
-          <b style={{ color: 'var(--green-text)' }}>Varsity M2 Ch20+21 Binary Gate active.</b>{' '}
-          Every pick below has passed all 12 Varsity checklist items
+          <b style={{ color: 'var(--green-text)' }}>Varsity Binary Gate + Book-Rules Gate active.</b>{' '}
+          Every pick below has passed (1) all 12 Varsity M2 Ch20+21 checklist items
           (priceAction · srContext · volume · aboveDailyTrend · R:R · netR:R ·
-          Dow · ATR band · VIX · session window · indicators · ADX trend).
-          Score is a diagnostic only — no score threshold is applied. Anything
-          failing Varsity never surfaces here. Gap type (Common / Breakaway /
-          Runaway / Exhaustion) is labelled per Varsity M2 Ch10. Chart patterns
-          (Flag / Pennant / Triangles / Wedges / Double-Top/Bottom / H&S — Ch19)
-          are detected and used as soft nudges to overall score.
+          Dow · ATR band · VIX · session window · indicators · ADX trend) AND
+          (2) the net-new book-rules subset — regime ≠ NO_TRADE, no losing
+          patterns (chasing · vertical spike · counter-EMA stack · big-gap-fade
+          · round-number trap), structural non-negotiables (SL set, 15:15
+          squareoff, avg-down &amp; widen-SL disabled, kill-switch not overridden).
+          Score is diagnostic only — no score threshold is applied. Gap type
+          (Common / Breakaway / Runaway / Exhaustion) is labelled per M2 Ch10.
+          Chart patterns (Flag / Pennant / Triangles / Wedges / Double-Top /
+          Bottom / H&amp;S — Ch19) corroborate with soft score nudges.
         </div>
       )}
 

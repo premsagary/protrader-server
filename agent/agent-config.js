@@ -11,7 +11,7 @@
 
 'use strict';
 
-const CONFIG_VERSION = '1.3.0-varsity-binary-gate';
+const CONFIG_VERSION = '1.4.0-book-rules-gate';
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // off     — agent does nothing (DEFAULT — safe)
@@ -112,6 +112,17 @@ const FILTERS = Object.freeze({
   ENTRY_CLOSE_CUTOFF_MINS: 345,     // no NEW entries after 345 mins since open (= 14:30 IST)
   CANDLE_CONFIRM_BPS: 5,            // close above breakout+0.05% (5 bps) to fire BUY
   ARMED_EXPIRY_MINS: 15,            // armed candidate expires after this
+  // 2026-04-20 v1.4.0: promote book-rules from diagnostic to gate. When true,
+  // scoreDayTrade runs agent/trading-rules.evaluateGateSubset() AFTER the
+  // Varsity 12-item checklist passes. The subset is net-new checks only:
+  //   • regime = NO_TRADE (stale state, VIX>25, Nifty fast-move, early/late)
+  //   • losing patterns (chasing, vertical spike, counter-EMA stack, big-gap
+  //     fade risk, round-number trap) — each distinct from Varsity
+  //   • structural NN (SL present, 15:15 squareoff, avg-down/widen-SL
+  //     disabled, kill-switch, live requires paper-test)
+  // Fail → return null (same contract as varsityPassed). Keep OFF (`false`)
+  // if you want book-rules to remain purely diagnostic.
+  ENFORCE_BOOK_RULES_GATE: true,
 });
 
 // ── Hard constraints (Layer 3 — Constraint Engine) ───────────────────────────

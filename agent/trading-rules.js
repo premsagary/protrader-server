@@ -27,7 +27,7 @@
 
 'use strict';
 
-const VERSION = '1.0.0-book-rules';
+const VERSION = '1.1.0-book-rules-gate';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 0. UTIL
@@ -462,6 +462,96 @@ function evaluateNonNegotiable(p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GATE SUBSET — net-new checks only (2026-04-20)
+// ═══════════════════════════════════════════════════════════════════════════
+// Why not use evaluateAll() as the gate?
+// The Varsity 12-item binary checklist in scoreDayTrade already enforces most
+// of what evaluateAll covers: volume ≥1.5x, ADX ≥18, RR ≥1.5, session window,
+// VIX sane, daily trend not down, ATR band, EMA-stack via indicator alignment.
+// Running evaluateAll after Varsity would reject on the same criteria twice
+// (double-gating) and surface spurious rejections for ctx fields the caller
+// legitimately cannot populate (e.g. pullback-leg vol ratio on a breakout).
+//
+// evaluateGateSubset runs ONLY the layers that are NET-NEW vs Varsity:
+//   • regime = NO_TRADE (fast-move / circuit / earnings / state-stale)
+//   • losing patterns subset (chasing / vertical-spike / counter-EMA / round
+//     number / big-gap-fade) — each distinct from Varsity checks
+//   • structural non-negotiables (SL present, 15:15 squareoff, avg-down &
+//     widen-SL disabled, kill-switch not overridden, mode discipline)
+//
+// State-dependent psych / concurrency / daily-trade caps / cooldowns stay in
+// agent/constraint-engine.js — they require runtime account state that
+// scoreDayTrade does not see.
+//
+// Structural NN IDs kept in the gate:
+//   NN01 — SL present and below entry
+//   NN04 — 15:15 IST squareoff set
+//   NN05 — average-down disabled
+//   NN06 — SL widening disabled
+//   NN19 — kill-switch not overridden
+//   NN20 — live mode only after paper-test pass
+//
+// Skipped NN IDs (enforced elsewhere):
+//   NN02 (1% risk), NN03 (2% daily loss), NN13 (concurrent cap),
+//   NN14 (daily-trade cap), NN12 (SL-symbol cooldown) — constraint-engine
+//   NN07 (open buffer), NN08 (entry cutoff), NN09 (ADX), NN10 (VIX),
+//   NN11 (volume), NN15 (daily trend), NN16 (circuit), NN17 (earnings),
+//   NN18 (netRR) — Varsity checklist / picks preflights
+const GATE_STRUCTURAL_NN_IDS = Object.freeze(['NN01', 'NN04', 'NN05', 'NN06', 'NN19', 'NN20']);
+
+function evaluateGateSubset(ctx, opts) {
+  const o = Object.assign({ regime: true, losingPatterns: true, structuralNN: true }, opts || {});
+  const failures = [];
+  let regime = null;
+  let losing = { blocked: false, codes: [] };
+  let structuralNN = { pass: true, failures: [] };
+
+  // ── Regime: block NO_TRADE only. SIDEWAYS/VOLATILE are not blocked here —
+  //    the Varsity checklist (ADX≥18, ATR band) already prunes those cases
+  //    where they matter. This keeps the gate narrow and predictable.
+  if (o.regime) {
+    regime = detectRegime(ctx);
+    if (regime === REGIME.NO_TRADE) failures.push({ layer: 'regime', code: 'regime_no_trade' });
+  }
+
+  // ── Losing patterns subset (distinct from Varsity). Deliberately skip:
+  //    LATE_ENTRY (session-window overlaps Varsity), SIDEWAYS_TRADE (ADX+BB
+  //    overlaps Varsity), THIN_BREAKOUT (volume overlaps Varsity),
+  //    FIRST_BAR_TRADE (first-bar rejects happen in picks preflight).
+  if (o.losingPatterns) {
+    const codes = [];
+    if (isFiniteNum(ctx.entryOffsetFromTriggerATR) && ctx.entryOffsetFromTriggerATR > 0.30)                 codes.push(LOSING_PATTERN_CODES.CHASING);
+    if (isFiniteNum(ctx.consecutiveGreenWithoutPullback) && ctx.consecutiveGreenWithoutPullback >= 3)        codes.push(LOSING_PATTERN_CODES.VERTICAL_SPIKE);
+    if (isFiniteNum(ctx.emaFast) && isFiniteNum(ctx.emaMid) && isFiniteNum(ctx.emaSlow) &&
+        ctx.emaFast < ctx.emaMid && ctx.emaMid < ctx.emaSlow)                                                codes.push(LOSING_PATTERN_CODES.COUNTER_EMA_STACK);
+    if (isFiniteNum(ctx.gapPct) && ctx.gapPct > 2.0 && ctx.bearReversalOnGapBar === true)                   codes.push(LOSING_PATTERN_CODES.BIG_GAP_FADE_RISK);
+    if (isFiniteNum(ctx.roundNumberDistPct) && ctx.roundNumberDistPct < 0.05)                                codes.push(LOSING_PATTERN_CODES.AT_ROUND_NUMBER);
+    losing = { blocked: codes.length > 0, codes };
+    for (const c of codes) failures.push({ layer: 'losing', code: c });
+  }
+
+  // ── Structural non-negotiables — SL/session/safety predicates the trader
+  //    or the ops layer must enforce before a real order is ever placed.
+  if (o.structuralNN) {
+    const subset = NON_NEGOTIABLE.filter(r => GATE_STRUCTURAL_NN_IDS.includes(r.id));
+    const fails = subset
+      .filter(r => { try { return !r.predicate(ctx); } catch (_) { return true; } })
+      .map(r => ({ id: r.id, rule: r.rule }));
+    structuralNN = { pass: fails.length === 0, failures: fails };
+    for (const f of fails) failures.push({ layer: 'nn', code: f.id });
+  }
+
+  return {
+    version: VERSION,
+    pass: failures.length === 0,
+    failures,
+    regime,
+    losing,
+    structuralNN,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // COMPOSITE EVALUATION — one call returns the full verdict
 // ═══════════════════════════════════════════════════════════════════════════
 function evaluateAll(ctx) {
@@ -517,6 +607,8 @@ module.exports = {
   LOSING_PATTERN_CODES, blockLosingPattern,
   // non-negotiables
   NON_NEGOTIABLE, evaluateNonNegotiable,
+  // gate subset (net-new vs Varsity)
+  GATE_STRUCTURAL_NN_IDS, evaluateGateSubset,
   // composite
   evaluateAll,
   // helpers

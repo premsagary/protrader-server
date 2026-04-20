@@ -11757,18 +11757,62 @@ function scoreDayTrade(candles, sym, ctx) {
   const scoreGains = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'gain');
   const scorePenalties = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'penalty');
 
-  // ── Book-Rules diagnostic (agent/trading-rules.js) ──────────────────────
-  // Deterministic rule-set distilled from Varsity + pro-trading books. Runs
-  // as a DIAGNOSTIC today — ships verdict on the pick but does not gate. To
-  // promote to a gate, flip FILTERS.ENFORCE_BOOK_RULES_GATE in agent-config
-  // and add a null-return branch here. The Varsity 12-item checklist above
-  // already enforces the critical overlap; this layer adds regime, loser
-  // patterns, 20 non-negotiables, and a 0-100 trade quality score (A+..D).
+  // ── Book-Rules GATE (agent/trading-rules.js) ────────────────────────────
+  // Deterministic rule-set distilled from Varsity + pro-trading books.
+  // 2026-04-20 (v1.4.0): promoted from diagnostic → gate via FILTERS.
+  // ENFORCE_BOOK_RULES_GATE. When the flag is true, a FAIL on the net-new
+  // subset (regime NO_TRADE, losing patterns, structural NN) returns null —
+  // same contract as varsityPassed. Full evaluateAll() still runs and ships
+  // its verdict on the pick for audit, but ONLY evaluateGateSubset drives
+  // the null-return decision so Varsity-overlap checks don't double-gate.
+  //
+  // Net-new ctx fields computed below from in-scope data:
+  //   • entryOffsetFromTriggerATR — how far price is past breakout, in ATRs
+  //   • consecutiveGreenWithoutPullback — vertical-spike guard
+  //   • roundNumberDistPct — proximity to psych round number (₹10/50/100/500
+  //     depending on price band)
+  // These were placeholder zeros while the layer was diagnostic — the gate
+  // needs real values or the loser-pattern checks become no-ops.
   let bookRules = null;
+  let bookRulesGate = null;
   try {
     const TR = require('./agent/trading-rules');
+    const { FILTERS: _AGENT_FILTERS } = require('./agent/agent-config');
     const ema50Local = n >= 50 ? calcEma(C, 50)[n - 1] : ema20[n - 1];
     const bbWidthPctile = (typeof bbSqueeze !== 'undefined' && bbSqueeze) ? 20 : 60; // coarse
+
+    // entryOffsetFromTriggerATR — distance past breakout trigger in ATR units.
+    // Only meaningful for breakout setups; pullback/bounce can leave at 0.
+    const _trigger = Math.max(orHigh || 0, pdHigh || 0);
+    const _brkOffset = (atr14val > 0 && _trigger > 0)
+      ? Math.max(0, (px - _trigger) / atr14val)
+      : 0;
+
+    // consecutiveGreenWithoutPullback — scan backwards counting bars where
+    // close>open AND bar low >= prior bar close (no retracement). Break on
+    // first bar that violates.
+    let _consecGreenNoPB = 0;
+    for (let _i = n - 1; _i > 0; _i--) {
+      const _c = candles[_i], _p = candles[_i - 1];
+      const _isGreen = (_c.close || 0) > (_c.open || 0);
+      const _noPullback = (_c.low || _c.close || 0) >= (_p.close || 0);
+      if (_isGreen && _noPullback) _consecGreenNoPB++;
+      else break;
+    }
+
+    // roundNumberDistPct — % distance to nearest psychological round number.
+    // Price-band thresholds: <₹100 → nearest 10, <₹500 → 50, <₹2000 → 100,
+    // else 500. Trades right at a round number frequently reverse as orders
+    // cluster there.
+    const _step = px < 100 ? 10 : px < 500 ? 50 : px < 2000 ? 100 : 500;
+    const _roundTo = Math.round(px / _step) * _step;
+    const _roundDistPct = px > 0 ? Math.abs(px - _roundTo) / px * 100 : 100;
+
+    // barIndex — position of current bar within today's session. Placeholder
+    // 5 was fine while diagnostic; for the gate we use todayCandles length so
+    // FIRST_BAR_TRADE check (barIndex===0) fires correctly on index 0.
+    const _barIndex = Math.max(0, (todayCandles.length || n) - 1);
+
     const brCtx = {
       // regime
       adx: adxVal, emaFast: ema9[n - 1], emaMid: ema20[n - 1], emaSlow: ema50Local,
@@ -11788,12 +11832,12 @@ function scoreDayTrade(candles, sym, ctx) {
         Math.abs(px - (orHigh || px)) / atr14val,
         Math.abs(px - (orLow  || px)) / atr14val
       ) : 1.0),
-      entryOffsetFromTriggerATR: 0, barsSinceTrigger: 0, atr: atr14val,
+      entryOffsetFromTriggerATR: _brkOffset, barsSinceTrigger: 0, atr: atr14val,
       bullishReversalCandle: !!bullPattern, pullbackLegVolRatio: 0.9, reversalBarVolRatio: volRatio,
       // losing patterns
-      consecutiveGreenWithoutPullback: 0,
+      consecutiveGreenWithoutPullback: _consecGreenNoPB,
       gapPct, bearReversalOnGapBar: (gapPct > 0 && !!bearPattern && bearPattern.weight >= 12),
-      barIndex: 5, roundNumberDistPct: 1.0,
+      barIndex: _barIndex, roundNumberDistPct: +_roundDistPct.toFixed(3),
       // non-negotiables
       sl: sl != null ? sl : null, entry: px, riskPct: 1.0,
       dailyLossPct: 0, squareOffByHHMM: 1515,
@@ -11817,7 +11861,28 @@ function scoreDayTrade(candles, sym, ctx) {
       nonNegotiableFails: verdict.nonNeg.failures.map(f => f.id),
       version: verdict.version,
     };
-  } catch (e) { bookRules = { pass: null, error: String(e && e.message || e).slice(0, 140) }; }
+    // Gate subset — net-new vs Varsity (see trading-rules.js for rationale).
+    const gate = TR.evaluateGateSubset(brCtx);
+    bookRulesGate = {
+      pass: gate.pass,
+      regime: gate.regime,
+      losingCodes: gate.losing.codes,
+      nnFails: gate.structuralNN.failures.map(f => f.id),
+      enforced: !!_AGENT_FILTERS.ENFORCE_BOOK_RULES_GATE,
+      version: gate.version,
+    };
+    if (_AGENT_FILTERS.ENFORCE_BOOK_RULES_GATE && !gate.pass) {
+      // Same null-return contract as varsityPassed. Caller-side `if (scored)`
+      // treats this as a filtered candidate — no noisy rejection surface.
+      return null;
+    }
+  } catch (e) {
+    bookRules = { pass: null, error: String(e && e.message || e).slice(0, 140) };
+    bookRulesGate = { pass: null, enforced: false, error: bookRules.error };
+    // Fail-open on exceptions: a bug in the rule module must NOT halt the
+    // entire DayTrade pipeline mid-session. Error is surfaced on the pick
+    // for audit; Varsity gate stays in force regardless.
+  }
 
   return {
     sym, name: f?.name || sym, grp: f?.grp || 'Unknown', sector: f?.sector || 'Other',
@@ -11844,11 +11909,17 @@ function scoreDayTrade(candles, sym, ctx) {
     dayHigh: +dayHigh.toFixed(2), dayLow: +dayLow.toFixed(2),
     pdHigh: +pdHigh.toFixed(2), pdLow: +pdLow.toFixed(2),
     bbPct: +bbPct.toFixed(2), gapUnfilled,
-    // Book-Rules verdict (agent/trading-rules.js) — diagnostic layer distilling
-    // Varsity + pro-trading-book principles into a deterministic rule set:
-    // regime / entry / exit / risk / rejection / psych / quality / losing-patterns
-    // / 20 non-negotiables. Not a gate today; flip ENFORCE_BOOK_RULES_GATE to promote.
+    // Book-Rules verdict (agent/trading-rules.js) — deterministic layer distilling
+    // Varsity + pro-trading-book principles into regime / entry / exit / risk /
+    // rejection / psych / quality / losing-patterns / 20 non-negotiables. Full
+    // evaluateAll result is shipped as `bookRules` for audit.
     bookRules,
+    // Book-Rules GATE (2026-04-20, v1.4.0): net-new subset that drives the
+    // null-return when FILTERS.ENFORCE_BOOK_RULES_GATE is true. Checks regime
+    // (NO_TRADE only), losing patterns distinct from Varsity (chasing, spike,
+    // counter-EMA, big-gap-fade, round-number), structural non-negotiables.
+    // A survived pick has `bookRulesGate.pass === true`.
+    bookRulesGate,
     // Varsity M2 Ch10 — named gap classification (Common / Breakaway / Runaway / Exhaustion / None)
     gapType,
     // Varsity M2 Ch19 — multi-bar chart pattern recognition. Array of
