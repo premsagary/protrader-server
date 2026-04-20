@@ -11757,6 +11757,68 @@ function scoreDayTrade(candles, sym, ctx) {
   const scoreGains = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'gain');
   const scorePenalties = _track.filter(t => (t.bucket === bestBucket || t.bucket === 'MULTI') && t.type === 'penalty');
 
+  // ── Book-Rules diagnostic (agent/trading-rules.js) ──────────────────────
+  // Deterministic rule-set distilled from Varsity + pro-trading books. Runs
+  // as a DIAGNOSTIC today — ships verdict on the pick but does not gate. To
+  // promote to a gate, flip FILTERS.ENFORCE_BOOK_RULES_GATE in agent-config
+  // and add a null-return branch here. The Varsity 12-item checklist above
+  // already enforces the critical overlap; this layer adds regime, loser
+  // patterns, 20 non-negotiables, and a 0-100 trade quality score (A+..D).
+  let bookRules = null;
+  try {
+    const TR = require('./agent/trading-rules');
+    const ema50Local = n >= 50 ? calcEma(C, 50)[n - 1] : ema20[n - 1];
+    const bbWidthPctile = (typeof bbSqueeze !== 'undefined' && bbSqueeze) ? 20 : 60; // coarse
+    const brCtx = {
+      // regime
+      adx: adxVal, emaFast: ema9[n - 1], emaMid: ema20[n - 1], emaSlow: ema50Local,
+      bbWidthPctile, atrPct, vix: vixValue,
+      niftyFastMovePct: (typeof _niftyChange === 'number' ? _niftyChange : null),
+      minutesSinceOpen: minsSinceOpen, minutesToClose: Math.max(0, 375 - minsSinceOpen),
+      isCircuitSession: false,   // circuit detection lives in picks pipeline, not scoreDayTrade
+      isEarningsSession: false,  // same
+      stateAgeSec: 1,
+      // entry
+      close: px, breakoutLevel: Math.max(orHigh || px, pdHigh || px),
+      breakoutBarVolRatio: volRatio, volRatio,
+      rsi: lastRSI, netRR: rrRatioNet, price: px, vwap: lastVWAP,
+      distToLevelInATR: (atr14val > 0 ? Math.min(
+        Math.abs(px - (pdHigh || px)) / atr14val,
+        Math.abs(px - (pdLow  || px)) / atr14val,
+        Math.abs(px - (orHigh || px)) / atr14val,
+        Math.abs(px - (orLow  || px)) / atr14val
+      ) : 1.0),
+      entryOffsetFromTriggerATR: 0, barsSinceTrigger: 0, atr: atr14val,
+      bullishReversalCandle: !!bullPattern, pullbackLegVolRatio: 0.9, reversalBarVolRatio: volRatio,
+      // losing patterns
+      consecutiveGreenWithoutPullback: 0,
+      gapPct, bearReversalOnGapBar: (gapPct > 0 && !!bearPattern && bearPattern.weight >= 12),
+      barIndex: 5, roundNumberDistPct: 1.0,
+      // non-negotiables
+      sl: sl != null ? sl : null, entry: px, riskPct: 1.0,
+      dailyLossPct: 0, squareOffByHHMM: 1515,
+      averagingDownDisabled: true, slWideningDisabled: true,
+      tradesTodayCount: 0, concurrentOpen: 0,
+      killSwitchOverridden: false, mode: 'paper', paperTestPassed: true,
+      minutesSinceLastSLOnSymbol: null,
+      dailyTrend: (dailyF2 && dailyF2.dowTheoryTrend) || 'UPTREND',
+      dailyAligned: !!(dailyF2 && dailyF2.pctAbove200 > 0 && dailyF2.dowTheoryTrend !== 'DOWNTREND'),
+      bidAskSpreadPct: null,
+    };
+    const verdict = TR.evaluateAll(brCtx);
+    bookRules = {
+      pass: verdict.pass,
+      regime: verdict.regime,
+      quality: verdict.quality,
+      rejectionCodes: verdict.rejection.codes,
+      losingPatternCodes: verdict.losing.codes,
+      entrySetup: verdict.entry.setup,
+      entryFailures: verdict.entry.failures,
+      nonNegotiableFails: verdict.nonNeg.failures.map(f => f.id),
+      version: verdict.version,
+    };
+  } catch (e) { bookRules = { pass: null, error: String(e && e.message || e).slice(0, 140) }; }
+
   return {
     sym, name: f?.name || sym, grp: f?.grp || 'Unknown', sector: f?.sector || 'Other',
     price: +px.toFixed(2),
@@ -11782,6 +11844,11 @@ function scoreDayTrade(candles, sym, ctx) {
     dayHigh: +dayHigh.toFixed(2), dayLow: +dayLow.toFixed(2),
     pdHigh: +pdHigh.toFixed(2), pdLow: +pdLow.toFixed(2),
     bbPct: +bbPct.toFixed(2), gapUnfilled,
+    // Book-Rules verdict (agent/trading-rules.js) — diagnostic layer distilling
+    // Varsity + pro-trading-book principles into a deterministic rule set:
+    // regime / entry / exit / risk / rejection / psych / quality / losing-patterns
+    // / 20 non-negotiables. Not a gate today; flip ENFORCE_BOOK_RULES_GATE to promote.
+    bookRules,
     // Varsity M2 Ch10 — named gap classification (Common / Breakaway / Runaway / Exhaustion / None)
     gapType,
     // Varsity M2 Ch19 — multi-bar chart pattern recognition. Array of
