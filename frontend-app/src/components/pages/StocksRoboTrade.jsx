@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { apiGet, apiPost } from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
 import GatesActiveBanner from '../common/GatesActiveBanner';
+import Agent from './Agent';
 
 // ══════════════════════════════════════════════════════════════════════
 // Stocks RoboTrade — unified page for all stocks/* sub-tabs
@@ -24,6 +25,7 @@ import GatesActiveBanner from '../common/GatesActiveBanner';
 
 const SUB_TABS = [
   { id: 'overview',   label: '◎ Overview' },
+  { id: 'agent',      label: '⟳ Agent' },        // auto-trader: mode/schedule/decisions (merged from standalone Agent tab, 2026-04-20)
   { id: 'positions',  label: '○ Positions' },
   { id: 'trades',     label: '⇅ Trade History' },
   { id: 'candidates', label: '◉ Candidates' },
@@ -68,7 +70,12 @@ const fmtT = (ts) => {
 export default function StocksRoboTrade() {
   const currentTab = useAppStore((s) => s.currentTab);
   const setCurrentTab = useAppStore((s) => s.setCurrentTab);
-  const sub = currentTab.startsWith('stocks/') ? currentTab.slice('stocks/'.length) : 'overview';
+  // Legacy '#agent' → 'stocks/agent' (nav was consolidated 2026-04-20).
+  const sub = currentTab === 'agent'
+    ? 'agent'
+    : currentTab.startsWith('stocks/')
+      ? currentTab.slice('stocks/'.length)
+      : 'overview';
 
   return (
     <div className="animate-fadeIn">
@@ -76,6 +83,7 @@ export default function StocksRoboTrade() {
       <SubTabNav active={sub} onChange={(id) => setCurrentTab(`stocks/${id}`)} />
       <div style={{ marginTop: 18 }}>
         {sub === 'overview'   && <OverviewTab />}
+        {sub === 'agent'      && <Agent embedded />}
         {sub === 'positions'  && <PositionsTab />}
         {sub === 'trades'     && <TradesTab />}
         {sub === 'candidates' && <CandidatesTab />}
@@ -111,14 +119,14 @@ function PageHeader({ sub }) {
       <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
         <div>
           <div className="label-xs" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-            Paper + Live Trading · NSE Stocks
+            Agent · Paper + Live Trading · NSE Stocks
             <span className="chip" style={{ height: 20, fontSize: 10, fontWeight: 700, background: 'var(--red-bg)', color: 'var(--red-text)' }}>ADMIN</span>
           </div>
           <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-1px', lineHeight: 1.1, color: 'var(--text)' }}>
-            <span className="gradient-fill">Stocks RoboTrade</span>
+            <span className="gradient-fill">Trade</span>
           </h1>
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text2)' }}>
-            Kite Connect · scans every 5 min during 09:15–15:30 IST · {SUB_TABS.find((t) => t.id === sub)?.label || sub}
+            Auto-trader + paper/live ledger + analytics · unified from the old Agent + RoboTrade tabs · {SUB_TABS.find((t) => t.id === sub)?.label || sub}
           </div>
         </div>
       </div>

@@ -12,7 +12,8 @@ import CryptoRoboTrade from './components/pages/CryptoRoboTrade';
 import DayTrade from './components/pages/DayTrade';
 import MiroFishLab from './components/pages/MiroFishLab';
 import Admin from './components/pages/Admin';
-import Agent from './components/pages/Agent';
+// Agent is still imported by StocksRoboTrade and rendered as the 'stocks/agent' sub-tab.
+// Standalone <Agent /> route was removed 2026-04-20 tab consolidation.
 import ComingSoon from './components/pages/ComingSoon';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -89,7 +90,9 @@ export default function App() {
     if (currentTab === 'daytrade') return <DayTrade />;
     if (currentTab === 'mirofish') return <MiroFishLab />;
     if (currentTab === 'admin') return <Admin />;
-    if (currentTab === 'agent') return <Agent />;
+    // Backwards-compat: the standalone 'agent' tab was removed from the nav
+    // 2026-04-20. Old bookmarks land on the new Trade tab's Agent sub-tab.
+    if (currentTab === 'agent') return <StocksRoboTrade />;
     return <ComingSoon tab={currentTab} />;
   };
 

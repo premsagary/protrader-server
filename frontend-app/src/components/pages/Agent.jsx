@@ -56,7 +56,7 @@ function fmtHM(ts) {
   } catch { return String(ts); }
 }
 
-export default function Agent() {
+export default function Agent({ embedded = false } = {}) {
   const [status, setStatus] = useState(null);
   const [closed, setClosed] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -168,7 +168,8 @@ export default function Agent() {
 
   return (
     <div className="animate-fadeIn" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Hero */}
+      {/* Hero — hidden when this component is embedded inside the Trade tab */}
+      {!embedded && (
       <div className="card card-premium" style={{ padding: '22px 24px', position: 'relative', overflow: 'hidden' }}>
         <div style={{
           position: 'absolute', top: 0, right: 0, width: 280, height: 280,
@@ -217,14 +218,17 @@ export default function Agent() {
           )}
         </div>
       </div>
+      )}
 
-      {/* Gates pipeline banner — shared across DayTrade, RoboTrade, Agent, Admin */}
-      <GatesActiveBanner
-        variant="full"
-        accent="indigo"
-        title="Agent — operates on the same 5-layer gate pipeline"
-        subtitle="Each minute, the agent re-evaluates DayTrade picks through these gates before emitting a BUY. Decisions are logged to agent_decisions."
-      />
+      {/* Gates pipeline banner — only shown when rendered standalone; Trade tab has its own */}
+      {!embedded && (
+        <GatesActiveBanner
+          variant="full"
+          accent="indigo"
+          title="Agent — operates on the same 5-layer gate pipeline"
+          subtitle="Each minute, the agent re-evaluates DayTrade picks through these gates before emitting a BUY. Decisions are logged to agent_decisions."
+        />
+      )}
 
       {/* Mode + actions row */}
       <div className="card" style={{ padding: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
