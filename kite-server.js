@@ -2470,13 +2470,14 @@ const CONFIG = {
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
-  // NEW — Varsity M2 full-stack gate. Require dayTradeScore (the 14-point
-  // Varsity checklist + CPR + OBV + S/R + candlestick + VPA matrix) before
-  // any entry. Cuts marginal-quality setups that pass the 3-strategy vote
-  // but fail the richer checklist. Tune down to 60 if too restrictive,
-  // up to 70 to be selective. Disable entirely with env ROBOTRADE_VARSITY_GATE=off.
+  // NEW — Varsity M2 full-stack gate. Pure BINARY gate — `scoreDayTrade()`
+  // returns null when ANY of the 12 Varsity M2 Ch20+21 checklist items fails
+  // (liquidity, RVOL, ADX, VWAP slope, clean-trend, R:R, no-late-entry, etc.).
+  // We enforce the binary pass/fail only — no score threshold. The numeric
+  // score is informational on balaji (paper arm), never a gate.
+  // Per 2026-04-21 directive: "we are not doing scoring for balaji."
+  // Disable entirely with env ROBOTRADE_VARSITY_GATE=off.
   VARSITY_GATE_ENABLED: (process.env.ROBOTRADE_VARSITY_GATE || 'on').toLowerCase() !== 'off',
-  MIN_VARSITY_SCORE:    parseInt(process.env.ROBOTRADE_MIN_VARSITY_SCORE || '65', 10),
   SCAN_DELAY_MS:  250,
 };
 
@@ -3334,7 +3335,7 @@ let _latestPass2Debug = {
   skippedCorr:  0,
   skippedDup:   0,
   skippedFilter: 0,
-  skippedVarsity: 0,   // Phase 5 — dayTradeScore < MIN_VARSITY_SCORE
+  skippedVarsity: 0,   // Phase 5 — Varsity M2 binary checklist hard-gate failed (scoreDayTrade returned null)
   skippedTradeCap: 0,  // NEW 2026-04-18 — MAX_TRADES_PER_DAY binds per-insert
   skippedLowProfit: 0, // NEW 2026-04-18 — (tgt-entry)*qty < MIN_EXPECTED_PROFIT_INR
   rejectedStructure: 0,
@@ -4505,17 +4506,16 @@ async function scanAndTrade() {
       continue;
     }
 
-    // Phase 5 · Varsity gate — require the full 14-point Varsity checklist
-    // to pass a minimum score. Cheap check (dayTradeScore was already computed
-    // in Pass 1 from the same candles), high filter rate on marginal setups.
-    // Combined with existing consensus + BUY_SCORE filters, this should
-    // meaningfully compress over-trading on choppy days.
+    // Phase 5 · Varsity BINARY hard-gate — `scoreDayTrade()` returns null
+    // when any of the 12 Varsity M2 Ch20+21 checklist items fails. We only
+    // enforce the pass/fail signal here — the numeric score is informational,
+    // not a threshold. Per 2026-04-21 directive: no score-based gating on
+    // balaji (paper arm). Quality is enforced by the checklist itself inside
+    // scoreDayTrade, not by a post-hoc cutoff.
     if (CONFIG.VARSITY_GATE_ENABLED) {
       const dts = candidate.dayTradeScore;
-      if (dts == null || dts < CONFIG.MIN_VARSITY_SCORE) {
-        const reason = dts == null
-          ? 'varsity_score_null (illiquid or quality gate failed)'
-          : `varsity_score_${dts}<${CONFIG.MIN_VARSITY_SCORE}`;
+      if (dts == null) {
+        const reason = 'varsity_binary_gate_failed (one or more of 12 checklist items failed)';
         console.log(`  ⊘ SKIP ${stock.sym} (strat score:${result.score.toFixed(1)}) — ${reason}`);
         _latestPass2Debug.skippedVarsity += 1;
         recordPass2(candidate, 'SKIPPED', reason);
@@ -4796,7 +4796,7 @@ async function scanAndTrade() {
     scanMsg += ` | Filter: ${fs.total}→${fs.approved} (S-rej:${fs.rejectedByStructure}${fs.rejectedByLLM?`, LLM-rej:${fs.rejectedByLLM}`:''})`;
   }
   if (CONFIG.VARSITY_GATE_ENABLED && _latestPass2Debug.skippedVarsity > 0) {
-    scanMsg += ` | Varsity-gate skipped ${_latestPass2Debug.skippedVarsity} (score<${CONFIG.MIN_VARSITY_SCORE})`;
+    scanMsg += ` | Varsity-gate skipped ${_latestPass2Debug.skippedVarsity} (binary checklist failed)`;
   }
   if (_latestPass2Debug.skippedTradeCap > 0) {
     scanMsg += ` | TradeCap-skipped ${_latestPass2Debug.skippedTradeCap}`;
