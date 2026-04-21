@@ -12086,6 +12086,8 @@ async function scanDayTrades(force = false) {
   _dayTradeScanning = true;
   const t0 = Date.now();
   let ok = 0, fail = 0;
+  let diagLogs = 0;   // 2026-04-21 — cap actual-error logs per scan so we can
+                       // see WHY fetches fail (previously catch(()=>null) ate them)
   const results = [];
 
   try {
@@ -12103,7 +12105,22 @@ async function scanDayTrades(force = false) {
       if (!token) continue;
 
       try {
-        const candles = await kite.getHistoricalData(token, '5minute', weekAgo, today).catch(() => null);
+        // 2026-04-21 — make the 0ok/0fail blind spot diagnosable. Previously
+        // .catch(()=>null) swallowed every fetch error and the `continue` below
+        // skipped without counting it as a fail, leaving us with zero visibility
+        // into why the scanner produced no picks. Now we preserve the error on
+        // a local, log the first 5 per scan, and count real errors in `fail`.
+        let fetchError = null;
+        const candles = await kite.getHistoricalData(token, '5minute', weekAgo, today)
+          .catch((e) => { fetchError = e; return null; });
+        if (fetchError) {
+          if (diagLogs < 5) {
+            console.warn(`[dt-scan] ${stock.sym} 5min fetch failed: ${fetchError.message || fetchError}`);
+            diagLogs++;
+          }
+          fail++;
+          continue;
+        }
         if (!candles || candles.length < 30) continue;
         const scored = scoreDayTrade(candles, stock.sym);
         if (scored) {
