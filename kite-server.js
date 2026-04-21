@@ -1017,6 +1017,36 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_candles_5m_ts ON candles_5m(ts)`);
 
+    // ── candidate_analyses (2026-04-21) ──────────────────────────────────
+    // Full audit trail of Pass 1.5 structure-filter + LLM decisions. Previously
+    // only the LATEST scan lived in memory (_latestCandidateAnalyses), so the
+    // morning scans that produced today's live trades were overwritten and
+    // un-inspectable by afternoon. Persisting here gives us a scan-by-scan
+    // history joinable to live_trades by (symbol, entry_time).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS candidate_analyses (
+        id               BIGSERIAL PRIMARY KEY,
+        scan_ts          TIMESTAMP NOT NULL,
+        symbol           VARCHAR(40) NOT NULL,
+        name             VARCHAR(200),
+        strategy         VARCHAR(60),
+        regime           VARCHAR(40),
+        original_score   DOUBLE PRECISION,
+        adjusted_score   DOUBLE PRECISION,
+        entry_price      DOUBLE PRECISION,
+        confidence       DOUBLE PRECISION,
+        final_decision   VARCHAR(20),
+        reject_reason    TEXT,
+        structure        JSONB,
+        llm_decision     JSONB,
+        adjustments      JSONB,
+        decision_object  JSONB,
+        created_at       TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_candidate_analyses_sym_ts ON candidate_analyses(symbol, scan_ts)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_candidate_analyses_ts ON candidate_analyses(scan_ts)`);
+
     // ── LLM news classifier cache + budget (Apr-2026) ────────────────────
     // Replaces the hand-maintained 83-entry NEGATIVE_KEYWORDS blacklist.
     // news_classification_cache keyed by sha256(headline) so identical
@@ -4348,6 +4378,44 @@ async function scanAndTrade() {
       scannedAt:       new Date().toISOString(),
     }));
     _latestFilterStats = filterStats;
+
+    // 2026-04-21 — persist candidate_analyses audit trail. Previously only
+    // the latest scan lived in _latestCandidateAnalyses (in-memory, overwritten
+    // every scan). Now every Pass 1.5 decision is DB-backed and joinable to
+    // live_trades by (symbol, scan_ts ≈ entry_time). Fire-and-forget, one
+    // INSERT per candidate, doesn't block scan loop.
+    (async () => {
+      const scanTs = new Date();
+      for (const c of buyCandidates) {
+        try {
+          await pool.query(`
+            INSERT INTO candidate_analyses
+              (scan_ts, symbol, name, strategy, regime, original_score, adjusted_score,
+               entry_price, confidence, final_decision, reject_reason,
+               structure, llm_decision, adjustments, decision_object)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          `, [
+            scanTs, c.stock.sym, c.stock.n || null,
+            c.result.strategy || null, c.result.regime || null,
+            +c.result.score.toFixed(2), c.adjustedScore ?? c.result.score,
+            c.last.close, c.decisionObject?.confidence ?? null,
+            c.finalDecision || (c.rejected ? 'REJECTED' : 'APPROVED'),
+            c.rejectReason || null,
+            c.structure       ? JSON.stringify(c.structure)      : null,
+            c.llmDecision     ? JSON.stringify(c.llmDecision)    : null,
+            c.adjustments     ? JSON.stringify(c.adjustments)    : null,
+            c.decisionObject  ? JSON.stringify(c.decisionObject) : null,
+          ]);
+        } catch (e) {
+          // Log once per batch at most — don't flood logs if DB is unavailable.
+          if (!global._candAnalyzeErrLogged) {
+            console.warn('[candidate_analyses] insert failed:', e.message);
+            global._candAnalyzeErrLogged = true;
+            setTimeout(() => { global._candAnalyzeErrLogged = false; }, 60000);
+          }
+        }
+      }
+    })();
 
     console.log(`  🧱 Structure filter: ${filterStats.total} → ${filterStats.approved} approved, ${filterStats.rejectedByStructure} rejected (S), ${filterStats.rejectedByLLM} rejected (LLM)`);
     if (Object.keys(filterStats.rejectReasons).length > 0) {
@@ -7957,6 +8025,45 @@ app.get("/api/candidates/latest", (req, res) => {
   });
 });
 
+// 2026-04-21 — historical candidate_analyses query. Replaces the "only latest
+// scan in memory" gap. Filter by symbol, date range, or final_decision.
+//   /api/candidates/history?symbol=DATAPATTNS
+//   /api/candidates/history?since=2026-04-21T00:00:00Z&limit=100
+//   /api/candidates/history?decision=REJECTED&limit=50
+app.get("/api/candidates/history", async (req, res) => {
+  try {
+    const clauses = [];
+    const params  = [];
+    if (req.query.symbol) {
+      params.push(String(req.query.symbol).toUpperCase());
+      clauses.push(`symbol = $${params.length}`);
+    }
+    if (req.query.since) {
+      params.push(new Date(String(req.query.since)));
+      clauses.push(`scan_ts >= $${params.length}`);
+    }
+    if (req.query.until) {
+      params.push(new Date(String(req.query.until)));
+      clauses.push(`scan_ts <= $${params.length}`);
+    }
+    if (req.query.decision) {
+      params.push(String(req.query.decision).toUpperCase());
+      clauses.push(`final_decision = $${params.length}`);
+    }
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    params.push(limit);
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const { rows } = await pool.query(
+      `SELECT * FROM candidate_analyses ${where} ORDER BY scan_ts DESC LIMIT $${params.length}`,
+      params
+    );
+    res.json({ candidates: rows, count: rows.length });
+  } catch (e) {
+    console.error("/api/candidates/history error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/structure/config", (req, res) => res.json(STRUCTURE_CONFIG));
 
 app.post("/api/structure/config", express.json(), (req, res) => {
@@ -11086,6 +11193,8 @@ async function scanDayTrades(force = false) {
   let ok = 0, fail = 0;
   let diagLogs = 0;   // 2026-04-21 — cap actual-error logs per scan so we can
                        // see WHY fetches fail (previously catch(()=>null) ate them)
+  let snapFailCount = 0, candleFailCount = 0; // 2026-04-21 — write-path visibility
+  let snapLogs = 0, candleLogs = 0;            // per-scan first-N error log caps
   const results = [];
 
   try {
@@ -11123,15 +11232,29 @@ async function scanDayTrades(force = false) {
           scored.tsMs = lastC.date ? (lastC.date instanceof Date ? lastC.date.getTime() : Date.parse(lastC.date)) : Date.now();
           scored.sector = stockFundamentals[stock.sym]?.sector;
           scored.grp    = stockFundamentals[stock.sym]?.grp || stock.grp;
-          // Log snapshot + last 5-min candle. Both non-blocking, isolated DLQ.
+          // Log snapshot + last 5-min candle. Non-blocking, but now LOUD:
+          // per-scan counters + capped first-N error logs make silent write
+          // failures visible (was the OBEROIRLTY 2026-04-21 blind spot).
           mlLogger.logFeatureSnapshot(scored, force ? 'force_scan' : 'scan_day_trades')
             .then(snapshotId => { scored._snapshotId = snapshotId; })
-            .catch(e => console.warn('[ml-logger] snapshot failed:', e.message));
+            .catch(e => {
+              snapFailCount++;
+              if (snapLogs < 3) {
+                console.warn(`[ml-logger] snapshot failed for ${stock.sym}: ${e.message}`);
+                snapLogs++;
+              }
+            });
           mlLogger.logCandlesBatch('candles_5m', [{
             sym: stock.sym, ts: new Date(scored.tsMs),
             open: lastC.open, high: lastC.high, low: lastC.low,
             close: lastC.close, volume: lastC.volume, vwap: scored.vwap,
-          }]).catch(e => console.warn('[ml-logger] candle_5m failed:', e.message));
+          }]).catch(e => {
+            candleFailCount++;
+            if (candleLogs < 3) {
+              console.warn(`[ml-logger] candle_5m failed for ${stock.sym}: ${e.message}`);
+              candleLogs++;
+            }
+          });
           results.push(scored);
           ok++;
         }
@@ -11161,15 +11284,104 @@ async function scanDayTrades(force = false) {
       // no single sector dominates the top 10 with more than 2 picks.
       _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached`);
+      const writeSummary = (snapFailCount || candleFailCount)
+        ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
+        : '';
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached${writeSummary}`);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
+      const writeSummary = (snapFailCount || candleFailCount)
+        ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
+        : '';
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)${writeSummary}`);
     }
   } catch (e) {
     console.error('🔴 DayTrade scanner error:', e.message);
   } finally {
     _dayTradeScanning = false;
+  }
+}
+
+// ── backfillOpenPositionCandles (2026-04-21) ─────────────────────────────
+// Fetch fresh 5-min candles for every symbol in live_trades WHERE status='OPEN'
+// and write them into candles_5m. The DayTrade scanner only persists candles
+// for symbols in UNIVERSE; once a position opens, its live-hold 5-min history
+// stops being captured (see DATAPATTNS forensics: only 1 hold-bar in DB for a
+// 32-min hold). Running on the same 5-min cadence as scanDayTrades closes the
+// gap. Read-only from Kite, write-only to candles_5m. ON CONFLICT DO NOTHING
+// in logCandlesBatch means safe to overlap with UNIVERSE scans.
+let _openPosCandleBackfillRunning = false;
+async function backfillOpenPositionCandles() {
+  if (_openPosCandleBackfillRunning) return;
+  if (!isMarketOpen()) return;
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
+
+  _openPosCandleBackfillRunning = true;
+  const t0 = Date.now();
+  let ok = 0, fail = 0, rowsWritten = 0;
+  let diagLogs = 0;
+  try {
+    const { rows: openTrades } = await pool.query(
+      `SELECT DISTINCT symbol FROM live_trades WHERE status = 'OPEN'`
+    );
+    if (!openTrades.length) {
+      _openPosCandleBackfillRunning = false;
+      return;
+    }
+    const today   = new Date().toISOString().split('T')[0];
+    const dayAgo  = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    for (const { symbol } of openTrades) {
+      const token = validTokens[symbol] || INSTRUMENTS[symbol];
+      if (!token) continue;
+      try {
+        let fetchError = null;
+        const candles = await kite.getHistoricalData(token, '5minute', dayAgo, today)
+          .catch(e => { fetchError = e; return null; });
+        if (fetchError) {
+          if (diagLogs < 3) {
+            console.warn(`[open-pos backfill] ${symbol} fetch failed: ${fetchError.message || fetchError}`);
+            diagLogs++;
+          }
+          fail++;
+          continue;
+        }
+        if (!candles || !candles.length) { fail++; continue; }
+        // Only persist the last N bars (trailing 6 hours = 72 bars max).
+        // Older bars are already persisted by earlier runs — ON CONFLICT DO NOTHING
+        // makes repeats safe, but we don't want to pay the cost of inserting
+        // the full 24h every cycle.
+        const recent = candles.slice(-80);
+        const batch = recent.map(c => ({
+          sym: symbol,
+          ts:  c.date instanceof Date ? c.date : new Date(c.date),
+          open: c.open, high: c.high, low: c.low, close: c.close,
+          volume: c.volume, vwap: null,
+        }));
+        await mlLogger.logCandlesBatch('candles_5m', batch).catch(e => {
+          if (diagLogs < 3) {
+            console.warn(`[open-pos backfill] ${symbol} write failed: ${e.message}`);
+            diagLogs++;
+          }
+          fail++;
+        });
+        rowsWritten += batch.length;
+        ok++;
+      } catch (e) {
+        fail++;
+        if (diagLogs < 3) {
+          console.warn(`[open-pos backfill] ${symbol} error: ${e.message}`);
+          diagLogs++;
+        }
+      }
+      await new Promise(r => setTimeout(r, 120)); // Kite rate-limit spacing
+    }
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`🪢 Open-position candle backfill: ${ok}ok/${fail}fail, ${rowsWritten} rows upserted, ${elapsed}s`);
+  } catch (e) {
+    console.error('🔴 Open-position backfill error:', e.message);
+  } finally {
+    _openPosCandleBackfillRunning = false;
   }
 }
 
@@ -11351,6 +11563,8 @@ async function runUnifiedKitePipeline(force = false) {
   _pipelineLastRun = { startedAt: new Date().toISOString(), status: 'running' };
   const t0 = Date.now();
   let okTA = 0, okDT = 0, failTA = 0, failDT = 0;
+  let snapFailCount = 0, candleFailCount = 0; // 2026-04-21 — write-path visibility
+  let snapLogs = 0, candleLogs = 0;
   const dayTradeResults = [];
 
   try {
@@ -11437,11 +11651,18 @@ async function runUnifiedKitePipeline(force = false) {
               scored.tsMs = barTs;
               scored.sector = stockFundamentals[sym]?.sector;
               scored.grp    = stockFundamentals[sym]?.grp;
-              // Non-blocking: persist snapshot. Fire-and-forget pattern with
-              // try/catch inside the call keeps the pipeline loop tight.
+              // Non-blocking: persist snapshot. Counter + capped log pattern
+              // surfaces silent write failures (added 2026-04-21 alongside
+              // scanDayTrades sibling, after OBEROIRLTY had zero snapshot).
               mlLogger.logFeatureSnapshot(scored, 'unified_pipeline')
                 .then(snapshotId => { scored._snapshotId = snapshotId; })
-                .catch(e => console.warn('[ml-logger] snapshot failed:', e.message));
+                .catch(e => {
+                  snapFailCount++;
+                  if (snapLogs < 3) {
+                    console.warn(`[ml-logger] snapshot failed for ${sym}: ${e.message}`);
+                    snapLogs++;
+                  }
+                });
               // Also persist the last 5-min candle (most recent bar only — older
               // bars are already in the DB from prior cycles). ON CONFLICT DO
               // NOTHING means replays are safe.
@@ -11449,7 +11670,13 @@ async function runUnifiedKitePipeline(force = false) {
                 sym, ts: new Date(barTs),
                 open: lastC.open, high: lastC.high, low: lastC.low,
                 close: lastC.close, volume: lastC.volume, vwap: scored.vwap,
-              }]).catch(e => console.warn('[ml-logger] candle_5m failed:', e.message));
+              }]).catch(e => {
+                candleFailCount++;
+                if (candleLogs < 3) {
+                  console.warn(`[ml-logger] candle_5m failed for ${sym}: ${e.message}`);
+                  candleLogs++;
+                }
+              });
               dayTradeResults.push(scored);
             }
             okDT++;
@@ -11489,8 +11716,11 @@ async function runUnifiedKitePipeline(force = false) {
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length };
-    console.log(`🔄 Unified pipeline: TA ${okTA}ok/${failTA}fail · DayTrade ${okDT}ok/${failDT}fail · ${dayTradeResults.length} setups · ${elapsed}s`);
+    _pipelineLastRun = { startedAt: _pipelineLastRun.startedAt, status: 'completed', elapsed, okTA, failTA, okDT, failDT, dayTradeCount: dayTradeResults.length, snapFailCount, candleFailCount };
+    const writeSummary = (snapFailCount || candleFailCount)
+      ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
+      : '';
+    console.log(`🔄 Unified pipeline: TA ${okTA}ok/${failTA}fail · DayTrade ${okDT}ok/${failDT}fail · ${dayTradeResults.length} setups · ${elapsed}s${writeSummary}`);
     // Fire NIFTY50 1-min candle ingest — non-blocking. Runs alongside the
     // next scoring cycle; if it takes longer than 5 min the _nifty1mRunning
     // guard prevents overlap. Errors are logged, never propagated.
@@ -22226,6 +22456,15 @@ async function start() {
   cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
     // DT scoring — fast path, independent lock, drives the agent.
     scanDayTrades(false).catch(e => console.error('📊 DayTrade scan error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+
+  // ── Open-position candle backfill (2026-04-21) ──────────────────────────
+  // Fires 90s AFTER scanDayTrades so rate-limiter windows don't collide with
+  // the heavier UNIVERSE scan. Typical open-position count is 1-3 symbols, so
+  // this adds only a few Kite requests per cycle. No-op if no open positions.
+  cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 9-15 * * 1-5", () => {
+    backfillOpenPositionCandles().catch(e =>
+      console.error('🪢 Open-position backfill cron error:', e.message));
   }, { timezone: "Asia/Kolkata" });
 
   cron.schedule("0,30 9-15 * * 1-5", () => {
