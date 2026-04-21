@@ -11310,8 +11310,15 @@ async function scanDayTrades(force = false) {
 // 32-min hold). Running on the same 5-min cadence as scanDayTrades closes the
 // gap. Read-only from Kite, write-only to candles_5m. ON CONFLICT DO NOTHING
 // in logCandlesBatch means safe to overlap with UNIVERSE scans.
+//
+// Env gate (2026-04-21): OPEN_POS_CANDLE_BACKFILL=false|0|off|no disables the
+// cron AND function body. Default is enabled. Added so the evaluation week
+// against balaji can be run with zero new Kite-quota side effects if desired.
+const OPEN_POS_CANDLE_BACKFILL_ENABLED = !['false', '0', 'off', 'no']
+  .includes(String(process.env.OPEN_POS_CANDLE_BACKFILL || '').toLowerCase().trim());
 let _openPosCandleBackfillRunning = false;
 async function backfillOpenPositionCandles() {
+  if (!OPEN_POS_CANDLE_BACKFILL_ENABLED) return;
   if (_openPosCandleBackfillRunning) return;
   if (!isMarketOpen()) return;
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
@@ -22462,10 +22469,17 @@ async function start() {
   // Fires 90s AFTER scanDayTrades so rate-limiter windows don't collide with
   // the heavier UNIVERSE scan. Typical open-position count is 1-3 symbols, so
   // this adds only a few Kite requests per cycle. No-op if no open positions.
-  cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 9-15 * * 1-5", () => {
-    backfillOpenPositionCandles().catch(e =>
-      console.error('🪢 Open-position backfill cron error:', e.message));
-  }, { timezone: "Asia/Kolkata" });
+  // Env-gated via OPEN_POS_CANDLE_BACKFILL (default: enabled).
+  if (OPEN_POS_CANDLE_BACKFILL_ENABLED) {
+    cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 9-15 * * 1-5", () => {
+      backfillOpenPositionCandles().catch(e =>
+        console.error('🪢 Open-position backfill cron error:', e.message));
+    }, { timezone: "Asia/Kolkata" });
+    console.log('🪢 Open-position candle backfill: ENABLED (cron :02,:07,... IST, weekdays 9-15)');
+  } else {
+    console.log('🪢 Open-position candle backfill: DISABLED (OPEN_POS_CANDLE_BACKFILL=' +
+      process.env.OPEN_POS_CANDLE_BACKFILL + ')');
+  }
 
   cron.schedule("0,30 9-15 * * 1-5", () => {
     // Full pipeline — TA rescore + fundamentals + ML snapshots + Nifty benchmark.
