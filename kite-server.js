@@ -4185,9 +4185,16 @@ async function scanAndTrade() {
 
           if (LIVE_TRADING && kite) {
             try {
+              // 2026-04-21 — Kite rejects MARKET orders without market_protection
+              // ("Market orders without market protection are not allowed via API").
+              // We set 2% — generous enough that volatile NSE opens / thin mid-caps
+              // still fill, but tight enough to cancel on runaway slippage. Exits
+              // especially benefit from getting filled even if price is moving
+              // against us; a cancelled exit leaves a stale open position.
               const order = await placeOrderViaProxy('regular', {
                 exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'SELL',
                 quantity: openPos.quantity, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
+                market_protection: 2,
               });
               const orderId = order.order_id || order.orderId || '';
               await pool.query(
@@ -4723,9 +4730,15 @@ async function scanAndTrade() {
     // to true fill price via kite.getOrderHistory when outcome cron runs.
     if (LIVE_TRADING && kite) {
       try {
+        // 2026-04-21 — Kite requires market_protection on MARKET orders
+        // ("Market orders without market protection are not allowed via API").
+        // 2% cap on slippage between placement and fill — tolerant enough for
+        // volatile opens and thinner mid-caps, strict enough to cancel if
+        // price runs away. Matches the SELL-side exit guard for symmetry.
         const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
           quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
+          market_protection: 2,
         });
         const orderId = order.order_id || order.orderId || '';
 
