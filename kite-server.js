@@ -7846,6 +7846,171 @@ app.get("/api/scan/health", (req, res) => {
   res.json(_latestScanHealth);
 });
 
+// ── /api/trade-forensics/:tradeId ──────────────────────────────────────────
+// 2026-04-21 — one-stop post-mortem for a single paper_trades row.
+// Ports shiva 5077b27 adapted for balaji's paper_trades schema: paper_trades
+// already carries structure_json / decision_json / ranking_json / llm_json /
+// experiment / hwm_price / gross_pnl / costs inline, so the endpoint mostly
+// exists to compute the hold-window derivatives (MFE/MAE, slippage vs
+// snapshot, snapshot staleness, hold duration, bar count) from the joined
+// tables. Still reads features_snapshot + outcome_metrics + candles_5m to
+// fill those in. Read-only (SELECT only). No side effects.
+app.get("/api/trade-forensics/:tradeId", async (req, res) => {
+  try {
+    const tradeId = parseInt(req.params.tradeId, 10);
+    if (!Number.isFinite(tradeId) || tradeId <= 0) {
+      return res.status(400).json({ error: "tradeId must be a positive integer" });
+    }
+
+    // 1. The trade itself
+    const { rows: tradeRows } = await pool.query(
+      `SELECT * FROM paper_trades WHERE id = $1`, [tradeId]
+    );
+    if (!tradeRows.length) return res.status(404).json({ error: `trade ${tradeId} not found` });
+    const trade = tradeRows[0];
+
+    // 2. Nearest features_snapshot BEFORE or AT entry_time (same sym).
+    //    Prefer daytrade scan_source, fall back to any source.
+    let snapshot = null;
+    {
+      const { rows } = await pool.query(`
+        SELECT * FROM features_snapshot
+        WHERE sym = $1 AND ts <= $2
+        ORDER BY
+          CASE WHEN scan_source = 'daytrade' THEN 0 ELSE 1 END,
+          ts DESC
+        LIMIT 1
+      `, [trade.symbol, trade.entry_time]);
+      snapshot = rows[0] || null;
+    }
+
+    // 3. outcome_metrics for that snapshot (post-trade MFE/MAE from cron)
+    let outcome = null;
+    if (snapshot) {
+      const { rows } = await pool.query(
+        `SELECT * FROM outcome_metrics WHERE sym = $1 AND ts = $2`,
+        [snapshot.sym, snapshot.ts]
+      );
+      outcome = rows[0] || null;
+    }
+
+    // 4. Candles spanning 2h pre-entry through exit + 30min buffer
+    const entryMs  = new Date(trade.entry_time).getTime();
+    const exitMs   = trade.exit_time ? new Date(trade.exit_time).getTime() : Date.now();
+    const windowStart = new Date(entryMs - 2 * 60 * 60 * 1000);
+    const windowEnd   = new Date(exitMs  + 30 * 60 * 1000);
+    const { rows: candles } = await pool.query(`
+      SELECT ts, open, high, low, close, volume, vwap
+      FROM candles_5m
+      WHERE sym = $1 AND ts >= $2 AND ts <= $3
+      ORDER BY ts ASC
+    `, [trade.symbol, windowStart, windowEnd]);
+
+    // 5. Derived metrics from the hold window
+    const holdCandles = candles.filter(c => {
+      const t = new Date(c.ts).getTime();
+      return t >= entryMs && t <= exitMs;
+    });
+    let maxAdverseExcursionPct = null, maxFavourableExcursionPct = null;
+    if (trade.price && holdCandles.length) {
+      const entryPx = Number(trade.price);
+      let worst = 0, best = 0;
+      for (const c of holdCandles) {
+        const lowPct  = ((Number(c.low)  - entryPx) / entryPx) * 100;
+        const highPct = ((Number(c.high) - entryPx) / entryPx) * 100;
+        if (trade.type === 'BUY') {
+          if (lowPct  < worst) worst = lowPct;
+          if (highPct > best)  best  = highPct;
+        } else {
+          // SELL / SHORT: MAE is positive movement, MFE is negative movement
+          if (-highPct < worst) worst = -highPct;
+          if (-lowPct  > best)  best  = -lowPct;
+        }
+      }
+      maxAdverseExcursionPct    = Number(worst.toFixed(3));
+      maxFavourableExcursionPct = Number(best.toFixed(3));
+    }
+
+    // Hold duration
+    const holdMinutes = Math.round((exitMs - entryMs) / 60000);
+
+    // Slippage vs snapshot price
+    let slippagePct = null;
+    if (snapshot && snapshot.price && trade.price) {
+      slippagePct = Number((((Number(trade.price) - Number(snapshot.price)) / Number(snapshot.price)) * 100).toFixed(3));
+    }
+
+    // Distance from entry to stop/target (signed)
+    const stopDistancePct   = (trade.stop_loss && trade.price) ? Number((((Number(trade.stop_loss) - Number(trade.price)) / Number(trade.price)) * 100).toFixed(3)) : null;
+    const targetDistancePct = (trade.target    && trade.price) ? Number((((Number(trade.target)    - Number(trade.price)) / Number(trade.price)) * 100).toFixed(3)) : null;
+
+    // hwm_price is balaji's persisted high-water-mark — cheap MFE proxy that
+    // survives restarts. Expose as derived.hwmExcursionPct so a UI can show
+    // it even when candles are sparse.
+    let hwmExcursionPct = null;
+    if (trade.hwm_price && trade.price) {
+      const hwmPct = ((Number(trade.hwm_price) - Number(trade.price)) / Number(trade.price)) * 100;
+      hwmExcursionPct = Number((trade.type === 'BUY' ? hwmPct : -hwmPct).toFixed(3));
+    }
+
+    // Parse indicators (TEXT in paper_trades) if it's JSON
+    let indicators = null;
+    try { indicators = trade.indicators ? JSON.parse(trade.indicators) : null; } catch (_) { indicators = trade.indicators; }
+
+    res.json({
+      trade: { ...trade, indicators },
+      snapshot,
+      outcome,
+      candles: {
+        preEntry: candles.filter(c => new Date(c.ts).getTime() < entryMs),
+        hold:     holdCandles,
+        postExit: trade.exit_time ? candles.filter(c => new Date(c.ts).getTime() > exitMs) : []
+      },
+      derived: {
+        holdMinutes,
+        holdBars:                  holdCandles.length,
+        maxAdverseExcursionPct,
+        maxFavourableExcursionPct,
+        hwmExcursionPct,
+        slippagePctVsSnapshot:     slippagePct,
+        snapshotAgeSecondsAtEntry: snapshot ? Math.round((entryMs - new Date(snapshot.ts).getTime()) / 1000) : null,
+        stopDistancePct,
+        targetDistancePct,
+        pnlPctActual:              trade.pnl_pct  != null ? Number(trade.pnl_pct)  : null,
+        grossPnl:                  trade.gross_pnl != null ? Number(trade.gross_pnl) : null,
+        costs:                     trade.costs    != null ? Number(trade.costs)    : null,
+        exitReason:                trade.exit_reason || null
+      },
+      meta: {
+        generatedAt: new Date().toISOString(),
+        version:     'forensics-balaji-v1'
+      }
+    });
+  } catch (e) {
+    console.error("/api/trade-forensics error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── /api/trade-forensics — list the most recent closed paper_trades (index)
+app.get("/api/trade-forensics", async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const { rows } = await pool.query(`
+      SELECT id, symbol, strategy, regime, entry_time, exit_time,
+             price AS fill_px, exit_price, pnl, pnl_pct, gross_pnl, costs,
+             exit_reason, status
+      FROM paper_trades
+      ORDER BY entry_time DESC
+      LIMIT $1
+    `, [limit]);
+    res.json({ trades: rows, count: rows.length });
+  } catch (e) {
+    console.error("/api/trade-forensics list error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 4: Analytics — strategy / regime / exit / time / trade-quality / filter
 // ─────────────────────────────────────────────────────────────────────────────
