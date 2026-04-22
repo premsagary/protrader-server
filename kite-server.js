@@ -11217,6 +11217,11 @@ async function scanDayTrades(force = false) {
                        // see WHY fetches fail (previously catch(()=>null) ate them)
   let snapFailCount = 0, candleFailCount = 0; // 2026-04-21 — write-path visibility
   let snapLogs = 0, candleLogs = 0;            // per-scan first-N error log caps
+  // 2026-04-22 — expose the two silent-skip paths that hid behind 0ok/0fail:
+  //   nodata  = candles missing or < 30 bars (no fail bump, no ok bump)
+  //   nosetup = got candles but scoreDayTrade returned null (no setup today)
+  //   notok   = instrument token missing (not in validTokens+INSTRUMENTS)
+  let noTokenCount = 0, noDataCount = 0, noSetupCount = 0;
   const results = [];
 
   try {
@@ -11226,7 +11231,7 @@ async function scanDayTrades(force = false) {
     for (const stock of UNIVERSE) {
       if (!stock.sym || !stock.name) continue;
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
-      if (!token) continue;
+      if (!token) { noTokenCount++; continue; }
 
       try {
         // 2026-04-21 — make the 0ok/0fail blind spot diagnosable. Previously
@@ -11245,7 +11250,7 @@ async function scanDayTrades(force = false) {
           fail++;
           continue;
         }
-        if (!candles || candles.length < 30) continue;
+        if (!candles || candles.length < 30) { noDataCount++; continue; }
         const scored = scoreDayTrade(candles, stock.sym);
         if (scored) {
           scored.optionRec = getOptionRecommendation(stock.sym, scored.price, scored.bestSetup, scored.sl, scored.tgt, scored.rrRatio);
@@ -11279,6 +11284,8 @@ async function scanDayTrades(force = false) {
           });
           results.push(scored);
           ok++;
+        } else {
+          noSetupCount++;
         }
       } catch (e) {
         fail++;
@@ -11299,6 +11306,18 @@ async function scanDayTrades(force = false) {
     // already empty (first run), or (c) the scan was comprehensive enough
     // that 0 picks is a legitimate signal ("no setups today").
     const successRatio = ok / Math.max(UNIVERSE.length, 1);
+    // 2026-04-22 — skip-path breakdown surfaces the silent buckets that hid
+    // behind 0ok/0fail: notok (missing instrument token), nodata (< 30 bars),
+    // nosetup (scoreDayTrade returned null). Only emit when non-zero to keep
+    // the happy-path log clean.
+    const skipParts = [];
+    if (noTokenCount) skipParts.push(`${noTokenCount}notok`);
+    if (noDataCount)  skipParts.push(`${noDataCount}nodata`);
+    if (noSetupCount) skipParts.push(`${noSetupCount}nosetup`);
+    const skipSummary = skipParts.length ? ` · skipped: ${skipParts.join('/')}` : '';
+    const writeSummary = (snapFailCount || candleFailCount)
+      ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
+      : '';
     if (results.length > 0 || _dayTradeCache.length === 0 || successRatio > 0.3) {
       results.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
       // Varsity M9: sector-correlation cap. "Never take N correlated positions
@@ -11306,16 +11325,10 @@ async function scanDayTrades(force = false) {
       // no single sector dominates the top 10 with more than 2 picks.
       _dayTradeCache   = applySectorCap(results, 2);
       _dayTradeCacheTs = Date.now();
-      const writeSummary = (snapFailCount || candleFailCount)
-        ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
-        : '';
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached${writeSummary}`);
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail, ${results.length} picks cached${skipSummary}${writeSummary}`);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
-      const writeSummary = (snapFailCount || candleFailCount)
-        ? ` · writes: ${snapFailCount} snap-fail, ${candleFailCount} candle-fail`
-        : '';
-      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)${writeSummary}`);
+      console.log(`📊 DayTrade scanner: ${ok}ok/${fail}fail — low success ratio (${(successRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)${skipSummary}${writeSummary}`);
     }
   } catch (e) {
     console.error('🔴 DayTrade scanner error:', e.message);
