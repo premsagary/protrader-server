@@ -11,7 +11,7 @@
 
 'use strict';
 
-const CONFIG_VERSION = '1.2.0-ab-trial-baseline';
+const CONFIG_VERSION = '1.0.0-phase1';
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 // off     — agent does nothing (DEFAULT — safe)

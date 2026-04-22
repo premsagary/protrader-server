@@ -12289,14 +12289,8 @@ async function runUnifiedKitePipeline(force = false) {
         } else { failDT++; }
       }));
 
-      // Respect Kite rate limits — 5 stocks × 2 requests each = 10 req per batch.
-      // 2026-04-20: tightened from 350ms → 250ms. Kite's historical-data rate
-      // limit is 3 req/sec; with 10 req/batch we need ≥333ms spacing to stay
-      // under theoretical cap, BUT each actual request takes 80-150ms network
-      // time, so wall-clock req/sec is much lower than 10/0.35. 250ms gets us
-      // closer to the rate limit without blowing past. If we see 429s, bump
-      // back to 350.
-      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 250));
+      // Respect Kite rate limits — 5 stocks × 2 requests each = 10 req per batch
+      if (i + BATCH < syms.length) await new Promise(r => setTimeout(r, 350));
     }
 
     // ── Finalize DayTrade cache with the same guard as scanDayTrades ──
