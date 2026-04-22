@@ -3178,12 +3178,34 @@ let _peakEquity = CONFIG.ACCOUNT_SIZE;
 let _ddPaused   = false;
 async function checkDrawdownCircuitBreaker() {
   try {
-    const { rows } = await pool.query(`
-      SELECT COALESCE(SUM(pnl),0) as total_pnl FROM paper_trades WHERE status='CLOSED'
-    `);
-    const totalPnl  = parseFloat(rows[0]?.total_pnl || 0);
-    const baseEquity = _liveAccountEquity || CONFIG.ACCOUNT_SIZE;
-    const equity    = baseEquity + totalPnl;
+    // Compute true equity. In LIVE mode we must mark-to-market open positions,
+    // because Kite's `net` field is cash-only — deploying cash into a buy drops
+    // `net` by the order value and the position replaces that cash with
+    // equivalent MTM value. Without the MTM add-back, opening a position looks
+    // like an instant loss (seen 2026-04-22 live-day-3: MMTC buy triggered a
+    // 19.9% false drawdown and paused new entries).
+    let equity;
+    if (LIVE_TRADING) {
+      const { rows: openRows } = await pool.query(
+        `SELECT symbol, quantity, price FROM live_trades WHERE status='OPEN'`
+      );
+      let openMark = 0;
+      for (const r of openRows) {
+        const qty     = parseFloat(r.quantity || 0);
+        const entryPx = parseFloat(r.price || 0);
+        const ltp     = (livePrices[r.symbol] && livePrices[r.symbol].price) || entryPx;
+        openMark += qty * ltp;
+      }
+      const cash = _liveAccountEquity || CONFIG.ACCOUNT_SIZE;
+      equity = cash + openMark;
+    } else {
+      // PAPER: account size + realized PnL from CLOSED paper trades (original logic).
+      const { rows } = await pool.query(`
+        SELECT COALESCE(SUM(pnl),0) as total_pnl FROM paper_trades WHERE status='CLOSED'
+      `);
+      const totalPnl = parseFloat(rows[0]?.total_pnl || 0);
+      equity = CONFIG.ACCOUNT_SIZE + totalPnl;
+    }
     _peakEquity     = Math.max(_peakEquity, equity);
     const drawdown  = (_peakEquity - equity) / _peakEquity;
 
