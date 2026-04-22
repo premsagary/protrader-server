@@ -4103,23 +4103,6 @@ async function scanAndTrade() {
   _fiveMinCacheHits   = 0;
   _fiveMinCacheMisses = 0;
 
-  // 2026-04-20 — unify picks → scan. Build a sym→pick lookup from
-  // _dayTradeCache so Pass-2 only considers entries that ALSO appear in the
-  // DayTrade picks slate. Previously scanAndTrade iterated UNIVERSE via its
-  // older EMA_CROSSOVER / BB_SQUEEZE / VWAP_MOMENTUM detectors — a separate
-  // signal from the varsity DayTrade scorer, which meant the picks tab and
-  // Pass-2 entries could disagree. Now: a stock must be scored by the
-  // DayTrade scanner (and have a valid bestSetup) before it's eligible for
-  // a BUY candidate, AND its `strategy` is promoted to the pick's bestSetup
-  // (VWAP_RECLAIM / GAP_AND_GO / BREAKOUT / OVERSOLD_BOUNCE). Exits and
-  // ranking logic are unchanged.
-  const _pickBySym = {};
-  try {
-    for (const p of (_dayTradeCache || [])) {
-      if (p && p.sym) _pickBySym[p.sym] = p;
-    }
-  } catch (_) {}
-
   for (const stock of UNIVERSE) {
     try {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
@@ -4276,34 +4259,13 @@ async function scanAndTrade() {
         // stock.sym for relative-strength context. Returns null for penny
         // stocks, illiquid names, abnormal 5-min bars — all of which we
         // already want to skip. Attach to candidate for audit trail.
-        // Prefer the freshly-computed DayTrade cache entry (scoreDayTrade's
-        // canonical output — already passed applySectorCap, reviewed by the
-        // picks pipeline) over a local rescore. Fall back to a one-off call
-        // only when the cache is empty/stale.
-        let dts = _pickBySym[stock.sym] || null;
-        if (!dts) {
-          try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
-        }
-
-        // 2026-04-20 — unify-picks gate. Without a matching DayTrade pick
-        // (either from the live cache or a local rescore that produced a
-        // bestSetup), the older strategy detectors disagree with the slate
-        // the user sees in the Picks tab. Skip to keep the two in sync.
-        if (!dts || !dts.bestSetup) {
-          _latestPass2Debug.skippedFilter = (_latestPass2Debug.skippedFilter||0) + 1;
-        } else {
-          // Promote the pick's bestSetup as the canonical strategy name so
-          // live_trades / paper_trades / logs reflect the unified taxonomy.
-          const origStrategy = result.strategy;
-          result.strategy = dts.bestSetup;
-          result._origStrategy = origStrategy; // kept for debug / analytics
-          buyCandidates.push({
-            stock, result, candles, last,
-            dayTradeScore: dts.dayTradeScore || null,
-            varsityBestSetup: dts.bestSetup,
-            pickRef: dts,
-          });
-        }
+        let dts = null;
+        try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
+        buyCandidates.push({
+          stock, result, candles, last,
+          dayTradeScore: dts ? dts.dayTradeScore : null,
+          varsityBestSetup: dts ? dts.bestSetup : null,
+        });
       }
 
       await delay(CONFIG.SCAN_DELAY_MS);
