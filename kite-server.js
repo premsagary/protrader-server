@@ -23267,72 +23267,18 @@ async function start() {
     { timezone: "Asia/Kolkata" }
   );
 
-  // ── Pipeline split (2026-04-20) ─────────────────────────────────────────
-  // Previously one unified cron did TA + DayTrade scoring every 5 min. Because
-  // the full pass takes ~14 min under Kite rate-limits, subsequent cron ticks
-  // were swallowed by _unifiedPipelineRunning — DT cache effectively refreshed
-  // only 2-3×/hour on Day 1 of live trading, starving the scan loop of picks.
-  //
-  // Split into:
-  //   (a) scanDayTrades — 5-min candles + setup detection, runs every 5 min
-  //   (b) runUnifiedKitePipeline — daily TA rescore + fundamentals, runs every
-  //       30 min on a different lock (_unifiedPipelineRunning), also refreshes
-  //       DT cache as a side benefit for its own in-flight 5-min fetches.
-  //
-  // Locks are independent (_dayTradeScanning vs _unifiedPipelineRunning) so
-  // the slow 30-min run never blocks the fast 5-min cadence. In the rare
-  // window where both finish at once, applySectorCap is deterministic — last
-  // write wins on _dayTradeCache which is acceptable (both writes produce
-  // equivalent top-of-slate).
+  // ── Unified Kite Pipeline — every 5 min during market hours ──
+  // Replaces separate intradayRescoreTA() + scanDayTrades() with a single pass:
+  //   1) TA Rescore — merges fresh TA into stockFundamentals + rebuilds _lastScoredV2
+  //   2) DayTrade Scanner — runs 4 setup detectors on 5-min candles
+  // Benefits:
+  //   - Kite API hit once per stock, not twice (halved rate limit pressure)
+  //   - Both caches update together — no stale gap
+  //   - TA rescore now runs every 5 min (was 30 min) since it piggybacks on
+  //     the DayTrade scan's Kite calls for free
+  //   - Score cache rebuild and DayTrade sort run in parallel at the end
   cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
-    // DT scoring — fast path, independent lock, drives the agent.
-    scanDayTrades(false).catch(e => console.error('📊 DayTrade scan error:', e.message));
-  }, { timezone: "Asia/Kolkata" });
-
-  // ── Open-position candle backfill (2026-04-21) ──────────────────────────
-  // Fires 90s AFTER scanDayTrades so rate-limiter windows don't collide with
-  // the heavier UNIVERSE scan. Typical open-position count is 1-3 symbols, so
-  // this adds only a few Kite requests per cycle. No-op if no open positions.
-  // Env-gated via OPEN_POS_CANDLE_BACKFILL (default: enabled).
-  if (OPEN_POS_CANDLE_BACKFILL_ENABLED) {
-    cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 9-15 * * 1-5", () => {
-      backfillOpenPositionCandles().catch(e =>
-        console.error('🪢 Open-position backfill cron error:', e.message));
-    }, { timezone: "Asia/Kolkata" });
-    console.log('🪢 Open-position candle backfill: ENABLED (cron :02,:07,... IST, weekdays 9-15)');
-  } else {
-    console.log('🪢 Open-position candle backfill: DISABLED (OPEN_POS_CANDLE_BACKFILL=' +
-      process.env.OPEN_POS_CANDLE_BACKFILL + ')');
-  }
-
-  cron.schedule("0,30 9-15 * * 1-5", () => {
-    // Full pipeline — TA rescore + fundamentals + ML snapshots + Nifty benchmark.
-    // Slower cadence prevents rate-limit starvation; DT scoring is handled by
-    // the separate 5-min cron above, so a 30-min gap here is fine.
     runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
-  }, { timezone: "Asia/Kolkata" });
-
-  // ── Pre-open cache warm (2026-04-22) ────────────────────────────────────
-  // The market-closed gate on runUnifiedKitePipeline means the scheduled
-  // :00/:30 ticks before open are all skipped — first runnable tick is 09:30,
-  // but Smart Scan fires at 09:15 against an empty _fiveMinCache. Every
-  // UNIVERSE stock then falls through to a serial Kite fetch inside Pass 1,
-  // pushing opening-scan time from ~30s → 400s.
-  //
-  // Real-world cost observed 2026-04-22: MMTC ran +7.5% in the first 5 min,
-  // our scan didn't produce signals until 09:21:39 (6m 37s cold), we bought
-  // within 40 paise of the absolute day-high, and the stock immediately
-  // reverted to our trailing stop for a -₹457 realised loss. Fresh data at
-  // 09:15 would have either skipped MMTC (gap already extended) or entered
-  // much earlier in the move.
-  //
-  // Fire the Unified Pipeline 3 min before market open with force=true so
-  // cache is warm when the 09:15 scan fires. Idempotent against the :00/:30
-  // cron — _unifiedPipelineRunning guard prevents overlap.
-  cron.schedule("12 9 * * 1-5", () => {
-    console.log('🔥 Pre-open cache warm-up (09:12 IST) — force-running Unified Pipeline');
-    runUnifiedKitePipeline(true).catch(e =>
-      console.error('🔥 Pre-open warm-up error:', e.message));
   }, { timezone: "Asia/Kolkata" });
 
   // ── Outcome computation — every 5 minutes, 24×7 ─────────────────────────
