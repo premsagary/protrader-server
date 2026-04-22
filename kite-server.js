@@ -4733,19 +4733,18 @@ async function scanAndTrade() {
     );
 
     // Live order
-    // 2026-04-22 — REVERTED back to LIMIT. MARKET entries (9bd3954) ate real
-    // slippage on live fills (e.g. MMTC 6.95% entry slippage vs snapshot on
-    // 2026-04-22 — ₹471 loss on one HONASA row alone). Paper mode simulates
-    // instant-fill via applyEntrySlippage, so the ₹14K paper run used signal
-    // price as the effective entry — LIMIT at signal price matches that shape
-    // better than MARKET + 2% protection. Trade-off: LIMIT may miss a fast
-    // momentum print (VOLTAS-style). Preferable to eating bad prints on thin
-    // opens. Rollback of 9bd3954 + c2a1ec9 (market_protection was MARKET-only).
+    // 2026-04-22 — MARKET with market_protection: 2. A LIMIT at signal price
+    // can sit un-filled when price pops past the level (paper-mode can't see
+    // this because paper always simulates a fill via applyEntrySlippage).
+    // MARKET guarantees execution; market_protection caps slippage at 2% so
+    // a thin-book freak print can't fill at a pathological price. Kite
+    // requires market_protection for MARKET orders since 2026-04-21.
     if (LIVE_TRADING && kite) {
       try {
         const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
-          quantity: qty, product: 'CNC', order_type: 'LIMIT', price: price, validity: 'DAY',
+          quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
+          market_protection: 2,
         });
         const orderId = order.order_id || order.orderId || '';
 
