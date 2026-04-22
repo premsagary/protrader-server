@@ -4249,8 +4249,24 @@ async function scanAndTrade() {
                 market_protection: 2,
               });
               const orderId = order.order_id || order.orderId || '';
+              // 2026-04-22 — close only the OLDEST open live_trades row for this
+              // symbol (FIFO, matches paper_trades.find behavior above). The
+              // original blanket UPDATE (WHERE symbol=X AND status='OPEN') would
+              // close ALL matching rows for ONE SELL order, leaving orphan
+              // shares at Kite when a duplicate-BUY had created multiple rows.
+              // Observed 2026-04-22 on HONASA live-day-3: id=6 and id=7 both
+              // got exit_time to the same millisecond with the same
+              // exit_order_id from a single 55-share SELL.
               await pool.query(
-                `UPDATE live_trades SET status='CLOSED',exit_price=$1,exit_time=NOW(),pnl=$2,pnl_pct=$3,exit_reason=$4,exit_order_id=$5 WHERE symbol=$6 AND status='OPEN'`,
+                `UPDATE live_trades
+                    SET status='CLOSED', exit_price=$1, exit_time=NOW(),
+                        pnl=$2, pnl_pct=$3, exit_reason=$4, exit_order_id=$5
+                  WHERE id = (
+                    SELECT id FROM live_trades
+                     WHERE symbol=$6 AND status='OPEN'
+                     ORDER BY entry_time ASC
+                     LIMIT 1
+                  )`,
                 [cmp,pnl,pnlPct,reason,orderId,stock.sym]
               );
               console.log(`  🔴 LIVE SELL ${stock.sym} @ ₹${cmp} | Order ID: ${orderId} | ${reason}`);
@@ -4548,6 +4564,20 @@ async function scanAndTrade() {
     rejectedLLM:       filterStats.rejectedByLLM || 0,
   };
 
+  // ── NEW 2026-04-22 — in-scan symbol dedup ──────────────────────────────────
+  // The DB dedup at the top of Pass 2's loop body only catches CROSS-SCAN
+  // dupes (it reads paper_trades). If the same sym appears in buyCandidates
+  // twice — e.g. UNIVERSE has it twice after a merge, or a race put it in the
+  // list twice — the first iteration's paper INSERT commits, but the second
+  // iteration's dedup query may have already been issued against a snapshot
+  // that didn't yet include the first row. Observed 2026-04-22 (HONASA live):
+  // two paper_trades rows inserted 71ms apart, both with identical
+  // stop_loss / target / snapshot_id, triggering two real Kite BUY orders
+  // (2046815489048895488 and 2046815489292165120). Cost: ₹471 extra loss.
+  // Cheap defensive guard below blocks the second occurrence regardless of
+  // root cause.
+  const _enteredSymbolsThisScan = new Set();
+
   // ── NEW 2026-04-18 — per-insert trade-count budget ─────────────────────────
   // `checkTradeCountCap` is called once at scan start and only flips
   // canEnterNew if already tripped. On a cold start (count=0) Pass 2 could
@@ -4593,6 +4623,15 @@ async function scanAndTrade() {
 
   for (const candidate of buyCandidates) {
     const { stock, result, candles, last } = candidate;
+
+    // 2026-04-22 — in-scan dedup guard. See _enteredSymbolsThisScan declaration
+    // above for the HONASA incident that motivated this.
+    if (_enteredSymbolsThisScan.has(stock.sym)) {
+      console.warn(`  ⚠ DUP-SCAN skip ${stock.sym} — already entered in this scan pass`);
+      _latestPass2Debug.skippedDup += 1;
+      recordPass2(candidate, 'SKIPPED', 'in_scan_dup');
+      continue;
+    }
 
     // Skip candidates rejected by structure filter or LLM
     if (candidate.rejected) {
@@ -4877,6 +4916,7 @@ async function scanAndTrade() {
     }
 
     openTrades.push({symbol:stock.sym,status:"OPEN"});
+    _enteredSymbolsThisScan.add(stock.sym); // block any later dupe in this scan
     dominantStrategy=result.strategy;
     const scoreStr = candidate.adjustedScore != null && candidate.adjustedScore !== result.score
       ? `Score:${result.score}→${candidate.adjustedScore.toFixed(2)}`
