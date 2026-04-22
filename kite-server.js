@@ -22488,6 +22488,29 @@ async function start() {
     runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
   }, { timezone: "Asia/Kolkata" });
 
+  // ── Pre-open cache warm (2026-04-22) ────────────────────────────────────
+  // The market-closed gate on runUnifiedKitePipeline means the scheduled
+  // :00/:30 ticks before open are all skipped — first runnable tick is 09:30,
+  // but Smart Scan fires at 09:15 against an empty _fiveMinCache. Every
+  // UNIVERSE stock then falls through to a serial Kite fetch inside Pass 1,
+  // pushing opening-scan time from ~30s → 400s.
+  //
+  // Real-world cost observed 2026-04-22: MMTC ran +7.5% in the first 5 min,
+  // our scan didn't produce signals until 09:21:39 (6m 37s cold), we bought
+  // within 40 paise of the absolute day-high, and the stock immediately
+  // reverted to our trailing stop for a -₹457 realised loss. Fresh data at
+  // 09:15 would have either skipped MMTC (gap already extended) or entered
+  // much earlier in the move.
+  //
+  // Fire the Unified Pipeline 3 min before market open with force=true so
+  // cache is warm when the 09:15 scan fires. Idempotent against the :00/:30
+  // cron — _unifiedPipelineRunning guard prevents overlap.
+  cron.schedule("12 9 * * 1-5", () => {
+    console.log('🔥 Pre-open cache warm-up (09:12 IST) — force-running Unified Pipeline');
+    runUnifiedKitePipeline(true).catch(e =>
+      console.error('🔥 Pre-open warm-up error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+
   // ── Outcome computation — every 5 minutes, 24×7 ─────────────────────────
   // Cheap no-op if no pending snapshots. Runs outside market hours too so
   // afternoon/evening scans get their outcomes filled by midnight. Lookahead
