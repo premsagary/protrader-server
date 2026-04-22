@@ -4850,24 +4850,19 @@ async function scanAndTrade() {
     remainingTradeBudget = Math.max(0, remainingTradeBudget - 1);
 
     // Live order
-    // 2026-04-20 — switched from LIMIT to MARKET. LIMIT entries were missing
-    // fast momentum moves (e.g., VOLTAS @ 1445.10 LIMIT stayed OPEN while price
-    // ran to 1460 within minutes on Day 1 of live trading). Exits already use
-    // MARKET (see SELL path above), so entries now match. Kite ignores `price`
-    // on MARKET orders; we store the signal price in live_trades.price as the
-    // intended entry — actual fill may differ slightly (slippage). Reconcile
-    // to true fill price via kite.getOrderHistory when outcome cron runs.
+    // 2026-04-22 — REVERTED back to LIMIT. MARKET entries (9bd3954) ate real
+    // slippage on live fills (e.g. MMTC 6.95% entry slippage vs snapshot on
+    // 2026-04-22 — ₹471 loss on one HONASA row alone). Paper mode simulates
+    // instant-fill via applyEntrySlippage, so the ₹14K paper run used signal
+    // price as the effective entry — LIMIT at signal price matches that shape
+    // better than MARKET + 2% protection. Trade-off: LIMIT may miss a fast
+    // momentum print (VOLTAS-style). Preferable to eating bad prints on thin
+    // opens. Rollback of 9bd3954 + c2a1ec9 (market_protection was MARKET-only).
     if (LIVE_TRADING && kite) {
       try {
-        // 2026-04-21 — Kite requires market_protection on MARKET orders
-        // ("Market orders without market protection are not allowed via API").
-        // 2% cap on slippage between placement and fill — tolerant enough for
-        // volatile opens and thinner mid-caps, strict enough to cancel if
-        // price runs away. Matches the SELL-side exit guard for symmetry.
         const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
-          quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
-          market_protection: 2,
+          quantity: qty, product: 'CNC', order_type: 'LIMIT', price: price, validity: 'DAY',
         });
         const orderId = order.order_id || order.orderId || '';
 
