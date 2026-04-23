@@ -26803,6 +26803,65 @@ app.get('/api/ai/validation', async (req, res) => {
       return hit && Number.isFinite(hit.atrPct) ? hit.atrPct : null;
     }
 
+    // ── Ops-agent signal getters ─────────────────────────────────────────────
+    // Read-only closures over the live kite-server state. Each returns a value
+    // or null; the ops-agent is tolerant of missing fields.
+    function getLastUnifiedPipelineAt() {
+      if (!_pipelineLastRun) return null;
+      // Prefer startedAt (present in both 'running' and 'completed' snapshots).
+      const iso = _pipelineLastRun.startedAt;
+      if (!iso) return null;
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : null;
+    }
+    function getDayTradeCacheSize()      { return (_dayTradeCache || []).length; }
+    function getDayTradeCacheUpdatedAt() { return _dayTradeCacheTs || null; }
+    function getCandidatesCount()        { return (_dayTradeCache || []).length; }
+
+    // ── Ops-agent auto-remediation callables ─────────────────────────────────
+    // Each returns a compact JSON-able result so ops_incidents.action_detail
+    // captures what happened. All three are safe to call concurrently — the
+    // underlying functions already guard against double-entry.
+    async function opsRerunUnifiedPipeline(reason) {
+      console.log(`🩺 ops-agent auto-remediate: rerunUnifiedPipeline (${reason && reason.reason || 'unspecified'})`);
+      try {
+        // force=true so we bypass the isMarketOpen check during the 09:00-09:15
+        // warm-up window, but the internal _unifiedPipelineRunning guard still
+        // prevents overlap with an in-flight run.
+        const before = _dayTradeCache.length;
+        await runUnifiedKitePipeline(true);
+        return {
+          ok: true,
+          cacheBefore: before,
+          cacheAfter: _dayTradeCache.length,
+          lastRun: _pipelineLastRun && _pipelineLastRun.status,
+        };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
+    async function opsRefreshCache(reason) {
+      console.log(`🩺 ops-agent auto-remediate: refreshCache (${reason && reason.reason || 'unspecified'})`);
+      try {
+        const before = _dayTradeCache.length;
+        await scanDayTrades(true);
+        return { ok: true, cacheBefore: before, cacheAfter: _dayTradeCache.length };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
+    function opsClearScanLock(reason) {
+      console.log(`🩺 ops-agent auto-remediate: clearScanLock (${reason && reason.reason || 'unspecified'})`);
+      // Capture prior state so the incident row records what we actually freed.
+      const prior = {
+        scanAndTradeRunning: _scanAndTradeRunning,
+        unifiedPipelineRunning: _unifiedPipelineRunning,
+      };
+      _scanAndTradeRunning = false;
+      _unifiedPipelineRunning = false;
+      return { ok: true, prior };
+    }
+
     await agent.bootstrap({
       app,
       pool,
@@ -26813,6 +26872,17 @@ app.get('/api/ai/validation', async (req, res) => {
       getNiftyDailyChange: () => _niftyDailyChangePct,
       getPrices:           agentGetPrices,
       getAtrPct:           agentGetAtrPct,
+
+      // Ops-agent signal getters (consumed when AGENT_OPS_ENABLED=1).
+      getLastUnifiedPipelineAt,
+      getDayTradeCacheSize,
+      getDayTradeCacheUpdatedAt,
+      getCandidatesCount,
+
+      // Ops-agent auto-remediation surface.
+      rerunUnifiedPipeline: opsRerunUnifiedPipeline,
+      refreshCache:         opsRefreshCache,
+      clearScanLock:        opsClearScanLock,
     });
   } catch (e) {
     console.error('🤖 agent wiring failed:', e.message);
