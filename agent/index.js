@@ -50,6 +50,24 @@ let _opsEnabled = false;
 let _errorSinkEnabled = false;
 let _shadowOutcomeTimer = null;
 const SHADOW_OUTCOME_INTERVAL_MS = 5 * 60 * 1000;  // 5 min
+
+// ────────────────────────────────────────────────────────────────────────────
+// _envFlag — default-ON env gate.
+//   unset/empty                     → defaultOn (true by default)
+//   '0' | 'false' | 'no'  | 'off'   → false (explicit disable)
+//   '1' | 'true'  | 'yes' | 'on'    → true
+//   anything else                   → defaultOn
+// Used for the three auxiliary-agent gates (ops / shadow / error-sink). The
+// explicit disable tokens let an operator knock a component out without
+// rebuilding the image, but by default everything boots live.
+// ────────────────────────────────────────────────────────────────────────────
+function _envFlag(name, defaultOn = true) {
+  const v = String(process.env[name] || '').toLowerCase().trim();
+  if (!v) return defaultOn;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  if (v === '1' || v === 'true'  || v === 'yes' || v === 'on') return true;
+  return defaultOn;
+}
 // Persistence keys — kept in sync with kite-server (read in bootstrap + write
 // on every auto-schedule update).
 const AUTO_ENABLED_KEY = 'agent_auto_schedule_enabled';
@@ -789,11 +807,10 @@ async function bootstrap({
 
   if (app) mountRoutes(app, { requireAdmin });
 
-  // ── Env-gated error-sink (default OFF) ────────────────────────────────────
+  // ── Env-gated error-sink (default ON — set AGENT_ERROR_SINK_ENABLED=0 to disable) ─
   // Must init BEFORE ops-agent so its getErrorCounts/getRingBuffer hooks
   // work on the very first detector tick.
-  const sinkEnv = String(process.env.AGENT_ERROR_SINK_ENABLED || '').toLowerCase();
-  if (sinkEnv === '1' || sinkEnv === 'true' || sinkEnv === 'yes') {
+  if (_envFlag('AGENT_ERROR_SINK_ENABLED', true)) {
     const r = errorSink.init({ pool, wrapConsole: true, captureUnhandled: true });
     _errorSinkEnabled = r.enabled;
     if (r.enabled) {
@@ -802,12 +819,11 @@ async function bootstrap({
       console.log('📋 error-sink: init returned disabled (pool missing?)');
     }
   } else {
-    console.log('📋 error-sink: disabled (set AGENT_ERROR_SINK_ENABLED=1 to start)');
+    console.log('📋 error-sink: disabled via env (unset AGENT_ERROR_SINK_ENABLED or set =0/false/no/off to disable)');
   }
 
-  // ── Env-gated ops-agent (default OFF) ─────────────────────────────────────
-  const opsEnv = String(process.env.AGENT_OPS_ENABLED || '').toLowerCase();
-  if (opsEnv === '1' || opsEnv === 'true' || opsEnv === 'yes') {
+  // ── Env-gated ops-agent (default ON — set AGENT_OPS_ENABLED=0 to disable) ─
+  if (_envFlag('AGENT_OPS_ENABLED', true)) {
     _startOpsAgent({
       pool, isMarketOpen, getKiteToken,
       getLastUnifiedPipelineAt,
@@ -822,15 +838,16 @@ async function bootstrap({
       getRingBuffer:  (n)    => errorSink.getRingBuffer(n),
     });
   } else {
-    console.log('🩺 ops-agent: disabled (set AGENT_OPS_ENABLED=1 to start)');
+    console.log('🩺 ops-agent: disabled via env (set AGENT_OPS_ENABLED=0/false/no/off to disable)');
   }
 
-  // ── Env-gated shadow-trader (default OFF) ─────────────────────────────────
-  const shadowEnv = String(process.env.AGENT_SHADOW_ENABLED || '').toLowerCase();
-  if (shadowEnv === '1' || shadowEnv === 'true' || shadowEnv === 'yes') {
+  // ── Env-gated shadow-trader (default ON — set AGENT_SHADOW_ENABLED=0 to disable) ─
+  // NOTE: shadow-trader calls the LLM on every BUY-eligible pick — up to ~1,950
+  // calls/day at full pick volume. Disable via env if that cost is undesired.
+  if (_envFlag('AGENT_SHADOW_ENABLED', true)) {
     _startShadowTrader({ pool, isMarketOpen, getPrices });
   } else {
-    console.log('🔮 shadow-trader: disabled (set AGENT_SHADOW_ENABLED=1 to start)');
+    console.log('🔮 shadow-trader: disabled via env (set AGENT_SHADOW_ENABLED=0/false/no/off to disable)');
   }
 
   return {

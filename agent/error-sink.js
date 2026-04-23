@@ -9,8 +9,9 @@
  *      the Debugger can attach "what was happening just before" as evidence.
  *
  * Safety posture:
- *   - Env-gated via AGENT_ERROR_SINK_ENABLED (default OFF). Without the flag
- *     every function is a no-op; require() is still safe.
+ *   - Env-gated via AGENT_ERROR_SINK_ENABLED (default ON). Set the env var to
+ *     0/false/no/off to disable; any other value (or unset) leaves it enabled.
+ *     When disabled every function is a no-op; require() is still safe.
  *   - Hard throttle: the sink itself cannot become a runaway writer — if the
  *     in-flight INSERT queue exceeds MAX_QUEUE_DEPTH, new errors are dropped
  *     (but the dropped count is exposed via getStatus() so we can detect it).
@@ -26,8 +27,18 @@ const crypto = require('crypto');
 // ────────────────────────────────────────────────────────────────────────────
 // Config
 // ────────────────────────────────────────────────────────────────────────────
+// AGENT_ERROR_SINK_ENABLED is default-ON: unset/empty → enabled; only '0',
+// 'false', 'no', or 'off' disables it. index.js also gates on the same env
+// via _envFlag() so the two checks stay in sync.
+function _envEnabledDefaultOn() {
+  const v = String(process.env.AGENT_ERROR_SINK_ENABLED || '').toLowerCase().trim();
+  if (!v) return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  return true;
+}
+
 const DEFAULTS = {
-  enabled:          String(process.env.AGENT_ERROR_SINK_ENABLED || '').toLowerCase() === '1',
+  enabled:          _envEnabledDefaultOn(),
   ringBufferSize:   Number(process.env.AGENT_ERROR_SINK_RING || 500),
   maxQueueDepth:    Number(process.env.AGENT_ERROR_SINK_MAXQ || 100),
   maxMsgLength:     500,
