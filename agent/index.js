@@ -35,12 +35,19 @@ const audit            = require('./agent-audit');
 const execution        = require('./execution-engine');
 const paper            = require('./paper-fill-engine');
 const tradeManager     = require('./trade-manager');
+const opsAgent         = require('./ops-agent');
+const shadowTrader     = require('./shadow-trader');
 
 let _cycleRunning = false;
 let _deps = null;
 let _cronTask = null;
 let _autoOpenTask = null;
 let _autoCloseTask = null;
+let _lastAgentCycleAt = null;   // ms epoch — read by ops-agent detectors
+let _shadowEnabled = false;
+let _opsEnabled = false;
+let _shadowOutcomeTimer = null;
+const SHADOW_OUTCOME_INTERVAL_MS = 5 * 60 * 1000;  // 5 min
 // Persistence keys — kept in sync with kite-server (read in bootstrap + write
 // on every auto-schedule update).
 const AUTO_ENABLED_KEY = 'agent_auto_schedule_enabled';
@@ -140,6 +147,25 @@ async function runCycle(deps = _deps) {
       + `rejected=${allRejected.length}${armedNote} (${elapsedMs}ms)`
     );
 
+    // 9. Shadow-trader (observational, never blocks main cycle). Fire-and-forget.
+    if (_shadowEnabled) {
+      shadowTrader.runCycle({
+        picks, state,
+        deps: {
+          pool: deps.pool,
+          askLLM: deps.askLLM,
+          maxCallsPerCycle: deps.shadowMaxCalls,
+        },
+      }).then((r) => {
+        if (r && r.evaluated) {
+          console.log(
+            `🔮 shadow-trader: evaluated=${r.evaluated} buys=${r.buys} skips=${r.skips} `
+            + `errors=${r.errors} disagreements=${r.disagreements}`
+          );
+        }
+      }).catch(e => console.error('🔮 shadow-trader cycle error:', e.message));
+    }
+
     return {
       ok: true, runId, mode,
       picksCount: picks.length,
@@ -155,6 +181,7 @@ async function runCycle(deps = _deps) {
     console.error(`🤖 agent ${runId}: cycle error — ${e.message}`);
     return { ok: false, runId, error: e.message };
   } finally {
+    _lastAgentCycleAt = Date.now();
     _cycleRunning = false;
   }
 }
@@ -516,7 +543,37 @@ function mountRoutes(app, opts = {}) {
     }
   });
 
-  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}');
+  // ── Ops + Shadow read-only endpoints (mounted always; they return empty
+  //    data when the tables/modules aren't enabled, so the UI can poll safely).
+  app.get('/api/ops-health', gate, async (req, res) => {
+    try {
+      const summary = await opsAgent.getHealthSummary(pool);
+      res.json({ ok: true, enabled: _opsEnabled, ...summary });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/shadow-decisions', gate, async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || '50', 10)));
+      const rows = await shadowTrader.getRecentDecisions(pool, limit);
+      res.json({ ok: true, enabled: _shadowEnabled, rows });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/shadow-vs-rules', gate, async (req, res) => {
+    try {
+      const stats = await shadowTrader.getTodayStats(pool);
+      res.json({ ok: true, enabled: _shadowEnabled, stats });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}, /api/ops-health, /api/shadow-decisions, /api/shadow-vs-rules');
   return { mounted: true };
 }
 
@@ -528,19 +585,107 @@ async function _ensureMigration(pool) {
   const path = require('path');
   try {
     const already = await audit.ensureTablesExist(pool);
-    if (already) return { applied: false, reason: 'already_present' };
+    if (already) {
+      // Even when 001 is already applied, still try 002 (ops + shadow tables)
+      // — they're additive and safe to rerun (CREATE TABLE IF NOT EXISTS).
+      await _ensureMigration002(pool);
+      return { applied: false, reason: 'already_present' };
+    }
 
     const sql = fs.readFileSync(path.join(__dirname, 'migrations', '001_agent_tables.sql'), 'utf8');
     await pool.query(sql);
     const ok = await audit.ensureTablesExist(pool);
     if (!ok) throw new Error('migration ran but agent_decisions still missing');
     console.log('🤖 agent: migration 001 applied (agent_decisions/agent_trades/agent_trade_events)');
+    await _ensureMigration002(pool);
     return { applied: true };
   } catch (e) {
     console.error('🤖 agent: migration bootstrap failed:', e.message);
     return { applied: false, error: e.message };
   }
 }
+
+// Ops-incidents + agent_shadow_trades. CREATE TABLE IF NOT EXISTS keeps this
+// safe to run on every boot.
+async function _ensureMigration002(pool) {
+  const fs   = require('fs');
+  const path = require('path');
+  try {
+    const p = path.join(__dirname, 'migrations', '002_ops_and_shadow_tables.sql');
+    if (!fs.existsSync(p)) return { applied: false, reason: 'missing_file' };
+    const sql = fs.readFileSync(p, 'utf8');
+    await pool.query(sql);
+    console.log('🤖 agent: migration 002 applied (ops_incidents, agent_shadow_trades)');
+    return { applied: true };
+  } catch (e) {
+    console.error('🤖 agent: migration 002 failed:', e.message);
+    return { applied: false, error: e.message };
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Ops + Shadow bootstrap — called from bootstrap() behind env gates
+// ────────────────────────────────────────────────────────────────────────────
+function _startOpsAgent(deps) {
+  if (_opsEnabled) return { skipped: 'already_started' };
+  if (!deps || !deps.pool) return { skipped: 'no_pool' };
+
+  const opsDeps = {
+    pool: deps.pool,
+    isMarketOpen: deps.isMarketOpen,
+    getKiteToken: deps.getKiteToken,
+    getAgentMode: getMode,
+
+    // Pipeline + cache signals — provided by kite-server via bootstrap.
+    getLastUnifiedPipelineAt:  deps.getLastUnifiedPipelineAt,
+    getLastAgentCycleAt:       deps.getLastAgentCycleAt || getLastAgentCycleAt,
+    getDayTradeCacheSize:      deps.getDayTradeCacheSize,
+    getDayTradeCacheUpdatedAt: deps.getDayTradeCacheUpdatedAt,
+    getCandidatesCount:        deps.getCandidatesCount,
+
+    // Capital / PnL — optional; if missing, drawdown detector will skip.
+    getCapital:             deps.getCapital,
+    getRealizedPnlToday:    deps.getRealizedPnlToday,
+    getUnrealizedPnlToday:  deps.getUnrealizedPnlToday,
+    getTradesTodayCount:    deps.getTradesTodayCount,
+    getOpenPositionsCount:  deps.getOpenPositionsCount,
+    getVixLevel:            deps.getVixLevel,
+
+    // Kill-switch snapshot (so ops-agent doesn't have to build its own state)
+    getKillReason: deps.getKillReason,
+
+    // Auto-remediation surface — all optional. Missing means NOTIFY_ONLY.
+    rerunUnifiedPipeline: deps.rerunUnifiedPipeline,
+    refreshCache:         deps.refreshCache,
+    clearScanLock:        deps.clearScanLock,
+  };
+
+  const r = opsAgent.start(opsDeps);
+  if (r.started) _opsEnabled = true;
+  return r;
+}
+
+function _startShadowTrader(deps) {
+  // Shadow runs inline in runCycle — we just record that it's enabled and
+  // start the outcome-evaluator timer.
+  _shadowEnabled = true;
+
+  if (_shadowOutcomeTimer) clearInterval(_shadowOutcomeTimer);
+  _shadowOutcomeTimer = setInterval(async () => {
+    try {
+      if (deps.isMarketOpen && !deps.isMarketOpen()) return;
+      const r = await shadowTrader.evaluateOutcomes({
+        pool: deps.pool, getPrices: deps.getPrices,
+      });
+      if (r && r.updated) console.log(`🔮 shadow-trader: ${r.updated} outcomes updated`);
+    } catch (e) { console.error('🔮 shadow outcome tick:', e.message); }
+  }, SHADOW_OUTCOME_INTERVAL_MS);
+
+  console.log(`🔮 shadow-trader: enabled (outcome poll every ${SHADOW_OUTCOME_INTERVAL_MS/1000}s)`);
+  return { started: true, outcomeIntervalMs: SHADOW_OUTCOME_INTERVAL_MS };
+}
+
+function getLastAgentCycleAt() { return _lastAgentCycleAt; }
 
 // ────────────────────────────────────────────────────────────────────────────
 // bootstrap — kite-server.js single entry point
@@ -549,6 +694,18 @@ async function bootstrap({
   app, pool, kite, isMarketOpen,
   getKiteToken, getPicks, getNiftyDailyChange,
   getPrices, getAtrPct, requireAdmin,
+
+  // Optional — ops-agent additional signals (gated by AGENT_OPS_ENABLED=1)
+  getLastUnifiedPipelineAt,
+  getDayTradeCacheSize, getDayTradeCacheUpdatedAt,
+  getCandidatesCount,
+  getCapital, getRealizedPnlToday, getUnrealizedPnlToday,
+  getTradesTodayCount, getOpenPositionsCount, getVixLevel,
+  getKillReason,
+  rerunUnifiedPipeline, refreshCache, clearScanLock,
+
+  // Optional — shadow-trader LLM callback (gated by AGENT_SHADOW_ENABLED=1)
+  askLLM, shadowMaxCalls,
 }) {
   const mig = await _ensureMigration(pool);
 
@@ -575,11 +732,45 @@ async function bootstrap({
     pool, kite, isMarketOpen,
     getKiteToken, getPicks, getNiftyDailyChange,
     getPrices, getAtrPct,
+    // Shadow trader reads askLLM + shadowMaxCalls off _deps inside runCycle()
+    askLLM, shadowMaxCalls,
   }, persistedMode, persistedAuto);
 
   if (app) mountRoutes(app, { requireAdmin });
 
-  return { ok: true, mode: getMode(), persistedMode, persistedAuto, migration: mig };
+  // ── Env-gated ops-agent (default OFF) ─────────────────────────────────────
+  const opsEnv = String(process.env.AGENT_OPS_ENABLED || '').toLowerCase();
+  if (opsEnv === '1' || opsEnv === 'true' || opsEnv === 'yes') {
+    _startOpsAgent({
+      pool, isMarketOpen, getKiteToken,
+      getLastUnifiedPipelineAt,
+      getLastAgentCycleAt,            // exported helper
+      getDayTradeCacheSize, getDayTradeCacheUpdatedAt, getCandidatesCount,
+      getCapital, getRealizedPnlToday, getUnrealizedPnlToday,
+      getTradesTodayCount, getOpenPositionsCount, getVixLevel,
+      getKillReason,
+      rerunUnifiedPipeline, refreshCache, clearScanLock,
+    });
+  } else {
+    console.log('🩺 ops-agent: disabled (set AGENT_OPS_ENABLED=1 to start)');
+  }
+
+  // ── Env-gated shadow-trader (default OFF) ─────────────────────────────────
+  const shadowEnv = String(process.env.AGENT_SHADOW_ENABLED || '').toLowerCase();
+  if (shadowEnv === '1' || shadowEnv === 'true' || shadowEnv === 'yes') {
+    _startShadowTrader({ pool, isMarketOpen, getPrices });
+  } else {
+    console.log('🔮 shadow-trader: disabled (set AGENT_SHADOW_ENABLED=1 to start)');
+  }
+
+  return {
+    ok: true,
+    mode: getMode(),
+    persistedMode, persistedAuto,
+    migration: mig,
+    opsAgent: opsAgent.getStatus(),
+    shadowEnabled: _shadowEnabled,
+  };
 }
 
 module.exports = {
@@ -590,5 +781,8 @@ module.exports = {
   applyMode,
   getStatus,
   stop,
-  _internal: { tradeAgent, constraintEngine, audit, execution, paper, tradeManager },
+  getLastAgentCycleAt,
+  opsAgent,
+  shadowTrader,
+  _internal: { tradeAgent, constraintEngine, audit, execution, paper, tradeManager, opsAgent, shadowTrader },
 };
