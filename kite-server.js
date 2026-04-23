@@ -8017,10 +8017,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
       safeQuery(
         `SELECT kind, message_hash, message_sample, count, first_seen, last_seen
          FROM app_errors
-         WHERE last_seen >= $1
+         WHERE last_seen >= $1 AND last_seen < $2
          ORDER BY count DESC, last_seen DESC
          LIMIT 30`,
-        [start]
+        [start, end]
       ),
       safeQuery(
         `SELECT scanned_at, stocks, signals, regime, strategy, message
@@ -8039,11 +8039,17 @@ app.get('/api/admin/daily-report', async (req, res) => {
         [start, end]
       ),
       safeQuery(
-        `SELECT reject_reason, COUNT(*)::int AS n
+        // Normalize reject_reason to prefix (before first colon/dash/paren) and
+        // truncate to 80 chars before aggregating — raw TEXT is high-cardinality
+        // so without normalization each message is counted once.
+        `SELECT
+            LEFT(TRIM(SPLIT_PART(SPLIT_PART(SPLIT_PART(reject_reason, ':', 1), '-', 1), '(', 1)), 80)
+              AS reason,
+            COUNT(*)::int AS n
          FROM candidate_analyses
          WHERE scan_ts >= $1 AND scan_ts < $2
            AND reject_reason IS NOT NULL AND reject_reason <> ''
-         GROUP BY reject_reason
+         GROUP BY reason
          ORDER BY n DESC
          LIMIT 10`,
         [start, end]
@@ -8057,13 +8063,16 @@ app.get('/api/admin/daily-report', async (req, res) => {
          HAVING COUNT(*) > 1`,
         [start, end]
       ),
-      // Orphan-exit regression: status=OPEN but exit_order_id already set
+      // Orphan-exit regression: status=OPEN but exit_order_id already set.
+      // Scope to today's IST day so the report reflects today, not historical
+      // stragglers that may persist across days.
       safeQuery(
         `SELECT id, symbol, entry_time, exit_order_id, status
          FROM live_trades
          WHERE status = 'OPEN' AND exit_order_id IS NOT NULL
+           AND entry_time >= $1 AND entry_time < $2
          LIMIT 20`,
-        []
+        [start, end]
       ),
       safeQuery(
         `SELECT COUNT(*)::int AS n FROM scan_log
@@ -8139,7 +8148,17 @@ app.get('/api/admin/daily-report', async (req, res) => {
       },
       {
         label: 'Pipeline/scan activity today',
-        pass: scanCount > 0 || pipelineCount > 0 || (typeof _pipelineLastRun !== 'undefined' && !!_pipelineLastRun),
+        // Only count in-memory _pipelineLastRun if its startedAt falls inside
+        // today's IST window — otherwise it false-positives across process
+        // lifetime (a pipeline yesterday would satisfy today's check).
+        pass: (() => {
+          if (scanCount > 0 || pipelineCount > 0) return true;
+          if (typeof _pipelineLastRun === 'undefined' || !_pipelineLastRun) return false;
+          const ts = _pipelineLastRun.startedAt || _pipelineLastRun.finishedAt || _pipelineLastRun.ts;
+          if (!ts) return false;
+          const tsMs = new Date(ts).getTime();
+          return Number.isFinite(tsMs) && tsMs >= start.getTime() && tsMs < end.getTime();
+        })(),
         detail: `${scanCount} scans · ${pipelineCount} pipelines · last=${(typeof _pipelineLastRun !== 'undefined' && _pipelineLastRun?.status) || 'never'}`,
       },
       {
@@ -8410,7 +8429,7 @@ ${rejReasonList.length > 0 ? `
   <tbody>
     ${rejReasonList.map(r => `
       <tr>
-        <td>${esc(r.reject_reason)}</td>
+        <td>${esc(r.reason)}</td>
         <td style="text-align:right"><strong>${r.n}</strong></td>
       </tr>
     `).join('')}
