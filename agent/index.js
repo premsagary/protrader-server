@@ -202,9 +202,14 @@ function wire(deps, persistedMode, persistedAuto) {
   }
 
   if (_cronTask) _cronTask.stop();
+  // 2026-04-23 — pin to IST. Without { timezone } this runs at server-local
+  // (UTC on Railway) so '* 9-15 * * 1-5' fires at IST 14:30-21:29, missing
+  // most of the trading window and spamming 'killed — MARKET_CLOSED' during
+  // the IST evening. isMarketOpen() is the real gate; this is just the coarse
+  // schedule, and it must overlap IST market hours.
   _cronTask = cron.schedule(CYCLE.CRON_EXPR_SIMPLE, () => {
     runCycle().catch(e => console.error('🤖 agent cycle uncaught:', e.message));
-  });
+  }, { timezone: 'Asia/Kolkata' });
 
   // Register the two IST-timezone crons that auto-flip mode at market
   // open/close. They check getAutoSchedule() at fire time so toggling the UI
