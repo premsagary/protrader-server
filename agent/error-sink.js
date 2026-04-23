@@ -161,6 +161,19 @@ function recordError(kind, msg, ctx) {
     }
     if (Object.keys(finalCtx).length === 0) finalCtx = null;
 
+    // Defensive stringify — if a future caller hands us a circular-ref ctx
+    // the sync JSON.stringify throw would fire AFTER _inflight++ but BEFORE
+    // the query's .finally(), leaking the counter. Catch here and substitute
+    // a marker so the row still records.
+    let ctxJson = null;
+    if (finalCtx) {
+      try {
+        ctxJson = JSON.stringify(finalCtx);
+      } catch (_serErr) {
+        ctxJson = '{"serialize_error":true}';
+      }
+    }
+
     _inflight++;
     _totalRecorded++;
     _pool.query(
@@ -171,7 +184,7 @@ function recordError(kind, msg, ctx) {
          last_seen = NOW(),
          count = app_errors.count + 1,
          sample_context = COALESCE(EXCLUDED.sample_context, app_errors.sample_context)`,
-      [finalKind, hash, sample, finalCtx ? JSON.stringify(finalCtx) : null]
+      [finalKind, hash, sample, ctxJson]
     )
       .catch((e) => {
         _totalUpsertErrors++;
