@@ -7930,6 +7930,601 @@ app.get("/api/trade-forensics", async (req, res) => {
   }
 });
 
+// ── Daily Report — end-to-end end-of-day observability page ──────────────
+// Single-URL consolidated view answering: did the pipeline run? were
+// candidates picked up? did trades happen? why-or-why-not? what broke?
+// known-issue regressions from this week's bugs (HONASA dup-BUY,
+// orphan exits, drawdown false-fire, cold-cache at open).
+//
+// Pulls from: live_trades, candidate_analyses, ops_incidents, app_errors,
+// scan_log, and in-memory signals (_pipelineLastRun, _dayTradeCache,
+// _marketDataCache, _niftyDailyChangePct).
+//
+// Admin-gated. Date is IST day (00:00 IST → 24:00 IST).
+//   GET /api/admin/daily-report                    -> today IST, HTML
+//   GET /api/admin/daily-report?date=YYYY-MM-DD    -> specific IST date
+//   GET /api/admin/daily-report?format=json        -> raw data JSON
+// ─────────────────────────────────────────────────────────────────────────
+app.get('/api/admin/daily-report', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  // IST day bounds. Date param is IST calendar date; output UTC Date objects
+  // for PG parameter binding (PG treats JS Date as UTC → TIMESTAMP comparison).
+  const istDayBounds = (dateStr) => {
+    const istOffsetMs = 5.5 * 3600 * 1000;
+    const istNow = new Date(Date.now() + istOffsetMs);
+    const istDate = dateStr || istNow.toISOString().slice(0, 10);
+    const start = new Date(istDate + 'T00:00:00+05:30');
+    const end   = new Date(start.getTime() + 24 * 3600 * 1000);
+    return { start, end, istDate };
+  };
+
+  // Wrap each query — return null on failure so the report still renders
+  // even when one table doesn't exist (e.g., fresh deploy pre-migration).
+  const safeQuery = async (sql, params) => {
+    try {
+      const r = await pool.query(sql, params);
+      return r.rows;
+    } catch (e) {
+      console.warn('daily-report query failed:', e.message.slice(0, 160));
+      return null;
+    }
+  };
+
+  try {
+    const dateStr = req.query.date ? String(req.query.date).slice(0, 10) : null;
+    const { start, end, istDate } = istDayBounds(dateStr);
+
+    const [
+      trades,
+      candidatesByDecision,
+      incidents,
+      errors,
+      scans,
+      topCandidates,
+      rejectReasons,
+      dupBuyCheck,
+      orphanExitCheck,
+      pipelineRuns,
+    ] = await Promise.all([
+      safeQuery(
+        `SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
+                exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
+                exit_reason, status, order_id, exit_order_id
+         FROM live_trades
+         WHERE entry_time >= $1 AND entry_time < $2
+         ORDER BY entry_time DESC`,
+        [start, end]
+      ),
+      safeQuery(
+        `SELECT final_decision, COUNT(*)::int AS n
+         FROM candidate_analyses
+         WHERE scan_ts >= $1 AND scan_ts < $2
+         GROUP BY final_decision
+         ORDER BY n DESC`,
+        [start, end]
+      ),
+      safeQuery(
+        `SELECT kind, severity, summary, evidence, action_attempted,
+                action_result, action_detail, detected_at, resolved_at
+         FROM ops_incidents
+         WHERE detected_at >= $1 AND detected_at < $2
+         ORDER BY detected_at DESC`,
+        [start, end]
+      ),
+      safeQuery(
+        `SELECT kind, message_hash, message_sample, count, first_seen, last_seen
+         FROM app_errors
+         WHERE last_seen >= $1
+         ORDER BY count DESC, last_seen DESC
+         LIMIT 30`,
+        [start]
+      ),
+      safeQuery(
+        `SELECT scanned_at, stocks, signals, regime, strategy, message
+         FROM scan_log
+         WHERE scanned_at >= $1 AND scanned_at < $2
+         ORDER BY scanned_at DESC`,
+        [start, end]
+      ),
+      safeQuery(
+        `SELECT symbol, name, adjusted_score, original_score, final_decision,
+                reject_reason, scan_ts
+         FROM candidate_analyses
+         WHERE scan_ts >= $1 AND scan_ts < $2
+         ORDER BY adjusted_score DESC NULLS LAST, scan_ts DESC
+         LIMIT 20`,
+        [start, end]
+      ),
+      safeQuery(
+        `SELECT reject_reason, COUNT(*)::int AS n
+         FROM candidate_analyses
+         WHERE scan_ts >= $1 AND scan_ts < $2
+           AND reject_reason IS NOT NULL AND reject_reason <> ''
+         GROUP BY reject_reason
+         ORDER BY n DESC
+         LIMIT 10`,
+        [start, end]
+      ),
+      // HONASA-class regression: duplicate BUY on same symbol same day
+      safeQuery(
+        `SELECT symbol, COUNT(*)::int AS n
+         FROM live_trades
+         WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
+         GROUP BY symbol
+         HAVING COUNT(*) > 1`,
+        [start, end]
+      ),
+      // Orphan-exit regression: status=OPEN but exit_order_id already set
+      safeQuery(
+        `SELECT id, symbol, entry_time, exit_order_id, status
+         FROM live_trades
+         WHERE status = 'OPEN' AND exit_order_id IS NOT NULL
+         LIMIT 20`,
+        []
+      ),
+      safeQuery(
+        `SELECT COUNT(*)::int AS n FROM scan_log
+         WHERE scanned_at >= $1 AND scanned_at < $2`,
+        [start, end]
+      ),
+    ]);
+
+    // ── Derive metrics ────────────────────────────────────────────────────
+    const tradesList    = trades    || [];
+    const incList       = incidents || [];
+    const errList       = errors    || [];
+    const scanList      = scans     || [];
+    const topCandList   = topCandidates   || [];
+    const rejReasonList = rejectReasons   || [];
+    const dupBuys       = dupBuyCheck     || [];
+    const orphans       = orphanExitCheck || [];
+
+    const openTrades   = tradesList.filter(t => t.status === 'OPEN');
+    const closedTrades = tradesList.filter(t => t.status !== 'OPEN');
+    const totalPnl     = closedTrades.reduce((s, t) => s + Number(t.pnl || 0), 0);
+    const buyCount     = tradesList.filter(t => t.type === 'BUY').length;
+    const sellCount    = tradesList.filter(t => t.type === 'SELL').length;
+
+    const critIncidents  = incList.filter(i => i.severity === 'critical').length;
+    const errIncidents   = incList.filter(i => i.severity === 'error').length;
+    const warnIncidents  = incList.filter(i => i.severity === 'warn').length;
+    const actionsTried   = incList.filter(i => i.action_attempted && i.action_attempted !== 'NONE').length;
+    const actionsOk      = incList.filter(i => i.action_result === 'ok').length;
+
+    const errTotal = errList.reduce((s, e) => s + Number(e.count || 0), 0);
+
+    const pipelineCount = (pipelineRuns?.[0]?.n) || 0;
+    const scanCount     = scanList.length;
+
+    const vixObj  = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix) || null;
+    const vixVal  = vixObj && Number.isFinite(Number(vixObj.value)) ? Number(vixObj.value) : null;
+
+    // Overall verdict
+    let verdict = 'GREEN';
+    let verdictReason = 'No anomalies detected';
+    if (critIncidents > 0) {
+      verdict = 'RED'; verdictReason = `${critIncidents} critical incident(s)`;
+    } else if (dupBuys.length > 0) {
+      verdict = 'RED'; verdictReason = `Duplicate BUY detected: ${dupBuys.map(r => r.symbol).join(', ')}`;
+    } else if (orphans.length > 0) {
+      verdict = 'RED'; verdictReason = `${orphans.length} orphaned exit(s)`;
+    } else if (errIncidents > 0) {
+      verdict = 'RED'; verdictReason = `${errIncidents} error-level incident(s)`;
+    } else if (warnIncidents > 0) {
+      verdict = 'YELLOW'; verdictReason = `${warnIncidents} warning(s)`;
+    } else if (errTotal > 50) {
+      verdict = 'YELLOW'; verdictReason = `${errTotal} error rows across ${errList.length} patterns`;
+    } else if (scanCount === 0 && pipelineCount === 0 && tradesList.length === 0) {
+      verdict = 'YELLOW'; verdictReason = 'No pipeline/scan/trade activity';
+    }
+
+    // Known-issue regression checks (from this week's bugs)
+    const checks = [
+      {
+        label: 'No duplicate BUYs (HONASA bug class)',
+        pass: dupBuys.length === 0,
+        detail: dupBuys.length
+          ? dupBuys.map(r => `${r.symbol}×${r.n}`).join(', ')
+          : 'none today',
+      },
+      {
+        label: 'No orphaned exits (status=OPEN + exit_order_id set)',
+        pass: orphans.length === 0,
+        detail: orphans.length
+          ? orphans.slice(0, 5).map(r => `#${r.id} ${r.symbol}`).join(', ')
+          : 'clean',
+      },
+      {
+        label: 'Pipeline/scan activity today',
+        pass: scanCount > 0 || pipelineCount > 0 || (typeof _pipelineLastRun !== 'undefined' && !!_pipelineLastRun),
+        detail: `${scanCount} scans · ${pipelineCount} pipelines · last=${(typeof _pipelineLastRun !== 'undefined' && _pipelineLastRun?.status) || 'never'}`,
+      },
+      {
+        label: 'Candidate cache populated',
+        pass: (typeof _dayTradeCache !== 'undefined' && _dayTradeCache && _dayTradeCache.length > 0) || topCandList.length > 0,
+        detail: `live=${(typeof _dayTradeCache !== 'undefined' && _dayTradeCache ? _dayTradeCache.length : 0)} · history today=${topCandList.length}`,
+      },
+      {
+        label: 'Error volume within normal bounds (<100 total)',
+        pass: errTotal < 100,
+        detail: `${errTotal} total across ${errList.length} unique patterns`,
+      },
+      {
+        label: 'No critical ops-incidents',
+        pass: critIncidents === 0,
+        detail: critIncidents === 0 ? 'clean' : `${critIncidents} critical — investigate`,
+      },
+      {
+        label: 'Auto-remediation effective (ok / attempted)',
+        pass: actionsTried === 0 || actionsOk / Math.max(actionsTried, 1) >= 0.5,
+        detail: `${actionsOk}/${actionsTried} succeeded`,
+      },
+      {
+        label: 'Kite connectivity healthy',
+        pass: !errList.some(e => /KITE/i.test(e.kind) && Number(e.count) >= 10),
+        detail: (() => {
+          const kiteErr = errList.filter(e => /KITE/i.test(e.kind));
+          return kiteErr.length === 0 ? 'no Kite errors'
+            : kiteErr.slice(0, 3).map(e => `${e.kind}×${e.count}`).join(', ');
+        })(),
+      },
+    ];
+
+    // JSON mode
+    if (String(req.query.format || '').toLowerCase() === 'json') {
+      return res.json({
+        istDate,
+        generatedAt: new Date().toISOString(),
+        verdict, verdictReason,
+        metrics: {
+          trades: tradesList.length, openTrades: openTrades.length, closedTrades: closedTrades.length,
+          buyCount, sellCount, totalPnl,
+          scanCount, pipelineCount,
+          candidatesLogged: topCandList.length,
+          incidents: incList.length, critIncidents, errIncidents, warnIncidents,
+          actionsTried, actionsOk,
+          errUnique: errList.length, errTotal,
+          vix: vixVal, niftyPct: typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null,
+        },
+        knownIssueChecks: checks,
+        trades: tradesList,
+        candidatesByDecision: candidatesByDecision || [],
+        topCandidates: topCandList,
+        rejectReasons: rejReasonList,
+        incidents: incList,
+        errors: errList,
+        scans: scanList,
+      });
+    }
+
+    // ── HTML builder ──────────────────────────────────────────────────────
+    const esc = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const fmtIST = (d) => {
+      if (!d) return '—';
+      const dt = new Date(d);
+      return isNaN(dt) ? '—' : dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+    };
+    const fmtNum = (n, dp = 2) => (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toFixed(dp);
+    const fmtInr = (n) => (n == null || !Number.isFinite(Number(n))) ? '—'
+      : '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Report — ${esc(istDate)} IST</title>
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --mute:#7d8590; --card:#161b22;
+          --border:#30363d; --green:#238636; --yellow:#9e6a03; --red:#da3633;
+          --accent:#2f81f7; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; padding:24px; font-family:-apple-system,'SF Pro Text','Segoe UI',sans-serif;
+        background:var(--bg); color:var(--fg); font-size:14px; line-height:1.5; }
+  .container{ max-width:1200px; margin:0 auto; }
+  h1{ font-size:24px; margin:0 0 4px; }
+  h2{ font-size:18px; margin:28px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+  .muted{ color:var(--mute); }
+  .verdict{ padding:16px 20px; border-radius:8px; font-weight:600; font-size:18px;
+            display:flex; align-items:center; gap:16px; margin:16px 0 24px; }
+  .verdict-green{  background:rgba(35,134,54,0.15);  border:1px solid var(--green);  color:#3fb950; }
+  .verdict-yellow{ background:rgba(158,106,3,0.15);  border:1px solid var(--yellow); color:#d29922; }
+  .verdict-red{    background:rgba(218,54,51,0.15);  border:1px solid var(--red);    color:#f85149; }
+  .verdict-badge{ font-size:28px; line-height:1; }
+  .grid{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin:16px 0; }
+  .card{ background:var(--card); border:1px solid var(--border); border-radius:6px; padding:12px 16px; }
+  .card .label{ color:var(--mute); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+  .card .value{ font-size:22px; font-weight:600; margin-top:4px; }
+  .card .sub{ color:var(--mute); font-size:12px; margin-top:2px; }
+  .pnl-pos{ color:#3fb950; } .pnl-neg{ color:#f85149; }
+  table{ width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--border);
+         border-radius:6px; overflow:hidden; font-size:13px; }
+  th{ background:#1c2128; text-align:left; padding:8px 12px; font-weight:600; color:var(--mute);
+      font-size:11px; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid var(--border); }
+  td{ padding:8px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+  tr:last-child td{ border-bottom:none; }
+  tr:hover td{ background:rgba(255,255,255,0.02); }
+  .check{ display:flex; gap:10px; padding:8px 0; align-items:baseline; border-bottom:1px dashed var(--border); }
+  .check:last-child{ border-bottom:none; }
+  .check-pass{ color:#3fb950; } .check-fail{ color:#f85149; }
+  .check-icon{ font-weight:bold; font-size:16px; min-width:20px; }
+  .sev-critical{ color:#f85149; font-weight:600; }
+  .sev-error{ color:#f85149; }
+  .sev-warn{ color:#d29922; }
+  .sev-info{ color:#6e7681; }
+  .tag{ display:inline-block; background:#1c2128; border:1px solid var(--border);
+        padding:2px 8px; border-radius:12px; font-size:11px; }
+  .empty{ color:var(--mute); font-style:italic; padding:12px; background:var(--card);
+          border:1px solid var(--border); border-radius:6px; }
+  .nav{ display:flex; gap:14px; margin-bottom:16px; font-size:12px; flex-wrap:wrap; }
+  .nav a{ color:var(--accent); text-decoration:none; }
+  .nav a:hover{ text-decoration:underline; }
+  details{ margin:8px 0; }
+  summary{ cursor:pointer; color:var(--accent); font-size:13px; padding:4px 0; }
+  .refresh{ color:var(--mute); font-size:12px; margin-left:auto; }
+  .msg-cell{ max-width:500px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+</style>
+</head>
+<body><div class="container">
+
+<div class="nav">
+  <a href="?">Today</a>
+  <a href="?date=${esc(istDate)}">${esc(istDate)}</a>
+  <a href="?format=json&amp;date=${esc(istDate)}">JSON</a>
+  <a href="/api/ops-health">ops-health</a>
+  <a href="/api/app-errors?minutes=1440">app-errors</a>
+  <a href="/api/trade-forensics">trade-forensics</a>
+  <span class="refresh">Generated ${fmtIST(new Date())}</span>
+</div>
+
+<h1>Daily Report</h1>
+<div class="muted">${esc(istDate)} IST · shiva-ui · live real-money</div>
+
+<div class="verdict verdict-${verdict.toLowerCase()}">
+  <span class="verdict-badge">${verdict === 'GREEN' ? '✓' : verdict === 'YELLOW' ? '⚠' : '✗'}</span>
+  <div>
+    <div style="font-size:22px">${verdict}</div>
+    <div style="font-size:13px;font-weight:400;opacity:0.85">${esc(verdictReason)}</div>
+  </div>
+</div>
+
+<!-- Top-line metric cards -->
+<div class="grid">
+  <div class="card">
+    <div class="label">P&amp;L (closed)</div>
+    <div class="value ${totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(totalPnl)}</div>
+    <div class="sub">${closedTrades.length} closed · ${openTrades.length} open</div>
+  </div>
+  <div class="card">
+    <div class="label">Trades</div>
+    <div class="value">${tradesList.length}</div>
+    <div class="sub">${buyCount} BUY · ${sellCount} SELL</div>
+  </div>
+  <div class="card">
+    <div class="label">Candidates scored</div>
+    <div class="value">${topCandList.length}</div>
+    <div class="sub">${scanCount} scans · ${pipelineCount} pipelines</div>
+  </div>
+  <div class="card">
+    <div class="label">Incidents</div>
+    <div class="value" style="color:${incList.length ? '#d29922' : '#3fb950'}">${incList.length}</div>
+    <div class="sub">${critIncidents} crit · ${errIncidents} err · ${warnIncidents} warn</div>
+  </div>
+  <div class="card">
+    <div class="label">Errors (unique)</div>
+    <div class="value" style="color:${errList.length > 5 ? '#d29922' : '#3fb950'}">${errList.length}</div>
+    <div class="sub">${errTotal} total occurrences</div>
+  </div>
+  <div class="card">
+    <div class="label">Auto-remediation</div>
+    <div class="value">${actionsOk}/${actionsTried}</div>
+    <div class="sub">ok / attempted</div>
+  </div>
+</div>
+
+<!-- Known-issue regression checks -->
+<h2>Known-issue checks</h2>
+<div class="card">
+  ${checks.map(c => `
+    <div class="check">
+      <span class="check-icon ${c.pass ? 'check-pass' : 'check-fail'}">${c.pass ? '✓' : '✗'}</span>
+      <span><strong>${esc(c.label)}</strong> — <span class="muted">${esc(c.detail)}</span></span>
+    </div>
+  `).join('')}
+</div>
+
+<!-- Trades -->
+<h2>Trades (${tradesList.length})</h2>
+${tradesList.length === 0 ? `<div class="empty">No trades executed today.</div>` : `
+<table>
+  <thead><tr>
+    <th>Symbol</th><th>Type</th><th>Qty</th><th>Entry</th><th>Exit</th>
+    <th>Entry time</th><th>Exit time</th><th>P&amp;L</th><th>P&amp;L %</th><th>Status</th><th>Exit reason</th>
+  </tr></thead>
+  <tbody>
+    ${tradesList.map(t => `
+      <tr>
+        <td><strong>${esc(t.symbol)}</strong></td>
+        <td>${esc(t.type)}</td>
+        <td>${esc(t.quantity)}</td>
+        <td>${fmtNum(t.price)}</td>
+        <td>${t.exit_price != null ? fmtNum(t.exit_price) : '—'}</td>
+        <td>${fmtIST(t.entry_time)}</td>
+        <td>${t.exit_time ? fmtIST(t.exit_time) : '—'}</td>
+        <td class="${Number(t.pnl) >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl != null ? fmtInr(t.pnl) : '—'}</td>
+        <td>${t.pnl_pct != null ? fmtNum(t.pnl_pct) + '%' : '—'}</td>
+        <td><span class="tag">${esc(t.status)}</span></td>
+        <td>${esc(t.exit_reason || '')}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+`}
+
+<!-- Top candidates -->
+<h2>Top candidates (${topCandList.length})</h2>
+${topCandList.length === 0 ? `<div class="empty">No candidate analyses recorded today.</div>` : `
+<table>
+  <thead><tr>
+    <th>Symbol</th><th>Score (adj)</th><th>Score (raw)</th>
+    <th>Decision</th><th>Reject reason</th><th>Scan time</th>
+  </tr></thead>
+  <tbody>
+    ${topCandList.map(c => `
+      <tr>
+        <td><strong>${esc(c.symbol)}</strong>${c.name ? ' <span class="muted">' + esc(c.name) + '</span>' : ''}</td>
+        <td>${fmtNum(c.adjusted_score)}</td>
+        <td>${fmtNum(c.original_score)}</td>
+        <td><span class="tag">${esc(c.final_decision || '—')}</span></td>
+        <td class="muted msg-cell">${esc(c.reject_reason || '')}</td>
+        <td>${fmtIST(c.scan_ts)}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+`}
+
+<!-- Candidates-by-decision pie-style grid -->
+${(candidatesByDecision || []).length > 0 ? `
+<h2>Candidates by final decision</h2>
+<div class="grid">
+  ${(candidatesByDecision || []).map(r => `
+    <div class="card">
+      <div class="label">${esc(r.final_decision || '(null)')}</div>
+      <div class="value">${r.n}</div>
+    </div>
+  `).join('')}
+</div>
+` : ''}
+
+<!-- Rejection reasons -->
+${rejReasonList.length > 0 ? `
+<h2>Why candidates got rejected (top ${rejReasonList.length})</h2>
+<table>
+  <thead><tr><th>Reject reason</th><th style="text-align:right">Count</th></tr></thead>
+  <tbody>
+    ${rejReasonList.map(r => `
+      <tr>
+        <td>${esc(r.reject_reason)}</td>
+        <td style="text-align:right"><strong>${r.n}</strong></td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+` : ''}
+
+<!-- Incidents -->
+<h2>Ops incidents (${incList.length})</h2>
+${incList.length === 0 ? `<div class="empty">No incidents detected today. ✓</div>` : `
+<table>
+  <thead><tr>
+    <th>Time</th><th>Severity</th><th>Kind</th><th>Summary</th><th>Action</th><th>Result</th>
+  </tr></thead>
+  <tbody>
+    ${incList.map(i => `
+      <tr>
+        <td>${fmtIST(i.detected_at)}</td>
+        <td class="sev-${esc(i.severity)}">${esc(i.severity)}</td>
+        <td><strong>${esc(i.kind)}</strong></td>
+        <td>${esc(i.summary)}</td>
+        <td>${esc(i.action_attempted || 'none')}</td>
+        <td>${esc(i.action_result || '—')}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+`}
+
+<!-- Errors -->
+<h2>App errors — top unique patterns (${errList.length})</h2>
+${errList.length === 0 ? `<div class="empty">No errors logged today. ✓</div>` : `
+<table>
+  <thead><tr>
+    <th>Kind</th><th style="text-align:right">Count</th><th>First seen</th><th>Last seen</th><th>Sample</th>
+  </tr></thead>
+  <tbody>
+    ${errList.map(e => `
+      <tr>
+        <td><strong>${esc(e.kind)}</strong></td>
+        <td style="text-align:right">${e.count}</td>
+        <td>${fmtIST(e.first_seen)}</td>
+        <td>${fmtIST(e.last_seen)}</td>
+        <td class="muted msg-cell">${esc((e.message_sample || '').slice(0, 220))}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+`}
+
+<!-- Scan log (collapsible) -->
+${scanList.length > 0 ? `
+<h2>Scan log (${scanList.length})</h2>
+<details>
+<summary>Show scan detail rows</summary>
+<table>
+  <thead><tr><th>Time</th><th>Stocks</th><th>Signals</th><th>Regime</th><th>Strategy</th><th>Message</th></tr></thead>
+  <tbody>
+    ${scanList.slice(0, 50).map(s => `
+      <tr>
+        <td>${fmtIST(s.scanned_at)}</td>
+        <td>${esc(s.stocks)}</td>
+        <td>${esc(s.signals)}</td>
+        <td>${esc(s.regime || '')}</td>
+        <td>${esc(s.strategy || '')}</td>
+        <td class="muted msg-cell">${esc((s.message || '').slice(0, 200))}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+</details>
+` : ''}
+
+<!-- Live system state -->
+<h2>System state (live snapshot)</h2>
+<div class="grid">
+  <div class="card">
+    <div class="label">Last pipeline</div>
+    <div class="value" style="font-size:14px">${esc((typeof _pipelineLastRun !== 'undefined' && _pipelineLastRun?.status) || 'never')}</div>
+    <div class="sub">${typeof _pipelineLastRun !== 'undefined' && _pipelineLastRun?.startedAt ? fmtIST(_pipelineLastRun.startedAt) : '—'}</div>
+  </div>
+  <div class="card">
+    <div class="label">DayTrade cache</div>
+    <div class="value">${typeof _dayTradeCache !== 'undefined' && _dayTradeCache ? _dayTradeCache.length : 0}</div>
+    <div class="sub">${typeof _dayTradeCacheTs !== 'undefined' && _dayTradeCacheTs ? 'age ' + Math.round((Date.now() - _dayTradeCacheTs) / 60000) + 'm' : '—'}</div>
+  </div>
+  <div class="card">
+    <div class="label">Scan / pipeline locks</div>
+    <div class="value" style="font-size:14px">${typeof _scanAndTradeRunning !== 'undefined' && _scanAndTradeRunning ? 'SCAN' : 'idle'}</div>
+    <div class="sub">pipeline=${typeof _unifiedPipelineRunning !== 'undefined' && _unifiedPipelineRunning ? 'RUNNING' : 'idle'}</div>
+  </div>
+  <div class="card">
+    <div class="label">VIX / Nifty</div>
+    <div class="value">${fmtNum(vixVal, 2)}</div>
+    <div class="sub">Nifty ${fmtNum(typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null, 2)}%</div>
+  </div>
+</div>
+
+<div class="muted" style="margin-top:40px; font-size:11px; padding-top:16px; border-top:1px solid var(--border)">
+  Sources: live_trades · candidate_analyses · ops_incidents · app_errors · scan_log · in-memory signals
+  &nbsp;·&nbsp; /api/admin/daily-report?date=${esc(istDate)}
+  &nbsp;·&nbsp; append &amp;format=json for raw data
+</div>
+
+</div></body></html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('/api/admin/daily-report error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/scan-log", async(req,res)=>{
   try{const{rows}=await pool.query("SELECT * FROM scan_log ORDER BY scanned_at DESC LIMIT 50");res.json(rows);}
   catch(e){res.status(500).json({error:e.message});}
