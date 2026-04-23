@@ -61,6 +61,13 @@ const CACHE_MAX_STALE_SEC = 15 * 60;         // 15 min
 const AGENT_CYCLE_MAX_STALE_SEC = 2 * 60;    // 2 min
 const CACHE_MIN_PICKS_AFTER_925 = 5;
 
+// Log-pattern thresholds (queried from app_errors via deps.getErrorCounts)
+const KITE_ERROR_BURST_THRESHOLD    = 10;    // ≥10 KITE_* errors in 5 min
+const DB_POOL_THRESHOLD             = 5;     // ≥5 DB_POOL errors in 5 min
+const UNHANDLED_SPIKE_THRESHOLD     = 3;     // ≥3 UNHANDLED in 10 min
+const CACHE_WRITE_FAILURE_THRESHOLD = 5;     // ≥5 CACHE_WRITE in 5 min
+const RING_BUFFER_ATTACH_LINES      = 20;    // tail lines attached to log-pattern incidents
+
 const INCIDENT_KINDS = Object.freeze({
   PIPELINE_STALLED:    'PIPELINE_STALLED',
   CACHE_EMPTY:         'CACHE_EMPTY',
@@ -74,6 +81,12 @@ const INCIDENT_KINDS = Object.freeze({
   STALE_PICKS:         'STALE_PICKS',
   AGENT_CYCLE_MISSED:  'AGENT_CYCLE_MISSED',
   HEARTBEAT_MISSED:    'HEARTBEAT_MISSED',
+
+  // Log-pattern detectors (populated from app_errors via error-sink)
+  KITE_ERROR_BURST:          'KITE_ERROR_BURST',
+  DB_POOL_EXHAUSTED:         'DB_POOL_EXHAUSTED',
+  UNHANDLED_REJECTION_SPIKE: 'UNHANDLED_REJECTION_SPIKE',
+  CACHE_WRITE_FAILURE:       'CACHE_WRITE_FAILURE',
 });
 
 const SEVERITY = Object.freeze({
@@ -289,18 +302,70 @@ function dAgentCycleMissed(snap) {
   };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Log-pattern detectors — read aggregates from app_errors (pre-computed once
+// per tick into snap.errorCounts5m / errorCounts10m). These are intentionally
+// NOTIFY_ONLY in v1: they tell us a class of failure is happening before it
+// breaks visible state, but we don't yet auto-remediate — the primitive for
+// "reduce Kite call rate" or "trim pg pool" needs real-world evidence of
+// what helps before we let the agent pull those levers.
+// ────────────────────────────────────────────────────────────────────────────
+function dKiteErrorBurst(snap) {
+  const c = snap.errorCounts5m || {};
+  const n = (c.KITE_API || 0) + (c.KITE_TOKEN || 0);
+  if (n < KITE_ERROR_BURST_THRESHOLD) return { hit: false };
+  return {
+    hit: true,
+    evidence: { count: n, threshold: KITE_ERROR_BURST_THRESHOLD, window: '5m',
+                kite_api: c.KITE_API || 0, kite_token: c.KITE_TOKEN || 0 },
+  };
+}
+
+function dDbPoolExhausted(snap) {
+  const n = (snap.errorCounts5m || {}).DB_POOL || 0;
+  if (n < DB_POOL_THRESHOLD) return { hit: false };
+  return {
+    hit: true,
+    evidence: { count: n, threshold: DB_POOL_THRESHOLD, window: '5m' },
+  };
+}
+
+function dUnhandledRejectionSpike(snap) {
+  const n = (snap.errorCounts10m || {}).UNHANDLED || 0;
+  if (n < UNHANDLED_SPIKE_THRESHOLD) return { hit: false };
+  return {
+    hit: true,
+    evidence: { count: n, threshold: UNHANDLED_SPIKE_THRESHOLD, window: '10m' },
+  };
+}
+
+function dCacheWriteFailure(snap) {
+  const n = (snap.errorCounts5m || {}).CACHE_WRITE || 0;
+  if (n < CACHE_WRITE_FAILURE_THRESHOLD) return { hit: false };
+  return {
+    hit: true,
+    evidence: { count: n, threshold: CACHE_WRITE_FAILURE_THRESHOLD, window: '5m' },
+  };
+}
+
 const DETECTORS = Object.freeze([
-  { kind: INCIDENT_KINDS.KITE_TOKEN_EXPIRED,  sev: SEVERITY.CRITICAL, fn: dKiteTokenExpired },
-  { kind: INCIDENT_KINDS.DRAWDOWN_BREACH,     sev: SEVERITY.CRITICAL, fn: dDrawdownBreach },
-  { kind: INCIDENT_KINDS.KILL_SWITCH_TRIPPED, sev: SEVERITY.ERROR,    fn: dKillSwitchTripped },
-  { kind: INCIDENT_KINDS.PIPELINE_STALLED,    sev: SEVERITY.ERROR,    fn: dPipelineStalled },
-  { kind: INCIDENT_KINDS.AGENT_CYCLE_MISSED,  sev: SEVERITY.ERROR,    fn: dAgentCycleMissed },
-  { kind: INCIDENT_KINDS.CACHE_EMPTY,         sev: SEVERITY.WARN,     fn: dCacheEmpty },
-  { kind: INCIDENT_KINDS.STALE_PICKS,         sev: SEVERITY.WARN,     fn: dStalePicks },
-  { kind: INCIDENT_KINDS.CANDIDATES_EMPTY,    sev: SEVERITY.WARN,     fn: dCandidatesEmpty },
-  { kind: INCIDENT_KINDS.NO_TRADES_BY_1030,   sev: SEVERITY.INFO,     fn: dNoTradesBy1030 },
-  { kind: INCIDENT_KINDS.VIX_SPIKE,           sev: SEVERITY.WARN,     fn: dVixSpike },
-  { kind: INCIDENT_KINDS.EOD_UNRECONCILED,    sev: SEVERITY.WARN,     fn: dEodUnreconciled },
+  { kind: INCIDENT_KINDS.KITE_TOKEN_EXPIRED,          sev: SEVERITY.CRITICAL, fn: dKiteTokenExpired },
+  { kind: INCIDENT_KINDS.DRAWDOWN_BREACH,             sev: SEVERITY.CRITICAL, fn: dDrawdownBreach },
+  { kind: INCIDENT_KINDS.KILL_SWITCH_TRIPPED,         sev: SEVERITY.ERROR,    fn: dKillSwitchTripped },
+  { kind: INCIDENT_KINDS.PIPELINE_STALLED,            sev: SEVERITY.ERROR,    fn: dPipelineStalled },
+  { kind: INCIDENT_KINDS.AGENT_CYCLE_MISSED,          sev: SEVERITY.ERROR,    fn: dAgentCycleMissed },
+  { kind: INCIDENT_KINDS.CACHE_EMPTY,                 sev: SEVERITY.WARN,     fn: dCacheEmpty },
+  { kind: INCIDENT_KINDS.STALE_PICKS,                 sev: SEVERITY.WARN,     fn: dStalePicks },
+  { kind: INCIDENT_KINDS.CANDIDATES_EMPTY,            sev: SEVERITY.WARN,     fn: dCandidatesEmpty },
+  { kind: INCIDENT_KINDS.NO_TRADES_BY_1030,           sev: SEVERITY.INFO,     fn: dNoTradesBy1030 },
+  { kind: INCIDENT_KINDS.VIX_SPIKE,                   sev: SEVERITY.WARN,     fn: dVixSpike },
+  { kind: INCIDENT_KINDS.EOD_UNRECONCILED,            sev: SEVERITY.WARN,     fn: dEodUnreconciled },
+  // Log-pattern detectors. `attachLogs: true` means the tick attaches the
+  // ring-buffer tail to evidence for forensic context.
+  { kind: INCIDENT_KINDS.KITE_ERROR_BURST,            sev: SEVERITY.ERROR,    fn: dKiteErrorBurst,          attachLogs: true },
+  { kind: INCIDENT_KINDS.DB_POOL_EXHAUSTED,           sev: SEVERITY.ERROR,    fn: dDbPoolExhausted,         attachLogs: true },
+  { kind: INCIDENT_KINDS.UNHANDLED_REJECTION_SPIKE,   sev: SEVERITY.ERROR,    fn: dUnhandledRejectionSpike, attachLogs: true },
+  { kind: INCIDENT_KINDS.CACHE_WRITE_FAILURE,         sev: SEVERITY.WARN,     fn: dCacheWriteFailure,       attachLogs: true },
 ]);
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -389,7 +454,25 @@ async function _buildSnapshot(deps) {
     vixLevel: deps.getVixLevel ? deps.getVixLevel() : null,
 
     killReason: deps.getKillReason ? deps.getKillReason() : null,
+
+    // Log-pattern aggregates (populated from app_errors via error-sink).
+    // If getErrorCounts is missing or throws, we default to empty objects so
+    // detectors simply never fire — fail-safe, never fail-open.
+    errorCounts5m:  {},
+    errorCounts10m: {},
   };
+  if (typeof deps.getErrorCounts === 'function') {
+    try {
+      const [c5, c10] = await Promise.all([
+        deps.getErrorCounts({ minutes: 5 }),
+        deps.getErrorCounts({ minutes: 10 }),
+      ]);
+      snap.errorCounts5m  = c5  || {};
+      snap.errorCounts10m = c10 || {};
+    } catch (_e) {
+      // leave defaults
+    }
+  }
   return snap;
 }
 
@@ -432,15 +515,26 @@ async function _tick() {
       if (ticks < MIN_PERSIST_TICKS) continue;
       if (!_canFireIncident(det.kind)) continue;
 
-      const summary = _summaryFor(det.kind, result.evidence);
-      const action = await _attemptAction(det.kind, _deps, result.evidence);
+      // Attach ring-buffer tail as forensic context for log-pattern incidents.
+      let evidence = result.evidence || {};
+      if (det.attachLogs && typeof _deps.getRingBuffer === 'function') {
+        try {
+          const tail = _deps.getRingBuffer(RING_BUFFER_ATTACH_LINES);
+          if (Array.isArray(tail) && tail.length) {
+            evidence = Object.assign({}, evidence, { recent_log: tail });
+          }
+        } catch (_e) { /* best effort */ }
+      }
+
+      const summary = _summaryFor(det.kind, evidence);
+      const action = await _attemptAction(det.kind, _deps, evidence);
 
       await _writeIncident(_deps.pool, {
         runId,
         severity: det.sev,
         kind: det.kind,
         summary,
-        evidence: result.evidence,
+        evidence,
         actionAttempted: action.action,
         actionResult: action.result,
         actionDetail: action.detail,
@@ -485,6 +579,14 @@ function _summaryFor(kind, evidence) {
         : `Agent cycle last ran ${ev.ageSec}s ago (>${AGENT_CYCLE_MAX_STALE_SEC}s)`;
     case INCIDENT_KINDS.HEARTBEAT_MISSED:
       return `Ops-agent own tick gap detected`;
+    case INCIDENT_KINDS.KITE_ERROR_BURST:
+      return `${ev.count} Kite errors in last ${ev.window} (threshold ${ev.threshold}; api=${ev.kite_api}, token=${ev.kite_token})`;
+    case INCIDENT_KINDS.DB_POOL_EXHAUSTED:
+      return `${ev.count} DB pool errors in last ${ev.window} (threshold ${ev.threshold})`;
+    case INCIDENT_KINDS.UNHANDLED_REJECTION_SPIKE:
+      return `${ev.count} unhandled rejections/exceptions in last ${ev.window} (threshold ${ev.threshold})`;
+    case INCIDENT_KINDS.CACHE_WRITE_FAILURE:
+      return `${ev.count} cache write failures in last ${ev.window} (threshold ${ev.threshold})`;
     default:
       return kind;
   }
@@ -575,5 +677,6 @@ module.exports = {
     dPipelineStalled, dCacheEmpty, dKiteTokenExpired, dCandidatesEmpty,
     dNoTradesBy1030, dDrawdownBreach, dKillSwitchTripped, dVixSpike,
     dEodUnreconciled, dStalePicks, dAgentCycleMissed,
+    dKiteErrorBurst, dDbPoolExhausted, dUnhandledRejectionSpike, dCacheWriteFailure,
   },
 };

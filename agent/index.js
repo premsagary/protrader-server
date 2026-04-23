@@ -37,6 +37,7 @@ const paper            = require('./paper-fill-engine');
 const tradeManager     = require('./trade-manager');
 const opsAgent         = require('./ops-agent');
 const shadowTrader     = require('./shadow-trader');
+const errorSink        = require('./error-sink');
 
 let _cycleRunning = false;
 let _deps = null;
@@ -46,6 +47,7 @@ let _autoCloseTask = null;
 let _lastAgentCycleAt = null;   // ms epoch — read by ops-agent detectors
 let _shadowEnabled = false;
 let _opsEnabled = false;
+let _errorSinkEnabled = false;
 let _shadowOutcomeTimer = null;
 const SHADOW_OUTCOME_INTERVAL_MS = 5 * 60 * 1000;  // 5 min
 // Persistence keys — kept in sync with kite-server (read in bootstrap + write
@@ -573,7 +575,31 @@ function mountRoutes(app, opts = {}) {
     }
   });
 
-  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}, /api/ops-health, /api/shadow-decisions, /api/shadow-vs-rules');
+  // /api/app-errors — read-only view of recent structured errors + sink status.
+  //   ?status=1            diagnostic counters + ring-buffer size
+  //   ?minutes=60&kind=X   query app_errors rows (minutes 1-1440, limit ≤500)
+  //   ?ring=1&n=100        last N in-memory log lines (no DB hit)
+  app.get('/api/app-errors', gate, async (req, res) => {
+    try {
+      if (String(req.query.status || '') === '1') {
+        return res.json({ ok: true, enabled: _errorSinkEnabled, status: errorSink.getStatus() });
+      }
+      if (String(req.query.ring || '') === '1') {
+        const n = Math.max(1, Math.min(500, parseInt(req.query.n || '100', 10)));
+        return res.json({ ok: true, enabled: _errorSinkEnabled, ring: errorSink.getRingBuffer(n) });
+      }
+      const rows = await errorSink.getRecentErrors({
+        minutes: req.query.minutes,
+        kind:    req.query.kind,
+        limit:   req.query.limit,
+      });
+      res.json({ ok: true, enabled: _errorSinkEnabled, rows });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  console.log('🤖 agent: routes mounted at /api/agent/{status,mode,run-now,decisions,trades,clear-armed,auto-schedule}, /api/ops-health, /api/shadow-decisions, /api/shadow-vs-rules, /api/app-errors');
   return { mounted: true };
 }
 
@@ -586,9 +612,10 @@ async function _ensureMigration(pool) {
   try {
     const already = await audit.ensureTablesExist(pool);
     if (already) {
-      // Even when 001 is already applied, still try 002 (ops + shadow tables)
-      // — they're additive and safe to rerun (CREATE TABLE IF NOT EXISTS).
+      // Even when 001 is already applied, still try 002 + 003 — they're
+      // additive and safe to rerun (CREATE TABLE IF NOT EXISTS).
       await _ensureMigration002(pool);
+      await _ensureMigration003(pool);
       return { applied: false, reason: 'already_present' };
     }
 
@@ -598,6 +625,7 @@ async function _ensureMigration(pool) {
     if (!ok) throw new Error('migration ran but agent_decisions still missing');
     console.log('🤖 agent: migration 001 applied (agent_decisions/agent_trades/agent_trade_events)');
     await _ensureMigration002(pool);
+    await _ensureMigration003(pool);
     return { applied: true };
   } catch (e) {
     console.error('🤖 agent: migration bootstrap failed:', e.message);
@@ -619,6 +647,24 @@ async function _ensureMigration002(pool) {
     return { applied: true };
   } catch (e) {
     console.error('🤖 agent: migration 002 failed:', e.message);
+    return { applied: false, error: e.message };
+  }
+}
+
+// app_errors — structured error-sink table used by log-pattern detectors in
+// ops-agent. Safe to rerun on every boot.
+async function _ensureMigration003(pool) {
+  const fs   = require('fs');
+  const path = require('path');
+  try {
+    const p = path.join(__dirname, 'migrations', '003_app_errors.sql');
+    if (!fs.existsSync(p)) return { applied: false, reason: 'missing_file' };
+    const sql = fs.readFileSync(p, 'utf8');
+    await pool.query(sql);
+    console.log('🤖 agent: migration 003 applied (app_errors)');
+    return { applied: true };
+  } catch (e) {
+    console.error('🤖 agent: migration 003 failed:', e.message);
     return { applied: false, error: e.message };
   }
 }
@@ -658,6 +704,11 @@ function _startOpsAgent(deps) {
     rerunUnifiedPipeline: deps.rerunUnifiedPipeline,
     refreshCache:         deps.refreshCache,
     clearScanLock:        deps.clearScanLock,
+
+    // Error-sink hooks for log-pattern detectors. If missing, those detectors
+    // silently never fire (they see empty counts).
+    getErrorCounts: deps.getErrorCounts,
+    getRingBuffer:  deps.getRingBuffer,
   };
 
   const r = opsAgent.start(opsDeps);
@@ -738,6 +789,22 @@ async function bootstrap({
 
   if (app) mountRoutes(app, { requireAdmin });
 
+  // ── Env-gated error-sink (default OFF) ────────────────────────────────────
+  // Must init BEFORE ops-agent so its getErrorCounts/getRingBuffer hooks
+  // work on the very first detector tick.
+  const sinkEnv = String(process.env.AGENT_ERROR_SINK_ENABLED || '').toLowerCase();
+  if (sinkEnv === '1' || sinkEnv === 'true' || sinkEnv === 'yes') {
+    const r = errorSink.init({ pool, wrapConsole: true, captureUnhandled: true });
+    _errorSinkEnabled = r.enabled;
+    if (r.enabled) {
+      console.log(`📋 error-sink: enabled (ring=${r.ringBufferSize}, console+unhandled wrapped)`);
+    } else {
+      console.log('📋 error-sink: init returned disabled (pool missing?)');
+    }
+  } else {
+    console.log('📋 error-sink: disabled (set AGENT_ERROR_SINK_ENABLED=1 to start)');
+  }
+
   // ── Env-gated ops-agent (default OFF) ─────────────────────────────────────
   const opsEnv = String(process.env.AGENT_OPS_ENABLED || '').toLowerCase();
   if (opsEnv === '1' || opsEnv === 'true' || opsEnv === 'yes') {
@@ -750,6 +817,9 @@ async function bootstrap({
       getTradesTodayCount, getOpenPositionsCount, getVixLevel,
       getKillReason,
       rerunUnifiedPipeline, refreshCache, clearScanLock,
+      // Error-sink hooks (no-ops when sink is disabled).
+      getErrorCounts: (opts) => errorSink.countByKind(opts),
+      getRingBuffer:  (n)    => errorSink.getRingBuffer(n),
     });
   } else {
     console.log('🩺 ops-agent: disabled (set AGENT_OPS_ENABLED=1 to start)');
@@ -770,6 +840,7 @@ async function bootstrap({
     migration: mig,
     opsAgent: opsAgent.getStatus(),
     shadowEnabled: _shadowEnabled,
+    errorSink: errorSink.getStatus(),
   };
 }
 
@@ -784,5 +855,6 @@ module.exports = {
   getLastAgentCycleAt,
   opsAgent,
   shadowTrader,
-  _internal: { tradeAgent, constraintEngine, audit, execution, paper, tradeManager, opsAgent, shadowTrader },
+  errorSink,
+  _internal: { tradeAgent, constraintEngine, audit, execution, paper, tradeManager, opsAgent, shadowTrader, errorSink },
 };
