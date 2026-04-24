@@ -12046,9 +12046,19 @@ function scoreDayTrade(candles, sym, ctx) {
   }
   const minSLDist = atr14val * betaSLMult;
   if (px - sl < minSLDist) sl = +(px - minSLDist).toFixed(2);
-  // Recalc targets and RR after ATR adjustment
-  tgt = +(px + (px - sl) * Math.max(1.5, rrRatio || 1.5)).toFixed(2);
-  rrRatio = sl < px ? +((tgt - px) / (px - sl)).toFixed(1) : 0;
+  // Recalc RR against the SETUP-SPECIFIC target (OR measured move, gap size,
+  // 2:1 from VWAP/oversold SL). Only when ATR/beta widening pushed SL close
+  // enough that RR fell below 1.5 do we floor-extend tgt to the 1.5R minimum —
+  // otherwise we keep the structure-anchored target so F_RR_MIN (1.5) actually
+  // filters, and breakouts/gaps retain their measured-move projections instead
+  // of collapsing onto an arbitrary 1.5R line. Bug fix 2026-04-24: previous
+  // logic unconditionally overwrote tgt with 1.5R, making every pick's RR
+  // identically 1.5 and nullifying the F_RR_MIN gate + setup-specific targets.
+  rrRatio = sl < px ? +((tgt - px) / (px - sl)).toFixed(2) : 0;
+  if (rrRatio < 1.5 && sl < px) {
+    tgt = +(px + (px - sl) * 1.5).toFixed(2);
+    rrRatio = 1.5;
+  }
 
   // ── Commit 1: slippage + brokerage applied to net RR ──────────────────
   // The structural engine has a full slippage/brokerage sim (STRUCTURE_CONFIG)
