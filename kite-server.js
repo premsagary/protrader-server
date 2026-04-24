@@ -8111,6 +8111,29 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const vixObj  = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix) || null;
     const vixVal  = vixObj && Number.isFinite(Number(vixObj.value)) ? Number(vixObj.value) : null;
 
+    // ── Regime summary ────────────────────────────────────────────────────
+    // Two distinct regime concepts:
+    //   1. Intraday regime: per-stock majority vote, emitted in scan_log.message
+    //      as "Market: RANGING | 0 signals | RANGING:275 BREAKOUT:172 ..."
+    //   2. Long-term portfolio regime: marketRegime global (BULL/BEAR/NEUTRAL),
+    //      driven by Nifty 6m/3m returns + breadth. Not intraday.
+    const regimeCounts = { TRENDING:0, RANGING:0, BREAKOUT:0, MOMENTUM:0, UNKNOWN:0 };
+    const dominantByScan = [];
+    for (const s of scanList) {
+      const msg = s.message || '';
+      const m = msg.match(/Market:\s*([A-Z_]+)/);
+      const dominant = m ? m[1] : 'UNKNOWN';
+      if (regimeCounts[dominant] != null) regimeCounts[dominant]++;
+      else regimeCounts.UNKNOWN++;
+      dominantByScan.push(dominant);
+    }
+    const intradayRegime = dominantByScan[0] || null;   // most recent scan
+    const dominantRegime = Object.entries(regimeCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+
+    const portfolioRegime = typeof marketRegime !== 'undefined' ? marketRegime : null;
+    const portfolioRegimeData = (typeof marketRegimeData !== 'undefined' && marketRegimeData) || {};
+
     // Overall verdict
     let verdict = 'GREEN';
     let verdictReason = 'No anomalies detected';
@@ -8207,6 +8230,13 @@ app.get('/api/admin/daily-report', async (req, res) => {
           actionsTried, actionsOk,
           errUnique: errList.length, errTotal,
           vix: vixVal, niftyPct: typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null,
+        },
+        regime: {
+          intradayLatest:  intradayRegime,
+          intradayDominant: dominantRegime,
+          intradayCounts:  regimeCounts,
+          portfolio:       portfolioRegime,
+          portfolioDetail: portfolioRegimeData,
         },
         knownIssueChecks: checks,
         trades: tradesList,
@@ -8343,6 +8373,56 @@ app.get('/api/admin/daily-report', async (req, res) => {
     <div class="label">Auto-remediation</div>
     <div class="value">${actionsOk}/${actionsTried}</div>
     <div class="sub">ok / attempted</div>
+  </div>
+  <div class="card">
+    <div class="label">Regime (intraday)</div>
+    <div class="value" style="font-size:16px">${esc(dominantRegime || '—')}</div>
+    <div class="sub">${
+      Object.entries(regimeCounts)
+        .filter(([_, n]) => n > 0)
+        .map(([k, n]) => `${k}:${n}`)
+        .join(' · ') || 'no scans'
+    }</div>
+  </div>
+  <div class="card">
+    <div class="label">Regime (portfolio)</div>
+    <div class="value" style="font-size:16px">${esc(portfolioRegime || '—')}</div>
+    <div class="sub">${
+      portfolioRegimeData && portfolioRegimeData.confidence != null
+        ? `conf ${portfolioRegimeData.confidence}% · cash ${portfolioRegimeData.cashSuggestion ?? '—'}%`
+        : 'not yet computed'
+    }</div>
+  </div>
+</div>
+
+<!-- Regime detail -->
+<h2>Regime</h2>
+<div class="card">
+  <div class="check">
+    <span><strong>Intraday (per-stock majority vote across scans)</strong></span>
+  </div>
+  <div class="check">
+    <span>Dominant today: <strong>${esc(dominantRegime || '—')}</strong>
+    &nbsp;·&nbsp; Most recent scan: <strong>${esc(intradayRegime || '—')}</strong>
+    &nbsp;·&nbsp; <span class="muted">${esc(
+      Object.entries(regimeCounts)
+        .filter(([_, n]) => n > 0)
+        .map(([k, n]) => `${k}×${n}`)
+        .join(' · ') || 'no scans yet'
+    )}</span></span>
+  </div>
+  <div class="check">
+    <span><strong>Portfolio (long-term, Nifty 6m/3m + breadth)</strong></span>
+  </div>
+  <div class="check">
+    <span>Current: <strong>${esc(portfolioRegime || '—')}</strong>
+    ${portfolioRegimeData && portfolioRegimeData.confidence != null
+      ? `&nbsp;·&nbsp; confidence <strong>${portfolioRegimeData.confidence}%</strong>
+         &nbsp;·&nbsp; cash suggestion <strong>${portfolioRegimeData.cashSuggestion ?? '—'}%</strong>`
+      : '&nbsp;·&nbsp; <span class="muted">not yet computed (runs on cron)</span>'}
+    ${portfolioRegimeData && portfolioRegimeData.pending
+      ? `&nbsp;·&nbsp; <span class="muted">pending → ${esc(portfolioRegimeData.pending)}</span>`
+      : ''}</span>
   </div>
 </div>
 
