@@ -6477,9 +6477,10 @@ async function buildMFCache() {
     console.log('[MF] boot: DB hydration succeeded → MF tab ready instantly');
   }
 })();
-cron.schedule('15,45 8-16 * * 1-5', () => {
-  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-  console.log(`🏦 ${hour}: Mutual fund rescore starting...`);
+// MF data refreshes weekly — run once Sunday 22:00 IST so Monday morning
+// opens with a warm cache. Consolidated 2026-04-25 (was every 30 min 8-16).
+cron.schedule('0 22 * * 0', () => {
+  console.log('🏦 Weekly MF rescore starting...');
   buildMFCache();
 }, { timezone: 'Asia/Kolkata' });
 
@@ -13031,6 +13032,15 @@ async function runUnifiedKitePipeline(force = false) {
     ingestNifty50OneMinCandles()
       .then(r => r && !r.skipped && console.log(`📊 NIFTY50 1-min: ${r.ok}/${r.symbols} syms, ${r.barsWritten} bars`))
       .catch(e => console.warn('NIFTY50 1-min ingest error:', e.message));
+
+    // ── First-trade-at-9:21 chain (added 2026-04-25) ────────────────────
+    // Cron has scanAndTrade slots offset from Unified slots, so the first
+    // viable trade after market open used to be 9:24 (next scanAndTrade
+    // slot after Unified at 9:21). Now we fire scanAndTrade inline at the
+    // end of every successful Unified cycle — _scanAndTradeRunning guard
+    // protects against double-fire if a cron tick lands during this call.
+    // First trade now lands at ~9:21:30 instead of 9:24.
+    scanAndTrade().catch(e => console.error('post-Unified scanAndTrade:', e.message));
   } catch (e) {
     _pipelineLastRun = { ..._pipelineLastRun, status: 'error', error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') };
     console.error('🔄 Unified pipeline error:', e.message);
@@ -18296,11 +18306,12 @@ cron.schedule('30 6 * * 1-5', async () => {
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
 
-// Every 30 min during market hours (9:30AM - 3:30PM IST, Mon-Fri)
-// Refreshes exit signals, trailing stops, drawdown alerts using live prices
-cron.schedule('*/30 9-15 * * 1-5', async () => {
+// Portfolio exit-signal refresh — midday + afternoon only (skips the 9-12
+// RoboTrader hot window). Consolidated 2026-04-25 (was */30 9-15, 6 fires
+// per morning competing for Kite queue with the trade engine).
+cron.schedule('30 12,14 * * 1-5', async () => {
   const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  console.log(`🔔 ${now}: Portfolio signal refresh (30-min cycle)...`);
+  console.log(`🔔 ${now}: Portfolio signal refresh...`);
   try {
     await generatePortfolioSignals();
   } catch(e) { console.error('Signal refresh error:', e.message); }
@@ -18317,11 +18328,12 @@ cron.schedule('45 15 * * 1-5', async () => {
   await savePortfolioSnapshot();
 }, { timezone: 'Asia/Kolkata' });
 
-// Stock scoring + TA pipeline: every 30 min, Mon-Fri, 8AM-5PM IST
-// Fetches Kite candles → computes ALL technicals (Ichimoku, RSI, MACD etc.) → scores → saves
-cron.schedule('*/30 8-16 * * 1-5', async () => {
-  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-  console.log(`📊 ${hour}: Stock scoring + TA pipeline starting...`);
+// Daily fundamentals refresh — Screener-backed, no intraday mutation.
+// Consolidated 2026-04-25: was every 30 min 8-16 with a 7-day staleness
+// floor inside refreshMissingFundamentals(), so it was a no-op most of the
+// time. Real TA recompute lives in the Unified Pipeline (market hours).
+cron.schedule('0 20 * * 1-5', async () => {
+  console.log('📊 20:00: Daily fundamentals refresh...');
   await refreshMissingFundamentals();
   await refreshAllFundamentals();
 }, { timezone: 'Asia/Kolkata' });
@@ -18409,9 +18421,12 @@ async function refreshExternalSignalsCron(opts = {}) {
   }
 }
 
-// News: every 30 min during IST market hours, Mon-Fri
-cron.schedule('*/30 8-16 * * 1-5',
-  () => refreshExternalSignalsCron({ reason: '30m-news', sources: ['news'] }),
+// News: skip the 9-12 RoboTrader hot window. Pre-open run at 8:00 captures
+// overnight news; post-lunch hourly catches afternoon developments.
+// Consolidated 2026-04-25 — yesterday's 17-min news crawl was starving
+// the Kite queue during market open.
+cron.schedule('0 8,13-16 * * 1-5',
+  () => refreshExternalSignalsCron({ reason: '1h-news', sources: ['news'] }),
   { timezone: 'Asia/Kolkata' });
 
 // ── Stale-data healthcheck + priority re-fetch (Apr-2026) ───────────────
@@ -18479,9 +18494,11 @@ async function staleDataHealthcheck(opts = {}) {
     console.warn('[stale-healthcheck] error:', e.message);
   }
 }
-// Every 15 min during IST market hours (offset :07 to avoid overlap with
-// fundamentals cron at :00/:30 and news cron at :00/:30)
-cron.schedule('7,22,37,52 8-16 * * 1-5',
+// Stale-price detector runs once after hours — it exists to serve the
+// Stock Picks UI, not RoboTrader (which queries fresh Kite directly).
+// Fires after the 20:00 fundamentals refresh so it validates freshly
+// written data. Consolidated 2026-04-25 (was every 15 min 8-16).
+cron.schedule('15 20 * * 1-5',
   () => staleDataHealthcheck(),
   { timezone: 'Asia/Kolkata' });
 
@@ -18569,9 +18586,11 @@ app.get('/api/admin/daytrade/systemic-context', (req, res) => {
   });
 });
 
-// BSE: hourly during IST market hours, Mon-Fri (at 5 past the hour so it
-// doesn't overlap with the fundamentals cron at :00/:30 and news at :00/:30)
-cron.schedule('5 8-16 * * 1-5',
+// BSE: skip the 9-12 hot window. Pre-open at 8:05 captures the day's
+// ex-dividend / split / corporate-action notices that matter for trading
+// decisions. Afternoon hourly fires for late-breaking actions.
+// Consolidated 2026-04-25.
+cron.schedule('5 8,13-16 * * 1-5',
   () => refreshExternalSignalsCron({ reason: '1h-bse', sources: ['bse'] }),
   { timezone: 'Asia/Kolkata' });
 
@@ -18714,20 +18733,17 @@ cron.schedule('0 9 * * 1-5', async () => {
   await refreshNFOInstruments().catch(e => console.error('NFO refresh error:', e.message));
 }, { timezone: 'Asia/Kolkata' });
 
-// 9:05AM IST — refresh NFO (options) instruments daily (after stock instruments refresh)
-cron.schedule('5 9 * * 1-5', () => {
-  refreshNFOInstruments().catch(e => console.error('NFO refresh error:', e.message));
-}, { timezone: 'Asia/Kolkata' });
+// 9:05AM NFO cron removed 2026-04-25 — the 09:00 cron handler already
+// calls refreshNFOInstruments() right after refreshInstruments(). Dupe.
 
 // Screener.in fundamentals via direct scraper (screener-scraper.js)
-// 4x daily: 7AM (pre-market), 12PM (midday), 2PM (afternoon), 4PM (pre-close)
-['0 7 * * *', '0 12 * * *', '0 14 * * *', '0 16 * * *'].forEach(cronExpr => {
-  cron.schedule(cronExpr, () => {
-    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-    console.log(`📊 ${hour}: Screener fundamentals refresh...`);
-    fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
-  }, { timezone: 'Asia/Kolkata' });
-});
+// Consolidated 2026-04-25: one run at 07:00 is enough — Screener updates
+// overnight, and the 12/14/16 runs were re-fetching the same rows.
+cron.schedule('0 7 * * *', () => {
+  const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  console.log(`📊 ${hour}: Screener fundamentals refresh...`);
+  fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
+}, { timezone: 'Asia/Kolkata' });
 
 // =============================================================================
 // SCORE V2 DAILY SNAPSHOT WRITER
@@ -18845,11 +18861,18 @@ async function writeDailySnapshots(reason = 'cron') {
   return { written, errors, total: all.length, tookMs: Date.now() - t0 };
 }
 
-// 10PM IST daily — snapshot writer (runs after 8PM Screener + 7:30PM fundamentals)
+// 10PM IST daily — merged chain (2026-04-25): snapshot → forward returns →
+// bucket stats, run sequentially in one cron so the dependency order is
+// explicit and we have one scheduler handle instead of three.
 cron.schedule('0 22 * * *', async () => {
-  console.log('📸 10PM: Daily score v2 snapshot starting...');
-  try { await writeDailySnapshots('cron-10pm'); }
-  catch (e) { console.error('Snapshot cron error:', e.message); }
+  console.log('📸 22:00: Daily chain starting (snapshot → forward returns → bucket stats)...');
+  try { await writeDailySnapshots('cron-22'); }
+  catch (e) { console.error('Snapshot step error:', e.message); }
+  try { await fillForwardReturns('cron-22'); }
+  catch (e) { console.error('Forward-return step error:', e.message); }
+  try { await computeBucketStats('cron-22'); }
+  catch (e) { console.error('Bucket-stats step error:', e.message); }
+  console.log('📸 22:00: Daily chain complete');
 }, { timezone: 'Asia/Kolkata' });
 
 // Manual trigger endpoint (admin/debug)
@@ -18941,12 +18964,8 @@ async function fillForwardReturns(reason = 'cron') {
   return { filled, errors, tookMs: Date.now() - t0 };
 }
 
-// 10:30PM IST daily — fill forward returns after the snapshot writer (10PM)
-cron.schedule('30 22 * * *', async () => {
-  console.log('📈 10:30PM: Forward-return fill starting...');
-  try { await fillForwardReturns('cron-1030pm'); }
-  catch (e) { console.error('Forward-return cron error:', e.message); }
-}, { timezone: 'Asia/Kolkata' });
+// 10:30PM cron removed 2026-04-25 — fillForwardReturns now runs inside the
+// chained 22:00 daily cron above. Manual trigger endpoint retained.
 
 // Manual trigger
 app.post('/api/admin/forward-returns/run', async (req, res) => {
@@ -19786,12 +19805,8 @@ async function computeBucketStats(reason = 'cron') {
   return { rows: written, tookMs: Date.now() - t0 };
 }
 
-// 11PM IST daily — recompute bucket stats after forward returns land
-cron.schedule('0 23 * * *', async () => {
-  console.log('📊 11PM: Bucket stats recompute starting...');
-  try { await computeBucketStats('cron-11pm'); }
-  catch (e) { console.error('Bucket-stats cron error:', e.message); }
-}, { timezone: 'Asia/Kolkata' });
+// 11PM cron removed 2026-04-25 — computeBucketStats now runs inside the
+// chained 22:00 daily cron above.
 
 // Expose read endpoint for UI diagnostics + manual recompute
 app.get('/api/stocks/bucket-stats', async (req, res) => {
@@ -23537,6 +23552,13 @@ const CRYPTO_CONFIG = {
 };
 
 async function scanCrypto() {
+  // Disabled by default 2026-04-25 — crypto not in scope. To re-enable,
+  // set CRYPTO_PAPER_ENABLED=1 on Railway. Existing OPEN rows in
+  // crypto_trades are left as-is (no auto-close).
+  if (process.env.CRYPTO_PAPER_ENABLED !== '1') {
+    console.log('₿ crypto paper trading disabled by default — scan skipped');
+    return;
+  }
   console.log(`\n₿ Crypto scan at ${new Date().toLocaleTimeString("en-IN")}...`);
   let signals = 0, scanned = 0, skipped = 0;
 
@@ -23853,11 +23875,13 @@ async function start() {
     runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
   }, { timezone: "Asia/Kolkata" });
 
-  // ── Outcome computation — every 5 minutes, 24×7 ─────────────────────────
-  // Cheap no-op if no pending snapshots. Runs outside market hours too so
-  // afternoon/evening scans get their outcomes filled by midnight. Lookahead
-  // safety is enforced inside computeOutcomes (ts < NOW - 31 min filter).
-  cron.schedule("*/5 * * * *", () => {
+  // ── Outcome computation — daily after hours, 7 days a week ──────────────
+  // Consolidated 2026-04-25 (was */5 * * * * 24×7). The ts < NOW - 31 min
+  // guard inside computeOutcomes means nothing ran during market hours
+  // anyway, and tracker UI is only read post-hoc. Runs Sat/Sun too so
+  // Friday-evening snapshots get processed before Monday open.
+  cron.schedule('0 20 * * *', () => {
+    console.log('📈 20:00: Daily outcomes computation...');
     outcomeEngine.computeOutcomes(500).catch(e =>
       console.error('[outcome-engine] cron error:', e.message));
   }, { timezone: "Asia/Kolkata" });
@@ -23869,11 +23893,19 @@ async function start() {
 
   // Remove the duplicate 3-min startup delay (90s timeout above handles startup)
 
-  // Crypto: start immediately, run 24/7 every 15 minutes
-  console.log("₿ Starting crypto engine - 24/7...");
-  startCryptoTicker(); // REST polling every 60s
-  setTimeout(scanCrypto, 10000); // first scan after 10s
-  cron.schedule("*/15 * * * *", ()=>scanCrypto());
+  // ── Crypto engine paused 2026-04-25 — not in scope, no paper trades.
+  // Weekly Sunday refresh only so the table isn't completely dormant.
+  // To re-enable 24×7 operation, uncomment the three lines below and
+  // set CRYPTO_PAPER_ENABLED=1 on Railway.
+  // console.log("₿ Starting crypto engine - 24/7...");
+  // startCryptoTicker();                                 // 60s price poll
+  // setTimeout(scanCrypto, 10000);                       // first scan after 10s
+  // cron.schedule("*/15 * * * *", ()=>scanCrypto());     // 15-min scanner
+  cron.schedule('0 22 * * 0', async () => {
+    console.log('₿ Sunday weekly crypto refresh...');
+    await fetchCryptoPricesREST();
+    await scanCrypto();
+  }, { timezone: 'Asia/Kolkata' });
 
   // Restore persisted trading mode from DB
   await restoreTradingModeFromDB();
