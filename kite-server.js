@@ -10458,6 +10458,40 @@ let _dayTradeCacheTs  = 0;
 let _dayTradeScanning = false;
 let _pipelineLastRun  = null;   // diagnostic: last pipeline run result
 
+// ── Universe tiering (2026-04-27) ────────────────────────────────────────────
+// Splits the 566-stock universe into three tiers with different scan
+// cadences. Solves the 10-14 min scan latency we saw on 2026-04-27 day-1
+// live. Each tier maps to a UNIVERSE.grp value.
+//
+//   TIER 1: NIFTY50      ~50 stocks, ~21s/cycle   — every 5 min
+//   TIER 2: NEXT50+MID   ~200 stocks, ~84s/cycle  — every 15 min
+//   TIER 3: SMALLCAP     ~250 stocks, ~105s/cycle — every 30 min
+//
+// Cache merges per-tier: tier-1 cycle replaces only NIFTY50 entries in
+// _dayTradeCache; tier-2/3 entries from prior scans stay in place. So
+// scanAndTrade always reads the freshest data available for each stock.
+const TIER_CONFIG = {
+  1: new Set(['NIFTY50']),
+  2: new Set(['NEXT50', 'MIDCAP']),
+  3: new Set(['SMALLCAP']),
+};
+function _tierOfSym(sym) {
+  const u = (typeof UNIVERSE !== 'undefined' ? UNIVERSE : []).find(s => s.sym === sym);
+  if (!u) return null;
+  for (const [tier, grps] of Object.entries(TIER_CONFIG)) {
+    if (grps.has(u.grp)) return Number(tier);
+  }
+  return null;
+}
+function _grpsForTiers(tiers) {
+  const set = new Set();
+  for (const t of tiers) {
+    const grps = TIER_CONFIG[t];
+    if (grps) for (const g of grps) set.add(g);
+  }
+  return set;
+}
+
 // ── DayTrade systemic context (Commit 2 — VIX / breadth / sector rotation) ──
 // All three are rolled at the END of each full scan and read by the NEXT
 // scan. One-cycle lag (5 min) is fine — intraday sector leadership + breadth
@@ -13061,8 +13095,16 @@ const TA_FIELDS = [
   'change6m', 'annualVol', 'beta',
 ];
 
-async function runUnifiedKitePipeline(force = false) {
-  if (_unifiedPipelineRunning) { console.log('🔄 Unified pipeline already running, skipping'); return; }
+// tierFilter: optional array of tier numbers, e.g. [1] for NIFTY50 only.
+// If omitted/null, scans the full universe (backward-compatible behavior).
+async function runUnifiedKitePipeline(force = false, tierFilter = null) {
+  const tierTag = Array.isArray(tierFilter) && tierFilter.length ? `tier${tierFilter.join('+')}` : 'all-tiers';
+  if (_unifiedPipelineRunning) {
+    // VERY visible — silent overlap-skip is how we lose Tier 2/3 cycles.
+    // Auditable in scan_log + ops-incidents for after-the-fact root cause.
+    console.warn(`⚠ Unified pipeline OVERLAP-SKIP: ${tierTag} skipped because previous run still active (started ${_pipelineLastRun?.startedAt}). If frequent, add a watchdog or stagger crons further.`);
+    return;
+  }
   if (!force && !isMarketOpen()) { console.log('🔄 Pipeline skipped: market closed (force=false)'); return; }
 
   // Auto-recover Kite token from DB if env var missing
@@ -13082,6 +13124,16 @@ async function runUnifiedKitePipeline(force = false) {
 
   _unifiedPipelineRunning = true;
   _pipelineLastRun = { startedAt: new Date().toISOString(), status: 'running' };
+  // Watchdog — force-release the running flag if we exceed 5 min, so a
+  // stalled pipeline can't block subsequent tier crons forever. Mirrors
+  // the _scanWatchdog pattern used by scanAndTrade. Cleared on normal
+  // completion in the finally block.
+  const _pipelineWatchdog = setTimeout(() => {
+    if (_unifiedPipelineRunning) {
+      console.warn(`⚠ Unified pipeline watchdog: force-releasing run flag after 5 min (tier=${tierTag})`);
+      _unifiedPipelineRunning = false;
+    }
+  }, 5 * 60 * 1000);
   const t0 = Date.now();
   let okTA = 0, okDT = 0, failTA = 0, failDT = 0;
   let snapFailCount = 0, candleFailCount = 0; // 2026-04-21 — write-path visibility
@@ -13108,9 +13160,21 @@ async function runUnifiedKitePipeline(force = false) {
       }
     } catch (e) { /* non-critical */ }
 
-    const syms = Object.keys(stockFundamentals);
-    console.log(`🔄 Unified pipeline starting: ${syms.length} symbols, force=${force}, kiteToken=${process.env.KITE_ACCESS_TOKEN ? 'SET' : 'MISSING'}`);
-    if (syms.length === 0) { console.log('🔄 Pipeline: no symbols in stockFundamentals — skipping'); _unifiedPipelineRunning = false; return; }
+    let syms = Object.keys(stockFundamentals);
+    // ── Tier filter (2026-04-27) ──────────────────────────────────────────
+    // When tierFilter is provided (e.g. [1] for NIFTY50), we only score
+    // symbols whose UNIVERSE.grp falls in the tier's grp set. The cache
+    // merge logic below preserves entries from other tiers untouched.
+    let tierLabel = 'all-tiers';
+    if (Array.isArray(tierFilter) && tierFilter.length > 0) {
+      const allowedGrps = _grpsForTiers(tierFilter);
+      const grpBySym = new Map();
+      for (const u of (typeof UNIVERSE !== 'undefined' ? UNIVERSE : [])) grpBySym.set(u.sym, u.grp);
+      syms = syms.filter(s => allowedGrps.has(grpBySym.get(s)));
+      tierLabel = `tier${tierFilter.join('+')}(${[...allowedGrps].join(',')})`;
+    }
+    console.log(`🔄 Unified pipeline starting: ${syms.length} symbols [${tierLabel}], force=${force}, kiteToken=${process.env.KITE_ACCESS_TOKEN ? 'SET' : 'MISSING'}`);
+    if (syms.length === 0) { console.log('🔄 Pipeline: no symbols matched — skipping'); _unifiedPipelineRunning = false; return; }
     const today   = new Date().toISOString().split('T')[0];
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -13226,11 +13290,39 @@ async function runUnifiedKitePipeline(force = false) {
     const dtSuccessRatio = okDT / Math.max(syms.length, 1);
     if (dayTradeResults.length > 0 || _dayTradeCache.length === 0 || dtSuccessRatio > 0.3) {
       dayTradeResults.sort((a, b) => b.dayTradeScore - a.dayTradeScore);
+      // ── Per-tier merge (2026-04-27) ────────────────────────────────────
+      // When tierFilter is set, only REPLACE the tier's entries in the
+      // cache; preserve entries from other tiers (their last scored state
+      // from the prior cycle of their own cron). Without this, a NIFTY50-
+      // only cycle would wipe NEXT50/MIDCAP/SMALLCAP picks every 5 min.
+      let merged;
+      if (Array.isArray(tierFilter) && tierFilter.length > 0) {
+        const allowedGrps = _grpsForTiers(tierFilter);
+        const grpBySym = new Map();
+        for (const u of (typeof UNIVERSE !== 'undefined' ? UNIVERSE : [])) grpBySym.set(u.sym, u.grp);
+        // Keep prior-tier entries that DON'T match this tier's grps.
+        const otherTier = _dayTradeCache.filter(p => !allowedGrps.has(grpBySym.get(p.sym)));
+        merged = [...otherTier, ...dayTradeResults]
+          .sort((a, b) => b.dayTradeScore - a.dayTradeScore);
+      } else {
+        // Full-universe call (backward compat) — replace everything.
+        merged = dayTradeResults;
+      }
+      // Defensive dedup by sym (audit L3): if the same sym ends up in
+      // both otherTier and dayTradeResults due to a mid-day grp change,
+      // keep the freshest entry (later in array wins).
+      const dedupMap = new Map();
+      for (const p of merged) dedupMap.set(p.sym, p);
+      const deduped = [...dedupMap.values()];
       // Varsity M9 sector-correlation cap — same logic as scanDayTrades.
-      _dayTradeCache   = applySectorCap(dayTradeResults, 2);
+      _dayTradeCache   = applySectorCap(deduped, 2);
       _dayTradeCacheTs = Date.now();
-      // Commit 2: roll systemic context (breadth + sector momentum) for next scan
-      _rollupSystemicContext(dayTradeResults);
+      // Commit 2: roll systemic context (breadth + sector momentum) for next scan.
+      // Only roll from Tier 1 (or full-universe) calls — Tier 2/3 alone
+      // would bias breadth toward those subsets. NIFTY50 is the most
+      // liquid + most representative for systemic regime detection.
+      const rollContext = !Array.isArray(tierFilter) || tierFilter.length === 0 || tierFilter.includes(1);
+      if (rollContext) _rollupSystemicContext(dayTradeResults);
       _persistDayTradeCache(); // fire-and-forget — survive restarts
     } else {
       console.log(`🔄 Unified pipeline: DayTrade ${okDT}/${syms.length} successful fetches — low ratio (${(dtSuccessRatio*100).toFixed(0)}%), keeping previous cache (${_dayTradeCache.length} picks)`);
@@ -13261,6 +13353,7 @@ async function runUnifiedKitePipeline(force = false) {
     _pipelineLastRun = { ..._pipelineLastRun, status: 'error', error: e.message, stack: e.stack?.split('\n').slice(0, 3).join(' | ') };
     console.error('🔄 Unified pipeline error:', e.message);
   } finally {
+    clearTimeout(_pipelineWatchdog);
     _unifiedPipelineRunning = false;
   }
 }
@@ -24087,9 +24180,37 @@ async function start() {
   //   - TA rescore now runs every 5 min (was 30 min) since it piggybacks on
   //     the DayTrade scan's Kite calls for free
   //   - Score cache rebuild and DayTrade sort run in parallel at the end
+  // ── Universe-tiered Unified pipeline (2026-04-27) ─────────────────────
+  // Tier 1 (NIFTY50, ~50 stocks, ~21s/cycle) — every 5 min, hot path.
+  //   Same minute slots the legacy single-tier cron used.
+  // Tier 2 (NEXT50+MIDCAP, ~200 stocks, ~84s/cycle) — every 15 min,
+  //   offset by 2 min so it doesn't collide with Tier 1 on shared minutes.
+  // Tier 3 (SMALLCAP, ~250 stocks, ~105s/cycle) — every 30 min,
+  //   offset by 3 min. Smallcap signals have the most noise; lowest cadence.
+  // _unifiedPipelineRunning serializes all three (only one runs at a time);
+  // cache-merge inside runUnifiedKitePipeline preserves other-tier entries.
   cron.schedule("1,6,11,16,21,26,31,36,41,46,51,56 9-15 * * 1-5", () => {
-    runUnifiedKitePipeline().catch(e => console.error('🔄 Unified pipeline error:', e.message));
+    runUnifiedKitePipeline(false, [1]).catch(e => console.error('🔄 Tier1 pipeline error:', e.message));
   }, { timezone: "Asia/Kolkata" });
+  cron.schedule("3,18,33,48 9-15 * * 1-5", () => {
+    runUnifiedKitePipeline(false, [2]).catch(e => console.error('🔄 Tier2 pipeline error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+  cron.schedule("4,34 9-15 * * 1-5", () => {
+    runUnifiedKitePipeline(false, [3]).catch(e => console.error('🔄 Tier3 pipeline error:', e.message));
+  }, { timezone: "Asia/Kolkata" });
+
+  // ── Cold-start seed (audit M2): on first deploy of the tiered pipeline,
+  // _dayTradeCache contains only Tier 1 picks for the first 12-30 min until
+  // Tier 2/3 crons fire. That window leaves scanAndTrade with a NIFTY50-only
+  // candidate set. One-shot full-universe scan at boot seeds all tiers so
+  // scanAndTrade has data for every stock from minute one. Force=true to
+  // bypass the market-open check (cache hydrates even if booted off-hours).
+  setTimeout(() => {
+    if (isMarketOpen() || (typeof _dayTradeCache !== 'undefined' && _dayTradeCache.length === 0)) {
+      console.log('🌱 Cold-start: kicking off full-universe seed scan...');
+      runUnifiedKitePipeline(true).catch(e => console.error('Seed scan error:', e.message));
+    }
+  }, 90 * 1000); // 90s after boot — gives DB hydrate + token init time to complete
 
   // ── Outcome computation — daily after hours, 7 days a week ──────────────
   // Consolidated 2026-04-25 (was */5 * * * * 24×7). The ts < NOW - 31 min
