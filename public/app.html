@@ -3538,6 +3538,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
   </div>
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
   <div style="display:flex;gap:8px;align-items:center;margin-left:12px;flex-shrink:0">
+    <button id="trading-mode-btn" class="admin-only" onclick="toggleTradingMode()" style="display:none;font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-weight:700;letter-spacing:0.5px;transition:all 0.2s" title="Toggle between LIVE (real-money orders) and PAPER (simulated)">📝 PAPER</button>
     <span id="free-badge" style="font-size:9px;color:var(--green);background:rgba(94,204,138,0.08);border:1px solid rgba(94,204,138,0.15);padding:3px 10px;border-radius:12px;letter-spacing:0.5px;font-weight:600">FREE BETA</span>
     <span id="user-badge" style="font-size:11px;color:var(--text3);display:none"></span>
     <button id="logout-btn" onclick="doLogout()" style="font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;font-weight:600;display:none;transition:all 0.2s" onmouseover="this.style.background='rgba(224,96,96,0.06)';this.style.borderColor='rgba(224,96,96,0.15)'" onmouseout="this.style.background='transparent';this.style.borderColor='var(--border)'">Logout</button>
@@ -3746,6 +3747,7 @@ async function fetchAll(){
     if(lr[1].status==="fulfilled"&&lr[1].value.ok) S.liveStats = await lr[1].value.json();
     if(lr[2].status==="fulfilled"&&lr[2].value.ok){const d=await lr[2].value.json();if(Array.isArray(d))S.liveDaily=d;}
     if(lr[3].status==="fulfilled"&&lr[3].value.ok){const d=await lr[3].value.json();S.tradingMode=d.mode||'PAPER';}
+    try{ renderTopBar(); }catch(e){}
   } catch(e){}
   // Crypto - optional
   try {
@@ -3968,6 +3970,21 @@ function renderTopBar(){
     riskBanner.style.display = 'flex';
   } else {
     riskBanner.style.display = 'none';
+  }
+  // ── Trading mode toggle button (admin-only, top-right) ────────────────
+  // Visibility is gated by .admin-only class (handled by setMode auth flow).
+  // Color/label reflect current S.tradingMode so the live state is always
+  // visible at a glance, not buried in a subtab.
+  const tmBtn = document.getElementById('trading-mode-btn');
+  if (tmBtn) {
+    const isLive = S.tradingMode === 'LIVE';
+    tmBtn.textContent = isLive ? '🔴 LIVE' : '📝 PAPER';
+    tmBtn.title = isLive
+      ? 'Currently LIVE — clicking will switch to PAPER (simulated)'
+      : 'Currently PAPER — clicking will switch to LIVE (real-money orders)';
+    tmBtn.style.color = isLive ? '#ef4444' : '#22c55e';
+    tmBtn.style.borderColor = isLive ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.3)';
+    tmBtn.style.background = isLive ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.05)';
   }
   }catch(e){ console.log("renderTopBar err:",e.message); }
 }
@@ -13423,7 +13440,11 @@ function _renderAgentPanel(d){
 
   var stats = d.stats || { total:0, approved:0, rejected:0, rejection_breakdown:{} };
   var recent = d.recent || [];
-  var validModes = d.validModes || ['off','dry_run','paper','live'];
+  // Filter out "live" — agent.execution-engine.placeLive() throws (Phase 3
+  // not built). Real live trading is controlled by the top-bar LIVE toggle
+  // which routes through scanAndTrade in kite-server.js, not the agent
+  // module. Showing a button that errors on click was misleading.
+  var validModes = (d.validModes || ['off','dry_run','paper','live']).filter(function(m){ return m !== 'live'; });
   var tablesMissing = stats.tablesMissing;
 
   var modeButtons = validModes.map(function(m){
@@ -13438,6 +13459,13 @@ function _renderAgentPanel(d){
       +(active?'● ':'')+m.toUpperCase()
       +'</button>';
   }).join('');
+  // Note next to the agent mode buttons clarifying that real trades are
+  // not controlled here.
+  var liveTradingNote = '<div style="margin-top:10px;padding:10px 14px;border:1px solid rgba(94,204,138,0.2);border-radius:8px;background:rgba(94,204,138,0.04);font-size:11px;color:var(--text3);line-height:1.5">'
+    +'<b style="color:#22c55e">Real trading lives in the top-bar toggle</b> (🔴 LIVE / 📝 PAPER, top-right). '
+    +'The agent modes above only control the rule-based filter chain Phase 1 dry-run. '
+    +'Agent\'s "live" mode is not yet implemented — execution still routes through scanAndTrade.'
+    +'</div>';
 
   var statsBox = tablesMissing
     ? '<div style="padding:20px;border:1px dashed var(--border);border-radius:10px;color:var(--amber);background:rgba(251,191,36,0.05)">'
@@ -13533,6 +13561,8 @@ function _renderAgentPanel(d){
       +'<button id="agent-run-now-btn" onclick="_agentRunNow()" style="padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700;font-size:12px;border:1px solid var(--border);background:transparent;color:var(--text2)">▶ Force-run cycle</button>'
       +'<button onclick="_agentFetchStatus()" style="padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700;font-size:12px;border:1px solid var(--border);background:transparent;color:var(--text2)">↻ Refresh</button>'
     +'</div>'
+
+    +liveTradingNote
 
     +_agentAutoScheduleBar(d)
     +statsBox
