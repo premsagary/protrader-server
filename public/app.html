@@ -13430,7 +13430,10 @@ async function _agentRunNow(){
 }
 
 function _agentModeBadge(mode){
-  var c = mode==='off' ? '#64748b' : mode==='dry_run' ? '#3b82f6' : mode==='paper' ? '#eab308' : '#ef4444';
+  // Coerce legacy 'live' display to 'OFF' — the server now refuses to enter
+  // live mode, but stale UI state may still ask us to render it.
+  if (mode === 'live') mode = 'off';
+  var c = mode==='off' ? '#64748b' : mode==='dry_run' ? '#3b82f6' : mode==='paper' ? '#eab308' : '#64748b';
   return '<span style="background:'+c+'22;color:'+c+';border:1px solid '+c+'55;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.5px">'+mode.toUpperCase()+'</span>';
 }
 

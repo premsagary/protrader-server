@@ -24,11 +24,16 @@ const CONFIG_VERSION = '1.0.0-phase1';
 // Mode is mutable at runtime: getMode() / setMode(m) allow the UI to flip it
 // without a redeploy. setMode DOES NOT persist by itself — the caller is
 // responsible for writing to app_config so the change survives restarts.
-const VALID_MODES = new Set(['off', 'paper', 'live']);
+// 'live' removed 2026-04-25 — execution-engine.placeLive() throws (Phase 3
+// not built). Showing it as a valid mode let users put the agent into a
+// broken state where every cycle silently errored. Real live trading is
+// controlled by the top-bar LIVE toggle which routes through scanAndTrade
+// in kite-server.js, not the agent module.
+const VALID_MODES = new Set(['off', 'paper']);
 // Legacy modes that may appear in env or DB — coerce silently to 'off' rather
 // than blowing up on boot. Persisted value will be overwritten the next time
 // the user presses a mode button in the UI.
-const _LEGACY_MODES = new Set(['dry_run']);
+const _LEGACY_MODES = new Set(['dry_run', 'live']);
 let _INITIAL_MODE = (process.env.AGENT_MODE || 'off').toLowerCase();
 if (_LEGACY_MODES.has(_INITIAL_MODE)) {
   console.warn(`agent-config: AGENT_MODE="${_INITIAL_MODE}" is deprecated, coercing to "off"`);
@@ -61,7 +66,8 @@ function listValidModes() { return [...VALID_MODES]; }
 // Persistence handled by kite-server via app_config — this module just holds
 // the runtime state. Target mode is always 'paper' for now; live will be
 // added in Phase 3 behind an explicit unlock.
-const AUTO_VALID_TARGETS = new Set(['paper', 'live']);
+// 'live' removed 2026-04-25 alongside VALID_MODES — see comment above.
+const AUTO_VALID_TARGETS = new Set(['paper']);
 let _autoEnabled = false;
 let _autoTargetMode = 'paper';
 
@@ -75,6 +81,12 @@ function setAutoSchedule({ enabled, targetMode }) {
   // values from before dry_run was removed.
   if (t === 'dry_run') {
     console.warn(`agent-config.setAutoSchedule: legacy targetMode "dry_run" coerced to "paper"`);
+    t = 'paper';
+  }
+  // Same for 'live' — removed 2026-04-25 since execution-engine.placeLive()
+  // throws. Coerce to 'paper' rather than erroring on persisted DB state.
+  if (t === 'live') {
+    console.warn(`agent-config.setAutoSchedule: legacy targetMode "live" coerced to "paper" (Phase 3 not built)`);
     t = 'paper';
   }
   if (!AUTO_VALID_TARGETS.has(t)) {
