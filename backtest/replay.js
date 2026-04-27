@@ -36,7 +36,15 @@ const DEFAULT_CFG = Object.freeze({
   squareOffAt: '15:15',             // IST EOD
   slippageBps: 5,                   // 0.05% per side (10bps round-trip)
   brokerageRoundTrip: 40,           // ~₹40 per trade (Zerodha intraday flat)
-  minScoreThreshold: 60,            // skip "Developing" tier (<60), only Good+
+  // 0 means "trust scoreDayTrade's internal preflight gates". Was 60
+  // (Good Setup tier on dayTradeScore 0-100 scale), but scanAndTrade in
+  // production trades on result.score from selectAndRunStrategy (0-10
+  // scale, stored as signal_score = score×10). Different scoring system →
+  // 60 filtered everything in 2026-04-27 replay even though live fired 2
+  // trades. Until we extract the live strategy engine into an importable
+  // module, the backtest can't match production exactly; setting threshold
+  // to 0 at least produces output to compare.
+  minScoreThreshold: 0,
 });
 
 /**

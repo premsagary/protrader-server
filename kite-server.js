@@ -1744,13 +1744,18 @@ let UNIVERSE = [
   {sym:"CRAFTSMAN",   n:"Craftsman Automation",     grp:"MIDCAP"},
   {sym:"KIRLOSENG",   n:"Kirloskar Electric",       grp:"MIDCAP"},
   {sym:"HBLPOWER",    n:"HBL Engineering",          grp:"MIDCAP"},
-  {sym:"PRAJ",        n:"Praj Industries",          grp:"MIDCAP"},
+  // PRAJ removed 2026-04-27 — Kite returns "invalid token" on every fetch,
+  // poisoning every scan with 51+ errors per day. Stale instrument-token
+  // mapping that refreshInstruments() can't fix. Re-add when instrument map
+  // is corrected.
+  // {sym:"PRAJ",        n:"Praj Industries",          grp:"MIDCAP"},
   {sym:"JYOTICNC",    n:"Jyoti CNC Automation",     grp:"MIDCAP"},
   {sym:"DATAPATTNS",  n:"Data Patterns India",      grp:"MIDCAP"},
   {sym:"IDEAFORGE",   n:"ideaForge Technology",     grp:"MIDCAP"},
   {sym:"PARAS",       n:"Paras Defence",            grp:"MIDCAP"},
   {sym:"MIDHANI",     n:"Mishra Dhatu Nigam",       grp:"MIDCAP"},
-  {sym:"MEIL",        n:"Megha Engineering",        grp:"MIDCAP"},
+  // MEIL removed 2026-04-27 — same "invalid token" issue as PRAJ.
+  // {sym:"MEIL",        n:"Megha Engineering",        grp:"MIDCAP"},
   {sym:"PNBHOUSING",  n:"PNB Housing Finance",      grp:"MIDCAP"},
   {sym:"AAVAS",       n:"Aavas Financiers",         grp:"MIDCAP"},
   {sym:"HOMEFIRST",   n:"Home First Finance",       grp:"MIDCAP"},
