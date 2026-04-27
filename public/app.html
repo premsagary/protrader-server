@@ -13553,9 +13553,9 @@ function _renderAgentPanel(d){
       +'<span style="color:var(--text4);font-size:11px;margin-left:auto">env fallback: '+(d.envFallback||'off')+' · config '+(d.configVersion||'?')+'</span>'
     +'</div>'
     +'<div style="color:var(--text3);font-size:13px;margin-bottom:22px;line-height:1.55;max-width:900px">'
-      +'Rule-based intraday agent. Reads picks from the DayTrade scanner every minute, applies filters + hard constraints, writes every decision to <code>agent_decisions</code>. '
-      +'Paper capital: <strong>₹'+(d.paperCapital||0).toLocaleString('en-IN')+'</strong>. '
-      +'Cycle auto-skips when mode is <code>off</code>.'
+      +'Rule-based intraday agent (paper-mode filter validator). Reads picks from the DayTrade scanner every minute when enabled, applies filters + hard constraints, writes every decision to <code>agent_decisions</code>. '
+      +'Paper capital: <strong>₹'+(d.paperCapital||0).toLocaleString('en-IN')+'</strong>.<br/>'
+      +'<b style="color:#eab308">⚠ Decision loop is currently DISABLED by default</b> (consolidation 2026-04-27). Real trading runs through RoboTrade in <code>scanAndTrade</code> (top-bar 🔴 LIVE toggle). To re-enable agent paper-research mode, set <code>AGENT_DECISION_LOOP_ENABLED=1</code> on Railway. Ops-agent (auto-heal), shadow-trader, and error-sink continue running.'
     +'</div>'
 
     +'<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">'

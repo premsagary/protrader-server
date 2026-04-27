@@ -249,38 +249,56 @@ function wire(deps, persistedMode, persistedAuto) {
   }
 
   if (_cronTask) _cronTask.stop();
-  // 2026-04-23 — pin to IST. Without { timezone } this runs at server-local
-  // (UTC on Railway) so '* 9-15 * * 1-5' fires at IST 14:30-21:29, missing
-  // most of the trading window and spamming 'killed — MARKET_CLOSED' during
-  // the IST evening. isMarketOpen() is the real gate; this is just the coarse
-  // schedule, and it must overlap IST market hours.
-  _cronTask = cron.schedule(CYCLE.CRON_EXPR_SIMPLE, () => {
-    runCycle().catch(e => console.error('🤖 agent cycle uncaught:', e.message));
-  }, { timezone: 'Asia/Kolkata' });
 
-  // Register the two IST-timezone crons that auto-flip mode at market
-  // open/close. They check getAutoSchedule() at fire time so toggling the UI
-  // takes effect without needing to re-schedule.
-  _registerAutoCrons();
+  // ── Decision loop env-gate (2026-04-27, Option A consolidation) ────────
+  // The agent's 1-min decision cycle runs in parallel to scanAndTrade in
+  // kite-server.js (the actual live-money path). With agent's "live" mode
+  // disabled (Phase 3 not built), the cycle's only output is paper-fill
+  // simulation + agent_decisions audit rows — observability that the
+  // daily-report's reject-reason tally already covers.
+  //
+  // Set AGENT_DECISION_LOOP_ENABLED=1 on Railway to re-enable. Default
+  // OFF so paper/research mode is opt-in. Ops-agent (auto-heal),
+  // shadow-trader (LLM A/B), and error-sink (log monitor) continue
+  // running — those are independent observability modules in bootstrap().
+  const decisionLoopEnabled = _envFlag('AGENT_DECISION_LOOP_ENABLED', false);
 
-  // If we're booting mid-session, reconcile state with where we "should" be.
-  _reconcileMidSessionMode().catch(e =>
-    console.error('🤖 agent: mid-session reconcile error:', e.message)
-  );
+  if (decisionLoopEnabled) {
+    // 2026-04-23 — pin to IST. Without { timezone } this runs at server-local
+    // (UTC on Railway) so '* 9-15 * * 1-5' fires at IST 14:30-21:29, missing
+    // most of the trading window and spamming 'killed — MARKET_CLOSED' during
+    // the IST evening. isMarketOpen() is the real gate; this is just the coarse
+    // schedule, and it must overlap IST market hours.
+    _cronTask = cron.schedule(CYCLE.CRON_EXPR_SIMPLE, () => {
+      runCycle().catch(e => console.error('🤖 agent cycle uncaught:', e.message));
+    }, { timezone: 'Asia/Kolkata' });
 
-  // Start the trade-manager poller. It gates internally on market hours and
-  // bails fast when there are no open trades — safe to leave running.
-  tradeManager.startPoller({
-    pool: deps.pool,
-    isMarketOpen: deps.isMarketOpen,
-    getPrices: deps.getPrices,
-    getAtrPct: deps.getAtrPct,
-    runId: null,
-  });
+    // Register the two IST-timezone crons that auto-flip mode at market
+    // open/close. They check getAutoSchedule() at fire time so toggling the UI
+    // takes effect without needing to re-schedule.
+    _registerAutoCrons();
+
+    // If we're booting mid-session, reconcile state with where we "should" be.
+    _reconcileMidSessionMode().catch(e =>
+      console.error('🤖 agent: mid-session reconcile error:', e.message)
+    );
+
+    // Start the trade-manager poller. It gates internally on market hours and
+    // bails fast when there are no open trades — safe to leave running.
+    tradeManager.startPoller({
+      pool: deps.pool,
+      isMarketOpen: deps.isMarketOpen,
+      getPrices: deps.getPrices,
+      getAtrPct: deps.getAtrPct,
+      runId: null,
+    });
+  } else {
+    console.log('🤖 agent: decision loop DISABLED via env (set AGENT_DECISION_LOOP_ENABLED=1 to re-enable). RoboTrade scanAndTrade in kite-server.js is the live trading path.');
+  }
 
   const mode = getMode();
-  console.log(`🤖 agent: wired (mode=${mode}, cron=${CYCLE.CRON_EXPR_SIMPLE})`);
-  return { wired: true, mode, cron: true, poller: tradeManager.getStatus() };
+  console.log(`🤖 agent: wired (mode=${mode}, decisionLoop=${decisionLoopEnabled ? 'ON' : 'OFF'}, cron=${CYCLE.CRON_EXPR_SIMPLE})`);
+  return { wired: true, mode, cron: decisionLoopEnabled, poller: decisionLoopEnabled ? tradeManager.getStatus() : { started: false, reason: 'decision_loop_disabled' } };
 }
 
 // ── Auto-schedule crons ─────────────────────────────────────────────────────
