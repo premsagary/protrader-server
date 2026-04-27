@@ -7998,7 +7998,7 @@ async function _loadBacktestCandlesForDate(dateStr) {
 //      leak into the historical scoreDayTrade calls). Comparable only when
 //      backtest state matches live state, which is true for today/yesterday.
 //   3. In-flight guard — refuse a second concurrent invocation.
-async function _runDailyBacktest(istDate) {
+async function _runDailyBacktest(istDate, opts = {}) {
   if (typeof isMarketOpen === 'function' && isMarketOpen()) {
     return { skipped: 'market_open_replay_would_stall_live_trading' };
   }
@@ -8016,7 +8016,7 @@ async function _runDailyBacktest(istDate) {
   }
   _backtestRunning = true;
   try {
-    return await backtestReplay.replayDate(istDate, {
+    const deps = {
       loadCandlesForDate: _loadBacktestCandlesForDate,
       scoreDayTrade,
       sectorOf: (sym) => {
@@ -8024,8 +8024,41 @@ async function _runDailyBacktest(istDate) {
         return (f && f.sector) || 'UNKNOWN';
       },
       ctxAt: () => ({ niftyDailyChange: _niftyDailyChangePct || 0 }),
-      onError: () => {},   // silent — error count rolls into summary if needed
-    });
+      onError: () => {},
+    };
+    // Run BOTH variants when caller requests A/B comparison (default).
+    // 'current' uses the existing scoring stack as configured; 'binary'
+    // strips score thresholds and requires only the Varsity Ch19 binary
+    // checklist (≥4 of 5 yes/no checks). The two share the same input
+    // candles + same scoreDayTrade scoring — only the gate differs.
+    if (opts.compareBinary !== false) {
+      const [current, binary] = await Promise.all([
+        backtestReplay.replayDate(istDate, deps),
+        backtestReplay.replayDate(istDate, deps, { binaryOnly: true }),
+      ]);
+      const gap = Number(((binary.summary?.netPnl || 0) - (current.summary?.netPnl || 0)).toFixed(2));
+      return {
+        date: istDate,
+        current,
+        binary,
+        comparison: {
+          gap,
+          gapDirection: gap > 0 ? 'binary_better' : gap < 0 ? 'current_better' : 'tied',
+          interpretation: gap > 0
+            ? 'Binary-only would have been MORE profitable. Composite score may be filtering out good trades.'
+            : gap < 0
+            ? 'Current scoring would have been MORE profitable. Composite score is doing real work.'
+            : 'Tied — composite score isn\'t adding signal vs. binary checklist alone.',
+        },
+        // Backward-compat fields so old callers reading the previous shape
+        // (single-variant) still get something useful.
+        trades: current.trades,
+        summary: current.summary,
+        config: current.config,
+      };
+    }
+    // Legacy single-variant call path (e.g. when explicit ?compareBinary=0)
+    return await backtestReplay.replayDate(istDate, deps);
   } finally {
     _backtestRunning = false;
   }
@@ -8581,6 +8614,79 @@ ${(() => {
     return `<div class="empty">Backtest skipped: ${esc(reason)}. Re-run after market close, or for today/yesterday only.</div>`;
   }
   if (backtest.error) return `<div class="empty" style="color:#ef4444">Backtest error: ${esc(backtest.error)}</div>`;
+  // ── A/B comparison block (current scoring vs binary-only) ───────────────
+  // Only renders when /api/admin/daily-report's _runDailyBacktest produced
+  // both variants. Falls through to the legacy single-variant block below
+  // when only one variant ran.
+  if (backtest.current && backtest.binary && backtest.comparison) {
+    const cur = backtest.current.summary || {};
+    const bin = backtest.binary.summary || {};
+    const gap = backtest.comparison.gap;
+    const gapColor = gap > 0 ? '#22c55e' : gap < 0 ? '#ef4444' : '#94a3b8';
+    return `
+<div class="cards">
+  <div class="card">
+    <div class="big">${fmtInr(totalPnl)}</div>
+    <div class="label">Live (paper) P&amp;L</div>
+    <div class="sub">${closedTrades.length} closed · ${openTrades.length} open</div>
+  </div>
+  <div class="card">
+    <div class="big" style="color:${cur.netPnl >= 0 ? '#22c55e' : '#ef4444'}">${fmtInr(cur.netPnl || 0)}</div>
+    <div class="label">Backtest CURRENT (composite scoring)</div>
+    <div class="sub">${cur.tradeCount || 0} trades · ${cur.winRate || 0}% win rate</div>
+  </div>
+  <div class="card">
+    <div class="big" style="color:${bin.netPnl >= 0 ? '#22c55e' : '#ef4444'}">${fmtInr(bin.netPnl || 0)}</div>
+    <div class="label">Backtest BINARY-only (Varsity Ch19 checklist)</div>
+    <div class="sub">${bin.tradeCount || 0} trades · ${bin.winRate || 0}% win rate</div>
+  </div>
+  <div class="card">
+    <div class="big" style="color:${gapColor}">${gap > 0 ? '+' : ''}${fmtInr(gap)}</div>
+    <div class="label">Binary − Current gap</div>
+    <div class="sub">${esc(backtest.comparison.gapDirection.replace(/_/g, ' '))}</div>
+  </div>
+</div>
+<div style="margin-top:10px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.02);font-size:12px;color:var(--text2);line-height:1.5">
+  <b style="color:${gapColor}">Verdict:</b> ${esc(backtest.comparison.interpretation)}
+</div>
+${cur.setupBreakdown && Object.keys(cur.setupBreakdown).length ? `
+<div style="margin-top:14px;font-size:13px;font-weight:700;color:var(--text)">Setup breakdown — current scoring</div>
+<table style="margin-top:6px">
+  <thead><tr><th>Setup</th><th>Trades</th><th>Win rate</th><th>Net P&amp;L</th></tr></thead>
+  <tbody>
+    ${Object.entries(cur.setupBreakdown).map(([setup, m]) => `
+      <tr>
+        <td><strong>${esc(setup)}</strong></td>
+        <td>${m.count}</td>
+        <td>${m.winRate}%</td>
+        <td class="${m.netPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(m.netPnl)}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>` : ''}
+${bin.setupBreakdown && Object.keys(bin.setupBreakdown).length ? `
+<div style="margin-top:14px;font-size:13px;font-weight:700;color:var(--text)">Setup breakdown — binary-only</div>
+<table style="margin-top:6px">
+  <thead><tr><th>Setup</th><th>Trades</th><th>Win rate</th><th>Net P&amp;L</th></tr></thead>
+  <tbody>
+    ${Object.entries(bin.setupBreakdown).map(([setup, m]) => `
+      <tr>
+        <td><strong>${esc(setup)}</strong></td>
+        <td>${m.count}</td>
+        <td>${m.winRate}%</td>
+        <td class="${m.netPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(m.netPnl)}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>` : ''}
+<div class="muted" style="margin-top:8px;font-size:12px">
+  Capital ₹${(backtest.current.config && backtest.current.config.capital || 100000).toLocaleString('en-IN')} ·
+  Min score (current path) ${(backtest.current.config && backtest.current.config.minScore || 0)} ·
+  Binary path: requires ≥4 of 5 Varsity Ch19 checks (price action · volume · S/R context · indicators · R:R) ·
+  Slippage 5bps/side · Brokerage ₹40/RT
+</div>
+`;
+  }
   const s = backtest.summary || {};
   if (s.error) return `<div class="empty">Backtest skipped: ${esc(s.error)}</div>`;
   const liveNetPnl = totalPnl;
@@ -12615,6 +12721,14 @@ function scoreDayTrade(candles, sym, ctx) {
     // Overall
     dayTradeScore: overall,
     verdict, verdictColor,
+    // Varsity M2 Ch 19 binary checklist — exposed for backtest binary-only mode
+    // (2026-04-27). 5 yes/no checks: price action, volume, S/R context,
+    // indicator alignment, R:R. Passing ≥4 of 5 is the Varsity criterion for
+    // "trade this setup". Used as a hard gate in binary-only backtest replay
+    // to test the hypothesis that scoreDayTrade's composite score adds noise
+    // vs. just the binary checklist.
+    ch19PassCount,
+    ch19Items: ch19,
     bestSetup: best.type, bestSetupEmoji: best.emoji, bestSetupScore: best.score,
     bestDetail: best.detail.join(' · '),
     // All setup scores

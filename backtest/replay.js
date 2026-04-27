@@ -45,6 +45,13 @@ const DEFAULT_CFG = Object.freeze({
   // module, the backtest can't match production exactly; setting threshold
   // to 0 at least produces output to compare.
   minScoreThreshold: 0,
+  // Binary-only mode (2026-04-27) — strips numeric score thresholds and
+  // requires only the Varsity M2 Ch 19 binary checklist (≥4 of 5: price
+  // action, volume, S/R context, indicators, R:R) plus scoreDayTrade's
+  // built-in preflight safety gates. Used to A/B test whether the
+  // composite scoring system adds signal vs. just the binary checklist.
+  binaryOnly: false,
+  ch19MinPassCount: 4,
 });
 
 /**
@@ -157,6 +164,12 @@ async function replayDate(dateStr, deps, cfg = {}) {
       }
       if (!result || !result.dayTradeScore) continue;
       if (result.dayTradeScore < C.minScoreThreshold) continue;
+      // Binary-only gate: require ≥N of 5 Varsity Ch19 binary checks to
+      // pass. When false, this gate is a no-op (composite-score path).
+      if (C.binaryOnly) {
+        const ch19 = (typeof result.ch19PassCount === 'number') ? result.ch19PassCount : 0;
+        if (ch19 < C.ch19MinPassCount) continue;
+      }
 
       // Don't re-enter same symbol in same session
       if (enteredToday.has(sym)) continue;
