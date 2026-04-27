@@ -28,6 +28,7 @@ const mlLogger  = require("./ml-logger");
 // with MFE / MAE / forward returns / time-to-barrier. Lookahead-safe by
 // construction (only processes snapshots older than 31 minutes).
 const outcomeEngine = require("./outcome-engine");
+const backtestReplay = require("./backtest/replay");
 
 // ── Risk flags (forward-looking demotions on top of trailing-ratio scorers) ──
 // Seven detectors: earnings-cliff, price/PAT divergence, IPO lock-in expiry,
@@ -7931,6 +7932,103 @@ app.get("/api/trade-forensics", async (req, res) => {
   }
 });
 
+// ── Backtest replay — answers "would the strategy have made money today?" ─
+// Walks historical candles_5m for an IST date through the live in-process
+// scoreDayTrade() function. No live order side effects. Returns trade list +
+// summary (win rate, P&L, setup breakdown).
+//
+// Used by the daily report (shows backtest result alongside actual live
+// trades so we can detect strategy drift, infrastructure issues, or both).
+//
+//   GET /api/admin/backtest-replay?date=YYYY-MM-DD
+//   GET /api/admin/backtest-replay                  (defaults to today IST)
+// In-flight guard — backtest is heavy (213K rows, 42K scoreDayTrade calls).
+// Without this guard, two concurrent /api/admin/daily-report opens would
+// both run the replay simultaneously and starve the PG pool (max=5).
+let _backtestRunning = false;
+
+async function _loadBacktestCandlesForDate(dateStr) {
+  // Need previous trading day's bars too so we have ≥30 candles by 9:15.
+  // Pull last 5 trading days of 5-min bars and let the replay slice per-bar.
+  const { rows } = await pool.query(
+    `SELECT sym, ts, open, high, low, close, volume
+       FROM candles_5m
+      WHERE ts >= $1::date - INTERVAL '5 days'
+        AND ts <  $1::date + INTERVAL '1 day'
+      ORDER BY sym, ts ASC`,
+    [dateStr]
+  );
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.sym)) map.set(r.sym, []);
+    map.get(r.sym).push({
+      ts: r.ts, open: +r.open, high: +r.high, low: +r.low,
+      close: +r.close, volume: +r.volume,
+    });
+  }
+  return map;
+}
+
+// Run the backtest with all the safety gates required to call it on shiva-ui.
+// Returns either a { trades, summary } payload or { skipped: 'reason' }.
+//
+// Gates (in order):
+//   1. Market hours — refuse to run during 9:15-15:30 IST. The replay loop
+//      blocks the event loop for 5-15s and would delay live trades.
+//   2. Today/yesterday only — older dates suffer state contamination
+//      (today's _dayTradeSLCooldown / _dayTradeKillSwitch / BSE events
+//      leak into the historical scoreDayTrade calls). Comparable only when
+//      backtest state matches live state, which is true for today/yesterday.
+//   3. In-flight guard — refuse a second concurrent invocation.
+async function _runDailyBacktest(istDate) {
+  if (typeof isMarketOpen === 'function' && isMarketOpen()) {
+    return { skipped: 'market_open_replay_would_stall_live_trading' };
+  }
+  // Compute IST-day age of the requested date
+  const istNowMs = Date.now() + 5.5 * 3600 * 1000;
+  const istToday = new Date(istNowMs).toISOString().slice(0, 10);
+  const dayDiff = Math.round(
+    (new Date(istToday + 'T00:00:00Z').getTime() - new Date(istDate + 'T00:00:00Z').getTime()) / 86400000
+  );
+  if (dayDiff < 0 || dayDiff > 1) {
+    return { skipped: 'older_dates_have_state_drift_today_or_yesterday_only' };
+  }
+  if (_backtestRunning) {
+    return { skipped: 'another_backtest_already_running' };
+  }
+  _backtestRunning = true;
+  try {
+    return await backtestReplay.replayDate(istDate, {
+      loadCandlesForDate: _loadBacktestCandlesForDate,
+      scoreDayTrade,
+      sectorOf: (sym) => {
+        const f = stockFundamentals[sym];
+        return (f && f.sector) || 'UNKNOWN';
+      },
+      ctxAt: () => ({ niftyDailyChange: _niftyDailyChangePct || 0 }),
+      onError: () => {},   // silent — error count rolls into summary if needed
+    });
+  } finally {
+    _backtestRunning = false;
+  }
+}
+
+app.get('/api/admin/backtest-replay', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const istOffsetMs = 5.5 * 3600 * 1000;
+    const istNow = new Date(Date.now() + istOffsetMs);
+    const dateStr = (req.query.date ? String(req.query.date) : istNow.toISOString()).slice(0, 10);
+    const result = await _runDailyBacktest(dateStr);
+    res.json(result);
+  } catch (e) {
+    console.error('/api/admin/backtest-replay error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Daily Report — end-to-end end-of-day observability page ──────────────
 // Single-URL consolidated view answering: did the pipeline run? were
 // candidates picked up? did trades happen? why-or-why-not? what broke?
@@ -8216,6 +8314,23 @@ app.get('/api/admin/daily-report', async (req, res) => {
       },
     ];
 
+    // ── Backtest replay — what-the-strategy-would-have-done ──────────────
+    // Runs scoreDayTrade against stored 5-min candles, simulates
+    // entries/exits, returns trade list + summary. Compared against actual
+    // live trades to detect strategy drift vs infrastructure failure.
+    // _runDailyBacktest enforces all the safety gates (market-hours,
+    // today/yesterday only, in-flight singleton). Wrapped so a backtest
+    // crash doesn't break the daily report.
+    let backtest = null;
+    if (req.query.backtest !== '0') {
+      try {
+        backtest = await _runDailyBacktest(istDate);
+      } catch (e) {
+        console.warn('daily-report backtest failed:', e.message.slice(0, 160));
+        backtest = { error: e.message };
+      }
+    }
+
     // JSON mode
     if (String(req.query.format || '').toLowerCase() === 'json') {
       return res.json({
@@ -8232,6 +8347,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
           errUnique: errList.length, errTotal,
           vix: vixVal, niftyPct: typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null,
         },
+        backtest,
         regime: {
           intradayLatest:  intradayRegime,
           intradayDominant: dominantRegime,
@@ -8437,6 +8553,88 @@ app.get('/api/admin/daily-report', async (req, res) => {
     </div>
   `).join('')}
 </div>
+
+<!-- Backtest replay — what the strategy WOULD have done -->
+<h2>Backtest replay <span class="muted" style="font-weight:normal;font-size:13px">— same code, same candles, no live order side-effects</span></h2>
+${(() => {
+  if (!backtest) return `<div class="empty">Backtest disabled (append <code>?backtest=0</code>).</div>`;
+  if (backtest.skipped) {
+    const reason = String(backtest.skipped).replace(/_/g, ' ');
+    return `<div class="empty">Backtest skipped: ${esc(reason)}. Re-run after market close, or for today/yesterday only.</div>`;
+  }
+  if (backtest.error) return `<div class="empty" style="color:#ef4444">Backtest error: ${esc(backtest.error)}</div>`;
+  const s = backtest.summary || {};
+  if (s.error) return `<div class="empty">Backtest skipped: ${esc(s.error)}</div>`;
+  const liveNetPnl = totalPnl;
+  const btNetPnl = Number(s.netPnl || 0);
+  const gapInr = liveNetPnl - btNetPnl;
+  const verdictColor = btNetPnl > 0 ? '#22c55e' : btNetPnl < 0 ? '#ef4444' : '#94a3b8';
+  return `
+<div class="cards">
+  <div class="card">
+    <div class="big" style="color:${verdictColor}">${fmtInr(btNetPnl)}</div>
+    <div class="label">Backtest net P&amp;L</div>
+    <div class="sub">${s.tradeCount} trades · ${s.winRate}% win rate</div>
+  </div>
+  <div class="card">
+    <div class="big">${fmtInr(liveNetPnl)}</div>
+    <div class="label">Live net P&amp;L (actual)</div>
+    <div class="sub">${closedTrades.length} closed · ${openTrades.length} open</div>
+  </div>
+  <div class="card">
+    <div class="big" style="color:${gapInr === 0 ? '#94a3b8' : gapInr > 0 ? '#22c55e' : '#ef4444'}">${fmtInr(gapInr)}</div>
+    <div class="label">Live − Backtest gap</div>
+    <div class="sub">${gapInr > 0 ? 'live outperformed' : gapInr < 0 ? 'live underperformed' : 'matched'}</div>
+  </div>
+  <div class="card">
+    <div class="big">${s.wins}/${s.losses}</div>
+    <div class="label">Wins / Losses</div>
+    <div class="sub">best ${s.bestTrade ? esc(s.bestTrade.sym) + ' ' + fmtInr(s.bestTrade.pnl) : '—'} · worst ${s.worstTrade ? esc(s.worstTrade.sym) + ' ' + fmtInr(s.worstTrade.pnl) : '—'}</div>
+  </div>
+</div>
+${s.setupBreakdown && Object.keys(s.setupBreakdown).length ? `
+<table style="margin-top:14px">
+  <thead><tr><th>Setup</th><th>Trades</th><th>Win rate</th><th>Net P&amp;L</th></tr></thead>
+  <tbody>
+    ${Object.entries(s.setupBreakdown).map(([setup, m]) => `
+      <tr>
+        <td><strong>${esc(setup)}</strong></td>
+        <td>${m.count}</td>
+        <td>${m.winRate}%</td>
+        <td class="${m.netPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(m.netPnl)}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>` : ''}
+<div class="muted" style="margin-top:8px;font-size:12px">
+  Capital ₹${(backtest.config && backtest.config.capital || 100000).toLocaleString('en-IN')} ·
+  Min score ${(backtest.config && backtest.config.minScore || 60)} ·
+  Max concurrent ${(backtest.config && backtest.config.maxConcurrent || 3)} ·
+  Slippage 5bps/side · Brokerage ₹40/RT
+</div>
+${backtest.trades && backtest.trades.length ? `
+<details style="margin-top:12px">
+  <summary style="cursor:pointer;color:var(--text2)">Show all ${backtest.trades.length} simulated trades</summary>
+  <table style="margin-top:8px">
+    <thead><tr><th>Symbol</th><th>Setup</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P&amp;L</th><th>%</th><th>Hold</th></tr></thead>
+    <tbody>
+      ${backtest.trades.map(t => `
+        <tr>
+          <td><strong>${esc(t.sym)}</strong></td>
+          <td>${esc(t.setup || '—')}</td>
+          <td>${fmtNum(t.entryPrice)}</td>
+          <td>${fmtNum(t.exitPrice)}</td>
+          <td><span class="tag">${esc(t.exitReason)}</span></td>
+          <td class="${t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(t.pnl)}</td>
+          <td>${fmtNum(t.pnlPct)}%</td>
+          <td>${t.holdMins}m</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+</details>` : ''}
+  `;
+})()}
 
 <!-- Trades -->
 <h2>Trades (${tradesList.length})</h2>
