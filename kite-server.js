@@ -4212,9 +4212,15 @@ async function scanAndTrade() {
               // still fill, but tight enough to cancel on runaway slippage. Exits
               // especially benefit from getting filled even if price is moving
               // against us; a cancelled exit leaves a stale open position.
+              //
+              // 2026-04-27 — switched product CNC → MIS to match the BUY entry.
+              // CNC positions held overnight when neither SL nor target hit
+              // intraday; MIS auto-squares at 3:20 PM IST so the strategy stays
+              // intraday by construction. Any pre-existing CNC positions must
+              // be closed manually in Kite — exits against them would fail.
               const order = await placeOrderViaProxy('regular', {
                 exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'SELL',
-                quantity: openPos.quantity, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
+                quantity: openPos.quantity, product: 'MIS', order_type: 'MARKET', validity: 'DAY',
                 market_protection: 2,
               });
               const orderId = order.order_id || order.orderId || '';
@@ -4742,9 +4748,15 @@ async function scanAndTrade() {
     // requires market_protection for MARKET orders since 2026-04-21.
     if (LIVE_TRADING && kite) {
       try {
+        // product: 'MIS' — intraday-with-auto-squareoff. Zerodha closes any
+        // remaining MIS positions at 3:20 PM IST. Switched from CNC on
+        // 2026-04-27 because CNC held positions overnight when neither SL
+        // nor target hit intraday (INOXWIND + VOLTAS sat as CNC delivery
+        // overnight on 2026-04-27, ₹37,763 unintended exposure). MIS keeps
+        // the strategy honestly intraday and gives ~5x intraday margin.
         const order = await placeOrderViaProxy('regular', {
           exchange: 'NSE', tradingsymbol: stock.sym, transaction_type: 'BUY',
-          quantity: qty, product: 'CNC', order_type: 'MARKET', validity: 'DAY',
+          quantity: qty, product: 'MIS', order_type: 'MARKET', validity: 'DAY',
           market_protection: 2,
         });
         const orderId = order.order_id || order.orderId || '';
@@ -7705,14 +7717,15 @@ app.post("/api/test-buy", express.json(), async (req, res) => {
 
     if (!price) return res.status(400).json({ error: `Cannot get price for ${sym}` });
 
-    console.log(`🧪 TEST BUY: ${qty} x ${sym} @ ₹${price} (LIMIT, CNC)`);
+    console.log(`🧪 TEST BUY: ${qty} x ${sym} @ ₹${price} (LIMIT, MIS)`);
 
+    // MIS to match production (scanAndTrade) entries — switched 2026-04-27.
     const order = await placeOrderViaProxy('regular', {
       exchange: 'NSE',
       tradingsymbol: sym,
       transaction_type: 'BUY',
       quantity: qty,
-      product: 'CNC',
+      product: 'MIS',
       order_type: 'LIMIT',
       price: price,
       validity: 'DAY',
