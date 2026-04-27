@@ -8854,19 +8854,79 @@ app.get("/regime", (req,res)=>{
 app.post("/scan-now", (req,res)=>{ res.json({message:"Scan started"}); scanAndTrade(); });
 
 // ── Structure Filter + LLM review visibility ──
-app.get("/api/candidates/latest", (req, res) => {
-  res.json({
-    candidates: _latestCandidateAnalyses || [],
-    stats:      _latestFilterStats      || null,
-    config: {
-      structureFilterEnabled: STRUCTURE_CONFIG.structureFilterEnabled,
-      llmFilterEnabled:       STRUCTURE_CONFIG.llmFilterEnabled,
-      rejectIfResistanceWithinPct: STRUCTURE_CONFIG.rejectIfResistanceWithinPct,
-      llmTopCandidatesPerScan:     STRUCTURE_CONFIG.llmTopCandidatesPerScan,
-      llmMinScoreThreshold:        STRUCTURE_CONFIG.llmMinScoreThreshold,
-    },
-    scannedAt: _latestCandidateAnalyses?.[0]?.scannedAt || null,
-  });
+app.get("/api/candidates/latest", async (req, res) => {
+  const config = {
+    structureFilterEnabled: STRUCTURE_CONFIG.structureFilterEnabled,
+    llmFilterEnabled:       STRUCTURE_CONFIG.llmFilterEnabled,
+    rejectIfResistanceWithinPct: STRUCTURE_CONFIG.rejectIfResistanceWithinPct,
+    llmTopCandidatesPerScan:     STRUCTURE_CONFIG.llmTopCandidatesPerScan,
+    llmMinScoreThreshold:        STRUCTURE_CONFIG.llmMinScoreThreshold,
+  };
+
+  // Fast path — in-memory cache populated by the most recent scanAndTrade
+  // Pass 1.5 in this Node process. Empty after every redeploy until the
+  // next market-hours scan.
+  if (_latestCandidateAnalyses && _latestCandidateAnalyses.length > 0) {
+    return res.json({
+      candidates: _latestCandidateAnalyses,
+      stats:      _latestFilterStats || null,
+      config,
+      scannedAt: _latestCandidateAnalyses[0]?.scannedAt || null,
+      source:    'memory',
+    });
+  }
+
+  // Fallback (2026-04-27) — read the most recent scan's rows from
+  // candidate_analyses so the Candidates tab isn't blank after a redeploy
+  // outside market hours. Pulls the latest distinct scan_ts and returns
+  // every row from it (matches the in-memory contract — one full scan).
+  try {
+    const { rows: tsRows } = await pool.query(
+      `SELECT MAX(scan_ts) AS scan_ts FROM candidate_analyses
+        WHERE scan_ts > NOW() - INTERVAL '24 hours'`
+    );
+    const lastScanTs = tsRows && tsRows[0] && tsRows[0].scan_ts;
+    if (!lastScanTs) {
+      return res.json({ candidates: [], stats: null, config, scannedAt: null, source: 'empty' });
+    }
+    const { rows } = await pool.query(
+      `SELECT scan_ts, symbol, name, strategy, regime,
+              original_score, adjusted_score, entry_price, confidence,
+              final_decision, reject_reason,
+              structure, llm_decision, adjustments, decision_object
+         FROM candidate_analyses
+        WHERE scan_ts = $1
+        ORDER BY adjusted_score DESC NULLS LAST, original_score DESC NULLS LAST`,
+      [lastScanTs]
+    );
+    const candidates = rows.map(r => ({
+      symbol:         r.symbol,
+      name:           r.name,
+      strategy:       r.strategy,
+      regime:         r.regime,
+      originalScore:  r.original_score,
+      adjustedScore:  r.adjusted_score,
+      adjustments:    r.adjustments || [],
+      structure:      r.structure || null,
+      llmDecision:    r.llm_decision || null,
+      finalDecision:  r.final_decision,
+      rejectReason:   r.reject_reason,
+      confidence:     r.confidence,
+      decisionObject: r.decision_object || null,
+      entryPrice:     r.entry_price,
+      scannedAt:      new Date(r.scan_ts).toISOString(),
+    }));
+    res.json({
+      candidates,
+      stats:    null,                // filterStats is in-memory only
+      config,
+      scannedAt: candidates[0]?.scannedAt || null,
+      source:   'db',
+    });
+  } catch (e) {
+    console.warn('/api/candidates/latest db fallback failed:', e.message);
+    res.json({ candidates: [], stats: null, config, scannedAt: null, source: 'error', error: e.message });
+  }
 });
 
 // 2026-04-21 — historical candidate_analyses query. Replaces the "only latest
