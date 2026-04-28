@@ -5175,12 +5175,41 @@ async function refreshInstruments() {
   try {
     console.log("📋 Fetching instrument tokens from Kite...");
     const instruments = await kite.getInstruments("NSE");
-    instruments.forEach(inst => {
+
+    // ── 2026-04-28 — atomic-swap pattern ─────────────────────────────────
+    // Build a fresh map locally, sanity-check its size, then swap. Avoids
+    // the previous "merge into existing" pattern which kept stale entries
+    // when Kite returned a partial/truncated response. Symptom of the old
+    // bug: ~55 stocks showing "invalid token" mid-day on 2026-04-28 because
+    // their tokens churned but the in-memory map kept yesterday's values.
+    const fresh = {};
+    let eqCount = 0;
+    for (const inst of (instruments || [])) {
       if (inst.exchange === "NSE" && inst.instrument_type === "EQ") {
-        validTokens[inst.tradingsymbol] = inst.instrument_token;
+        fresh[inst.tradingsymbol] = inst.instrument_token;
+        eqCount++;
       }
-    });
-    console.log(`✅ Loaded ${Object.keys(validTokens).length} NSE instrument tokens`);
+    }
+    // Sanity gate — NSE has ~2500 listed equities. If we got far fewer
+    // than expected, the Kite response is truncated/broken; keep existing
+    // tokens rather than swapping in a malformed map.
+    const MIN_EXPECTED_EQ = 1500;
+    if (eqCount < MIN_EXPECTED_EQ) {
+      console.error(`⚠ refreshInstruments: only ${eqCount} EQ tokens received (expected ≥${MIN_EXPECTED_EQ}). Likely truncated response — KEEPING existing tokens.`);
+      return { ok: false, reason: 'truncated_response', count: eqCount, kept: Object.keys(validTokens).length };
+    }
+    // Diff against current — log how many tokens changed (useful for spotting
+    // the next time tokens churn, e.g. F&O monthly expiry).
+    let added = 0, changed = 0, removed = 0;
+    for (const sym of Object.keys(fresh)) {
+      if (!validTokens[sym]) added++;
+      else if (validTokens[sym] !== fresh[sym]) changed++;
+    }
+    for (const sym of Object.keys(validTokens)) {
+      if (!fresh[sym]) removed++;
+    }
+    validTokens = fresh;
+    console.log(`✅ Loaded ${eqCount} NSE instrument tokens (+${added} new · ${changed} changed · ${removed} removed)`);
 
     // Persist to stock_instruments table for all UNIVERSE stocks
     for (const s of UNIVERSE) {
@@ -5199,16 +5228,19 @@ async function refreshInstruments() {
 
     // 2026-04-20 — now that validTokens is freshly populated, expand the live
     // ticker subscription from the hardcoded INSTRUMENTS (~145) to the full
-    // UNIVERSE (~568). Safe to call even if ticker hasn't connected yet — the
-    // resubscribe helper returns silently in that case and startTicker will
-    // pick up validTokens automatically on its next connect.
+    // UNIVERSE (~568).
     try {
       const r = resubscribeTickerToUniverse();
       if (r && r.resubscribed) console.log(`📡 Ticker coverage expanded → ${r.count} tokens`);
     } catch (e) { console.error('Ticker resubscribe threw:', e.message); }
+
+    return { ok: true, count: eqCount, added, changed, removed };
   } catch(e) {
-    console.error("Could not fetch instruments:", e.message);
-    validTokens = {...INSTRUMENTS};
+    console.error("⚠ Could not fetch instruments:", e.message, "— keeping existing validTokens (last good state)");
+    // 2026-04-28 — was: validTokens = {...INSTRUMENTS} (hardcoded ~145 only).
+    // That truncated us to a tiny map, breaking 400+ stocks. Better to keep
+    // last successful state (which may be stale by hours but covers UNIVERSE).
+    return { ok: false, reason: 'fetch_failed', error: e.message };
   }
 }
 
@@ -21829,10 +21861,26 @@ app.get('/api/admin/pipeline', async (req, res) => {
 
 // Force refresh endpoint — runs the full pipeline
 app.post('/api/admin/force-refresh', async (req, res) => {
-  const what = req.query.what || 'all'; // all, universe, fundamentals, scoring, mf
+  const what = req.query.what || 'all'; // all, universe, fundamentals, scoring, mf, instruments
+  // 2026-04-28 — instruments path returns synchronously with the result so
+  // operators can see the count + diff without grepping logs. Other paths
+  // are fire-and-forget (acknowledged immediately).
+  if (what === 'instruments') {
+    try {
+      const r = await refreshInstruments();
+      return res.json({ ok: !!(r && r.ok), result: r || { reason: 'no_result' } });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  }
   res.json({ message: `Force refresh started: ${what}` });
   try {
     if (what === 'all' || what === 'universe') await refreshUniverseFromNSE();
+    if (what === 'all') {
+      // refreshInstruments included in 'all' so a full refresh fixes stale
+      // token issues without restarting the container.
+      refreshInstruments().catch(e => console.error('Force instruments error:', e.message));
+    }
     if (what === 'all' || what === 'scoring') refreshAllFundamentals();
     if (what === 'all' || what === 'mf') buildMFCache();
     if (what === 'all' || what === 'fundamentals') {
