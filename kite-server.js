@@ -10496,7 +10496,14 @@ async function fetchKiteDaily(sym) {
   const token = validTokens[sym] || INSTRUMENTS[sym];
   if (!token) { return null; }
   const to   = new Date();
-  const from = new Date(Date.now() - 5*365*24*60*60*1000); // 5 years back (safe range)
+  // 2026-04-28 — reduced from 5 years to 18 months. The 5-year range pulled
+  // ~1240 candles per stock; 51 stocks × 1240 = ~63K candle records per
+  // Tier 1 scan, saturating the DO proxy with ECONNABORTED cascades and
+  // breaking TA entirely (TA 0ok/51fail observed all market day on
+  // 2026-04-28). 18 months covers all our indicators (200-SMA, EMAs need
+  // 400-500 days for stable convergence, 52-week high/low needs 252).
+  // Cuts payload to ~30% of previous, ~370 candles per stock.
+  const from = new Date(Date.now() - 18*30*24*60*60*1000); // 18 months back
   const toStr = to.toISOString().split('T')[0];
   const fromStr = from.toISOString().split('T')[0];
 

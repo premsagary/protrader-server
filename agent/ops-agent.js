@@ -99,6 +99,7 @@ let _running = false;              // tick concurrency guard
 let _lastTick = null;
 let _tickCount = 0;
 let _enabled = false;
+let _startedAt = 0;                // boot timestamp — used for cold-start grace
 
 // Persistence trackers — { [kind]: { count, firstSeenAt } }
 const _pending = new Map();
@@ -490,6 +491,20 @@ async function _tick() {
   try {
     if (!_inOpsWindow()) return;
 
+    // ── Cold-start grace period (2026-04-28) ─────────────────────────────
+    // Skip detector-driven auto-remediation for the first 3 minutes after
+    // start(). On 2026-04-28 we observed ops-agent firing PIPELINE_STALLED
+    // at 04:18:02 — exactly 60s after _intervalId started — but BEFORE
+    // stockFundamentals had finished loading at 04:19:03. Result was a
+    // RERUN_PIPELINE on 0 symbols ("Pipeline: no symbols matched"),
+    // wasted cycles, and noisy false-positive incidents. Three minutes of
+    // grace covers the typical boot window (DB hydrate + universe load +
+    // instrument refresh + first scan completion).
+    const COLD_START_GRACE_MS = 3 * 60 * 1000;
+    if (_startedAt && (Date.now() - _startedAt) < COLD_START_GRACE_MS) {
+      return;
+    }
+
     const runId = `ops-${Date.now().toString(36)}`;
     const snap = await _buildSnapshot(_deps);
 
@@ -600,10 +615,12 @@ function start(deps) {
   if (!deps || !deps.pool) return { started: false, reason: 'pool_required' };
   _deps = deps;
   _enabled = true;
+  _startedAt = Date.now();
   _intervalId = setInterval(() => { _tick().catch(() => {}); }, TICK_INTERVAL_MS);
   // Fire one tick immediately so the first incident doesn't wait 60s.
+  // (Tick will short-circuit during the cold-start grace period — see _tick.)
   _tick().catch(() => {});
-  console.log(`🩺 ops-agent: started (every ${TICK_INTERVAL_MS / 1000}s, window 09:00-16:30 IST)`);
+  console.log(`🩺 ops-agent: started (every ${TICK_INTERVAL_MS / 1000}s, window 09:00-16:30 IST, 3min cold-start grace)`);
   return { started: true, intervalMs: TICK_INTERVAL_MS };
 }
 
