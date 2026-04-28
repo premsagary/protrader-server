@@ -10607,9 +10607,15 @@ async function ingestNifty50OneMinCandles() {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
       if (!token) { symsFail++; return; }
       try {
+        // 2026-04-28 — bumped 5s → 15s. Original 5s was too aggressive
+        // under proxy load: today's daily-fetch saturation caused every
+        // 1-min fetch to hit the timeout, producing "0/51 syms, 0 bars"
+        // recurring across all market hours. 15s matches the half-budget
+        // of the 30s daily-fetch timeout — fast enough to bail on a real
+        // hang, slow enough to ride out moderate proxy congestion.
         const candles = await Promise.race([
           kite.getHistoricalData(token, 'minute', fromStr, toStr),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))
         ]).catch(() => null);
         if (!candles || candles.length === 0) { symsFail++; return; }
         const bars = candles.map(c => ({
