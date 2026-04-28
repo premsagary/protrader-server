@@ -8171,13 +8171,23 @@ app.get('/api/admin/daily-report', async (req, res) => {
       orphanExitCheck,
       pipelineRuns,
     ] = await Promise.all([
+      // 2026-04-28 — UNION live + paper. Trades go to live_trades when
+      // LIVE_TRADING=true, paper_trades when false. Without UNION the daily
+      // report shows 0 trades during paper mode even when the engine fires.
+      // trade_mode column tags each row so the UI can label them.
       safeQuery(
         `SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
-                exit_reason, status, order_id, exit_order_id
-         FROM live_trades
-         WHERE entry_time >= $1 AND entry_time < $2
-         ORDER BY entry_time DESC`,
+                exit_reason, status, order_id, exit_order_id, 'live'::text AS trade_mode
+           FROM live_trades
+          WHERE entry_time >= $1 AND entry_time < $2
+          UNION ALL
+         SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
+                exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
+                exit_reason, status, NULL::varchar AS order_id, NULL::varchar AS exit_order_id, 'paper'::text AS trade_mode
+           FROM paper_trades
+          WHERE entry_time >= $1 AND entry_time < $2
+          ORDER BY entry_time DESC`,
         [start, end]
       ),
       safeQuery(
@@ -8236,18 +8246,25 @@ app.get('/api/admin/daily-report', async (req, res) => {
          LIMIT 10`,
         [start, end]
       ),
-      // HONASA-class regression: duplicate BUY on same symbol same day
+      // HONASA-class regression: duplicate BUY on same symbol same day.
+      // Covers both live + paper so paper-mode dup-bugs surface too.
       safeQuery(
-        `SELECT symbol, COUNT(*)::int AS n
-         FROM live_trades
-         WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
+        `SELECT symbol, COUNT(*)::int AS n FROM (
+            SELECT symbol FROM live_trades
+             WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
+            UNION ALL
+            SELECT symbol FROM paper_trades
+             WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
+          ) t
          GROUP BY symbol
          HAVING COUNT(*) > 1`,
         [start, end]
       ),
       // Orphan-exit regression: status=OPEN but exit_order_id already set.
-      // Scope to today's IST day so the report reflects today, not historical
-      // stragglers that may persist across days.
+      // Scope to today's IST day. Only live_trades has order_id columns
+      // (paper_trades doesn't fire real Kite orders), so this stays
+      // live-only — orphan-exit is a Kite-side state mismatch, paper has
+      // no equivalent failure mode.
       safeQuery(
         `SELECT id, symbol, entry_time, exit_order_id, status
          FROM live_trades
