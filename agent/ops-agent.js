@@ -72,6 +72,8 @@ const INCIDENT_KINDS = Object.freeze({
   PIPELINE_STALLED:    'PIPELINE_STALLED',
   CACHE_EMPTY:         'CACHE_EMPTY',
   KITE_TOKEN_EXPIRED:  'KITE_TOKEN_EXPIRED',
+  KITE_TOKEN_AGING:    'KITE_TOKEN_AGING',          // 2026-04-29 — daily 08:30 cron warning
+  LIVE_EOD_UNRECONCILED: 'LIVE_EOD_UNRECONCILED',   // 2026-04-29 — 15:25 cron, MIS auto-square miss
   CANDIDATES_EMPTY:    'CANDIDATES_EMPTY',
   NO_TRADES_BY_1030:   'NO_TRADES_BY_1030',
   DRAWDOWN_BREACH:     'DRAWDOWN_BREACH',
@@ -224,6 +226,9 @@ function dKiteTokenExpired(snap) {
 
 function dCandidatesEmpty(snap) {
   if (snap.minsSinceOpen < 15) return { hit: false };
+  // 2026-04-29 — boot-grace: if we booted in the last 5 min, the
+  // candidate cache may not have hydrated yet. Skip to avoid false fire.
+  if ((snap.secsSinceBoot || 0) < 300) return { hit: false };
   // Candidates count comes from most recent scanAndTrade run.
   const n = snap.candidatesCount;
   if (n == null) return { hit: false };
@@ -237,6 +242,10 @@ function dNoTradesBy1030(snap) {
   // 10:30 IST = 75 min after open.
   if (snap.minsSinceOpen < 75) return { hit: false };
   if (snap.minsSinceOpen > 120) return { hit: false }; // only fires in 10:30-11:00 window
+  // 2026-04-29 — boot-grace: a Railway redeploy mid-day means
+  // tradesTodayCount=0 not because we failed to trade but because we
+  // haven't queried the DB yet. Wait 5 min after boot before firing.
+  if ((snap.secsSinceBoot || 0) < 300) return { hit: false };
   return {
     hit: snap.tradesTodayCount === 0,
     evidence: {
@@ -249,6 +258,12 @@ function dNoTradesBy1030(snap) {
 
 function dDrawdownBreach(snap) {
   if (!snap.capital) return { hit: false };
+  // 2026-04-29 — boot grace: unrealized PnL needs livePrices warmed +
+  // pool query to complete (30s cache, but first call is async). On
+  // cold boot, both pnl values default to 0 → lossPct=0 → no fire,
+  // which is the safe direction. But we also want to avoid firing on
+  // stale state. Skip for first 5 min after boot.
+  if ((snap.secsSinceBoot || 0) < 300) return { hit: false };
   const pnl = (snap.realizedPnlToday || 0) + (snap.unrealizedPnlToday || 0);
   const lossPct = (pnl / snap.capital) * 100;
   return {
@@ -285,6 +300,10 @@ function dEodUnreconciled(snap) {
 function dStalePicks(snap) {
   if (!snap.dayTradeCacheUpdatedAt) return { hit: false };
   if (snap.minsSinceOpen < 10) return { hit: false };
+  // 2026-04-29 — boot grace: pick cache may be loaded but stale from
+  // yesterday on first boot. Wait 5 min for the unified pipeline to run
+  // and refresh the cache before judging staleness.
+  if ((snap.secsSinceBoot || 0) < 300) return { hit: false };
   const ageSec = _secSince(snap.dayTradeCacheUpdatedAt);
   return {
     hit: ageSec > CACHE_MAX_STALE_SEC,
@@ -443,6 +462,13 @@ async function _attemptAction(kind, deps, evidence) {
 // ────────────────────────────────────────────────────────────────────────────
 async function _buildSnapshot(deps) {
   const minsSinceOpen = minsSinceOpenIST();
+  // 2026-04-29 — secsSinceBoot lets detectors that depend on hydrated
+  // state (tradesTodayCount, candidatesCount, picks cache) skip when
+  // we just booted mid-day. The 3-min global cold-start grace covers
+  // detector execution but not "snap.tradesTodayCount === 0 because
+  // DB query hasn't run yet". Detectors should now check
+  // `snap.secsSinceBoot < 300` for state-dependent conditions.
+  const secsSinceBoot = _startedAt ? Math.round((Date.now() - _startedAt) / 1000) : 0;
   // 2026-04-29 — getters may now return either a value OR a Promise. Resolve
   // any Promise-returning ones in parallel so detectors see real numbers.
   // Without this, async getters land in the snap as Promise objects and
@@ -463,6 +489,7 @@ async function _buildSnapshot(deps) {
 
   const snap = {
     minsSinceOpen,
+    secsSinceBoot,
     marketOpen: typeof deps.isMarketOpen === 'function' ? Boolean(deps.isMarketOpen()) : false,
     kiteTokenPresent: Boolean(deps.getKiteToken && deps.getKiteToken()),
     agentMode: deps.getAgentMode ? deps.getAgentMode() : 'off',

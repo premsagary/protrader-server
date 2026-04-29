@@ -8549,6 +8549,17 @@ app.get('/api/admin/daily-report', async (req, res) => {
       const r = (t.regime || (t.indicators && /MOMENTUM|RANGING|BREAKOUT|TRENDING/.exec(t.indicators)?.[0]) || 'UNKNOWN');
       tradeRegimeCounts[r] = (tradeRegimeCounts[r] || 0) + 1;
     }
+    // 2026-04-29 — per-STRATEGY fire counts for fired trades. Pre-fix,
+    // 5/5 trades on 2026-04-29 were VWAP_MOMENTUM with no visibility into
+    // whether other strategies (RSI mean-rev, Bollinger, EMA cross, MACD,
+    // Supertrend, Volume Spike, Opening Range) ever fired. This breakdown
+    // tells us if the strategy router has actual diversity or if one
+    // strategy is dominating regardless of regime.
+    const tradeStrategyCounts = {};
+    for (const t of tradesList) {
+      const s = t.strategy || 'UNKNOWN';
+      tradeStrategyCounts[s] = (tradeStrategyCounts[s] || 0) + 1;
+    }
 
     const portfolioRegime = typeof marketRegime !== 'undefined' ? marketRegime : null;
     const portfolioRegimeData = (typeof marketRegimeData !== 'undefined' && marketRegimeData) || {};
@@ -8679,6 +8690,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
           // universe-dominant regime — only momentum-y stocks usually
           // cross BUY threshold even on a RANGING-dominant day.
           tradeRegimeCounts,
+          // Per-trade strategy breakdown: tells you if the strategy
+          // router has real diversity (RSI/Bollinger/EMA/MACD/etc.) or
+          // if one strategy dominates. Empty/single-key = router stuck.
+          tradeStrategyCounts,
           portfolio:       portfolioRegime,
           portfolioDetail: portfolioRegimeData,
         },
@@ -19462,9 +19477,112 @@ async function squareOffPaperTrades(reason = 'eod') {
 }
 // Cron: 15:20 IST every weekday — same time Zerodha squares off MIS.
 cron.schedule('20 15 * * 1-5', () => squareOffPaperTrades('eod-1520'), { timezone: 'Asia/Kolkata' });
+
+// 2026-04-29 — Live-trades EOD safety net. Zerodha auto-squares MIS at
+// 15:20 IST; we check 5 min later (15:25). Anything still OPEN at that
+// point means a SELL order was rejected (insufficient margin, circuit
+// breaker, network blip) and Zerodha will hand the position to the user
+// for manual exit. We DO NOT force-close the DB row — the actual stock
+// is still in the user's account. We just log a loud incident so the
+// user notices and exits manually before T+1.
+async function checkLiveTradesEodReconciled(reason = 'eod-1525') {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, symbol, quantity, entry_time, price, stop_loss, target
+         FROM live_trades WHERE status = 'OPEN'`
+    );
+    if (!rows.length) {
+      console.log(`[live-eod:${reason}] all live positions reconciled (0 OPEN)`);
+      return { reconciled: true, openCount: 0 };
+    }
+    const symbols = rows.map(r => r.symbol).join(', ');
+    console.warn(`⚠ [live-eod:${reason}] ${rows.length} live positions still OPEN past 15:20 IST: ${symbols}`);
+    // Surface as ops_incidents so the daily report flags it RED.
+    try {
+      await pool.query(
+        `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+         VALUES ('LIVE_EOD_UNRECONCILED', 'critical', $1, $2, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
+        [
+          `${rows.length} live position(s) still OPEN past 15:20 IST: ${symbols}`,
+          JSON.stringify({ count: rows.length, symbols: rows.map(r => r.symbol), ids: rows.map(r => r.id) }),
+        ]
+      );
+    } catch (e) {
+      console.warn(`[live-eod:${reason}] failed to write ops_incidents: ${e.message}`);
+    }
+    return { reconciled: false, openCount: rows.length, symbols: rows.map(r => r.symbol) };
+  } catch (e) {
+    console.warn(`[live-eod:${reason}] failed: ${e.message}`);
+    return { reconciled: null, error: e.message };
+  }
+}
+cron.schedule('25 15 * * 1-5', () => checkLiveTradesEodReconciled('eod-1525'), { timezone: 'Asia/Kolkata' });
+
+// 2026-04-29 — Kite token expiry warning. Tokens are good for ~24h;
+// official expiry is 06:00 IST next trading day. Pre-fix, the system
+// just stopped working when the token expired (KITE_TOKEN errors
+// piled up — observed 2026-04-23 → 2026-04-29 = 6 days of stale auth
+// errors). Now: at 08:30 IST every weekday, check token age and emit
+// a CRITICAL ops_incident if there's no token, or if it's > 22h old
+// (within 2h of typical expiry).
+async function checkKiteTokenFreshness(reason = 'morning') {
+  try {
+    const setAtStr = await dbGet('kite_access_token_set_at');
+    const tok = process.env.KITE_ACCESS_TOKEN;
+    const setAt = setAtStr ? Number(setAtStr) : 0;
+    const ageH  = setAt > 0 ? (Date.now() - setAt) / 3600000 : null;
+    let severity = null;
+    let summary  = null;
+    if (!tok) {
+      severity = 'critical';
+      summary  = 'Kite access token MISSING — re-auth required at /auth/login';
+    } else if (ageH == null) {
+      // 2026-04-29 — first deploy after this fix lands has no
+      // kite_access_token_set_at row. Don't fire a warn for that case
+      // on the boot path — wait for /auth/callback to set the timestamp.
+      // The morning cron will warn if it's still null after a day.
+      if (reason === 'boot') {
+        console.log(`[kite-token:${reason}] age unknown (first deploy or pre-tracking token), silent`);
+        return { healthy: null, ageH: null, summary: 'age unknown, boot-silent' };
+      }
+      severity = 'warn';
+      summary  = 'Kite token age unknown (no kite_access_token_set_at). Re-auth to set timestamp.';
+    } else if (ageH > 22) {
+      severity = 'critical';
+      summary  = `Kite token is ${ageH.toFixed(1)}h old — expires within ~2h. Re-auth at /auth/login`;
+    } else if (ageH > 18) {
+      severity = 'warn';
+      summary  = `Kite token is ${ageH.toFixed(1)}h old — re-auth recommended before expiry`;
+    } else {
+      console.log(`[kite-token:${reason}] healthy, age=${ageH.toFixed(1)}h`);
+      return { healthy: true, ageH };
+    }
+    console.warn(`⚠ [kite-token:${reason}] ${severity}: ${summary}`);
+    try {
+      await pool.query(
+        `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+         VALUES ('KITE_TOKEN_AGING', $1, $2, $3, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
+        [severity, summary, JSON.stringify({ ageH, hasToken: !!tok, setAt })]
+      );
+    } catch (e) {
+      console.warn(`[kite-token:${reason}] failed to write ops_incidents: ${e.message}`);
+    }
+    return { healthy: false, severity, ageH, summary };
+  } catch (e) {
+    console.warn(`[kite-token:${reason}] failed: ${e.message}`);
+    return { healthy: null, error: e.message };
+  }
+}
+cron.schedule('30 8 * * 1-5', () => checkKiteTokenFreshness('morning-0830'), { timezone: 'Asia/Kolkata' });
+// Also check at boot (give DB 30s to be ready)
+setTimeout(() => checkKiteTokenFreshness('boot').catch(() => {}), 30 * 1000);
 // Admin endpoint for manual squareoff (e.g. to clean up stuck post-market
 // entries from before the 2026-04-29 isMarketOpen-before-INSERT fix).
+// 2026-04-29 — admin-gated; matches pattern of other /api/admin/* routes.
 app.post('/api/admin/squareoff-paper', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
   try {
     const r = await squareOffPaperTrades(req.query.reason || 'manual');
     res.json({ ok: true, ...r });
@@ -24236,6 +24354,10 @@ app.get("/auth/callback", async(req,res)=>{
     process.env.KITE_ACCESS_TOKEN=token; kite.setAccessToken(token);
     tokenValid = true;
     await dbSet('kite_access_token', token); // persist across restarts
+    // 2026-04-29 — track token set timestamp so we can warn before expiry.
+    // Kite tokens are good for ~24h from generation (officially expire at
+    // 06:00 IST next trading day per Zerodha docs).
+    await dbSet('kite_access_token_set_at', String(Date.now()));
     startTicker(token);
     res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center">
       <h2 style="color:#22c55e">✅ Connected! Token saved to DB - survives restarts.</h2>
@@ -28560,16 +28682,39 @@ app.get('/api/ai/validation', async (req, res) => {
       return _realizedPnlCache.value;
     }
 
-    function getUnrealizedPnlToday() {
-      // Unrealized = sum of live mark-to-market deltas on open paper+live
-      // positions. Pulled from the in-memory livePrices cache to avoid an
-      // extra DB query every ops-agent tick. If cache is empty, returns 0.
+    async function getUnrealizedPnlToday() {
+      // 2026-04-29 — wired to compute MTM from open positions × livePrices.
+      // Pre-fix, this returned 0 always → drawdown detector was blind to
+      // intraday gap-down losses. Now: SUM((current - entry) × qty) across
+      // all open paper + live positions, using the in-memory livePrices
+      // tick cache. 30s cache to avoid hammering pool every ops-agent tick.
+      // entry_time bound to last 7 days as a defensive cap so a
+      // pathological row with status='OPEN' but stale entry_time can't
+      // pull the whole table on every query.
       const now = Date.now();
       if (now - _unrealizedCache.ts < _CACHE_TTL_MS) return _unrealizedCache.value;
-      // Best-effort: estimate from in-memory open trades if exposed.
-      // Falls back to 0 if no per-position MTM accessor is wired.
-      _unrealizedCache = { ts: now, value: 0 };
-      return 0;
+      let total = 0;
+      try {
+        const { rows } = await pool.query(
+          `SELECT symbol, price, quantity FROM (
+              SELECT symbol, price, quantity
+                FROM live_trades
+               WHERE status = 'OPEN' AND entry_time >= NOW() - INTERVAL '7 days'
+              UNION ALL
+              SELECT symbol, price, quantity
+                FROM paper_trades
+               WHERE status = 'OPEN' AND entry_time >= NOW() - INTERVAL '7 days'
+            ) t`
+        );
+        for (const r of rows) {
+          const cached = livePrices && livePrices[r.symbol];
+          const cur = cached && Number.isFinite(cached.price) ? Number(cached.price) : null;
+          if (cur == null) continue; // no live tick → can't MTM this one
+          total += (cur - Number(r.price)) * Number(r.quantity);
+        }
+      } catch (_) { /* keep last cached value */ }
+      _unrealizedCache = { ts: now, value: +total.toFixed(2) };
+      return _unrealizedCache.value;
     }
 
     function getVixLevel() {
