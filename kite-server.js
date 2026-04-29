@@ -1363,6 +1363,7 @@ async function refreshUniverseFromNSE() {
   const nseSyms = new Set(deduped.map(s => s.sym));
   const preserved = UNIVERSE.filter(s => !nseSyms.has(s.sym));
   UNIVERSE = [...deduped, ...preserved];
+  applyUniverseRestriction('nse-fetch');
 
   universeLastUpdate = Date.now();
   universeUpdateStatus = `updated ${new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} - ${deduped.length} stocks`;
@@ -1382,8 +1383,9 @@ async function loadUniverseFromDB() {
       const nseSyms = new Set(rows.map(r => r.sym));
       const extras  = UNIVERSE.filter(s => !nseSyms.has(s.sym));
       UNIVERSE = [...rows.map(r => ({ sym: r.sym, n: r.name, grp: r.grp, industry: r.industry })), ...extras];
-      universeUpdateStatus = `from DB table (${rows.length} stocks)`;
-      console.log(`NSE universe loaded from stock_universe table: ${rows.length} stocks`);
+      applyUniverseRestriction('db-table');
+      universeUpdateStatus = `from DB table (${rows.length} stocks, restricted to ${UNIVERSE.length})`;
+      console.log(`NSE universe loaded from stock_universe table: ${rows.length} → ${UNIVERSE.length} after group filter`);
       return true;
     }
   } catch(e) {
@@ -1402,13 +1404,36 @@ async function loadUniverseFromDB() {
     const nseSyms = new Set(parsed.map(s => s.sym));
     const extras  = UNIVERSE.filter(s => !nseSyms.has(s.sym));
     UNIVERSE = [...parsed, ...extras];
+    applyUniverseRestriction('kv-cache');
     universeLastUpdate = parseInt(updatedAt||'0');
-    universeUpdateStatus = `from kv cache (${ageHours.toFixed(0)}h ago)`;
-    console.log(`NSE universe loaded from kv cache: ${parsed.length} stocks (${ageHours.toFixed(0)}h ago)`);
+    universeUpdateStatus = `from kv cache (${ageHours.toFixed(0)}h ago, restricted to ${UNIVERSE.length})`;
+    console.log(`NSE universe loaded from kv cache: ${parsed.length} → ${UNIVERSE.length} after group filter (${ageHours.toFixed(0)}h ago)`);
     return true;
   } catch(e) {
     console.log('Universe cache load failed:', e.message);
     return false;
+  }
+}
+
+// 2026-04-29 — universe restriction. Default is NIFTY 50 + Next 50 (~100
+// stocks). Pre-fix, scanning 564 stocks at ~420ms each = 4 min minimum,
+// 6+ hours observed under proxy slowness. NIFTY 100 = ~63s per scan at
+// full Kite throughput, well within the 5-min cron cadence.
+//
+// Override via env: UNIVERSE_GROUPS='NIFTY50,NEXT50,MIDCAP' restores
+// the broader universe; UNIVERSE_GROUPS='all' disables filtering.
+const _UNIVERSE_GROUPS_RAW = (process.env.UNIVERSE_GROUPS || 'NIFTY50,NEXT50').trim();
+const _UNIVERSE_GROUPS_ALLOWED = _UNIVERSE_GROUPS_RAW.toLowerCase() === 'all'
+  ? null  // null = no filter
+  : new Set(_UNIVERSE_GROUPS_RAW.split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
+
+function applyUniverseRestriction(reason = 'load') {
+  if (!_UNIVERSE_GROUPS_ALLOWED) return; // 'all' = no-op
+  const before = UNIVERSE.length;
+  UNIVERSE = UNIVERSE.filter(s => _UNIVERSE_GROUPS_ALLOWED.has(s.grp));
+  const after = UNIVERSE.length;
+  if (before !== after) {
+    console.log(`📉 Universe restricted (${reason}): ${before} → ${after} (groups: ${[..._UNIVERSE_GROUPS_ALLOWED].join(',')})`);
   }
 }
 
@@ -1786,6 +1811,9 @@ let UNIVERSE = [
   {sym:"BSE",         n:"BSE Ltd",                  grp:"MIDCAP"},
   {sym:"MCX",         n:"MCX India",                grp:"MIDCAP"}
 ];
+// 2026-04-29 — apply group restriction to initial in-code literal too,
+// so a fresh boot (before DB load) starts with the restricted universe.
+applyUniverseRestriction('initial-literal');
 
 const INSTRUMENTS = {
   // Nifty 50
