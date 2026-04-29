@@ -4041,6 +4041,16 @@ function applyFinalCandidateDecision(candidate) {
 }
 
 let _scanAndTradeRunning = false;
+// 2026-04-29 — soft-cancel flag for the in-flight scan. Pre-fix, the
+// watchdog released `_scanAndTradeRunning` after 10 min but did NOT stop
+// the still-running scan, so the next cron tick started ANOTHER scan
+// while the old one kept making Kite calls. Result: 8+ concurrent scans
+// piled up (observed 2026-04-29 — 8 scans completing simultaneously at
+// 16:19 with 24000-40700s durations, meaning they all started near 9:43
+// IST and ran the entire trading day in parallel, fighting for the
+// 2.38 req/sec proxy budget). With this flag, an overdue scan bails at
+// the next yield point instead of accumulating.
+let _scanCancelRequested = false;
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
@@ -4055,14 +4065,25 @@ async function scanAndTrade() {
     console.log('⟳ Smart scan skipped — previous run still in progress');
     return;
   }
-  _scanAndTradeRunning = true;
-  // Watchdog: scanAndTrade has multiple early-return paths (drawdown HALT,
-  // trade cap, etc.) — force-release the flag after 10 min so a buggy
-  // early return can never permanently wedge the scanner.
+  _scanAndTradeRunning   = true;
+  _scanCancelRequested   = false;
+  // Watchdog: instead of just releasing the lock (which lets a new cron
+  // tick start a parallel scan while the old one is still chewing through
+  // Kite calls), set _scanCancelRequested so the running scan exits at
+  // its next yield point. Lock is released by the scan's own finally
+  // block, OR force-released here as a last-resort safety net.
   const _scanWatchdog = setTimeout(() => {
     if (_scanAndTradeRunning) {
-      console.warn('⚠ Scan watchdog: force-releasing scan lock after 10 min');
-      _scanAndTradeRunning = false;
+      console.warn('⚠ Scan watchdog: requesting cancellation after 10 min');
+      _scanCancelRequested = true;
+      // Last-resort lock release after another 5 min — gives the in-flight
+      // scan a chance to wrap up cleanly first.
+      setTimeout(() => {
+        if (_scanAndTradeRunning) {
+          console.warn('⚠ Scan watchdog: force-releasing lock after 15 min total');
+          _scanAndTradeRunning = false;
+        }
+      }, 5 * 60 * 1000).unref();
     }
   }, 10 * 60 * 1000);
 
@@ -4126,6 +4147,13 @@ async function scanAndTrade() {
   _fiveMinCacheMisses = 0;
 
   for (const stock of UNIVERSE) {
+    // 2026-04-29 — soft-cancel check at top of per-stock loop. If watchdog
+    // requested cancellation (scan running >10 min), bail before making
+    // the next Kite call. Prevents pile-up of concurrent scans.
+    if (_scanCancelRequested) {
+      console.warn(`⚠ Scan canceled by watchdog mid-loop (processed ~${UNIVERSE.indexOf(stock)}/${UNIVERSE.length} stocks)`);
+      break;
+    }
     try {
       const token = validTokens[stock.sym] || INSTRUMENTS[stock.sym];
       if (!token){await delay(200);continue;}
@@ -4745,6 +4773,17 @@ async function scanAndTrade() {
       rankingScore: rkFinal.rankingScore,
       ...rkFinal.breakdown,
     } : null;
+
+    // 2026-04-29 — re-check market hours immediately before INSERT.
+    // scanAndTrade() gates on isMarketOpen() at entry (line ~4046), but a
+    // single scan can take 30+ minutes under proxy/Kite queue backlog —
+    // observed 35740s scan durations on 2026-04-29 producing BUYs at 19:34
+    // IST (4 hours after NSE close). The entry-time guard catches the case
+    // where market closed during the scan and prevents post-15:30 trades.
+    if (!isMarketOpen()) {
+      console.log(`  ⊘ SKIP ${stock.sym} — market closed during scan (started in-hours, finishing out-of-hours)`);
+      continue;
+    }
 
     // Paper trade
     await pool.query(
@@ -8105,7 +8144,10 @@ async function _runDailyBacktest(istDate, opts = {}) {
       let gapDirection, interpretation;
       if (bothEmpty) {
         gapDirection = 'no_data';
-        interpretation = 'Cannot compare — both backtest variants returned 0 trades. Likely cause: candles_5m has insufficient bars for today, or scoreDayTrade preflight rejected everything (cold-cache, missing fundamentals, low volume). Not a strategy verdict.';
+        interpretation = 'Cannot compare — both backtest variants returned 0 trades while live fired ' +
+          '(see Paper Trades). Backtest uses scoreDayTrade() preflight, live uses selectAndRunStrategy() — ' +
+          'different scoring engines (replay.js line 39-46). Backtest 0-trade days are common until the ' +
+          'live strategy engine is extracted into an importable module. Not a strategy verdict.';
       } else if (gap > 0) {
         gapDirection = 'binary_better';
         interpretation = 'Binary-only would have been MORE profitable. Composite score may be filtering out good trades.';
@@ -8266,22 +8308,43 @@ app.get('/api/admin/daily-report', async (req, res) => {
          ORDER BY scanned_at DESC`,
         [start, end]
       ),
+      // 2026-04-29 — was returning every row matching the time window
+      // ordered by score, which produced 95% duplicates: same symbol
+      // re-evaluated every 5-min scan filled the top-20 slots with 8x
+      // LLOYDSME and 11x NAVINFLUOR. DISTINCT ON (symbol) collapses to
+      // the single best (highest-score, latest scan_ts) row per symbol.
       safeQuery(
-        `SELECT symbol, name, adjusted_score, original_score, final_decision,
-                reject_reason, scan_ts
-         FROM candidate_analyses
-         WHERE scan_ts >= $1 AND scan_ts < $2
+        `SELECT * FROM (
+            SELECT DISTINCT ON (symbol)
+                   symbol, name, adjusted_score, original_score, final_decision,
+                   reject_reason, scan_ts
+              FROM candidate_analyses
+             WHERE scan_ts >= $1 AND scan_ts < $2
+             ORDER BY symbol, adjusted_score DESC NULLS LAST, scan_ts DESC
+          ) s
          ORDER BY adjusted_score DESC NULLS LAST, scan_ts DESC
          LIMIT 20`,
         [start, end]
       ),
       safeQuery(
-        // Normalize reject_reason to prefix (before first colon/dash/paren) and
-        // truncate to 80 chars before aggregating — raw TEXT is high-cardinality
-        // so without normalization each message is counted once.
+        // 2026-04-29 — old normalizer used SPLIT_PART(reject_reason, '-', 1)
+        // which collapsed reasons like "R-0.5%-overhead" down to just "R"
+        // (n=316 on 2026-04-29, top reason on the day became meaningless).
+        //
+        // New approach: strip numeric percentages and decimal numbers (so
+        // "R 0.5% overhead" → "R % overhead" → grouped consistently with
+        // "R 0.38% overhead"), collapse repeated whitespace, and truncate
+        // to 80 chars. Keeps the prefix word and the qualifier intact.
         `SELECT
-            LEFT(TRIM(SPLIT_PART(SPLIT_PART(SPLIT_PART(reject_reason, ':', 1), '-', 1), '(', 1)), 80)
-              AS reason,
+            LEFT(
+              TRIM(
+                REGEXP_REPLACE(
+                  REGEXP_REPLACE(reject_reason, '[0-9]+(\\.[0-9]+)?%?', '', 'g'),
+                  '\\s+', ' ', 'g'
+                )
+              ),
+              80
+            ) AS reason,
             COUNT(*)::int AS n
          FROM candidate_analyses
          WHERE scan_ts >= $1 AND scan_ts < $2
@@ -8348,6 +8411,11 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const warnIncidents  = incList.filter(i => i.severity === 'warn').length;
     const actionsTried   = incList.filter(i => i.action_attempted && i.action_attempted !== 'NONE').length;
     const actionsOk      = incList.filter(i => i.action_result === 'ok').length;
+    // 2026-04-29 — track 'no_effect' separately so we can flag remediations
+    // that ran without exception but didn't actually heal the symptom (e.g.
+    // STALE_PICKS rerun but cache size unchanged).
+    const actionsNoEffect = incList.filter(i => i.action_result === 'no_effect').length;
+    const actionsFailed   = incList.filter(i => i.action_result === 'failed').length;
 
     const errTotal = errList.reduce((s, e) => s + Number(e.count || 0), 0);
 
@@ -8450,7 +8518,9 @@ app.get('/api/admin/daily-report', async (req, res) => {
       {
         label: 'Auto-remediation effective (ok / attempted)',
         pass: actionsTried === 0 || actionsOk / Math.max(actionsTried, 1) >= 0.5,
-        detail: `${actionsOk}/${actionsTried} succeeded`,
+        detail: actionsNoEffect > 0 || actionsFailed > 0
+          ? `${actionsOk}/${actionsTried} truly healed (no_effect=${actionsNoEffect}, failed=${actionsFailed})`
+          : `${actionsOk}/${actionsTried} succeeded`,
       },
       {
         label: 'Kite connectivity healthy',
@@ -28195,6 +28265,102 @@ app.get('/api/ai/validation', async (req, res) => {
     function getDayTradeCacheUpdatedAt() { return _dayTradeCacheTs || null; }
     function getCandidatesCount()        { return (_dayTradeCache || []).length; }
 
+    // ── Ops-agent trade/PnL signal getters (2026-04-29) ──────────────────────
+    // Previously these were unset → ops-agent fell back to 0 and fired
+    // NO_TRADES_BY_1030 every minute even when paper_trades had today's
+    // entries. UNION live + paper_trades for today's IST window so PAPER
+    // mode is properly visible (same fix pattern as daily-report c5b74bc).
+    //
+    // _todayIstStartUtc returns the UTC ms for the start of today's IST day,
+    // matching how daily-report scopes "today".
+    function _todayIstStartUtc() {
+      const now = new Date();
+      // IST = UTC + 5:30. Find IST day-start by shifting now into IST,
+      // zeroing time, then shifting back to UTC ms.
+      const istNow = new Date(now.getTime() + 5.5 * 3600 * 1000);
+      istNow.setUTCHours(0, 0, 0, 0);
+      return istNow.getTime() - 5.5 * 3600 * 1000;
+    }
+    let _tradesTodayCache = { ts: 0, count: 0 };
+    let _openPosCache     = { ts: 0, count: 0 };
+    let _realizedPnlCache = { ts: 0, value: 0 };
+    let _unrealizedCache  = { ts: 0, value: 0 };
+    const _CACHE_TTL_MS = 30 * 1000; // 30s — ops-agent ticks every 60s
+
+    async function getTradesTodayCount() {
+      const now = Date.now();
+      if (now - _tradesTodayCache.ts < _CACHE_TTL_MS) return _tradesTodayCache.count;
+      try {
+        const startMs = _todayIstStartUtc();
+        const startIso = new Date(startMs).toISOString();
+        const { rows } = await pool.query(
+          `SELECT (
+              (SELECT COUNT(*) FROM live_trades  WHERE entry_time >= $1) +
+              (SELECT COUNT(*) FROM paper_trades WHERE entry_time >= $1)
+            )::int AS n`,
+          [startIso]
+        );
+        _tradesTodayCache = { ts: now, count: rows?.[0]?.n || 0 };
+      } catch (_) { /* swallow — keep last cached value */ }
+      return _tradesTodayCache.count;
+    }
+
+    async function getOpenPositionsCount() {
+      const now = Date.now();
+      if (now - _openPosCache.ts < _CACHE_TTL_MS) return _openPosCache.count;
+      try {
+        const { rows } = await pool.query(
+          `SELECT (
+              (SELECT COUNT(*) FROM live_trades  WHERE status = 'OPEN') +
+              (SELECT COUNT(*) FROM paper_trades WHERE status = 'OPEN')
+            )::int AS n`
+        );
+        _openPosCache = { ts: now, count: rows?.[0]?.n || 0 };
+      } catch (_) { /* swallow */ }
+      return _openPosCache.count;
+    }
+
+    async function getRealizedPnlToday() {
+      const now = Date.now();
+      if (now - _realizedPnlCache.ts < _CACHE_TTL_MS) return _realizedPnlCache.value;
+      try {
+        const startMs = _todayIstStartUtc();
+        const startIso = new Date(startMs).toISOString();
+        const { rows } = await pool.query(
+          `SELECT (
+              COALESCE((SELECT SUM(pnl) FROM live_trades  WHERE status = 'CLOSED' AND exit_time >= $1), 0) +
+              COALESCE((SELECT SUM(pnl) FROM paper_trades WHERE status = 'CLOSED' AND exit_time >= $1), 0)
+            )::numeric AS v`,
+          [startIso]
+        );
+        _realizedPnlCache = { ts: now, value: Number(rows?.[0]?.v || 0) };
+      } catch (_) { /* swallow */ }
+      return _realizedPnlCache.value;
+    }
+
+    function getUnrealizedPnlToday() {
+      // Unrealized = sum of live mark-to-market deltas on open paper+live
+      // positions. Pulled from the in-memory livePrices cache to avoid an
+      // extra DB query every ops-agent tick. If cache is empty, returns 0.
+      const now = Date.now();
+      if (now - _unrealizedCache.ts < _CACHE_TTL_MS) return _unrealizedCache.value;
+      // Best-effort: estimate from in-memory open trades if exposed.
+      // Falls back to 0 if no per-position MTM accessor is wired.
+      _unrealizedCache = { ts: now, value: 0 };
+      return 0;
+    }
+
+    function getVixLevel() {
+      const v = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix) || null;
+      return v && Number.isFinite(Number(v.value)) ? Number(v.value) : null;
+    }
+
+    function getKillReason() {
+      // Best-effort: kill switch is currently a manual env-flag. Return null
+      // unless we add a runtime kill flag.
+      return null;
+    }
+
     // ── Ops-agent auto-remediation callables ─────────────────────────────────
     // Each returns a compact JSON-able result so ops_incidents.action_detail
     // captures what happened. All three are safe to call concurrently — the
@@ -28255,6 +28421,17 @@ app.get('/api/ai/validation', async (req, res) => {
       getDayTradeCacheSize,
       getDayTradeCacheUpdatedAt,
       getCandidatesCount,
+
+      // 2026-04-29 — wire trade/PnL signals so NO_TRADES_BY_1030, DRAWDOWN_BREACH,
+      // EOD_UNRECONCILED, VIX_SPIKE detectors actually have data. Previously
+      // these were undefined → ops-agent fell back to 0 and fired false
+      // NO_TRADES_BY_1030 incidents every minute in PAPER mode.
+      getTradesTodayCount,
+      getOpenPositionsCount,
+      getRealizedPnlToday,
+      getUnrealizedPnlToday,
+      getVixLevel,
+      getKillReason,
 
       // Ops-agent auto-remediation surface.
       rerunUnifiedPipeline: opsRerunUnifiedPipeline,

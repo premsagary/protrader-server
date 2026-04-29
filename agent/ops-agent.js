@@ -382,7 +382,22 @@ async function _attemptAction(kind, deps, evidence) {
       _recordActionAttempt('RERUN_PIPELINE');
       try {
         const r = await deps.rerunUnifiedPipeline({ reason: `ops-agent:${kind}` });
-        return { action: 'RERUN_PIPELINE', result: 'ok', detail: JSON.stringify(r).slice(0, 400) };
+        // 2026-04-29 — old code returned 'ok' as long as the action threw no
+        // exception, even when cacheBefore === cacheAfter (the action ran
+        // but didn't actually heal the staleness). 7/7 false-success was
+        // observed in 2026-04-29 daily report. Distinguish:
+        //   - 'no_effect': action ran cleanly but cache size didn't change
+        //                  (e.g., Kite token still bad, picks-feed still empty)
+        //   - 'ok':        cache delta is non-zero or unknown
+        //   - 'failed':    the rerun explicitly returned ok:false
+        let result = 'ok';
+        if (r && r.ok === false) {
+          result = 'failed';
+        } else if (r && Number.isFinite(r.cacheBefore) && Number.isFinite(r.cacheAfter)
+                   && r.cacheBefore === r.cacheAfter) {
+          result = 'no_effect';
+        }
+        return { action: 'RERUN_PIPELINE', result, detail: JSON.stringify(r).slice(0, 400) };
       } catch (e) {
         return { action: 'RERUN_PIPELINE', result: 'failed', detail: e.message };
       }
@@ -428,6 +443,24 @@ async function _attemptAction(kind, deps, evidence) {
 // ────────────────────────────────────────────────────────────────────────────
 async function _buildSnapshot(deps) {
   const minsSinceOpen = minsSinceOpenIST();
+  // 2026-04-29 — getters may now return either a value OR a Promise. Resolve
+  // any Promise-returning ones in parallel so detectors see real numbers.
+  // Without this, async getters land in the snap as Promise objects and
+  // detectors compare Promise === 0 (always false).
+  const _resolve = async (fn, fallback) => {
+    if (typeof fn !== 'function') return fallback;
+    try { return await fn(); } catch (_) { return fallback; }
+  };
+  const [
+    realizedPnlToday, unrealizedPnlToday,
+    tradesTodayCount, openPositionsCount,
+  ] = await Promise.all([
+    _resolve(deps.getRealizedPnlToday, 0),
+    _resolve(deps.getUnrealizedPnlToday, 0),
+    _resolve(deps.getTradesTodayCount, 0),
+    _resolve(deps.getOpenPositionsCount, 0),
+  ]);
+
   const snap = {
     minsSinceOpen,
     marketOpen: typeof deps.isMarketOpen === 'function' ? Boolean(deps.isMarketOpen()) : false,
@@ -445,12 +478,13 @@ async function _buildSnapshot(deps) {
     // Most recent scan result
     candidatesCount:        deps.getCandidatesCount        ? deps.getCandidatesCount()        : null,
 
-    // Live capital/PnL (from deps to avoid circular state dependency)
+    // Live capital/PnL (from deps to avoid circular state dependency).
+    // PnL/trades/positions are awaited above so async-DB-backed getters work.
     capital:              deps.getCapital           ? deps.getCapital()           : null,
-    realizedPnlToday:     deps.getRealizedPnlToday  ? deps.getRealizedPnlToday()  : 0,
-    unrealizedPnlToday:   deps.getUnrealizedPnlToday? deps.getUnrealizedPnlToday(): 0,
-    tradesTodayCount:     deps.getTradesTodayCount  ? deps.getTradesTodayCount()  : 0,
-    openPositionsCount:   deps.getOpenPositionsCount? deps.getOpenPositionsCount(): 0,
+    realizedPnlToday,
+    unrealizedPnlToday,
+    tradesTodayCount,
+    openPositionsCount,
 
     vixLevel: deps.getVixLevel ? deps.getVixLevel() : null,
 
