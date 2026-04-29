@@ -92,9 +92,25 @@ app.use(express.text({ limit: '5mb' }));
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL?.includes("railway") ? { rejectUnauthorized: false } : false,
-  max: 5,                        // Railway free tier allows ~5 concurrent connections
+  max: 10,                       // bumped from 5 → 10 to avoid pool starvation under parallel queries + concurrent backtest replays
   idleTimeoutMillis: 30000,      // close idle connections after 30s
-  connectionTimeoutMillis: 5000, // fail fast if DB unreachable
+  connectionTimeoutMillis: 8000, // bumped 5s → 8s to tolerate brief contention bursts
+});
+
+// 2026-04-29 — visibility on pool errors. If Railway PG starts rejecting
+// connections (max_connections cap, network blip, etc.), node-postgres emits
+// 'error' on idle clients. Without this listener, the process can crash with
+// an uncaught exception. Logging through error-sink (if loaded) keeps these
+// surfaceable in the daily report under kind='DB_POOL'.
+pool.on('error', (err) => {
+  console.error('[pg-pool] idle client error:', err && err.message);
+  try {
+    // Lazy require to avoid circular import; error-sink may not be loaded yet at boot.
+    const sink = require('./agent/error-sink');
+    if (sink && typeof sink.recordError === 'function') {
+      sink.recordError({ kind: 'DB_POOL', message: String(err && err.message || err), source: 'pool.on(error)' });
+    }
+  } catch (_) { /* best-effort logging only */ }
 });
 
 async function initDB() {
@@ -4837,13 +4853,22 @@ async function scanAndTrade() {
     scanMsg += ` | Varsity-gate skipped ${_latestPass2Debug.skippedVarsity} (score<${CONFIG.MIN_VARSITY_SCORE})`;
   }
 
-  // Phase 3 · Part 8 — record scan latency + warn if it exceeded threshold
-  const _scanDurationMs  = Date.now() - _scanStartedAt;
-  const _scanDurationSec = +(_scanDurationMs / 1000).toFixed(1);
-  const _scanWarnSec     = STRUCTURE_CONFIG.scanLatencyWarnSec || 180;
+  // Phase 3 · Part 8 — record scan latency + warn if it exceeded threshold.
+  // 2026-04-29: cap at 2× watchdog (1200s) for log/UI purposes. A scan that
+  // actually ran 8+ hours means a Kite call hung indefinitely past the
+  // watchdog's force-release; the resulting astronomical latency value
+  // (e.g. 27000-40000s observed on 2026-04-29) is misleading in scan_log.
+  const _scanDurationMsRaw = Date.now() - _scanStartedAt;
+  const _scanDurationMs    = Math.min(_scanDurationMsRaw, 1200 * 1000);
+  const _scanDurationSec   = +(_scanDurationMs / 1000).toFixed(1);
+  const _scanRawDurationSec= +(_scanDurationMsRaw / 1000).toFixed(1);
+  const _scanCapped        = _scanDurationMsRaw > _scanDurationMs;
+  const _scanWarnSec       = STRUCTURE_CONFIG.scanLatencyWarnSec || 180;
   _latestScanHealth = {
     scannedAt:       new Date().toISOString(),
     durationSec:     _scanDurationSec,
+    rawDurationSec:  _scanRawDurationSec,   // un-capped — exposes silent watchdog drift
+    capped:          _scanCapped,           // true when raw > 1200s (likely Kite hang past watchdog)
     lagging:         _scanDurationSec > _scanWarnSec,
     warnThresholdSec:_scanWarnSec,
     dataWarnings:    _scanDataWarnings,
@@ -4851,10 +4876,14 @@ async function scanAndTrade() {
     universeSize:    UNIVERSE.length,
     signalCount,
   };
-  if (_scanDurationSec > _scanWarnSec) {
+  if (_scanCapped) {
+    // Loud log so ops can see the actual hang duration even though we
+    // suppress the astronomical number from scan_log.message.
+    console.warn(`⚠ Scan latency RAW ${_scanRawDurationSec}s capped at ${_scanDurationSec}s (likely Kite call hung past watchdog)`);
+  } else if (_scanDurationSec > _scanWarnSec) {
     console.warn(`⚠ Scan latency ${_scanDurationSec}s > ${_scanWarnSec}s threshold`);
   }
-  scanMsg += ` | ${_scanDurationSec}s`;
+  scanMsg += ` | ${_scanDurationSec}s${_scanCapped ? ` (raw ${_scanRawDurationSec}s)` : ''}`;
 
   // Phase 4 · Part 9 — update post-rejection forward-price snapshots for
   // previously rejected candidates using the latest livePrices from this scan.
@@ -8069,19 +8098,29 @@ async function _runDailyBacktest(istDate, opts = {}) {
         backtestReplay.replayDate(istDate, deps, { binaryOnly: true }),
       ]);
       const gap = Number(((binary.summary?.netPnl || 0) - (current.summary?.netPnl || 0)).toFixed(2));
+      // 2026-04-29 — disambiguate "tied because both ran and matched"
+      // from "tied because both returned 0 trades (data/replay issue)".
+      // The latter is NOT a strategy verdict — it's a measurement gap.
+      const bothEmpty = (current.summary?.tradeCount || 0) === 0 && (binary.summary?.tradeCount || 0) === 0;
+      let gapDirection, interpretation;
+      if (bothEmpty) {
+        gapDirection = 'no_data';
+        interpretation = 'Cannot compare — both backtest variants returned 0 trades. Likely cause: candles_5m has insufficient bars for today, or scoreDayTrade preflight rejected everything (cold-cache, missing fundamentals, low volume). Not a strategy verdict.';
+      } else if (gap > 0) {
+        gapDirection = 'binary_better';
+        interpretation = 'Binary-only would have been MORE profitable. Composite score may be filtering out good trades.';
+      } else if (gap < 0) {
+        gapDirection = 'current_better';
+        interpretation = 'Current scoring would have been MORE profitable. Composite score is doing real work.';
+      } else {
+        gapDirection = 'tied';
+        interpretation = 'Tied — composite score isn\'t adding signal vs. binary checklist alone.';
+      }
       return {
         date: istDate,
         current,
         binary,
-        comparison: {
-          gap,
-          gapDirection: gap > 0 ? 'binary_better' : gap < 0 ? 'current_better' : 'tied',
-          interpretation: gap > 0
-            ? 'Binary-only would have been MORE profitable. Composite score may be filtering out good trades.'
-            : gap < 0
-            ? 'Current scoring would have been MORE profitable. Composite score is doing real work.'
-            : 'Tied — composite score isn\'t adding signal vs. binary checklist alone.',
-        },
+        comparison: { gap, gapDirection, interpretation },
         // Backward-compat fields so old callers reading the previous shape
         // (single-variant) still get something useful.
         trades: current.trades,
@@ -8206,10 +8245,16 @@ app.get('/api/admin/daily-report', async (req, res) => {
          ORDER BY detected_at DESC`,
         [start, end]
       ),
+      // 2026-04-29 — was filtering on last_seen, which surfaced errors
+      // first seen days ago whose count gets touched today. Switched to
+      // first_seen so today's report only shows errors that ORIGINATED today.
+      // The 21-count "Incorrect api_key or access_token" entries from
+      // 2026-04-23 were polluting today's "Kite connectivity healthy" check
+      // and pushing errTotal over the 100 threshold falsely.
       safeQuery(
         `SELECT kind, message_hash, message_sample, count, first_seen, last_seen
          FROM app_errors
-         WHERE last_seen >= $1 AND last_seen < $2
+         WHERE first_seen >= $1 AND first_seen < $2
          ORDER BY count DESC, last_seen DESC
          LIMIT 30`,
         [start, end]
@@ -8273,11 +8318,13 @@ app.get('/api/admin/daily-report', async (req, res) => {
          LIMIT 20`,
         [start, end]
       ),
-      safeQuery(
-        `SELECT COUNT(*)::int AS n FROM scan_log
-         WHERE scanned_at >= $1 AND scanned_at < $2`,
-        [start, end]
-      ),
+      // 2026-04-29 — was a separate COUNT query that duplicated the
+      // scan_log range scan. Under PG pool pressure (max=5 + 10 parallel
+      // queries + concurrent backtest replay), this query frequently
+      // timed out → safeQuery returned null → pipelineCount=0 even when
+      // scanList had 24 rows. Now we just count scanList.length below
+      // (see line where pipelineCount is computed).
+      Promise.resolve([{ n: null }]),
     ]);
 
     // ── Derive metrics ────────────────────────────────────────────────────
@@ -8304,8 +8351,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
 
     const errTotal = errList.reduce((s, e) => s + Number(e.count || 0), 0);
 
-    const pipelineCount = (pipelineRuns?.[0]?.n) || 0;
     const scanCount     = scanList.length;
+    // pipelineCount used to be a separate COUNT(*) query; now derived from
+    // scanList directly to avoid pool-starvation false-zeros (2026-04-29).
+    const pipelineCount = scanCount;
 
     const vixObj  = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix) || null;
     const vixVal  = vixObj && Number.isFinite(Number(vixObj.value)) ? Number(vixObj.value) : null;
@@ -8671,7 +8720,10 @@ ${(() => {
     const cur = backtest.current.summary || {};
     const bin = backtest.binary.summary || {};
     const gap = backtest.comparison.gap;
-    const gapColor = gap > 0 ? '#22c55e' : gap < 0 ? '#ef4444' : '#94a3b8';
+    // 2026-04-29 — explicit color for no_data state so users don't see
+    // a misleading "tied" green/red on what's actually a measurement gap.
+    const isNoData = backtest.comparison.gapDirection === 'no_data';
+    const gapColor = isNoData ? '#94a3b8' : (gap > 0 ? '#22c55e' : gap < 0 ? '#ef4444' : '#94a3b8');
     return `
 <div class="cards">
   <div class="card">
