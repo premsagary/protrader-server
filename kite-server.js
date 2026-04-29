@@ -4168,7 +4168,24 @@ async function scanAndTrade() {
         _fiveMinCacheMisses++;
         const today   = new Date().toISOString().split("T")[0];
         const weekAgo = new Date(Date.now()-7*24*60*60*1000).toISOString().split("T")[0];
-        candles = await kite.getHistoricalData(token,"5minute",weekAgo,today);
+        // 2026-04-29 — wrap in 10s per-stock timeout. Pre-fix, a single hung
+        // Kite call could block the entire scan loop indefinitely while the
+        // proxy/queue contended → observed scans of 35740s (9.9h). With a
+        // 10s upper bound per stock, a 564-stock scan can never exceed
+        // 564*10 = 94 minutes worst case (vs unbounded before). The
+        // watchdog at 10min still cancels mid-loop if many stocks time out.
+        candles = await Promise.race([
+          kite.getHistoricalData(token, "5minute", weekAgo, today),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('per-stock-timeout-10s')), 10000)
+          ),
+        ]).catch(e => {
+          // Bubble up to the outer try/catch as null → continue on next stock.
+          if (e && e.message === 'per-stock-timeout-10s') {
+            _scanApiFailures.push({ sym: stock.sym, reason: 'kite_timeout_10s' });
+          }
+          return null;
+        });
         // Populate cache for other consumers so we don't repeat this fetch
         if (candles && candles.length) _setCachedFiveMin(stock.sym, candles);
       }
@@ -4206,15 +4223,25 @@ async function scanAndTrade() {
         const tgt = parseFloat(openPos.target);
         const entryPrice = parseFloat(openPos.price);
 
-        // Trailing stop — once 1 ATR in profit, trail at 1.5 ATR from high
+        // Trailing stop — regime-aware (2026-04-29).
+        // Pre-fix: fixed 1.5×ATR trail distance regardless of regime.
+        // Observed 2026-04-29: 0% win rate — both closed trades exited
+        // via trailing SL on a RANGING-regime day with normal pullbacks.
+        // Now: widen trail to 2.0×ATR in RANGING regime so normal range
+        // noise doesn't whipsaw the position. Keep 1.5×ATR for MOMENTUM /
+        // TRENDING / BREAKOUT — those regimes mean directional moves
+        // where a tighter trail is appropriate.
         const highs = candles.slice(-14).map(c=>c.high);
         const lows  = candles.slice(-14).map(c=>c.low);
         const trs   = highs.map((h,i)=>h-lows[i]);
         const atr   = trs.reduce((a,b)=>a+b,0)/trs.length;
         const profit = cmp - entryPrice;
         let trailSL = sl;
+        // Per-stock regime from the most recent strategy run for THIS stock.
+        const _trailRegime = (result && result.regime) || 'UNKNOWN';
+        const trailMult = (_trailRegime === 'RANGING') ? 2.0 : 1.5;
         if (profit > atr) {
-          const trailLevel = cmp - (atr * 1.5);
+          const trailLevel = cmp - (atr * trailMult);
           if (trailLevel > sl) {
             trailSL = +trailLevel.toFixed(2);
             await pool.query('UPDATE paper_trades SET stop_loss=$1 WHERE id=$2', [trailSL, openPos.id]);
@@ -8116,9 +8143,41 @@ async function _runDailyBacktest(istDate, opts = {}) {
   }
   _backtestRunning = true;
   try {
+    // 2026-04-29 — adapter that wraps selectAndRunStrategy in the shape
+    // backtest/replay.js expects (dayTradeScore + bestSetup + sl/target).
+    // This is the SAME scoring engine production scanAndTrade uses, so
+    // backtest CURRENT now mirrors live trade decisions (modulo daily-TF
+    // confirmation which needs daily candles we don't load yet).
+    //
+    // Pre-fix, replay used scoreDayTrade — a different scorer that ranks
+    // 0-100 with its own preflight gates. Result: backtest CURRENT
+    // returned 0 trades on 2026-04-29 while live made 5 (replay.js
+    // line 39-46 acknowledged this divergence).
+    const _liveParityScorer = function (candles, sym /*, ctx*/) {
+      try {
+        const r = selectAndRunStrategy(candles);
+        if (!r) return null;
+        if (r.signal !== 'BUY') return null;
+        if (typeof r.score !== 'number' || r.score < CONFIG.BUY_SCORE) return null;
+        return {
+          // 0-10 → 0-100 scaling so replay's threshold/sort math still works.
+          dayTradeScore: Math.min(100, +(r.score * 10).toFixed(1)),
+          // Force-pass binary checklist — selectAndRunStrategy already does
+          // its own consensus + score gating, Ch19 is a different system.
+          ch19PassCount: 5,
+          bestSetup: { type: r.strategy, sl: r.sl, target: r.tgt },
+          sl:     r.sl,
+          target: r.tgt,
+          overall: Math.min(100, +(r.score * 10).toFixed(1)),
+          regime:    r.regime,
+          consensus: r.consensus,
+        };
+      } catch (_) { return null; }
+    };
     const deps = {
       loadCandlesForDate: _loadBacktestCandlesForDate,
-      scoreDayTrade,
+      // CURRENT variant: live-parity scorer (selectAndRunStrategy).
+      scoreDayTrade: _liveParityScorer,
       sectorOf: (sym) => {
         const f = stockFundamentals[sym];
         return (f && f.sector) || 'UNKNOWN';
@@ -8126,6 +8185,9 @@ async function _runDailyBacktest(istDate, opts = {}) {
       ctxAt: () => ({ niftyDailyChange: _niftyDailyChangePct || 0 }),
       onError: () => {},
     };
+    // BINARY variant keeps the original scoreDayTrade so the binary-only
+    // Ch19 checklist gate has its expected ch19PassCount field.
+    const depsBinary = { ...deps, scoreDayTrade };
     // Run BOTH variants when caller requests A/B comparison (default).
     // 'current' uses the existing scoring stack as configured; 'binary'
     // strips score thresholds and requires only the Varsity Ch19 binary
@@ -8133,8 +8195,8 @@ async function _runDailyBacktest(istDate, opts = {}) {
     // candles + same scoreDayTrade scoring — only the gate differs.
     if (opts.compareBinary !== false) {
       const [current, binary] = await Promise.all([
-        backtestReplay.replayDate(istDate, deps),
-        backtestReplay.replayDate(istDate, deps, { binaryOnly: true }),
+        backtestReplay.replayDate(istDate, deps),                     // live-parity scorer
+        backtestReplay.replayDate(istDate, depsBinary, { binaryOnly: true }), // scoreDayTrade Ch19 gate
       ]);
       const gap = Number(((binary.summary?.netPnl || 0) - (current.summary?.netPnl || 0)).toFixed(2));
       // 2026-04-29 — disambiguate "tied because both ran and matched"
@@ -8144,10 +8206,10 @@ async function _runDailyBacktest(istDate, opts = {}) {
       let gapDirection, interpretation;
       if (bothEmpty) {
         gapDirection = 'no_data';
-        interpretation = 'Cannot compare — both backtest variants returned 0 trades while live fired ' +
-          '(see Paper Trades). Backtest uses scoreDayTrade() preflight, live uses selectAndRunStrategy() — ' +
-          'different scoring engines (replay.js line 39-46). Backtest 0-trade days are common until the ' +
-          'live strategy engine is extracted into an importable module. Not a strategy verdict.';
+        interpretation = 'Both backtest variants returned 0 trades. With CURRENT now using the live ' +
+          'selectAndRunStrategy adapter (2026-04-29), this means: insufficient candles_5m bars in DB ' +
+          'for replay, OR the universe-level conditions today produced no BUY signals across the day ' +
+          '(plausible on a 0-2 signals/scan day like 2026-04-29). Check candles_5m row count for the date.';
       } else if (gap > 0) {
         gapDirection = 'binary_better';
         interpretation = 'Binary-only would have been MORE profitable. Composite score may be filtering out good trades.';
@@ -8447,6 +8509,19 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const dominantRegime = Object.entries(regimeCounts)
       .sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
+    // 2026-04-29 — regime per FIRED TRADE, distinct from universe-dominant
+    // regime. trades.regime captures the per-stock regime at the moment of
+    // the BUY, which is what the strategy router used. A day can be
+    // universe=RANGING but trades=MOMENTUM if only momentum-y stocks
+    // crossed the BUY threshold (observed 2026-04-29: 5 trades all
+    // VWAP_MOMENTUM in stocks that were individually MOMENTUM regime,
+    // even though 35/35 scans reported RANGING dominant).
+    const tradeRegimeCounts = {};
+    for (const t of tradesList) {
+      const r = (t.regime || (t.indicators && /MOMENTUM|RANGING|BREAKOUT|TRENDING/.exec(t.indicators)?.[0]) || 'UNKNOWN');
+      tradeRegimeCounts[r] = (tradeRegimeCounts[r] || 0) + 1;
+    }
+
     const portfolioRegime = typeof marketRegime !== 'undefined' ? marketRegime : null;
     const portfolioRegimeData = (typeof marketRegimeData !== 'undefined' && marketRegimeData) || {};
 
@@ -8571,6 +8646,11 @@ app.get('/api/admin/daily-report', async (req, res) => {
           intradayLatest:  intradayRegime,
           intradayDominant: dominantRegime,
           intradayCounts:  regimeCounts,
+          // Per-trade regime breakdown: what regime the strategy router
+          // actually saw for stocks that fired BUY. Often diverges from
+          // universe-dominant regime — only momentum-y stocks usually
+          // cross BUY threshold even on a RANGING-dominant day.
+          tradeRegimeCounts,
           portfolio:       portfolioRegime,
           portfolioDetail: portfolioRegimeData,
         },
@@ -19266,6 +19346,56 @@ cron.schedule('5 8,13-16 * * 1-5',
 cron.schedule('30 19 * * 1-5',
   () => refreshExternalSignalsCron({ reason: 'daily-analyst', sources: ['analyst'] }),
   { timezone: 'Asia/Kolkata' });
+
+// 2026-04-29 — VIX-only fetch on its own schedule. Pre-fix, VIX was only
+// populated as a side-effect of clicking AI Stock/MF Picks (lines 25788,
+// 27781). If user didn't click those, _marketDataCache.vix stayed null
+// the entire day, leaving daily-report.vix=null + scoreV2 VIX regime
+// tilt skipped + RoboTrade VIX cap unable to evaluate. Lightweight cron
+// at 9:10 / every hour during market keeps VIX fresh without the heavy
+// per-stock delivery loop that fetchAIMarketData runs.
+async function fetchVixOnly(reason = 'cron') {
+  try {
+    const cookies = await getNSESession();
+    const vixData = await fetchNSEApi('allIndices', cookies);
+    const vixIdx = vixData?.data?.find(i => i.indexSymbol === 'INDIA VIX' || i.index === 'INDIA VIX');
+    if (vixIdx) {
+      _marketDataCache = _marketDataCache || {};
+      _marketDataCache.vix = {
+        value: vixIdx.last || vixIdx.previousClose,
+        change: vixIdx.percentChange,
+        high: vixIdx.dayHigh, low: vixIdx.dayLow,
+        fetchedAt: Date.now(),
+      };
+      console.log(`[vix-cron:${reason}] VIX = ${_marketDataCache.vix.value}`);
+    } else {
+      console.warn(`[vix-cron:${reason}] VIX index not found in NSE response`);
+    }
+  } catch (e) {
+    console.warn(`[vix-cron:${reason}] failed: ${e.message}`);
+  }
+}
+// Pre-open at 9:10 IST + hourly during market hours (9-15 IST). Runs
+// only on weekdays. NSE allIndices is a single ~50KB JSON, no per-stock
+// loop, so this is cheap.
+cron.schedule('10 9 * * 1-5', () => fetchVixOnly('pre-open'), { timezone: 'Asia/Kolkata' });
+cron.schedule('0 10-15 * * 1-5', () => fetchVixOnly('hourly'),  { timezone: 'Asia/Kolkata' });
+// Cold-start: fetch once at boot if it's a weekday and we don't have a
+// recent value. Wrapped in setTimeout so this doesn't slow down boot —
+// 30s gives the rest of the system time to come up first.
+//
+// Guard against double-fetch within the same process (e.g. if module is
+// re-required somewhere). Per-process boot fetch is idempotent.
+let _vixBootFetched = false;
+setTimeout(() => {
+  if (_vixBootFetched) return;
+  const v = _marketDataCache && _marketDataCache.vix;
+  const fresh = v && v.fetchedAt && (Date.now() - v.fetchedAt) < 4 * 3600 * 1000;
+  if (!fresh) {
+    _vixBootFetched = true;
+    fetchVixOnly('boot');
+  }
+}, 30 * 1000);
 
 // Startup: load cached external signals into memory so the first request
 // after a deploy gets them, even before the cron fires.
