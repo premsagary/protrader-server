@@ -19380,6 +19380,70 @@ async function fetchVixOnly(reason = 'cron') {
 // loop, so this is cheap.
 cron.schedule('10 9 * * 1-5', () => fetchVixOnly('pre-open'), { timezone: 'Asia/Kolkata' });
 cron.schedule('0 10-15 * * 1-5', () => fetchVixOnly('hourly'),  { timezone: 'Asia/Kolkata' });
+
+// 2026-04-29 — EOD square-off for OPEN paper_trades. Live trades use Kite's
+// MIS product which auto-squares-off all positions at 15:20 IST (Zerodha
+// rule). Paper trades had no equivalent — they sat OPEN past close, only
+// getting touched when next morning's scan ran and the time-exit (6h) or
+// SL/target/strategy-SELL fired. That meant overnight P&L drift on paper
+// rows that should have closed cleanly. Now: at 15:20 IST every weekday,
+// force-close every OPEN paper_trade at the last cached price (or entry
+// price if no quote available — zero-P&L exit, more honest than fake
+// numbers).
+async function squareOffPaperTrades(reason = 'eod') {
+  try {
+    const { rows: open } = await pool.query(
+      `SELECT id, symbol, price, quantity, entry_time, stop_loss, target
+         FROM paper_trades WHERE status = 'OPEN'`
+    );
+    if (!open.length) {
+      console.log(`[paper-eod:${reason}] no OPEN positions to square off`);
+      return { closed: 0 };
+    }
+    let closed = 0;
+    for (const t of open) {
+      try {
+        // Last cached price → fallback to entry price (zero-P&L exit) if
+        // quote feed died and we can't price honestly.
+        const cached = livePrices && livePrices[t.symbol];
+        const exitPx = (cached && Number.isFinite(cached.price) && cached.price > 0)
+          ? cached.price
+          : Number(t.price);
+        const realistic = computeRealisticExitPnL(Number(t.price), exitPx, Number(t.quantity));
+        await pool.query(
+          `UPDATE paper_trades
+              SET status = 'CLOSED', exit_price = $1, exit_time = NOW(),
+                  pnl = $2, pnl_pct = $3,
+                  exit_reason = $4, gross_pnl = $5, costs = $6
+            WHERE id = $7 AND status = 'OPEN'`,
+          [realistic.exitPrice, realistic.pnl, realistic.pnlPct,
+           `EOD Squareoff (${reason})`,
+           realistic.grossPnL, realistic.costs, t.id]
+        );
+        closed++;
+      } catch (e) {
+        console.warn(`[paper-eod:${reason}] failed to close ${t.symbol}: ${e.message}`);
+      }
+    }
+    console.log(`[paper-eod:${reason}] closed ${closed}/${open.length} OPEN paper positions`);
+    return { closed, total: open.length };
+  } catch (e) {
+    console.warn(`[paper-eod:${reason}] failed: ${e.message}`);
+    return { closed: 0, error: e.message };
+  }
+}
+// Cron: 15:20 IST every weekday — same time Zerodha squares off MIS.
+cron.schedule('20 15 * * 1-5', () => squareOffPaperTrades('eod-1520'), { timezone: 'Asia/Kolkata' });
+// Admin endpoint for manual squareoff (e.g. to clean up stuck post-market
+// entries from before the 2026-04-29 isMarketOpen-before-INSERT fix).
+app.post('/api/admin/squareoff-paper', async (req, res) => {
+  try {
+    const r = await squareOffPaperTrades(req.query.reason || 'manual');
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // Cold-start: fetch once at boot if it's a weekday and we don't have a
 // recent value. Wrapped in setTimeout so this doesn't slow down boot —
 // 30s gives the rest of the system time to come up first.
