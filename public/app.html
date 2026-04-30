@@ -14231,6 +14231,40 @@ function renderArchitecturePage(){
     + _archNote('MiroFish also exposes a crowd-reaction agent simulator (56 AI agents) that is not yet wired into ProTrader. It is a future integration for qualitative "how would retail investors react to this fund\'s drawdown profile" narratives.')
   );
 
+  // ── 2026-04-29 — Daily Report observability cleanup ──
+  h += _archCard('🔎', 'Daily Report observability cleanup (2026-04-29)',
+      'Bundle of fixes from 2026-04-29 daily-report triage. Closes 18 surfaced issues + 8 residual concerns.',
+        _archPillar('Universe restriction', 'NIFTY 50 + Next 50 only',
+          'UNIVERSE filtered to NIFTY50 + NEXT50 groups (≈100 stocks vs 564 prior). Each scan completes in ~63s instead of 6+ hours. Override: env <code>UNIVERSE_GROUPS=all</code> to disable, or list groups e.g. <code>NIFTY50,NEXT50,MIDCAP</code>.')
+      + _archPillar('Pre-INSERT market gate', 'isMarketOpen() checked at every BUY',
+          'Pre-fix: scanAndTrade gated only at entry. A 6-hour scan started 09:40 IST would INSERT post-market BUYs at 19:34 IST (observed). Now: each per-stock INSERT re-checks isMarketOpen() and skips if closed.')
+      + _archPillar('EOD squareoff (paper)', 'Cron at 15:20 IST',
+          'New <code>squareOffPaperTrades()</code> + cron — force-closes all OPEN paper_trades at last cached price (or entry price if no quote, zero-PnL). Mirrors Zerodha\'s MIS auto-square at 15:20. Manual trigger: <code>POST /api/admin/squareoff-paper</code> (admin-gated).')
+      + _archPillar('EOD reconciliation (live)', 'Cron at 15:25 IST',
+          '<code>checkLiveTradesEodReconciled()</code> — reads live_trades WHERE status=\'OPEN\' 5min after Zerodha\'s auto-square. Surfaces CRITICAL <code>LIVE_EOD_UNRECONCILED</code> ops_incident if any remain. Does NOT force-close DB row (real stock still in account; manual exit needed).')
+      + _archPillar('Watchdog cancel', '_scanCancelRequested + 15-min force-release',
+          'Pre-fix: 10-min watchdog released the lock but didn\'t stop in-flight scan, so cron tick started concurrent scan while old one kept making Kite calls (8+ scans piled up 2026-04-29). Now: watchdog sets cancel flag at 10min (per-stock loop checks at top of iteration); 15-min hard force-release as safety net.')
+      + _archPillar('Per-stock Kite timeout', '10s upper bound',
+          '<code>kite.getHistoricalData()</code> wrapped in <code>Promise.race</code> with 10s timeout. Pre-fix: single hung Kite call could block the whole scan loop indefinitely. Hard upper bound: 564×10s = 94min worst case (vs unbounded before).')
+      + _archPillar('Backtest live-parity', '_liveParityScorer adapter',
+          'Backtest CURRENT variant now wraps <code>selectAndRunStrategy()</code> in scoreDayTrade\'s output shape. Pre-fix: backtest used a different scorer (scoreDayTrade) than live (selectAndRunStrategy) so 0/0 backtest while live made 5 trades on 2026-04-29 was common. BINARY variant keeps original scoreDayTrade for Ch19 A/B test.')
+      + _archPillar('Trailing SL regime-aware', '2.0×ATR in RANGING, 1.5×ATR else',
+          'Widened trailing-stop distance for stocks classified as RANGING regime (where mean-revert noise hits a tight trail) to reduce whipsaw exits. Other regimes (MOMENTUM/TRENDING/BREAKOUT) keep the tighter 1.5×ATR trail since directional moves justify earlier exits.')
+      + _archPillar('VIX cron', '9:10 IST + hourly',
+          'Pre-fix: VIX only populated as a side-effect of clicking Stock/MF AI Picks. Now: dedicated <code>fetchVixOnly()</code> with cron at 9:10 IST + hourly during market. NSE allIndices fetch (≈50KB JSON), no per-stock loop.')
+      + _archPillar('Kite token expiry warning', 'Daily 8:30 IST cron',
+          'New <code>kite_access_token_set_at</code> DB key tracks token age. Cron classifies: missing/&gt;22h → critical, &gt;18h → warn, else silent. Surfaces as <code>KITE_TOKEN_AGING</code> ops_incident. Status endpoint: <code>GET /api/admin/kite-token-status</code>.')
+      + _archPillar('Ops-agent paper-blindness', 'getTradesTodayCount UNIONs paper+live',
+          'Pre-fix: <code>tradesTodayCount</code> fell back to 0 always because <code>getTradesTodayCount</code> wasn\'t wired into agent.bootstrap. NO_TRADES_BY_1030 fired falsely every minute. Now: 6 ops-agent getters wired (trades, open positions, realized PnL, unrealized PnL via livePrices MTM, VIX level, kill reason).')
+      + _archPillar('Boot grace per-detector', 'secsSinceBoot < 300 skip',
+          'Pre-fix: 3-min global cold-start grace covered first boot but not mid-day Railway redeploys. Now: snap.secsSinceBoot exposed; dCandidatesEmpty / dNoTradesBy1030 / dStalePicks / dDrawdownBreach all skip for first 5min after boot regardless of how late we deploy.')
+      + _archPillar('Daily-report query fixes', 'first_seen filter, DISTINCT ON, regex normalizer',
+          'app_errors filter: last_seen → first_seen so cross-day errors don\'t pollute today. topCandidates: <code>DISTINCT ON (symbol)</code> so top-20 are unique. rejectReasons: <code>REGEXP_REPLACE</code> strips numeric percentages (was SPLIT_PART chain that collapsed "R 0.5% overhead" → just "R", n=316 on 2026-04-29).')
+      + _archPillar('Per-trade regime + strategy', 'tradeRegimeCounts / tradeStrategyCounts',
+          'Daily report now exposes both: (a) regime breakdown of fired trades (often diverges from universe-dominant regime), and (b) strategy distribution (RSI/Bollinger/EMA/MACD/Supertrend/Volume/OR vs single-strategy concentration). Lets you see strategy router behavior at a glance.')
+      + _archNote('Commits: <code>b281828</code> daily-report observability • <code>60519e5</code> 7 root-cause regressions • <code>ea2dfa7</code> backtest live-parity + RANGING trail • <code>f8b6a60</code> EOD squareoff • <code>a79fbaa</code> universe restriction • <code>1b2b199</code> 6 residual concerns.')
+  );
+
   h += '</div>';
   document.getElementById("main-content").innerHTML = h;
 }

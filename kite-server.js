@@ -8883,6 +8883,31 @@ app.get('/api/admin/daily-report', async (req, res) => {
       ? `&nbsp;·&nbsp; <span class="muted">pending → ${esc(portfolioRegimeData.pending)}</span>`
       : ''}</span>
   </div>
+  ${(() => {
+    // 2026-04-29 — per-trade regime + strategy breakdown. Universe-dominant
+    // regime above is what most stocks were in; this row shows what the
+    // stocks that actually FIRED BUY were classified as. Often diverges
+    // (e.g. universe RANGING but trades fired in MOMENTUM stocks).
+    const trEntries = Object.entries(tradeRegimeCounts || {}).filter(([_, n]) => n > 0);
+    const tsEntries = Object.entries(tradeStrategyCounts || {}).filter(([_, n]) => n > 0);
+    if (trEntries.length === 0 && tsEntries.length === 0) return '';
+    const trStr = trEntries.length
+      ? trEntries.map(([k, n]) => `${esc(k)}×${n}`).join(' · ')
+      : 'no fired trades';
+    const tsStr = tsEntries.length
+      ? tsEntries.map(([k, n]) => `${esc(k)}×${n}`).join(' · ')
+      : 'no fired trades';
+    return `
+      <div class="check" style="border-top:1px dashed var(--border);padding-top:10px;margin-top:10px">
+        <span><strong>Per-trade breakdown</strong> <span class="muted">(what fired BUY today)</span></span>
+      </div>
+      <div class="check">
+        <span>Regime of fired trades: <span class="muted">${trStr}</span></span>
+      </div>
+      <div class="check">
+        <span>Strategy of fired trades: <span class="muted">${tsStr}</span></span>
+      </div>`;
+  })()}
 </div>
 
 <!-- Known-issue regression checks -->
@@ -19576,6 +19601,38 @@ async function checkKiteTokenFreshness(reason = 'morning') {
 cron.schedule('30 8 * * 1-5', () => checkKiteTokenFreshness('morning-0830'), { timezone: 'Asia/Kolkata' });
 // Also check at boot (give DB 30s to be ready)
 setTimeout(() => checkKiteTokenFreshness('boot').catch(() => {}), 30 * 1000);
+
+// 2026-04-29 — admin endpoint to read current Kite token freshness
+// without waiting for cron. Useful when investigating "is auth currently
+// healthy?" without parsing ops_incidents.
+app.get('/api/admin/kite-token-status', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const setAtStr = await dbGet('kite_access_token_set_at');
+    const tok = process.env.KITE_ACCESS_TOKEN;
+    const setAt = setAtStr ? Number(setAtStr) : 0;
+    const ageH  = setAt > 0 ? +((Date.now() - setAt) / 3600000).toFixed(2) : null;
+    let status = 'unknown';
+    if (!tok) status = 'missing';
+    else if (ageH == null) status = 'untracked';
+    else if (ageH > 22) status = 'critical';
+    else if (ageH > 18) status = 'warn';
+    else status = 'healthy';
+    res.json({
+      ok: true,
+      status,
+      hasToken: !!tok,
+      tokenSetAt: setAt > 0 ? new Date(setAt).toISOString() : null,
+      ageHours: ageH,
+      tokenValid: typeof tokenValid !== 'undefined' ? tokenValid : null,
+      reauthUrl: '/auth/login',
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // Admin endpoint for manual squareoff (e.g. to clean up stuck post-market
 // entries from before the 2026-04-29 isMarketOpen-before-INSERT fix).
 // 2026-04-29 — admin-gated; matches pattern of other /api/admin/* routes.
