@@ -7324,9 +7324,9 @@ function buildUI(d){
   html+='<div class="analyzer-section-title" style="margin-bottom:4px">AI Second Opinion</div>';
   html+='<div style="font-size:13px;color:#c0c8d8;margin-top:4px;font-weight:700;letter-spacing:0.3px">5-model AI council (Varsity + Pure lenses) → Claude Sonnet 4.6 judge → final verdict with score</div>';
   html+='</div>';
-  if(_isPublicUser()){
+  if(!_canRunAIReview()){
     html+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 18px;font-size:12px;font-weight:600;cursor:not-allowed;display:flex;align-items:center;gap:6px;font-family:inherit">';
-    html+='<span>🧠 AI Review — Coming Soon</span></button></div>';
+    html+='<span>🧠 AI Review — Admin Only</span></button></div>';
   } else {
     html+='<button id="ai-review-btn" onclick="runSingleStockAI(\''+d.sym+'\')" style="background:rgba(99,102,241,0.15);color:var(--shiva-blue);border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">';
     html+='<span>Run AI Review</span></button></div>';
@@ -8677,10 +8677,10 @@ function _escHtml(s) {
 
 // The "🧠 Deep AI Review" button that sits next to each column header.
 function _picksAIButton(category) {
-  if(_isPublicUser()){
-    return '<button disabled title="AI Deep Review — available in a future update" '
+  if(!_canRunAIReview()){
+    return '<button disabled title="AI Deep Review — admin only (5-model fan-out is expensive)" '
       + 'style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:not-allowed;box-shadow:none;white-space:nowrap;font-family:inherit">'
-      + '🧠 AI Deep Review — Coming Soon</button>';
+      + '🧠 AI Deep Review — Admin Only</button>';
   }
   var meta = _PICKS_CAT_META[category];
   var running = _picksAIRunning[category];
@@ -8941,10 +8941,10 @@ var _MF_CAT_META = {
 
 // The "🧠 Deep AI Review" button that sits next to each MF category header.
 function _mfAIButton(category) {
-  if(_isPublicUser()){
-    return '<button disabled title="AI Deep Review — available in a future update" '
+  if(!_canRunAIReview()){
+    return '<button disabled title="AI Deep Review — admin only (5-model fan-out is expensive)" '
       + 'style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:not-allowed;box-shadow:none;white-space:nowrap;font-family:inherit">'
-      + '🧠 AI Deep Review — Coming Soon</button>';
+      + '🧠 AI Deep Review — Admin Only</button>';
   }
   var meta = _MF_CAT_META[category];
   var running = _mfAIRunning[category];
@@ -10414,8 +10414,8 @@ function renderHoldingsPage(){
   h += '<div style="font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.2px">Your portfolio · live CMP + P&amp;L'+(_isAdmin()?' · Varsity-grounded AI review across 5 models':' · AI review coming soon')+'</div></div>';
   h += '<div style="margin-left:auto;display:flex;gap:8px">';
   h += '<button onclick="loadHoldings()" class="btn btn-sm">Refresh</button>';
-  if(_isPublicUser()){
-    h += '<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:9px 18px;font-size:12px;font-weight:600;cursor:not-allowed;letter-spacing:0.3px;font-family:inherit">🧠 Deep AI Review — Coming Soon</button>';
+  if(!_canRunAIReview()){
+    h += '<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:9px 18px;font-size:12px;font-weight:600;cursor:not-allowed;letter-spacing:0.3px;font-family:inherit">🧠 Deep AI Review — Admin Only</button>';
   } else {
     h += '<button id="holdings-ai-btn" onclick="runHoldingsAIReview()" style="background:rgba(99,102,241,0.15);color:var(--shiva-blue);border:1px solid rgba(99,102,241,0.2);border-radius:var(--radius);padding:9px 18px;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all var(--transition-fast);letter-spacing:0.3px">Deep AI Review</button>';
   }
@@ -11163,8 +11163,8 @@ function psRenderLongTermTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">4-pillar Varsity model: Quality 40% + Growth 25% + Valuation 20% + Business 15%. Buy-and-hold · 12M horizon · Max 15 stocks · Max 3 per sector · 5–25% per position · DC floor 0.6.</div>';
-  if(_isPublicUser()){
-    h+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Coming Soon</button>';
+  if(!_canRunAIReview()){
+    h+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Admin Only</button>';
   } else {
     h+='<button onclick="ltRunAIValidation()" id="lt-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   }
@@ -11431,8 +11431,8 @@ function psRenderModelTab(){
   h+='</div>';
   h+='<div style="display:flex;align-items:center;gap:8px;margin-top:8px">';
   h+='<div style="font-size:10px;color:var(--text4);flex:1">5-factor model: FA 30% + TA 25% + Valuation 15% + Momentum 15% + Risk 15%. Market regime-aware cash allocation. Sector diversification.</div>';
-  if(_isPublicUser()){
-    h+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Coming Soon</button>';
+  if(!_canRunAIReview()){
+    h+='<button disabled style="background:rgba(120,140,180,0.18);color:#c0c8d8;border:1px solid rgba(180,190,220,0.25);border-radius:999px;padding:8px 16px;font-size:12px;font-weight:600;cursor:not-allowed;white-space:nowrap;font-family:inherit">🧠 AI Deep Review — Admin Only</button>';
   } else {
     h+='<button onclick="psRunAIValidation(\'deep\')" id="ps-ai-btn" style="background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,211,238,.15));color:#22c55e;border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:8px 16px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🧠 AI Deep Review</button>';
   }
@@ -14821,6 +14821,14 @@ window.fetch = function(url, opts) {
 /* ── Role helpers ── */
 function _isAdmin(){ return _authUser && _authUser.role === 'admin'; }
 function _isPublicUser(){ return !_authUser; }
+// 2026-04-30 — admin gate for AI Review surfaces. Backend endpoints
+// already 403 for non-admin (see kite-server.js commit 51e6e0c). UI
+// button visibility was previously gated on _isPublicUser() which only
+// hid for unauth — authenticated non-admins still saw the buttons and
+// could click them (now they get 403 from backend, but cleaner to hide
+// the button entirely). Use this helper everywhere AI Review surfaces
+// are conditionally rendered.
+function _canRunAIReview(){ return !!(_authUser && _authUser.role === 'admin'); }
 
 /* ── Landing page ↔ Login navigation ── */
 /* Landing now lives in the React build at / — redirect there instead of
