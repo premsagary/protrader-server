@@ -23528,6 +23528,12 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
 // Calls all 5 AI models with the stock's complete data for individual analysis
 // On-demand: frontend calls this when user clicks "Run AI Review" in analyzer
 app.get('/api/stocks/analyze/:sym/ai', async (req, res) => {
+  // 2026-04-30 — admin-gated. AI Review fans out to 5 OpenRouter models
+  // + judge per request. Without this gate, any authenticated session
+  // could trigger unlimited fan-outs and burn OpenRouter credits.
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only — AI Review' });
+  }
   const sym = req.params.sym.toUpperCase().trim();
   console.log(`🤖 Single-stock AI review starting for ${sym}...`);
 
@@ -26589,6 +26595,10 @@ app.get('/api/ai/status', (req, res) => {
 
 // API endpoint — manual trigger
 app.get('/api/ai/validate', async (req, res) => {
+  // 2026-04-30 — admin-gated. Triggers 5-model council + judge.
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only — AI Review' });
+  }
   try {
     const mode = req.query.mode === 'deep' ? 'deep' : 'auto';
     const result = await validateSignalsWithAI(mode);
@@ -26732,6 +26742,12 @@ app.delete('/api/holdings/:symbol', async (req, res) => {
 // Varsity payload, persists per-(user, symbol, model) verdict, returns both
 // aggregated and per-model results).
 app.post('/api/holdings/ai-review', async (req, res) => {
+  // 2026-04-30 — admin-gated. Holdings AI Review fans out to 5 council
+  // models + judge with the user's full holdings payload. Pre-fix, any
+  // authenticated session could trigger unlimited fan-outs.
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only — AI Review' });
+  }
   try {
     const username = req.user.username;
     const hasAnyKey = ANTHROPIC_API_KEY || OPENAI_API_KEY || DEEPSEEK_API_KEY;
@@ -28052,6 +28068,12 @@ FINAL CHECK: signal_reviews length = ${pickCount}, ranking length = ${pickCount}
 
 // POST /api/mf/ai-review?category=largecap|midcap|smallcap|flexicap
 app.post('/api/mf/ai-review', async (req, res) => {
+  // 2026-04-30 — admin-gated. MF AI Review fans out to 5 council models +
+  // judge per category with the full Varsity M11 fund payload. Cached
+  // GET reads are still public (separate handler below).
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only — AI Review' });
+  }
   try {
     const category = (req.query.category || req.body?.category || '').toLowerCase();
     if (!['largecap', 'midcap', 'smallcap', 'flexicap'].includes(category)) {
@@ -28521,6 +28543,11 @@ Respond ONLY in the JSON format specified in your system prompt. Use signal_type
 
 // GET /api/ai/validate-longterm?amount=100000&mode=deep
 app.get('/api/ai/validate-longterm', async (req, res) => {
+  // 2026-04-30 — admin-gated. Long-term portfolio AI validation fans out
+  // to 5 council models + judge with arbitrary user-supplied amount.
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only — AI Review' });
+  }
   try {
     const amount = parseFloat(req.query.amount) || 100000;
     const mode = req.query.mode === 'auto' ? 'auto' : 'deep';
