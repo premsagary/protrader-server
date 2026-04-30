@@ -4102,7 +4102,16 @@ function _positionCard(pos){
       </div>
     </div>
     <div class="pos-mini-grid">
-      ${[["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Score",pos.signal_score||"-"]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}
+      ${(() => {
+        // 2026-04-30 — replaced "Score" with "Ch19" since RoboTrade now
+        // gates on Varsity M2 Ch 19 binary checklist, not composite score.
+        // signal_score is stored as (ch19PassCount/5)*100 in binary mode,
+        // so divide by 20 to recover the X/5 pass count.
+        const ch19Display = pos.signal_score != null
+          ? `${Math.round(pos.signal_score / 20)}/5`
+          : '-';
+        return [["Entry",INR(pos.price)],["Live CMP",INR(cmp)],["Stop Loss",INR(pos.stop_loss)],["Target",INR(pos.target)],["Capital",INR(pos.capital)],["Ch19",ch19Display]].map(([l,v])=>`<div class="pos-cell"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+      })()}
     </div>
     <div class="prog-bar"><div class="prog-fill ${pnl>=0?'positive':'negative'}" style="width:${prog}%"></div></div>
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)"><span>SL ${INR(pos.stop_loss)}</span><span>progress to target</span><span>TGT ${INR(pos.target)}</span></div>
@@ -4340,10 +4349,18 @@ async function renderStocksCandidates(){
       </tr>`;
     }).join("");
 
-    return `<div class="tw"><table>
+    // 2026-04-30 — Ch19 binary mode banner. Strat scores below are
+    // informational only — trades fire on Varsity Ch19 ≥4/5 (see top-bar
+    // "🎯 CH19 4/5" badge). Orig/Adj/Δ columns are kept for forensics
+    // (post-mortem on why a stock did or didn't fire) but no longer
+    // gate the trade decision.
+    const ch19Banner = `<div style="background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#a78bfa">
+      🎯 <b>Trades fire on Varsity Ch19 ≥4/5</b> — strat scores below are informational only. <span style="color:var(--text3)">Setup detection + structure filter still apply; numeric thresholds removed.</span>
+    </div>`;
+    return ch19Banner + `<div class="tw"><table>
       <thead><tr>
         <th>Symbol</th><th>Strategy</th><th>Regime</th>
-        <th style="text-align:right">Orig</th><th style="text-align:right">Adj</th><th style="text-align:right">Δ</th>
+        <th style="text-align:right" title="Strategy-engine raw score (informational only — Ch19 binary mode)">Strat</th><th style="text-align:right" title="Adjusted score after structure filter (informational only)">Adj</th><th style="text-align:right" title="Score delta from structure filter">Δ</th>
         <th>Nearest R</th><th>Nearest S</th><th>VWAP</th>
         <th>Flags</th><th>LLM</th><th>Final</th><th>Reject</th>
       </tr></thead>
@@ -12951,6 +12968,17 @@ function renderDayTradePage(){
   filtered = _dtSort(filtered, _dayTradeSortKey, _dayTradeSortDir);
 
   var html = '<div style="margin-bottom:20px">';
+
+  // 2026-04-30 — Ch19 binary mode banner. The dayTradeScore column below
+  // is a Varsity composite (0-100) but in CH19_BINARY_MODE it does NOT
+  // gate trade decisions — only the 5-item M2 Ch 19 binary checklist
+  // does (≥4/5 must pass). Score below is informational; useful for
+  // post-mortems and ranking comparisons but not for whether a trade
+  // fired.
+  html += '<div style="background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);border-radius:8px;padding:8px 14px;margin-bottom:14px;font-size:11px;color:#a78bfa;display:flex;align-items:center;gap:8px">'
+    + '<span>🎯</span>'
+    + '<span><b>RoboTrade decisions use Varsity Ch19 ≥4/5</b> — the dayTradeScore column below is informational only. <span style="color:var(--text3)">Trades fire on the 5 binary checks (priceAction · volume · S/R · indicators · R:R), not on this composite score.</span></span>'
+    + '</div>';
 
   // ── Header row ──
   html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
