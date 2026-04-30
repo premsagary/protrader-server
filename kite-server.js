@@ -4105,8 +4105,11 @@ let _scanAndTradeRunning = false;
 // the next yield point instead of accumulating.
 let _scanCancelRequested = false;
 // 2026-04-30 — Scenario 2 fix: throttle for KITE_TOKEN_EXPIRED ops_incident.
-// scanAndTrade runs every 1-2 min; without throttling we'd flood incidents.
+// scanAndTrade runs every 1-2 min; without throttling we'd flood incidents
+// AND the warn log line. Two separate throttles so the log can be tighter
+// than the DB write.
 let _lastKiteExpiredIncidentAt = 0;
+let _lastKiteExpiredWarnAt     = 0;
 
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
@@ -4126,8 +4129,13 @@ async function scanAndTrade() {
     const _kiteSetAt    = _kiteSetAtStr ? Number(_kiteSetAtStr) : 0;
     const _kiteAgeH     = _kiteSetAt > 0 ? (Date.now() - _kiteSetAt) / 3600000 : null;
     if (_kiteAgeH != null && _kiteAgeH > 22) {
-      console.warn(`🛑 Smart scan blocked — Kite token is ${_kiteAgeH.toFixed(1)}h old (>22h). Re-auth at /auth/login`);
-      // Throttle ops_incidents so we don't write one per cron tick.
+      // Throttle the warn log to once per 5 min so we don't flood Railway
+      // logs while the token is expired (cron ticks every 1-2 min).
+      if (Date.now() - _lastKiteExpiredWarnAt > 5 * 60 * 1000) {
+        _lastKiteExpiredWarnAt = Date.now();
+        console.warn(`🛑 Smart scan blocked — Kite token is ${_kiteAgeH.toFixed(1)}h old (>22h). Re-auth at /auth/login`);
+      }
+      // Throttle ops_incidents to once per 30 min — coarser than the log.
       if (Date.now() - _lastKiteExpiredIncidentAt > 30 * 60 * 1000) {
         _lastKiteExpiredIncidentAt = Date.now();
         try {
@@ -24936,21 +24944,33 @@ async function start() {
   let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
   if (token) process.env.KITE_ACCESS_TOKEN = token;
 
-  // 2026-04-30 — Scenario 7 fix. If we just restored a token but no
-  // kite_access_token_set_at timestamp exists (first deploy after the
-  // freshness-tracking change, or DB-restore path without re-auth),
-  // stamp tracking start at boot time. Without this, the freshness
-  // gate in scanAndTrade can never fire because age stays unknown
-  // forever — token would silently expire and trades would fail.
-  // Conservative trade-off: a stale-but-restored token gets marked
-  // "fresh from boot", but at most we burn one trading day before the
-  // 22h gate kicks in.
+  // 2026-04-30 — Scenario 7 fix (hardened). If we just restored a token
+  // but no kite_access_token_set_at timestamp exists (first deploy after
+  // the freshness-tracking change, or DB-restore path without re-auth),
+  // stamp tracking start — but ONLY after verifying the token actually
+  // works via a lightweight kite.getMargins('equity') call. Without
+  // verification, a stale env-var token would get marked "fresh from
+  // boot" and the 22h gate wouldn't fire for a full trading day. With
+  // verification, a stale token leaves set_at unset and the existing
+  // morning-cron warn will fire instead of silent failure.
   if (token) {
     try {
       const _existingSetAt = await dbGet('kite_access_token_set_at');
       if (!_existingSetAt) {
-        await dbSet('kite_access_token_set_at', String(Date.now()));
-        console.log('🕒 Initialized kite_access_token_set_at at boot (no prior timestamp)');
+        // Verify token works before stamping fresh.
+        try {
+          if (kite && typeof kite.setAccessToken === 'function') {
+            kite.setAccessToken(token);
+          }
+          await Promise.race([
+            kite.getMargins('equity'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('boot-token-probe timeout')), 8000)),
+          ]);
+          await dbSet('kite_access_token_set_at', String(Date.now()));
+          console.log('🕒 Initialized kite_access_token_set_at at boot (token probe succeeded)');
+        } catch (probeErr) {
+          console.warn(`⚠ Boot token probe failed — leaving set_at unset so morning cron can warn: ${probeErr.message}`);
+        }
       }
     } catch (e) {
       console.warn(`Failed to initialize kite_access_token_set_at at boot: ${e.message}`);
