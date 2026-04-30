@@ -12999,14 +12999,15 @@ function renderDayTradePage(){
   html += '</div></div>';
 
   // ── Summary pills ──
+  // 2026-04-30 — removed "Strong Entry (≥70)" pill since composite
+  // dayTradeScore no longer gates trades in CH19_BINARY_MODE. The
+  // setup-type breakdown is what matters now.
   var vwapCount = all.filter(function(s){return s.bestSetup==='VWAP_RECLAIM';}).length;
   var gapCount  = all.filter(function(s){return s.bestSetup==='GAP_AND_GO';}).length;
   var brkCount  = all.filter(function(s){return s.bestSetup==='BREAKOUT';}).length;
   var bncCount  = all.filter(function(s){return s.bestSetup==='OVERSOLD_BOUNCE';}).length;
-  var strongCount = all.filter(function(s){return s.dayTradeScore>=75;}).length;
   var dtPills = [
     {l:'Total Setups',   v:all.length,   c:'var(--text)', k:'total'},
-    {l:'Strong Entry',   v:strongCount,  c:'#22c55e',     k:'strong'},
     {l:'🔵 VWAP Reclaim',v:vwapCount,    c:'#3b82f6',     k:'VWAP_RECLAIM'},
     {l:'🚀 Gap & Go',    v:gapCount,     c:'#f59e0b',     k:'GAP_AND_GO'},
     {l:'📈 Breakout',    v:brkCount,     c:'#10b981',     k:'BREAKOUT'},
@@ -13069,26 +13070,30 @@ function renderDayTradePage(){
     html += '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;min-width:0">';
     html += '<div style="margin-bottom:10px">';
     html += '<div style="font-weight:800;font-size:14px;color:'+col.color+'">'+col.label+'</div>';
-    html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Top setups ranked by setup score</div>';
+    html += '<div style="font-size:10px;color:var(--text3);margin-top:2px">Setups ordered by Ch19 pass-count (≥4/5 fires) · informational</div>';
     html += '<span style="background:'+col.color+'22;color:'+col.color+';border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;margin-top:6px;display:inline-block">'+colPicks.length+'</span>';
     html += '</div>';
     if(colPicks.length){
       html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
       html += '<thead><tr style="background:var(--bg3)">'
         +'<th style="text-align:left;padding:6px 8px;color:var(--text3)">Stock</th>'
-        +'<th style="text-align:center;padding:6px 8px;color:var(--text3)">Score</th>'
+        +'<th style="text-align:center;padding:6px 8px;color:var(--text3)" title="Varsity M2 Ch 19 binary checklist pass count — ≥4/5 must pass for trade to fire">Ch19</th>'
         +'<th style="text-align:center;padding:6px 8px;color:var(--text3)">RSI</th>'
         +'<th style="text-align:center;padding:6px 8px;color:var(--text3)">Vol</th>'
         +'<th style="text-align:center;padding:6px 8px;color:var(--text3)">Price</th>'
         +'</tr></thead><tbody>';
       colPicks.forEach(function(s,i){
         var gc = {NIFTY50:'var(--blue)',NEXT50:'#8B5CF6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
-        var sc = s[col.scoreKey]||0;
-        var scCol = sc>=70?'#22c55e':sc>=50?'#f59e0b':'#94a3b8';
+        // 2026-04-30 — show Ch19 pass count instead of composite score.
+        // Falls back to deriving from dayTradeScore band when ch19PassCount
+        // isn't exposed: ≥75 → 5, ≥60 → 4, ≥45 → 3, else 2.
+        var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount
+                  : (s.dayTradeScore >= 75 ? 5 : s.dayTradeScore >= 60 ? 4 : s.dayTradeScore >= 45 ? 3 : 2);
+        var pcCol = pc >= 5 ? '#22c55e' : pc >= 4 ? '#86efac' : '#94a3b8';
         var bg = i%2===0?'var(--bg)':'var(--bg2)';
         html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
           +'<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
-          +'<td style="padding:6px 8px;text-align:center;font-weight:700;color:'+scCol+'">'+sc+'</td>'
+          +'<td style="padding:6px 8px;text-align:center;font-weight:700;color:'+pcCol+'">'+pc+'/5</td>'
           +'<td style="padding:6px 8px;text-align:center;color:'+(s.rsi5m<30?'#22c55e':s.rsi5m>70?'#ef4444':'var(--text2)')+'">'+s.rsi5m+'</td>'
           +'<td style="padding:6px 8px;text-align:center;color:'+(s.volRatio>=2?'#f59e0b':'var(--text2)')+'">'+s.volRatio+'x</td>'
           +'<td style="padding:6px 8px;text-align:center">₹'+s.price+'</td>'
@@ -13127,8 +13132,8 @@ function renderDayTradePage(){
     html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<thead><tr style="background:var(--bg3)">'
       + _dtHdr('sym',          'Stock',   'left')
-      + _dtHdr('bestSetup',    'Setup',   'center', 'Best scoring intraday setup type')
-      + _dtHdr('dayTradeScore','SCORE',   'center', 'Overall DayTrade Score (0-100)')
+      + _dtHdr('bestSetup',    'Setup',   'center', 'Best Varsity setup type detected (BREAKOUT / GAP_AND_GO / VWAP_RECLAIM / OVERSOLD_BOUNCE)')
+      + _dtHdr('ch19PassCount','Ch19',    'center', 'Varsity M2 Ch 19 binary checklist pass count — ≥4/5 must pass for trade to fire')
       + '<th style="text-align:center;padding:6px 8px;color:var(--text3)">Verdict</th>'
       + '<th style="text-align:left;padding:6px 8px;color:var(--text3);min-width:150px" title="Why this stock was picked, why this score, why points lost">Why Picked / Score Breakdown</th>'
       + _dtHdr('rsi5m',        'RSI<br/>5m','center','RSI-14 on 5-min candles')
@@ -13151,7 +13156,13 @@ function renderDayTradePage(){
       html += '<tr data-dt-sym="'+s.sym+'" style="border-bottom:1px solid var(--border2);background:'+bg+';cursor:pointer" onclick="var r=document.getElementById(\'dt-detail-'+s.sym+'\');if(r)r.style.display=r.style.display===\'none\'?\'table-row\':\'none\'">'
         +'<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
         +'<td style="padding:6px 8px;text-align:center"><span style="background:'+setupC+'22;color:'+setupC+';border-radius:4px;padding:2px 6px;font-size:9px;font-weight:700">'+s.bestSetupEmoji+' '+(setupLabels[s.bestSetup]||s.bestSetup)+'</span></td>'
-        +'<td data-dt-field="score" style="padding:6px 8px;text-align:center;font-weight:800;font-size:13px;color:'+scCol+'">'+s.dayTradeScore+'</td>'
+        +(function(){
+          // 2026-04-30 — Ch19 cell replaces SCORE.
+          var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount
+                    : (s.dayTradeScore >= 75 ? 5 : s.dayTradeScore >= 60 ? 4 : s.dayTradeScore >= 45 ? 3 : 2);
+          var pcCol = pc >= 5 ? '#22c55e' : pc >= 4 ? '#86efac' : '#94a3b8';
+          return '<td data-dt-field="score" style="padding:6px 8px;text-align:center;font-weight:800;font-size:13px;color:'+pcCol+'">'+pc+'/5</td>';
+        })()
         +'<td style="padding:6px 8px;text-align:center"><span style="color:'+s.verdictColor+';font-weight:600;font-size:10px">'+s.verdict+'</span></td>'
         +'<td style="padding:6px 8px;text-align:left;max-width:220px">'
         +'<div style="font-size:9px;color:var(--text2);line-height:1.4;margin-bottom:3px" title="'+(s.whyPicked||'').replace(/"/g,'&quot;')+'">'+(s.whyPicked ? s.whyPicked.substring(0,80)+(s.whyPicked.length>80?'…':'') : s.bestDetail)+'</div>'
