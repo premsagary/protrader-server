@@ -1852,7 +1852,8 @@ const INSTRUMENTS = {
   "CDSL":3001089,"MCX":5104513,"BSE":5097217,"LICI":4592641,
   "MRF":225537,"APOLLOTYRE":41729,"CEATLTD":157571,"ASHOKLEY":2920705,
   "ESCORTS":2013185,"MOTHERSON":4285697,"EXIDEIND":232961,"BOSCHLTD":2413697,
-  "CROMPTON":3081537,"POLYCAB":4000513,"PRAJ":685569,"SUZLON":3302785,
+  "CROMPTON":3081537,"POLYCAB":4000513,"SUZLON":3302785,
+  /* PRAJ removed 2026-04-30 — Kite returns "invalid token" on every fetch (token 685569 stale per Apr 2026 instrument refresh). Was already removed from UNIVERSE in 89407c8 but the INSTRUMENTS map still had it, causing repeated KITE_TOKEN errors during ticker resub + open-position candle backfill. */
   "INOXWIND":4592129,"TATAPOWER":877985,"TORNTPOWER":3281409,"CESC":174657,
   /* JSPL removed 2026-04-20 - renamed to JINDALSTEL */"NYKAA":5065601,"STARHEALTH":3940673,"GICRE":3378433,
   "PNBHOUSING":3984897,"AAVAS":3717377,"CREDITACC":3425281,"HAPPSTMNDS":3825921,
@@ -8545,8 +8546,11 @@ app.get('/api/admin/daily-report', async (req, res) => {
             LEFT(
               TRIM(
                 REGEXP_REPLACE(
-                  REGEXP_REPLACE(reject_reason, '[0-9]+(\\.[0-9]+)?%?', '', 'g'),
-                  '\\s+', ' ', 'g'
+                  REGEXP_REPLACE(
+                    REGEXP_REPLACE(reject_reason, '-?[0-9]+(\\.[0-9]+)?%?', '', 'g'),
+                    '\\s+', ' ', 'g'
+                  ),
+                  '\\s-\\s|^-\\s|\\s-$', ' ', 'g'
                 )
               ),
               80
@@ -10789,7 +10793,7 @@ let FUND = {
   JUBLFOOD:   [12.4,0.42,82.4,8.4,42.4,18.4],   UNITDSPR:   [18.4,0.42,42.4,8.4,12.4,12.4],
   MINDA:      [14.8,0.42,42.4,18.4,28.4,10.2],  SONACOMS:   [22.4,0.28,42.4,18.4,18.4,18.4],
   BEL:        [28.1,0.08,52.4,18.2,32.4,22.4],  DATAPATTNS: [22.4,0.00,52.4,28.4,22.4,28.4],
-  SOLARINDS:  [18.4,0.28,52.4,22.4,18.4,18.4],  PRAJ:       [22.4,0.08,42.4,18.4,22.4,14.8],
+  SOLARINDS:  [18.4,0.28,52.4,22.4,18.4,18.4],  /* PRAJ removed 2026-04-30 — instrument token stale */
   INOXWIND:   [8.4,1.20,82.4,28.4,null,6.4],    SUZLON:     [14.8,0.42,82.4,42.4,182.4,8.4],
   TATAPOWER:  [8.4,1.82,28.4,14.8,28.4,22.4],   TORNTPOWER: [12.4,1.82,28.4,8.4,12.4,28.4],
   CESC:       [14.8,0.82,18.4,4.8,18.4,22.4],   HBLPOWER:   [18.4,0.12,42.4,22.4,42.4,14.8],
@@ -10838,7 +10842,7 @@ let FUND = {
   SML:        [8.4,0.42,28.4,8.4,8.4,10.2],
   JSPL:       [12.4,1.20,8.4,14.8,42.4,18.4],
   TATAELXSI:  [28.4,0.04,52.4,8.4,-8.4,32.4],
-  MEIL:       [8.4,1.80,null,28.4,null,8.4],
+  /* MEIL removed 2026-04-30 — instrument token stale, same issue as PRAJ */
   ARMAN:      [18.4,6.20,12.4,22.4,22.4,null],
   "5PAISA":   [12.4,1.20,28.4,18.4,12.4,22.4],
 
@@ -24767,7 +24771,7 @@ const CRYPTO_CONFIG = {
   SML:        [8.4,0.42,28.4,8.4,8.4,10.2],
   JSPL:       [12.4,1.20,8.4,14.8,42.4,18.4],
   TATAELXSI:  [28.4,0.04,52.4,8.4,-8.4,32.4],
-  MEIL:       [8.4,1.80,null,28.4,null,8.4],
+  /* MEIL removed 2026-04-30 — instrument token stale, same issue as PRAJ */
   ARMAN:      [18.4,6.20,12.4,22.4,22.4,null],
 
 };

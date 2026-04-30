@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import { useAppStore } from '../../store/useAppStore';
 
 // Fetch wrapper for DELETE since api/client.js only exposes GET/POST.
 // Server uses DELETE /api/holdings/:symbol (see kite-server.js ~22228).
@@ -22,6 +23,9 @@ function normCmp(h)  { return Number(h?.cmp ?? h?.ltp ?? normAvg(h) ?? 0); }
 function normSym(h)  { return h?.symbol || h?.sym || '—'; }
 
 export default function Holdings() {
+  // 2026-04-30 — admin gate for Deep AI Review (5-model fan-out is
+  // expensive; backend already 403s for non-admin per commit 51e6e0c).
+  const isAdmin = useAppStore((s) => s.user?.role === 'admin');
   const [holdings, setHoldings] = useState([]);
   const [totals, setTotals] = useState(null);       // server-supplied totals, if any
   const [loading, setLoading] = useState(true);
@@ -256,8 +260,13 @@ export default function Holdings() {
               <button onClick={fetchHoldings} className="btn btn-secondary" style={{ height: 32, fontSize: 12, padding: '0 12px' }}>
                 Refresh
               </button>
-              <button onClick={runAIReview} disabled={aiRunning || holdings.length === 0} className="btn btn-primary" style={{ height: 32, fontSize: 12, padding: '0 12px' }}>
-                {aiRunning ? 'Reviewing…' : 'Deep AI Review'}
+              <button
+                onClick={isAdmin ? runAIReview : undefined}
+                disabled={aiRunning || holdings.length === 0 || !isAdmin}
+                title={isAdmin ? 'Run 5-council Deep AI Review on holdings' : 'AI Review — admin only (5-model fan-out is expensive)'}
+                className="btn btn-primary"
+                style={{ height: 32, fontSize: 12, padding: '0 12px', opacity: isAdmin ? 1 : 0.5 }}>
+                {aiRunning ? 'Reviewing…' : (isAdmin ? 'Deep AI Review' : 'Deep AI Review — Admin Only')}
               </button>
             </div>
           </div>

@@ -1716,6 +1716,9 @@ function LensTallyBar({ label, tally, consensus, vStyle }) {
 }
 
 function AIReviewSection({ sym }) {
+  // 2026-04-30 — admin gate. Backend 403s for non-admin (51e6e0c) but the
+  // button visibility was leaking. 5-model fan-out is expensive.
+  const isAdmin = useAppStore((s) => s.user?.role === 'admin');
   const [state, setState] = useState('idle'); // 'idle' | 'running' | 'done' | 'error'
   const [result, setResult] = useState(null);
   const [err, setErr] = useState(null);
@@ -1764,8 +1767,14 @@ function AIReviewSection({ sym }) {
           <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.55, marginBottom: 14 }}>
             Sends the full feature bundle (fundamentals, TA, news, sector context, Varsity modules) to 5 LLMs in parallel. Judge synthesises into a single ordered verdict with why_choose, why_not, confidence.
           </p>
-          <button onClick={runReview} className="btn btn-primary" style={{ height: 40, fontSize: 13 }}>
-            ▶ Run AI Review
+          <button
+            onClick={isAdmin ? runReview : undefined}
+            disabled={!isAdmin}
+            className="btn btn-primary"
+            style={{ height: 40, fontSize: 13, opacity: isAdmin ? 1 : 0.5 }}
+            title={isAdmin ? 'Run 5-council + judge AI review on this stock' : 'AI Review — admin only (5-model fan-out is expensive)'}
+          >
+            {isAdmin ? '▶ Run AI Review' : '▶ Run AI Review — Admin Only'}
           </button>
         </div>
       )}

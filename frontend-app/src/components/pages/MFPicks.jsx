@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiGet, apiPost } from '../../api/client';
+import { useAppStore } from '../../store/useAppStore';
 
 const CAT_CONFIG = {
   smallcap: { label: 'Small Cap', color: '#F59E0B', bg: 'rgba(245,158,11,0.12)', desc: 'High risk · 7+ year horizon' },
@@ -63,6 +64,9 @@ function PctCell({ v, dec = 1 }) {
 }
 
 export default function MFPicks() {
+  // 2026-04-30 — admin gate for Deep AI Review (5-model fan-out per
+  // category; backend already 403s for non-admin per commit 51e6e0c).
+  const isAdmin = useAppStore((s) => s.user?.role === 'admin');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -220,12 +224,12 @@ export default function MFPicks() {
               </span>
               <button
                 className="btn btn-primary"
-                onClick={() => runAI(cat)}
-                disabled={isAIRunning}
-                style={{ fontSize: 12, padding: '6px 14px', marginLeft: 6 }}
-                title="Run 5-council + judge Deep AI Review on top 5"
+                onClick={isAdmin ? () => runAI(cat) : undefined}
+                disabled={isAIRunning || !isAdmin}
+                style={{ fontSize: 12, padding: '6px 14px', marginLeft: 6, opacity: isAdmin ? 1 : 0.5 }}
+                title={isAdmin ? 'Run 5-council + judge Deep AI Review on top 5' : 'AI Review — admin only (5-model fan-out is expensive)'}
               >
-                {isAIRunning ? '⏳ Reviewing…' : '🧠 Deep AI Review'}
+                {isAIRunning ? '⏳ Reviewing…' : (isAdmin ? '🧠 Deep AI Review' : '🧠 Deep AI Review — Admin Only')}
               </button>
               <span style={{ fontSize: 12, color: 'var(--text2)', marginLeft: 'auto' }}>
                 <b style={{ color: cfg.color }}>{eligFunds.length}</b> eligible · {catFunds.length - eligFunds.length} not eligible
