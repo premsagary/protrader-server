@@ -13084,11 +13084,11 @@ function renderDayTradePage(){
         +'</tr></thead><tbody>';
       colPicks.forEach(function(s,i){
         var gc = {NIFTY50:'var(--blue)',NEXT50:'#8B5CF6',MIDCAP:'#f59e0b',SMALLCAP:'#10b981'}[s.grp]||'var(--text3)';
-        // 2026-04-30 — show Ch19 pass count instead of composite score.
-        // Falls back to deriving from dayTradeScore band when ch19PassCount
-        // isn't exposed: ≥75 → 5, ≥60 → 4, ≥45 → 3, else 2.
-        var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount
-                  : (s.dayTradeScore >= 75 ? 5 : s.dayTradeScore >= 60 ? 4 : s.dayTradeScore >= 45 ? 3 : 2);
+        // 2026-04-30 — show Ch19 pass count. scoreDayTrade always returns
+        // ch19PassCount (line 13118 of kite-server.js), passed through
+        // /api/stocks/picks/daytrade unchanged. Default 0 if absent
+        // (shouldn't happen post-binary-mode).
+        var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount : 0;
         var pcCol = pc >= 5 ? '#22c55e' : pc >= 4 ? '#86efac' : '#94a3b8';
         var bg = i%2===0?'var(--bg)':'var(--bg2)';
         html += '<tr style="border-bottom:1px solid var(--border2);background:'+bg+'">'
@@ -13157,9 +13157,9 @@ function renderDayTradePage(){
         +'<td style="padding:6px 8px"><div style="font-weight:700">'+(i+1)+'. '+s.sym+' <span style="background:'+gc+'22;color:'+gc+';border-radius:3px;padding:1px 5px;font-size:9px;font-weight:700">'+s.grp+'</span></div><div style="font-size:9px;color:var(--text3)">'+(s.sector||'')+'</div></td>'
         +'<td style="padding:6px 8px;text-align:center"><span style="background:'+setupC+'22;color:'+setupC+';border-radius:4px;padding:2px 6px;font-size:9px;font-weight:700">'+s.bestSetupEmoji+' '+(setupLabels[s.bestSetup]||s.bestSetup)+'</span></td>'
         +(function(){
-          // 2026-04-30 — Ch19 cell replaces SCORE.
-          var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount
-                    : (s.dayTradeScore >= 75 ? 5 : s.dayTradeScore >= 60 ? 4 : s.dayTradeScore >= 45 ? 3 : 2);
+          // 2026-04-30 — Ch19 cell replaces SCORE. Direct read of
+          // ch19PassCount from scoreDayTrade output (already in cache).
+          var pc = (typeof s.ch19PassCount === 'number') ? s.ch19PassCount : 0;
           var pcCol = pc >= 5 ? '#22c55e' : pc >= 4 ? '#86efac' : '#94a3b8';
           return '<td data-dt-field="score" style="padding:6px 8px;text-align:center;font-weight:800;font-size:13px;color:'+pcCol+'">'+pc+'/5</td>';
         })()
