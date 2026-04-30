@@ -4393,8 +4393,12 @@ async function scanAndTrade() {
         // scoreDayTrade is the Varsity scorer; it returns null on
         // preflight failure (penny / illiquid / junk fundamentals /
         // abnormal candle range) — that's the hard floor.
+        // 2026-04-30 — log scoreDayTrade exceptions instead of silently
+        // swallowing. A bug inside the 12K-line scorer would otherwise
+        // skip the stock with zero trace.
         let dts = null;
-        try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
+        try { dts = scoreDayTrade(candles, stock.sym); }
+        catch (e) { console.warn(`[ch19-mode] scoreDayTrade(${stock.sym}) threw: ${e && e.message}`); }
         if (!dts) continue;
         const passCount = dts.ch19PassCount || 0;
         if (passCount < CONFIG.CH19_MIN_PASS) continue;
@@ -5008,11 +5012,19 @@ async function scanAndTrade() {
           continue;
         }
 
+        // 2026-04-30 (CRITICAL FIX): use finalScore + enrichedDetail so
+        // live_trades audit trail matches paper_trades exactly.
+        // Pre-fix: paper_trades got finalScore (post structure-filter
+        // adjustment) and enrichedDetail (with [CH19: 4/5 ...] suffix);
+        // live_trades got result.score (pre-adjustment) and result.detail
+        // (no Ch19 suffix). Same trade had two different signal_score
+        // values across the tables, breaking PnL reconciliation and
+        // post-trade Ch19 verification.
         await pool.query(
           `INSERT INTO live_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,order_id)
            VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12)`,
           [stock.sym,stock.n,avgFillPrice,filledQty,+(filledQty*avgFillPrice).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
-           +(result.score*10).toFixed(0),result.strategy,result.regime,result.detail,orderId]
+           +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,orderId]
         );
         console.log(`  🔴 LIVE BUY ${stock.sym} FILLED ${filledQty}@₹${avgFillPrice} (signal ₹${price}) | Order: ${orderId} | Status: ${finalStatus}`);
       } catch(liveErr) {
@@ -12832,7 +12844,13 @@ function scoreDayTrade(candles, sym, ctx) {
                     .filter(Boolean).length >= 2,                                    // ✅ at least 2 of 4 indicators aligned
     rrRatio:      true,  // filled in below after sl/tgt are computed — placeholder passes for now
   };
-  const ch19PassCount = [ch19.priceAction, ch19.volume, ch19.srContext, ch19.indicators, ch19.rrRatio].filter(Boolean).length;
+  // 2026-04-30 — `let` instead of `const` so the retroactive R:R correction
+  // below (line ~12955) can reassign after rrRatio is downgraded post-ATR
+  // adjustment. Pre-fix: const meant the ch19PassCount returned to callers
+  // stayed at the original (placeholder) value even when rrRatio was later
+  // flipped to false — so a stock could pass the Ch19 ≥4 gate in scanAndTrade
+  // while factually being 3/5 (rrRatio<1.5).
+  let ch19PassCount = [ch19.priceAction, ch19.volume, ch19.srContext, ch19.indicators, ch19.rrRatio].filter(Boolean).length;
   if (ch19PassCount >= 4) overall = Math.min(100, overall + _gain('MULTI', 8, `M2 Ch 19 checklist: ${ch19PassCount}/5 passed`));
   else if (ch19PassCount === 3) overall = Math.min(100, overall + _gain('MULTI', 4, 'M2 Ch 19 checklist: 3/5 passed'));
   else if (ch19PassCount <= 1) overall = Math.max(0, overall + _penalty('MULTI', 6, `M2 Ch 19 checklist: only ${ch19PassCount}/5 — weak setup`));
@@ -12951,10 +12969,19 @@ function scoreDayTrade(candles, sym, ctx) {
   // Ch 19 checklist retroactive R:R correction. If the ATR-adjusted R:R
   // ended up < 1.5, the rrRatio check we placeholded above was too
   // generous — drop that tick from the checklist and recompute the bonus.
+  //
+  // 2026-04-30 (CRITICAL): also reassign ch19PassCount so the value
+  // returned to callers (and used by Pass 1's Ch19 binary gate) reflects
+  // the actual checklist after R:R correction. Pre-fix, scanAndTrade
+  // would see ch19PassCount=4 and fire the trade even when rrRatio was
+  // factually false (so true count = 3, below the binary mode threshold).
   if (rrRatio < 1.5) {
     ch19.rrRatio = false;
     const revisedPass = [ch19.priceAction, ch19.volume, ch19.srContext, ch19.indicators, ch19.rrRatio].filter(Boolean).length;
-    if (revisedPass < ch19PassCount && revisedPass <= 2) {
+    if (revisedPass < ch19PassCount) {
+      ch19PassCount = revisedPass;  // ← the fix
+    }
+    if (revisedPass <= 2) {
       overall = Math.max(0, overall + _penalty('MULTI', 4, `M2 Ch 19: R:R ${rrRatio.toFixed(1)} below 1.5 — weakened checklist`));
     }
   }
