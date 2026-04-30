@@ -4104,9 +4104,47 @@ let _scanAndTradeRunning = false;
 // 2.38 req/sec proxy budget). With this flag, an overdue scan bails at
 // the next yield point instead of accumulating.
 let _scanCancelRequested = false;
+// 2026-04-30 — Scenario 2 fix: throttle for KITE_TOKEN_EXPIRED ops_incident.
+// scanAndTrade runs every 1-2 min; without throttling we'd flood incidents.
+let _lastKiteExpiredIncidentAt = 0;
+
 async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
+
+  // ── Token freshness gate (Apr-2026) ──────────────────────────────────
+  // 2026-04-30 — Scenario 2 fix. Pre-fix, scanAndTrade only checked token
+  // existence. If KITE_ACCESS_TOKEN was set but expired (>24h old per
+  // Zerodha policy), every Kite call inside the loop failed silently and
+  // the daily report just showed KITE_TOKEN_AGING after the fact. Now:
+  // bail BEFORE entering the per-stock loop if the recorded set_at says
+  // the token is past the safe window (22h, ~2h before official 06:00
+  // IST expiry). If age is unknown (no set_at row), proceed — don't
+  // block trading just because tracking is missing.
+  try {
+    const _kiteSetAtStr = await dbGet('kite_access_token_set_at');
+    const _kiteSetAt    = _kiteSetAtStr ? Number(_kiteSetAtStr) : 0;
+    const _kiteAgeH     = _kiteSetAt > 0 ? (Date.now() - _kiteSetAt) / 3600000 : null;
+    if (_kiteAgeH != null && _kiteAgeH > 22) {
+      console.warn(`🛑 Smart scan blocked — Kite token is ${_kiteAgeH.toFixed(1)}h old (>22h). Re-auth at /auth/login`);
+      // Throttle ops_incidents so we don't write one per cron tick.
+      if (Date.now() - _lastKiteExpiredIncidentAt > 30 * 60 * 1000) {
+        _lastKiteExpiredIncidentAt = Date.now();
+        try {
+          await pool.query(
+            `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+             VALUES ('KITE_TOKEN_EXPIRED', 'critical', $1, $2, 'BLOCK_SCAN', 'ok', 'scan_skipped_until_reauth', NOW())`,
+            [`Smart scan blocked — token ${_kiteAgeH.toFixed(1)}h old, re-auth required`,
+             JSON.stringify({ ageH: _kiteAgeH, setAt: _kiteSetAt })]
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+  } catch (e) {
+    // dbGet failure shouldn't block trading — log and proceed.
+    console.warn(`[scanAndTrade] token freshness check failed: ${e.message}`);
+  }
 
   // ── Concurrency guard (Apr-2026) ─────────────────────────────────────
   // Without this guard, overlapping Smart Scan runs pile their Kite calls
@@ -24897,6 +24935,27 @@ async function start() {
   // Load token: env var takes priority, then DB (persisted from last session)
   let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
   if (token) process.env.KITE_ACCESS_TOKEN = token;
+
+  // 2026-04-30 — Scenario 7 fix. If we just restored a token but no
+  // kite_access_token_set_at timestamp exists (first deploy after the
+  // freshness-tracking change, or DB-restore path without re-auth),
+  // stamp tracking start at boot time. Without this, the freshness
+  // gate in scanAndTrade can never fire because age stays unknown
+  // forever — token would silently expire and trades would fail.
+  // Conservative trade-off: a stale-but-restored token gets marked
+  // "fresh from boot", but at most we burn one trading day before the
+  // 22h gate kicks in.
+  if (token) {
+    try {
+      const _existingSetAt = await dbGet('kite_access_token_set_at');
+      if (!_existingSetAt) {
+        await dbSet('kite_access_token_set_at', String(Date.now()));
+        console.log('🕒 Initialized kite_access_token_set_at at boot (no prior timestamp)');
+      }
+    } catch (e) {
+      console.warn(`Failed to initialize kite_access_token_set_at at boot: ${e.message}`);
+    }
+  }
 
   // STEP 1: Load universe from stock_universe table (or kv cache fallback)
   const loadedFromDB = await loadUniverseFromDB();
