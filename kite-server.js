@@ -2545,6 +2545,30 @@ const CONFIG = {
   VARSITY_GATE_ENABLED: (process.env.ROBOTRADE_VARSITY_GATE || 'on').toLowerCase() !== 'off',
   MIN_VARSITY_SCORE:    parseInt(process.env.ROBOTRADE_MIN_VARSITY_SCORE || '65', 10),
   SCAN_DELAY_MS:  250,
+
+  // 2026-04-30 — Varsity Ch19 binary mode. When ON, live trading drops
+  // composite-score gating entirely and trades on the M2 Ch 19 5-item
+  // checklist: priceAction · volume · srContext · indicators · rrRatio.
+  // ≥4 of 5 must pass. Drops:
+  //   - selectAndRunStrategy.score >= BUY_SCORE (composite)
+  //   - selectAndRunStrategy.buyVotes >= CONSENSUS_NEEDED (vote-count)
+  //   - scoreDayTrade.dayTradeScore >= MIN_VARSITY_SCORE (Pass 2 numeric)
+  // Keeps:
+  //   - scoreDayTrade preflight (no penny / illiquid / junk fundamentals)
+  //   - structure filter / correlation / sector cap / dedup / cooldown
+  //   - MAX_POSITIONS slot cap
+  //
+  // Rationale: 2026-04-30 RANGING tape produced 135 candidates approved
+  // by structure but 0 BUY signals from the strategy router. Backtest
+  // CURRENT (which uses live-parity adapter) also fired 0. Backtest
+  // BINARY (Ch19 ≥4) consistently fires more trades because it doesn't
+  // require multi-strategy consensus on choppy days. Aligning live with
+  // BINARY backtest gives the system a chance to actually trade in
+  // RANGING regime while still respecting Varsity quality gates.
+  //
+  // Set CH19_BINARY_MODE=false to revert to composite scoring.
+  CH19_BINARY_MODE: (process.env.CH19_BINARY_MODE || 'on').toLowerCase() !== 'off',
+  CH19_MIN_PASS:   parseInt(process.env.CH19_MIN_PASS || '4', 10),
 };
 
 // NSE trading holidays — update annually.
@@ -4360,16 +4384,65 @@ async function scanAndTrade() {
           signalCount++;
         }
 
-      // ── COLLECT BUY CANDIDATES (don't enter yet — rank first) ──
+      // ── COLLECT BUY CANDIDATES ──
+      // 2026-04-30 — two paths: Varsity Ch19 binary mode (default), or
+      // legacy composite scoring (CH19_BINARY_MODE=off).
+      } else if (canEnterNew && CONFIG.CH19_BINARY_MODE) {
+        // ── Ch19 binary mode ──────────────────────────────────────────
+        // Trade fires on Ch19 ≥4-of-5 alone. No score/vote thresholds.
+        // scoreDayTrade is the Varsity scorer; it returns null on
+        // preflight failure (penny / illiquid / junk fundamentals /
+        // abnormal candle range) — that's the hard floor.
+        let dts = null;
+        try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
+        if (!dts) continue;
+        const passCount = dts.ch19PassCount || 0;
+        if (passCount < CONFIG.CH19_MIN_PASS) continue;
+
+        // Override result fields with Varsity setup-derived values so
+        // Pass 2 + INSERT use structural SL/TGT (VWAP-reclaim / OR-mid /
+        // gap-fill) rather than strategy-engine SL. dts.sl / dts.tgt are
+        // top-level fields on the scoreDayTrade return; bestSetup is a
+        // string identifier (e.g. 'VWAP_RECLAIM').
+        if (dts.sl)  result.sl       = dts.sl;
+        if (dts.tgt) result.tgt      = dts.tgt;
+        if (dts.bestSetup) result.strategy = dts.bestSetup;
+        // 2026-04-30 — when Ch19 disagrees with the strategy router
+        // (e.g. router consensus is SELL but Ch19 ≥4 says trade),
+        // log it explicitly so it's auditable. The override is the
+        // whole point of binary mode — we trust Varsity's checklist
+        // over the multi-strategy vote — but we want the divergence
+        // visible in trade indicators for post-hoc analysis.
+        const _routerSignal = result.signal;
+        result.signal       = 'BUY';
+        if (_routerSignal !== 'BUY') {
+          result.detail = (result.detail || '') + ` [router-signal:${_routerSignal} → Ch19-override:BUY]`;
+        }
+        // Surface Ch19 pass-count as the score so ranking + UI use it.
+        // Old composite score (0-10) was scaled from weighted-strategy
+        // result; in binary mode it's no longer meaningful, so replace
+        // with passCount-derived value (0-10 range preserved for
+        // downstream calls expecting a score).
+        result.score         = +((passCount / 5) * 10).toFixed(2);
+        result.ch19PassCount = passCount;
+        const ch19 = dts.ch19Items || {};
+        result.detail     = (result.detail || '') +
+                            ` [CH19: ${passCount}/5 — pa:${ch19.priceAction?'✓':'✗'} ` +
+                            `vol:${ch19.volume?'✓':'✗'} sr:${ch19.srContext?'✓':'✗'} ` +
+                            `ind:${ch19.indicators?'✓':'✗'} rr:${ch19.rrRatio?'✓':'✗'}]`;
+
+        buyCandidates.push({
+          stock, result, candles, last,
+          dayTradeScore:    dts.dayTradeScore,
+          varsityBestSetup: dts.bestSetup,
+          ch19PassCount:    passCount,
+        });
+
+      // ── Legacy composite-score path (CH19_BINARY_MODE=off) ────────
       } else if (canEnterNew
                  && result.signal==="BUY"
                  && result.buyVotes >= CONFIG.CONSENSUS_NEEDED
                  && result.score >= CONFIG.BUY_SCORE) {
-        // Phase 5 · Varsity gate — compute the full 14-point Varsity score so
-        // Pass 2 can filter on it. Uses the SAME candles already in memory +
-        // stock.sym for relative-strength context. Returns null for penny
-        // stocks, illiquid names, abnormal 5-min bars — all of which we
-        // already want to skip. Attach to candidate for audit trail.
         let dts = null;
         try { dts = scoreDayTrade(candles, stock.sym); } catch (_) {}
         buyCandidates.push({
@@ -4685,9 +4758,12 @@ async function scanAndTrade() {
     // Phase 5 · Varsity gate — require the full 14-point Varsity checklist
     // to pass a minimum score. Cheap check (dayTradeScore was already computed
     // in Pass 1 from the same candles), high filter rate on marginal setups.
-    // Combined with existing consensus + BUY_SCORE filters, this should
-    // meaningfully compress over-trading on choppy days.
-    if (CONFIG.VARSITY_GATE_ENABLED) {
+    //
+    // 2026-04-30 — skipped when CH19_BINARY_MODE is on. Pass 1 already
+    // gated on Ch19 ≥4 (the binary checklist), no need to re-gate on
+    // composite Varsity score here. Composite score gating was the very
+    // thing the Ch19 binary mode is replacing.
+    if (CONFIG.VARSITY_GATE_ENABLED && !CONFIG.CH19_BINARY_MODE) {
       const dts = candidate.dayTradeScore;
       if (dts == null || dts < CONFIG.MIN_VARSITY_SCORE) {
         const reason = dts == null
@@ -8171,34 +8247,37 @@ async function _runDailyBacktest(istDate, opts = {}) {
   }
   _backtestRunning = true;
   try {
-    // 2026-04-29 — adapter that wraps selectAndRunStrategy in the shape
-    // backtest/replay.js expects (dayTradeScore + bestSetup + sl/target).
-    // This is the SAME scoring engine production scanAndTrade uses, so
-    // backtest CURRENT now mirrors live trade decisions (modulo daily-TF
-    // confirmation which needs daily candles we don't load yet).
-    //
-    // Pre-fix, replay used scoreDayTrade — a different scorer that ranks
-    // 0-100 with its own preflight gates. Result: backtest CURRENT
-    // returned 0 trades on 2026-04-29 while live made 5 (replay.js
-    // line 39-46 acknowledged this divergence).
+    // 2026-04-30 — backtest CURRENT mirrors live's Ch19 binary mode.
+    // Was: wrapped selectAndRunStrategy with score>=2.5 gate. That's
+    // gone in live (CH19_BINARY_MODE) so the backtest follows. Now:
+    // call scoreDayTrade directly (same as BINARY variant) — the only
+    // difference between CURRENT and BINARY in the new world is whether
+    // replay enforces the Ch19≥4 hard gate inside the loop. CURRENT
+    // applies it explicitly here in the adapter; BINARY applies it via
+    // replay.js's binaryOnly path. Same scorer, same expected output.
     const _liveParityScorer = function (candles, sym /*, ctx*/) {
       try {
-        const r = selectAndRunStrategy(candles);
-        if (!r) return null;
-        if (r.signal !== 'BUY') return null;
-        if (typeof r.score !== 'number' || r.score < CONFIG.BUY_SCORE) return null;
+        const dts = scoreDayTrade(candles, sym);
+        if (!dts) return null;
+        const passCount = dts.ch19PassCount || 0;
+        if (passCount < CONFIG.CH19_MIN_PASS) return null;
+        // 2026-04-30 — populate regime from detectRegime(candles) since
+        // scoreDayTrade doesn't expose it. Backtest replay segregates
+        // by regime in some places; null would silently break that.
+        let _regime = null;
+        try {
+          const dr = detectRegime(candles);
+          _regime = dr && dr.regime ? dr.regime : null;
+        } catch (_) { /* keep null */ }
         return {
-          // 0-10 → 0-100 scaling so replay's threshold/sort math still works.
-          dayTradeScore: Math.min(100, +(r.score * 10).toFixed(1)),
-          // Force-pass binary checklist — selectAndRunStrategy already does
-          // its own consensus + score gating, Ch19 is a different system.
-          ch19PassCount: 5,
-          bestSetup: { type: r.strategy, sl: r.sl, target: r.tgt },
-          sl:     r.sl,
-          target: r.tgt,
-          overall: Math.min(100, +(r.score * 10).toFixed(1)),
-          regime:    r.regime,
-          consensus: r.consensus,
+          dayTradeScore: dts.dayTradeScore,
+          ch19PassCount: passCount,
+          bestSetup:     { type: dts.bestSetup, sl: dts.sl, target: dts.tgt },
+          sl:            dts.sl,
+          target:        dts.tgt,
+          overall:       dts.dayTradeScore,
+          regime:        _regime,
+          consensus:     'BUY',
         };
       } catch (_) { return null; }
     };
