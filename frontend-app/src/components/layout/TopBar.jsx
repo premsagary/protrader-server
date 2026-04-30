@@ -116,6 +116,27 @@ export default function TopBar() {
 
         {/* User + Logout */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          {/* 2026-04-30 — Ch19 binary mode badge for admins. RoboTrade
+              now decides BUY/NO-BUY on Varsity M2 Ch19 5-item checklist
+              (≥4 must pass), not on composite scoring. */}
+          {user?.role === 'admin' && (
+            <span
+              title="Trading gate: Varsity M2 Ch 19 binary checklist (≥4 of 5 must pass). Composite scoring is OFF."
+              style={{
+                fontSize: 9,
+                color: '#a78bfa',
+                background: 'rgba(167,139,250,0.08)',
+                border: '1px solid rgba(167,139,250,0.2)',
+                padding: '3px 10px',
+                borderRadius: 12,
+                letterSpacing: '0.5px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              🎯 CH19 4/5
+            </span>
+          )}
           {user ? (
             <>
               <span className="chip">

@@ -501,7 +501,10 @@ function PositionCard({ pos, prices }) {
           ['Stop Loss', INR(pos.stop_loss)],
           ['Target', INR(pos.target)],
           ['Capital', INR(pos.capital)],
-          ['Score', pos.signal_score ?? '—'],
+          // 2026-04-30 — show Ch19 pass count instead of composite score.
+          // signal_score in binary mode is stored as (passCount/5)*100,
+          // so divide by 20 to recover the X/5 form.
+          ['Ch19', pos.signal_score != null ? `${Math.round(pos.signal_score / 20)}/5` : '—'],
         ].map(([l, v]) => (
           <div key={l} style={{ background: 'var(--bg2)', borderRadius: 8, padding: '8px 10px' }}>
             <div style={{ fontSize: 10, color: 'var(--text3)', letterSpacing: '0.4px', textTransform: 'uppercase', fontWeight: 600 }}>{l}</div>

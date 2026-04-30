@@ -51,7 +51,10 @@ const SETUP_FILTER_PILLS = [
 const COLS = [
   { k: 'sym',           l: 'Stock',     w: 110, align: 'left',   sticky: true, bold: true },
   { k: 'grp',           l: 'Grp',       w: 75,  align: 'left' },
-  { k: 'dayTradeScore', l: 'Score',     w: 80,  align: 'right', fmt: (v) => v != null ? Math.round(v) : '—' },
+  // 2026-04-30 — replaced "Score" with Ch19 pass count (Varsity M2 Ch 19
+  // binary checklist). Trades fire on ch19PassCount ≥4, not on composite
+  // dayTradeScore. Format as X/5 for clarity.
+  { k: 'ch19PassCount', l: 'Ch19',     w: 70,  align: 'right', fmt: (v) => v != null ? `${v}/5` : '—' },
   { k: 'bestSetup',     l: 'Setup',     w: 115, align: 'left',  fmt: (v, s) => v ? `${s.bestSetupEmoji || ''} ${String(v).replace(/_/g, ' ')}` : '—' },
   { k: 'price',         l: 'Price',     w: 80,  align: 'right', fmt: (v) => v != null ? `₹${Number(v).toFixed(1)}` : '—' },
   { k: 'rsi',           l: 'RSI',       w: 60,  align: 'right', fmt: (v) => v != null ? Math.round(v) : '—' },
@@ -103,7 +106,7 @@ export default function DayTrade() {
   const [marketOpen, setMarketOpen] = useState(null);
   const [setupFilter, setSetupFilter] = useState('ALL');
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState('dayTradeScore');
+  const [sortKey, setSortKey] = useState('ch19PassCount');
   const [sortDir, setSortDir] = useState('desc');
   const [expanded, setExpanded] = useState(null);
   const [forceRunning, setForceRunning] = useState(false);
@@ -192,13 +195,15 @@ export default function DayTrade() {
   };
 
   // ── Summary counts per setup type (pre-filter) ────────────────────
+  // 2026-04-30 — replaced "strong (≥70 score)" pill with "ch19_4plus"
+  // (≥4/5 Ch19 binary checks pass — what actually fires a trade).
   const counts = useMemo(() => {
-    const o = { total: picks.length, strong: 0 };
+    const o = { total: picks.length, ch19_4plus: 0 };
     for (const st of SETUPS) o[st.type] = 0;
     for (const p of picks) {
       const setup = String(p.bestSetup || '').toUpperCase();
       if (o[setup] != null) o[setup]++;
-      if ((p.dayTradeScore || 0) >= 70) o.strong++;
+      if ((p.ch19PassCount || 0) >= 4) o.ch19_4plus++;
     }
     return o;
   }, [picks]);
@@ -322,7 +327,7 @@ export default function DayTrade() {
         marginBottom: 20,
       }}>
         <StatCard l="Total" v={counts.total} c="var(--text)" />
-        <StatCard l="Strong (≥70)" v={counts.strong} c="var(--green-text)" />
+        <StatCard l="Ch19 ≥4/5" v={counts.ch19_4plus} c="var(--green-text)" />
         {SETUPS.map((s) => (
           <StatCard key={s.type} l={s.label} v={counts[s.type] || 0} c={s.color} icon={s.icon} />
         ))}
@@ -339,7 +344,8 @@ export default function DayTrade() {
                 setup={s}
                 rows={(Array.isArray(picks) ? picks : [])
                   .filter((p) => String(p.bestSetup || '').toUpperCase() === s.type)
-                  .sort((a, b) => (b.dayTradeScore || 0) - (a.dayTradeScore || 0))
+                  .sort((a, b) => (b.ch19PassCount || 0) - (a.ch19PassCount || 0)
+                                  || (b.rrRatio || 0) - (a.rrRatio || 0))
                   .slice(0, 10)}
               />
             ))}
@@ -469,8 +475,9 @@ export default function DayTrade() {
                           const raw = p[c.k];
                           const val = c.fmt ? c.fmt(raw, p) : raw != null ? String(raw) : '—';
                           let color = c.k === 'sym' ? 'var(--text)' : 'var(--text2)';
-                          if (c.k === 'dayTradeScore' && raw != null) {
-                            color = raw >= 70 ? 'var(--green-text)' : raw >= 50 ? 'var(--amber-text)' : 'var(--text2)';
+                          // 2026-04-30 — color Ch19 cell by pass count: 5/5 green, 4/5 light, lower grey
+                          if (c.k === 'ch19PassCount' && raw != null) {
+                            color = raw >= 5 ? 'var(--green-text)' : raw >= 4 ? 'var(--text)' : 'var(--text2)';
                           }
                           if (c.k === 'bestSetup' && setup) color = setup.color;
                           if (c.k === 'rrRatio' && raw != null) {
@@ -494,7 +501,7 @@ export default function DayTrade() {
                               style={{
                                 ...tdStyle,
                                 textAlign: c.align === 'left' ? 'left' : 'right',
-                                fontWeight: c.bold ? 700 : c.k === 'dayTradeScore' ? 700 : 500,
+                                fontWeight: c.bold ? 700 : c.k === 'ch19PassCount' ? 700 : 500,
                                 color,
                                 ...(c.sticky ? { position: 'sticky', left: 34, background: 'rgba(12,14,20,0.95)', zIndex: 4 } : {}),
                               }}
