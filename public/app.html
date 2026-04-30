@@ -3539,6 +3539,10 @@ img,video,canvas,svg{max-width:100%;height:auto}
   <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;align-items:center" id="topbar-stats"></div>
   <div style="display:flex;gap:8px;align-items:center;margin-left:12px;flex-shrink:0">
     <button id="trading-mode-btn" class="admin-only" onclick="toggleTradingMode()" style="display:none;font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-weight:700;letter-spacing:0.5px;transition:all 0.2s" title="Toggle between LIVE (real-money orders) and PAPER (simulated)">📝 PAPER</button>
+    <!-- 2026-04-30 — Ch19 binary mode badge. Visible to admin only.
+         Shows current trading-gate mode so user can see at a glance
+         whether composite scoring or Varsity Ch19 binary is active. -->
+    <span id="ch19-mode-badge" class="admin-only" style="display:none;font-size:9px;color:#a78bfa;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);padding:3px 10px;border-radius:12px;letter-spacing:0.5px;font-weight:600" title="Trading gate: Varsity M2 Ch 19 binary checklist (≥4 of 5 must pass). Composite scoring is OFF.">🎯 CH19 4/5</span>
     <span id="free-badge" style="font-size:9px;color:var(--green);background:rgba(94,204,138,0.08);border:1px solid rgba(94,204,138,0.15);padding:3px 10px;border-radius:12px;letter-spacing:0.5px;font-weight:600">FREE BETA</span>
     <span id="user-badge" style="font-size:11px;color:var(--text3);display:none"></span>
     <button id="logout-btn" onclick="doLogout()" style="font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--red);cursor:pointer;font-weight:600;display:none;transition:all 0.2s" onmouseover="this.style.background='rgba(224,96,96,0.06)';this.style.borderColor='rgba(224,96,96,0.15)'" onmouseout="this.style.background='transparent';this.style.borderColor='var(--border)'">Logout</button>
@@ -14229,6 +14233,41 @@ function renderArchitecturePage(){
     + _archPillar('Response horizons', '7Y / 10Y / 20Y / 30Y / 40Y', 'Each horizon returns an expected corpus for a ₹1 Lakh lump-sum investment. Rendered as a compact row under the fund name: "🐟 MiroFish — ₹1 Lakh invested → X @ 7Y · Y @ 10Y · …". Colour-coded by horizon so the 30Y/40Y numbers stand out.')
     + _archPillar('Scope', 'top 5 per category only', 'Only the top-5 cards per category call the endpoint — matches the Deep AI Review scope so every AI-reviewed fund also gets a wealth projection. The full table below does NOT call MiroFish — keeps latency + cost bounded.')
     + _archNote('MiroFish also exposes a crowd-reaction agent simulator (56 AI agents) that is not yet wired into ProTrader. It is a future integration for qualitative "how would retail investors react to this fund\'s drawdown profile" narratives.')
+  );
+
+  // ── 2026-04-30 — Ch19 binary trading mode ──
+  h += _archCard('🎯', 'Varsity Ch19 binary trading mode (2026-04-30)',
+      'RoboTrade now decides BUY/NO-BUY on the Varsity M2 Ch 19 5-item checklist (≥4 must pass). Composite scoring is gone from the gate — kept only for setup-detection inside scoreDayTrade. Toggle via env <code>CH19_BINARY_MODE=off</code>.',
+        _archPillar('The 5 Ch19 checks', '≥4 must pass (default)',
+          '<b>1. priceAction</b> — bullish candlestick on latest 5-min bar (engulfing, hammer, morning star, etc.). '
+          + '<b>2. volume</b> — volRatio ≥ 1.5× the 20-bar average. '
+          + '<b>3. srContext</b> — price at a recognized pivot (CPR / Fibonacci / PDH / PDL / opening-range high or low). '
+          + '<b>4. indicators</b> — at least 2 of {EMA9>EMA20, MACD bull, Supertrend bull, RSI in 20-80}. '
+          + '<b>5. rrRatio</b> — set after SL/TGT computed; placeholder always passes (RR floor enforced separately).')
+      + _archPillar('What got dropped', 'no more numeric thresholds',
+          '<code>result.score &gt;= CONFIG.BUY_SCORE</code> (2.5/10) — gone. '
+          + '<code>result.buyVotes &gt;= CONSENSUS_NEEDED</code> (≥2 of 3 strategies) — gone. '
+          + '<code>dayTradeScore &gt;= MIN_VARSITY_SCORE</code> (65/100, Pass-2 numeric gate) — skipped when binary mode is on. '
+          + 'Result: trades that would have failed the score thresholds but pass the Varsity checklist now fire.')
+      + _archPillar('What still scores (and why it\'s still Varsity)', 'preflight + setup detection',
+          'Inside scoreDayTrade: <b>preflight</b> rejects penny &lt;₹20, illiquid &lt;5K avg vol, junk fundamentals score &lt;20, abnormal &gt;3% bar (Varsity M2 Ch1+12 explicit prerequisites). '
+          + '<b>Setup picker</b> ranks 4 bullish setups (VWAP_RECLAIM / BREAKOUT / GAP_AND_GO / OVERSOLD_BOUNCE) by individual score, picks best. '
+          + '<b>Risk plan</b> derives SL from structural levels (VWAP / OR-mid / gap-fill) and TGT from measured-move (Varsity M9). '
+          + 'Numeric scoring exists, but only to pick which Varsity setup fires — never to decide whether to trade.')
+      + _archPillar('Pure Varsity ranking (how slots fill)', 'binaryRankScore — no weights',
+          'Pass 2 picks 3-of-N Ch19 passers via: <code>passCount × 1000 + rrRatio × 100 + regimeAffinity × 10</code>. '
+          + '5/5 always ranks above 4/5 regardless of R:R. Within same passCount, higher R:R wins. Regime affinity (TRENDING > BREAKOUT > MOMENTUM > RANGING) is the final tiebreak. '
+          + 'No weighted multi-factor formula — every component is Varsity-explicit.')
+      + _archPillar('Backtest parity', 'CURRENT and BINARY now both Ch19',
+          'Backtest CURRENT variant uses <code>_liveParityScorer</code> which wraps scoreDayTrade with the same Ch19 ≥4 gate. So backtest mirrors live decision-making. '
+          + 'BINARY variant uses replay.js binaryOnly path — same scorer, same gate, same expected output. '
+          + 'A/B between CURRENT and BINARY in the daily report is now mostly cosmetic (they should fire identical trades).')
+      + _archPillar('Easy revert + tuning knobs', 'env vars',
+          '<code>CH19_BINARY_MODE=off</code> — falls back to composite-score path. '
+          + '<code>CH19_MIN_PASS=5</code> — require all 5 checks (stricter, fewer trades). '
+          + '<code>CH19_MIN_PASS=3</code> — looser (more trades, weaker setups). '
+          + 'Default: 4 of 5, what Varsity Ch19 explicitly prescribes.')
+      + _archNote('Why we made this change: 2026-04-30 daily report — 0 live trades all day, 135 candidates approved by structure, but strategy router\'s consensus-vote requirement (≥2 of 3 strategies agreeing on BUY) was too strict for RANGING-dominant tape. Backtest CURRENT (which used the strategy adapter) also fired 0. Switching to Ch19 lets the system trade quality structures even when multi-strategy consensus doesn\'t materialize. Commits <code>3437bcf</code> + <code>4f39ff7</code>.')
   );
 
   // ── 2026-04-29 — Daily Report observability cleanup ──
