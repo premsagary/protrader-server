@@ -4662,9 +4662,34 @@ async function scanAndTrade() {
       // Rough ATR estimate: stop = px − 1.2*ATR, target = px + 2.4*ATR
       const estStop = px - 1.2 * atrVal;
       const estTgt  = px + 2.4 * atrVal;
-      const rk = computeRankingScore(c, px, estStop, estTgt, _portfolioCtx);
-      c.rankingScore    = rk.rankingScore;
-      c.rankingBreakdown = rk.breakdown;
+      if (CONFIG.CH19_BINARY_MODE) {
+        // 2026-04-30 — Varsity-pure ranking: Ch19 pass-count first,
+        // then R:R, then regime fit. No weighted multi-factor formula.
+        // M2 Ch 19 says the checklist decides WHETHER to trade; once
+        // multiple stocks pass, the ones with MORE checks pass and
+        // higher R:R deserve the slots.
+        //
+        //   binaryRankScore = ch19PassCount * 1000  ← dominates
+        //                   + rrRatio * 100        ← tiebreak by R:R
+        //                   + regimeAffinity * 10  ← final tiebreak
+        //
+        // RR computed from candidate's actual sl/tgt (already set in
+        // Pass 1 by scoreDayTrade.bestSetup). Falls back to estimated
+        // ATR-based RR when sl/tgt missing.
+        const sl  = c.result?.sl  ?? estStop;
+        const tgt = c.result?.tgt ?? estTgt;
+        const denom = px - sl;
+        const rr = (denom > 0 && tgt > px) ? +((tgt - px) / denom).toFixed(2) : 0;
+        const regAffin = ({ TRENDING: 3, BREAKOUT: 2, MOMENTUM: 1, RANGING: 0 })[c.result?.regime] ?? 0;
+        const passCount = c.ch19PassCount || 0;
+        c.rankingScore     = +(passCount * 1000 + rr * 100 + regAffin * 10).toFixed(2);
+        c.rankingBreakdown = { ch19PassCount: passCount, rrRatio: rr, regimeAffinity: regAffin, mode: 'ch19_binary' };
+      } else {
+        // Legacy composite ranking (CH19_BINARY_MODE=off).
+        const rk = computeRankingScore(c, px, estStop, estTgt, _portfolioCtx);
+        c.rankingScore    = rk.rankingScore;
+        c.rankingBreakdown = rk.breakdown;
+      }
     } catch (_) {
       c.rankingScore = +(c.adjustedScore ?? c.result.score);
     }
