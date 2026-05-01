@@ -3238,6 +3238,33 @@ async function updateRejectedTracking(livePrices) {
 // Drawdown circuit breaker — Varsity M9 Ch 6
 let _peakEquity = CONFIG.ACCOUNT_SIZE;
 let _ddPaused   = false;
+let _peakEquityHydrated = false;
+
+// 2026-04-30 — fix cold-boot drawdown false-fire. Pre-fix, _peakEquity reset
+// to CONFIG.ACCOUNT_SIZE on every restart. If cumulative paper PnL was
+// negative enough (e.g. -₹18 000 on ₹100k account = -18%, close to the 20%
+// HALT line), the FIRST checkDrawdownCircuitBreaker call computed
+// drawdown ≈ 18% and could HALT trading on the very first scan tick of the
+// day. Fix: hydrate peak from kv on boot; if no stored peak, anchor to
+// max(equity, ACCOUNT_SIZE) so cumulative losses don't look like fresh
+// intraday drawdown. Persist peak on each call so it survives restarts.
+async function _hydratePeakEquity(currentEquity) {
+  if (_peakEquityHydrated) return;
+  try {
+    const stored = await dbGet('drawdown_peak_equity');
+    const storedNum = stored ? parseFloat(stored) : NaN;
+    if (Number.isFinite(storedNum) && storedNum > 0) {
+      _peakEquity = Math.max(_peakEquity, storedNum);
+    } else {
+      // No stored peak — anchor to max(current equity, ACCOUNT_SIZE) so a
+      // cold-start with negative cumulative PnL doesn't immediately HALT.
+      _peakEquity = Math.max(currentEquity, CONFIG.ACCOUNT_SIZE);
+    }
+  } catch (_) {
+    // dbGet failure shouldn't block scan — fall through with current peak.
+  }
+  _peakEquityHydrated = true;
+}
 async function checkDrawdownCircuitBreaker() {
   try {
     // Compute true equity. In LIVE mode we must mark-to-market open positions,
@@ -3268,8 +3295,12 @@ async function checkDrawdownCircuitBreaker() {
       const totalPnl = parseFloat(rows[0]?.total_pnl || 0);
       equity = CONFIG.ACCOUNT_SIZE + totalPnl;
     }
+    // Hydrate peak from kv on first call so cold-boot doesn't fire false DD.
+    await _hydratePeakEquity(equity);
     _peakEquity     = Math.max(_peakEquity, equity);
     const drawdown  = (_peakEquity - equity) / _peakEquity;
+    // Persist peak across restarts. Best-effort — DB hiccup shouldn't block scan.
+    try { await dbSet('drawdown_peak_equity', String(_peakEquity)); } catch (_) {}
 
     if (drawdown >= CONFIG.DD_HALT_PCT) {
       console.log(`🛑 Drawdown ${(drawdown*100).toFixed(1)}% — HALTING all trading`);
@@ -4198,6 +4229,50 @@ async function scanAndTrade() {
   await getLiveAccountEquity();
 
   const { rows: openTrades } = await pool.query("SELECT * FROM paper_trades WHERE status='OPEN'");
+
+  // 2026-04-30 — orphan exit pass. Pre-fix, exit management ran ONLY inside
+  // the `for (const stock of UNIVERSE)` loop. If a paper position was opened
+  // before a universe restriction (or its symbol got removed from the active
+  // list), it would never see the matching iteration → no SL/TGT/time exit.
+  // Observed 2026-04-29: ATGL/EXIDEIND/SRF stuck OPEN past EOD because they
+  // weren't in NIFTY50+Next50. Fix: pre-loop, force-close any OPEN paper
+  // trade whose symbol is not in the current UNIVERSE — at last cached
+  // price if available, otherwise at entry price (zero PnL squareoff).
+  try {
+    const _univSet = new Set(UNIVERSE.map(s => s.sym));
+    const _orphans = openTrades.filter(t => !_univSet.has(t.symbol));
+    for (const t of _orphans) {
+      try {
+        const entryPx  = parseFloat(t.price || 0);
+        const cached   = livePrices && livePrices[t.symbol] && livePrices[t.symbol].price;
+        const exitPx   = (cached && cached > 0) ? cached : entryPx;
+        const realistic = computeRealisticExitPnL(entryPx, exitPx, t.quantity);
+        await pool.query(
+          `UPDATE paper_trades
+              SET status='CLOSED', exit_price=$1, exit_time=NOW(),
+                  pnl=$2, pnl_pct=$3, exit_reason=$4, gross_pnl=$5, costs=$6
+            WHERE id=$7 AND status='OPEN'`,
+          [realistic.exitPrice, realistic.pnl, realistic.pnlPct,
+           cached ? 'Orphan close (out of universe, cached price)'
+                  : 'Orphan close (out of universe, entry-px squareoff)',
+           realistic.grossPnL, realistic.costs, t.id]
+        );
+        console.log(`🧹 Orphan paper trade closed: ${t.symbol} (id=${t.id}) — ${cached ? 'cached' : 'entry-px'}`);
+      } catch (e) {
+        console.warn(`[orphan-exit] ${t.symbol}: ${e.message}`);
+      }
+    }
+    if (_orphans.length) {
+      // Reload openTrades after orphan cleanup so the rest of scanAndTrade
+      // operates on the current set.
+      const { rows: refreshed } = await pool.query("SELECT * FROM paper_trades WHERE status='OPEN'");
+      openTrades.length = 0;
+      openTrades.push(...refreshed);
+    }
+  } catch (e) {
+    console.warn(`[orphan-exit] sweep failed: ${e.message}`);
+  }
+
   let signalCount=0, dominantRegime="UNKNOWN", dominantStrategy="NONE";
   const regimeCounts={};
 
@@ -8813,6 +8888,49 @@ app.get('/api/admin/daily-report', async (req, res) => {
       },
     ];
 
+    // ── Trading-mode & gate context (2026-04-30) ─────────────────────────
+    // Surfaces the active gates and mode so the daily report reflects
+    // current trading behavior — not just historical outcomes. Rendered
+    // in the HTML as a "Mode & Gates" panel between top-line cards and
+    // the regime section.
+    const _modeCtx = {
+      ch19BinaryOn:   !!CONFIG.CH19_BINARY_MODE,
+      ch19MinPass:    CONFIG.CH19_MIN_PASS,
+      universeGroups: process.env.UNIVERSE_GROUPS || 'NIFTY50,NEXT50',
+      universeSize:   Array.isArray(UNIVERSE) ? UNIVERSE.length : null,
+      ddPeakEquity:   typeof _peakEquity === 'number' ? _peakEquity : null,
+      ddHydrated:     !!_peakEquityHydrated,
+      ddHaltPct:      CONFIG.DD_HALT_PCT,
+    };
+    // Token freshness: read live, don't fail report if dbGet hiccups.
+    try {
+      const _tokSetAtStr = await dbGet('kite_access_token_set_at');
+      const _tokSetAt    = _tokSetAtStr ? Number(_tokSetAtStr) : 0;
+      const _tokAgeH     = _tokSetAt > 0 ? +(((Date.now() - _tokSetAt) / 3600000).toFixed(2)) : null;
+      _modeCtx.tokenSetAt = _tokSetAt > 0 ? new Date(_tokSetAt).toISOString() : null;
+      _modeCtx.tokenAgeH  = _tokAgeH;
+      _modeCtx.tokenStatus = !process.env.KITE_ACCESS_TOKEN ? 'missing'
+        : _tokAgeH == null ? 'untracked'
+        : _tokAgeH > 22    ? 'expired'
+        : _tokAgeH > 18    ? 'aging'
+        :                    'fresh';
+    } catch (_) {
+      _modeCtx.tokenStatus = 'unknown';
+    }
+    // Today's orphan-exit count — derived from paper_trades exit_reason text
+    // written by the new orphan sweep at scanAndTrade entry.
+    try {
+      const orphanRows = await safeQuery(
+        `SELECT COUNT(*)::int AS n FROM paper_trades
+          WHERE exit_time >= $1 AND exit_time < $2
+            AND exit_reason ILIKE 'Orphan close%'`,
+        [start, end]
+      );
+      _modeCtx.orphanExitsToday = (orphanRows && orphanRows[0] && orphanRows[0].n) || 0;
+    } catch (_) {
+      _modeCtx.orphanExitsToday = null;
+    }
+
     // ── Backtest replay — what-the-strategy-would-have-done ──────────────
     // Runs scoreDayTrade against stored 5-min candles, simulates
     // entries/exits, returns trade list + summary. Compared against actual
@@ -8846,6 +8964,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
           errUnique: errList.length, errTotal,
           vix: vixVal, niftyPct: typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null,
         },
+        mode: _modeCtx,
         backtest,
         regime: {
           intradayLatest:  intradayRegime,
@@ -9017,6 +9136,50 @@ app.get('/api/admin/daily-report', async (req, res) => {
         ? `conf ${portfolioRegimeData.confidence}% · cash ${portfolioRegimeData.cashSuggestion ?? '—'}%`
         : 'not yet computed'
     }</div>
+  </div>
+</div>
+
+<!-- Trading mode & gates (2026-04-30) -->
+<h2>Mode &amp; Gates <span class="muted" style="font-weight:normal;font-size:13px">— current trading behavior</span></h2>
+<div class="card">
+  <div class="check">
+    <span class="check-icon ${_modeCtx.ch19BinaryOn ? 'check-pass' : 'check-fail'}">${_modeCtx.ch19BinaryOn ? '✓' : '✗'}</span>
+    <span><strong>Trading mode:</strong>
+      ${_modeCtx.ch19BinaryOn
+        ? `Varsity M2 Ch 19 BINARY checklist (≥${_modeCtx.ch19MinPass}/5 must pass) · composite scoring OFF for entries`
+        : 'Composite scoring (legacy)'}
+      &nbsp;<span class="muted">Ranking: passCount × 1000 + R:R × 100 + regimeAffinity × 10</span>
+    </span>
+  </div>
+  <div class="check">
+    <span class="check-icon check-pass">✓</span>
+    <span><strong>Universe:</strong>
+      ${esc(_modeCtx.universeGroups)} · <strong>${_modeCtx.universeSize ?? '—'}</strong> stocks loaded
+    </span>
+  </div>
+  <div class="check">
+    <span class="check-icon ${_modeCtx.tokenStatus === 'fresh' ? 'check-pass' : 'check-fail'}">${_modeCtx.tokenStatus === 'fresh' ? '✓' : _modeCtx.tokenStatus === 'aging' ? '⚠' : '✗'}</span>
+    <span><strong>Kite token:</strong>
+      ${esc(_modeCtx.tokenStatus)}
+      ${_modeCtx.tokenAgeH != null ? ` · age <strong>${_modeCtx.tokenAgeH}h</strong>` : ''}
+      ${_modeCtx.tokenSetAt ? ` · set ${esc(_modeCtx.tokenSetAt.replace('T', ' ').slice(0, 16))}Z` : ''}
+      ${_modeCtx.tokenStatus === 'expired' || _modeCtx.tokenStatus === 'aging' || _modeCtx.tokenStatus === 'missing'
+        ? ' · <a href="/auth/login" style="color:var(--accent)">re-auth</a>' : ''}
+    </span>
+  </div>
+  <div class="check">
+    <span class="check-icon check-pass">✓</span>
+    <span><strong>Drawdown peak:</strong>
+      ${_modeCtx.ddPeakEquity != null ? fmtInr(_modeCtx.ddPeakEquity) : '—'}
+      <span class="muted">(${_modeCtx.ddHydrated ? 'hydrated from kv' : 'cold'} · HALT@${(_modeCtx.ddHaltPct * 100).toFixed(0)}%)</span>
+    </span>
+  </div>
+  <div class="check">
+    <span class="check-icon ${_modeCtx.orphanExitsToday === 0 ? 'check-pass' : 'check-fail'}">${_modeCtx.orphanExitsToday === 0 ? '✓' : '⚠'}</span>
+    <span><strong>Orphan exits today:</strong>
+      ${_modeCtx.orphanExitsToday == null ? '—' : _modeCtx.orphanExitsToday}
+      <span class="muted">(positions closed at scan entry because their symbol left the active universe)</span>
+    </span>
   </div>
 </div>
 
@@ -24944,38 +25107,7 @@ async function start() {
   let token = process.env.KITE_ACCESS_TOKEN || await dbGet('kite_access_token');
   if (token) process.env.KITE_ACCESS_TOKEN = token;
 
-  // 2026-04-30 — Scenario 7 fix (hardened). If we just restored a token
-  // but no kite_access_token_set_at timestamp exists (first deploy after
-  // the freshness-tracking change, or DB-restore path without re-auth),
-  // stamp tracking start — but ONLY after verifying the token actually
-  // works via a lightweight kite.getMargins('equity') call. Without
-  // verification, a stale env-var token would get marked "fresh from
-  // boot" and the 22h gate wouldn't fire for a full trading day. With
-  // verification, a stale token leaves set_at unset and the existing
-  // morning-cron warn will fire instead of silent failure.
-  if (token) {
-    try {
-      const _existingSetAt = await dbGet('kite_access_token_set_at');
-      if (!_existingSetAt) {
-        // Verify token works before stamping fresh.
-        try {
-          if (kite && typeof kite.setAccessToken === 'function') {
-            kite.setAccessToken(token);
-          }
-          await Promise.race([
-            kite.getMargins('equity'),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('boot-token-probe timeout')), 8000)),
-          ]);
-          await dbSet('kite_access_token_set_at', String(Date.now()));
-          console.log('🕒 Initialized kite_access_token_set_at at boot (token probe succeeded)');
-        } catch (probeErr) {
-          console.warn(`⚠ Boot token probe failed — leaving set_at unset so morning cron can warn: ${probeErr.message}`);
-        }
-      }
-    } catch (e) {
-      console.warn(`Failed to initialize kite_access_token_set_at at boot: ${e.message}`);
-    }
-  }
+  // (Boot token probe moved below initKite() — kite is null at this point.)
 
   // STEP 1: Load universe from stock_universe table (or kv cache fallback)
   const loadedFromDB = await loadUniverseFromDB();
@@ -25111,6 +25243,33 @@ async function start() {
   if (token) {
     tokenValid = true; // fresh token from DB, assume valid
     console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") - starting smart engine...");
+
+    // 2026-04-30 — Scenario 7 fix (relocated). kite is now initialized, so the
+    // probe can actually call kite.getMargins. If kite_access_token_set_at is
+    // missing, verify the token works before stamping fresh — a failed probe
+    // leaves set_at unset so the morning cron and scanAndTrade entry gate
+    // continue to behave correctly with the stale token.
+    try {
+      const _existingSetAt = await dbGet('kite_access_token_set_at');
+      if (!_existingSetAt) {
+        try {
+          if (kite && typeof kite.setAccessToken === 'function') {
+            kite.setAccessToken(token);
+          }
+          await Promise.race([
+            kite.getMargins('equity'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('boot-token-probe timeout')), 15000)),
+          ]);
+          await dbSet('kite_access_token_set_at', String(Date.now()));
+          console.log('🕒 Initialized kite_access_token_set_at at boot (token probe succeeded)');
+        } catch (probeErr) {
+          console.warn(`⚠ Boot token probe failed — leaving set_at unset so morning cron can warn: ${probeErr.message}`);
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to initialize kite_access_token_set_at at boot: ${e.message}`);
+    }
+
     startTicker(token);
     await refreshInstruments();  // fetch real tokens from Kite — must complete before scoring
     await refreshNFOInstruments().catch(e => console.error('NFO refresh error:', e.message));
