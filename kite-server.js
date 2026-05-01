@@ -3239,6 +3239,18 @@ async function updateRejectedTracking(livePrices) {
 let _peakEquity = CONFIG.ACCOUNT_SIZE;
 let _ddPaused   = false;
 let _peakEquityHydrated = false;
+// 2026-05-02 — TOCTOU guard. Pre-fix, two concurrent
+// checkDrawdownCircuitBreaker calls (admin endpoint + cron tick) both saw
+// _peakEquityHydrated === false and both invoked dbGet/dbSet. Result was
+// correct but wasted a roundtrip and produced non-deterministic write
+// ordering. The in-flight Promise gate ensures exactly one hydration.
+let _peakEquityHydratingPromise = null;
+// 2026-05-02 — persist guard. Pre-fix, drawdown_peak_equity was dbSet on
+// every checkDrawdownCircuitBreaker call (~every 1-2 min during market
+// hours, ~150-200 writes/day). Now: only persist when peak strictly
+// advances. Backfill at hydration time to handle case where the kv row
+// is missing.
+let _lastPersistedPeak = NaN;
 
 // 2026-04-30 — fix cold-boot drawdown false-fire. Pre-fix, _peakEquity reset
 // to CONFIG.ACCOUNT_SIZE on every restart. If cumulative paper PnL was
@@ -3247,23 +3259,35 @@ let _peakEquityHydrated = false;
 // drawdown ≈ 18% and could HALT trading on the very first scan tick of the
 // day. Fix: hydrate peak from kv on boot; if no stored peak, anchor to
 // max(equity, ACCOUNT_SIZE) so cumulative losses don't look like fresh
-// intraday drawdown. Persist peak on each call so it survives restarts.
-async function _hydratePeakEquity(currentEquity) {
-  if (_peakEquityHydrated) return;
-  try {
-    const stored = await dbGet('drawdown_peak_equity');
-    const storedNum = stored ? parseFloat(stored) : NaN;
-    if (Number.isFinite(storedNum) && storedNum > 0) {
-      _peakEquity = Math.max(_peakEquity, storedNum);
-    } else {
-      // No stored peak — anchor to max(current equity, ACCOUNT_SIZE) so a
-      // cold-start with negative cumulative PnL doesn't immediately HALT.
-      _peakEquity = Math.max(currentEquity, CONFIG.ACCOUNT_SIZE);
+// intraday drawdown. Persist peak only on advance so it survives restarts.
+function _hydratePeakEquity(currentEquity) {
+  if (_peakEquityHydrated) return Promise.resolve();
+  // 2026-05-02 — single in-flight hydration. Concurrent callers wait on the
+  // same Promise instead of racing dbGet.
+  if (_peakEquityHydratingPromise) return _peakEquityHydratingPromise;
+  _peakEquityHydratingPromise = (async () => {
+    try {
+      const stored = await dbGet('drawdown_peak_equity');
+      const storedNum = stored ? parseFloat(stored) : NaN;
+      if (Number.isFinite(storedNum) && storedNum > 0) {
+        _peakEquity = Math.max(_peakEquity, storedNum);
+        _lastPersistedPeak = storedNum;
+      } else {
+        // No stored peak — anchor to max(current equity, ACCOUNT_SIZE) so a
+        // cold-start with negative cumulative PnL doesn't immediately HALT.
+        _peakEquity = Math.max(currentEquity, CONFIG.ACCOUNT_SIZE);
+        // Backfill so the kv row exists going forward.
+        try { await dbSet('drawdown_peak_equity', String(_peakEquity)); } catch (_) {}
+        _lastPersistedPeak = _peakEquity;
+      }
+    } catch (_) {
+      // dbGet failure shouldn't block scan — fall through with current peak.
+    } finally {
+      _peakEquityHydrated = true;
+      _peakEquityHydratingPromise = null;
     }
-  } catch (_) {
-    // dbGet failure shouldn't block scan — fall through with current peak.
-  }
-  _peakEquityHydrated = true;
+  })();
+  return _peakEquityHydratingPromise;
 }
 async function checkDrawdownCircuitBreaker() {
   try {
@@ -3297,10 +3321,18 @@ async function checkDrawdownCircuitBreaker() {
     }
     // Hydrate peak from kv on first call so cold-boot doesn't fire false DD.
     await _hydratePeakEquity(equity);
+    const _prevPeak = _peakEquity;
     _peakEquity     = Math.max(_peakEquity, equity);
     const drawdown  = (_peakEquity - equity) / _peakEquity;
-    // Persist peak across restarts. Best-effort — DB hiccup shouldn't block scan.
-    try { await dbSet('drawdown_peak_equity', String(_peakEquity)); } catch (_) {}
+    // 2026-05-02 — only persist when the peak strictly advanced. Pre-fix,
+    // we wrote to kv on every call (~150-200 writes/day during market
+    // hours). Now: write only when there's something new to remember.
+    if (_peakEquity > _prevPeak && _peakEquity !== _lastPersistedPeak) {
+      try {
+        await dbSet('drawdown_peak_equity', String(_peakEquity));
+        _lastPersistedPeak = _peakEquity;
+      } catch (_) {}
+    }
 
     if (drawdown >= CONFIG.DD_HALT_PCT) {
       console.log(`🛑 Drawdown ${(drawdown*100).toFixed(1)}% — HALTING all trading`);
@@ -4157,8 +4189,15 @@ async function scanAndTrade() {
   // block trading just because tracking is missing.
   try {
     const _kiteSetAtStr = await dbGet('kite_access_token_set_at');
-    const _kiteSetAt    = _kiteSetAtStr ? Number(_kiteSetAtStr) : 0;
-    const _kiteAgeH     = _kiteSetAt > 0 ? (Date.now() - _kiteSetAt) / 3600000 : null;
+    const _kiteSetAtRaw = _kiteSetAtStr ? Number(_kiteSetAtStr) : 0;
+    // 2026-05-02 — clamp to non-future. If clock skew or a manual dbSet
+    // pushes the timestamp into the future, raw age is negative and the
+    // > 22h gate would never fire — scan would proceed on a possibly-bad
+    // token. Treat any non-positive age as "untracked" (null) so the gate
+    // doesn't bypass silently.
+    const _kiteSetAt = (Number.isFinite(_kiteSetAtRaw) && _kiteSetAtRaw > 0 && _kiteSetAtRaw <= Date.now())
+                       ? _kiteSetAtRaw : 0;
+    const _kiteAgeH  = _kiteSetAt > 0 ? (Date.now() - _kiteSetAt) / 3600000 : null;
     if (_kiteAgeH != null && _kiteAgeH > 22) {
       // Throttle the warn log to once per 5 min so we don't flood Railway
       // logs while the token is expired (cron ticks every 1-2 min).
@@ -4175,7 +4214,7 @@ async function scanAndTrade() {
              VALUES ($3, 'KITE_TOKEN_EXPIRED', 'critical', $1, $2, 'BLOCK_SCAN', 'ok', 'scan_skipped_until_reauth', NOW())`,
             [`Smart scan blocked — token ${_kiteAgeH.toFixed(1)}h old, re-auth required`,
              JSON.stringify({ ageH: _kiteAgeH, setAt: _kiteSetAt }),
-             `kite-token-gate-${Date.now()}`]
+             `kite-token-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`]
           );
         } catch (_) {}
       }
@@ -9177,7 +9216,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
     <span><strong>Kite token:</strong>
       ${esc(_modeCtx.tokenStatus)}
       ${_modeCtx.tokenAgeH != null ? ` · age <strong>${_modeCtx.tokenAgeH}h</strong>` : ''}
-      ${_modeCtx.tokenSetAt ? ` · set ${esc(_modeCtx.tokenSetAt.replace('T', ' ').slice(0, 16))}Z` : ''}
+      ${_modeCtx.tokenSetAt ? ` · set ${esc(String(_modeCtx.tokenSetAt).replace('T', ' ').slice(0, 16))}Z` : ''}
       ${_modeCtx.tokenStatus === 'expired' || _modeCtx.tokenStatus === 'aging' || _modeCtx.tokenStatus === 'missing'
         ? ' · <a href="/auth/login" style="color:var(--accent)">re-auth</a>' : ''}
     </span>
@@ -19901,7 +19940,7 @@ async function checkLiveTradesEodReconciled(reason = 'eod-1525') {
         [
           `${rows.length} live position(s) still OPEN past 15:20 IST: ${symbols}`,
           JSON.stringify({ count: rows.length, symbols: rows.map(r => r.symbol), ids: rows.map(r => r.id) }),
-          `live-eod-${reason}-${Date.now()}`,
+          `live-eod-${reason}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ]
       );
     } catch (e) {
@@ -19926,7 +19965,11 @@ async function checkKiteTokenFreshness(reason = 'morning') {
   try {
     const setAtStr = await dbGet('kite_access_token_set_at');
     const tok = process.env.KITE_ACCESS_TOKEN;
-    const setAt = setAtStr ? Number(setAtStr) : 0;
+    const setAtRaw = setAtStr ? Number(setAtStr) : 0;
+    // 2026-05-02 — clamp future timestamps to "untracked". Same clock-skew
+    // hardening as the scanAndTrade gate.
+    const setAt = (Number.isFinite(setAtRaw) && setAtRaw > 0 && setAtRaw <= Date.now())
+                  ? setAtRaw : 0;
     const ageH  = setAt > 0 ? (Date.now() - setAt) / 3600000 : null;
     let severity = null;
     let summary  = null;
@@ -19960,7 +20003,7 @@ async function checkKiteTokenFreshness(reason = 'morning') {
         `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
          VALUES ($4, 'KITE_TOKEN_AGING', $1, $2, $3, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
         [severity, summary, JSON.stringify({ ageH, hasToken: !!tok, setAt }),
-         `kite-token-${reason}-${Date.now()}`]
+         `kite-token-${reason}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`]
       );
     } catch (e) {
       console.warn(`[kite-token:${reason}] failed to write ops_incidents: ${e.message}`);
@@ -29227,18 +29270,49 @@ app.get('/api/ai/validation', async (req, res) => {
     // Each returns a compact JSON-able result so ops_incidents.action_detail
     // captures what happened. All three are safe to call concurrently — the
     // underlying functions already guard against double-entry.
+    // 2026-05-02 — handler-level marketOpen defense. Detector-side guards
+    // are the primary line of defense, but if any future detector loses
+    // its guard (or a manual /api/agent/run-now triggers a remediation
+    // off-hours), we don't want force=true to slam Kite during a closed
+    // market. Returns a 'skipped' marker that the agent classifies
+    // distinctly from no_effect/ok/failed.
+    function _shouldSkipRemediation() {
+      try {
+        return typeof isMarketOpen === 'function' && !isMarketOpen();
+      } catch (_) { return false; }
+    }
     async function opsRerunUnifiedPipeline(reason) {
       console.log(`🩺 ops-agent auto-remediate: rerunUnifiedPipeline (${reason && reason.reason || 'unspecified'})`);
+      if (_shouldSkipRemediation()) {
+        return { ok: true, skipped: true, reason: 'market_closed' };
+      }
       try {
-        // force=true so we bypass the isMarketOpen check during the 09:00-09:15
-        // warm-up window, but the internal _unifiedPipelineRunning guard still
-        // prevents overlap with an in-flight run.
+        // 2026-05-02 — capture both cache size AND timestamp so the agent
+        // can distinguish "ran cleanly but produced same-size cache" from
+        // "ran cleanly and refreshed timestamp" (the latter is a real heal
+        // even if size is unchanged).
         const before = _dayTradeCache.length;
-        await runUnifiedKitePipeline(true);
+        const beforeTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const r = await runUnifiedKitePipeline(true);
+        const afterTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        // Distinguish operational outcomes:
+        //  - skipped:   pipeline early-returned (overlap, no token, market closed)
+        //  - refreshed: cache size unchanged but timestamp advanced (new data)
+        //  - ok:        cache size grew (or unknown)
+        //  - no_effect: cache size and timestamp both unchanged
+        let outcome = 'ok';
+        if (r && r.skipped) {
+          outcome = 'skipped';
+        } else if (_dayTradeCache.length === before) {
+          outcome = (beforeTs && afterTs && afterTs > beforeTs) ? 'refreshed' : 'no_effect';
+        }
         return {
           ok: true,
+          outcome,
           cacheBefore: before,
           cacheAfter: _dayTradeCache.length,
+          tsBefore: beforeTs,
+          tsAfter: afterTs,
           lastRun: _pipelineLastRun && _pipelineLastRun.status,
         };
       } catch (e) {
@@ -29247,10 +29321,24 @@ app.get('/api/ai/validation', async (req, res) => {
     }
     async function opsRefreshCache(reason) {
       console.log(`🩺 ops-agent auto-remediate: refreshCache (${reason && reason.reason || 'unspecified'})`);
+      if (_shouldSkipRemediation()) {
+        return { ok: true, skipped: true, reason: 'market_closed' };
+      }
       try {
+        // 2026-05-02 — same shape as opsRerunUnifiedPipeline so the agent
+        // can classify uniformly. Pre-fix, this handler always returned
+        // ok:true and the agent never detected a no-op.
         const before = _dayTradeCache.length;
-        await scanDayTrades(true);
-        return { ok: true, cacheBefore: before, cacheAfter: _dayTradeCache.length };
+        const beforeTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const r = await scanDayTrades(true);
+        const afterTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        let outcome = 'ok';
+        if (r && r.skipped) {
+          outcome = 'skipped';
+        } else if (_dayTradeCache.length === before) {
+          outcome = (beforeTs && afterTs && afterTs > beforeTs) ? 'refreshed' : 'no_effect';
+        }
+        return { ok: true, outcome, cacheBefore: before, cacheAfter: _dayTradeCache.length, tsBefore: beforeTs, tsAfter: afterTs };
       } catch (e) {
         return { ok: false, error: e.message };
       }

@@ -220,7 +220,12 @@ function dCacheEmpty(snap) {
 }
 
 function dKiteTokenExpired(snap) {
-  // Warn before open (token should be valid by 08:30 IST).
+  // 2026-05-02 — only fire within ±45 min of market open on actual trading days.
+  // Pre-fix, fired on holidays/weekends from 08:30 IST onwards because the
+  // -45min check used clock time, not the trading-day calendar. Floods
+  // ops_incidents on closed days.
+  if (!snap.marketOpen && snap.minsSinceOpen < -45) return { hit: false };
+  if (!snap.marketOpen && snap.minsSinceOpen > 30) return { hit: false };
   if (snap.minsSinceOpen < -45) return { hit: false };
   return {
     hit: !snap.kiteTokenPresent,
@@ -265,6 +270,10 @@ function dNoTradesBy1030(snap) {
 
 function dDrawdownBreach(snap) {
   if (!snap.capital) return { hit: false };
+  // 2026-05-02 — only evaluate on trading days. PnL/equity counters carry
+  // forward across calendar days; firing this on a Saturday off cumulative
+  // state produces an incident that the operator can't act on.
+  if (!snap.marketOpen) return { hit: false };
   // 2026-04-29 — boot grace: unrealized PnL needs livePrices warmed +
   // pool query to complete (30s cache, but first call is async). On
   // cold boot, both pnl values default to 0 → lossPct=0 → no fire,
@@ -289,6 +298,9 @@ function dKillSwitchTripped(snap) {
 
 function dVixSpike(snap) {
   if (snap.vixLevel == null) return { hit: false };
+  // 2026-05-02 — only fire on trading days. Cached VIX from Friday close
+  // would otherwise re-fire on Sat/Sun if it ever crossed the threshold.
+  if (!snap.marketOpen) return { hit: false };
   return {
     hit: snap.vixLevel > CONSTRAINTS.MAX_VIX_LEVEL,
     evidence: { vix: snap.vixLevel, cap: CONSTRAINTS.MAX_VIX_LEVEL },
@@ -296,6 +308,10 @@ function dVixSpike(snap) {
 }
 
 function dEodUnreconciled(snap) {
+  // 2026-05-02 — only run on trading days. Without this, a Friday EOD that
+  // didn't reconcile (positions stuck OPEN) re-fires every minute past
+  // 15:30 IST through the entire weekend.
+  if (!snap.marketOpen) return { hit: false };
   // After 15:30 IST (minsSinceOpen >= 375), no open positions should remain.
   if (snap.minsSinceOpen < 375) return { hit: false };
   return {
@@ -401,6 +417,29 @@ const DETECTORS = Object.freeze([
 // ────────────────────────────────────────────────────────────────────────────
 // Auto-remediation — operational actions only (no code patching)
 // ────────────────────────────────────────────────────────────────────────────
+
+// 2026-05-02 — unified classifier for remediation handler results. Pre-fix,
+// `opsRefreshCache` always reported 'ok' (no no_effect detection) and
+// `opsRerunUnifiedPipeline` lumped overlap-skip and missing-token paths into
+// 'no_effect' — both poison the daily-report's "Auto-remediation effective"
+// metric. The handler now returns r.outcome ∈ {skipped|refreshed|ok|no_effect},
+// and this mapping preserves backward-compat with handlers that still return
+// the older { cacheBefore, cacheAfter } shape.
+function _classifyRemediation(r) {
+  if (!r) return 'failed';
+  if (r.ok === false) return 'failed';
+  // Preferred path: handler explicitly classified.
+  if (typeof r.outcome === 'string') {
+    const ok = ['skipped', 'refreshed', 'ok', 'no_effect', 'failed'];
+    if (ok.includes(r.outcome)) return r.outcome;
+  }
+  // Legacy: handler returned only cacheBefore/cacheAfter.
+  if (Number.isFinite(r.cacheBefore) && Number.isFinite(r.cacheAfter)) {
+    return r.cacheBefore === r.cacheAfter ? 'no_effect' : 'ok';
+  }
+  return 'ok';
+}
+
 async function _attemptAction(kind, deps, evidence) {
   // Routing: which kind maps to which safe action.
   if (kind === INCIDENT_KINDS.PIPELINE_STALLED || kind === INCIDENT_KINDS.CACHE_EMPTY || kind === INCIDENT_KINDS.STALE_PICKS) {
@@ -411,21 +450,10 @@ async function _attemptAction(kind, deps, evidence) {
       _recordActionAttempt('RERUN_PIPELINE');
       try {
         const r = await deps.rerunUnifiedPipeline({ reason: `ops-agent:${kind}` });
-        // 2026-04-29 — old code returned 'ok' as long as the action threw no
-        // exception, even when cacheBefore === cacheAfter (the action ran
-        // but didn't actually heal the staleness). 7/7 false-success was
-        // observed in 2026-04-29 daily report. Distinguish:
-        //   - 'no_effect': action ran cleanly but cache size didn't change
-        //                  (e.g., Kite token still bad, picks-feed still empty)
-        //   - 'ok':        cache delta is non-zero or unknown
-        //   - 'failed':    the rerun explicitly returned ok:false
-        let result = 'ok';
-        if (r && r.ok === false) {
-          result = 'failed';
-        } else if (r && Number.isFinite(r.cacheBefore) && Number.isFinite(r.cacheAfter)
-                   && r.cacheBefore === r.cacheAfter) {
-          result = 'no_effect';
-        }
+        // 2026-05-02 — handler now returns r.outcome ∈ {skipped|refreshed|
+        // ok|no_effect}. Map it directly. Fall back to legacy
+        // cacheBefore===cacheAfter heuristic for older handler shapes.
+        const result = _classifyRemediation(r);
         return { action: 'RERUN_PIPELINE', result, detail: JSON.stringify(r).slice(0, 400) };
       } catch (e) {
         return { action: 'RERUN_PIPELINE', result: 'failed', detail: e.message };
@@ -439,7 +467,9 @@ async function _attemptAction(kind, deps, evidence) {
       _recordActionAttempt('REFRESH_CACHE');
       try {
         const r = await deps.refreshCache({ reason: `ops-agent:${kind}` });
-        return { action: 'REFRESH_CACHE', result: 'ok', detail: JSON.stringify(r).slice(0, 400) };
+        // 2026-05-02 — was always 'ok'. Now uses unified classification.
+        const result = _classifyRemediation(r);
+        return { action: 'REFRESH_CACHE', result, detail: JSON.stringify(r).slice(0, 400) };
       } catch (e) {
         return { action: 'REFRESH_CACHE', result: 'failed', detail: e.message };
       }
