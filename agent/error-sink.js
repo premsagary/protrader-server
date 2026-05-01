@@ -140,7 +140,13 @@ function init(deps) {
 function recordError(kind, msg, ctx) {
   try {
     const raw = msg instanceof Error ? (msg.message || String(msg)) : String(msg || '');
-    ringPush('error', `[${kind || 'ERR'}] ${raw}`);
+    // 2026-05-01 — fix double ringPush. wrapConsole's patchedError already
+    // pushes the raw msg to the ring buffer; if recordError is called from
+    // there (ctx.source === 'console.error'), skip the second push to avoid
+    // duplicate "❌ ..." + "[ERR] ❌ ..." pairs in ops_incident recent_log.
+    if (!ctx || ctx.source !== 'console.error') {
+      ringPush('error', `[${kind || 'ERR'}] ${raw}`);
+    }
     if (!_enabled || !_pool) return;
 
     if (_inflight >= DEFAULTS.maxQueueDepth) {

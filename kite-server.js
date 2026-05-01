@@ -11164,7 +11164,12 @@ async function fetchKiteDaily(sym) {
       const msg = String(e?.message || e);
       // Include 'timeout' in the retry set — a timed-out call is often a
       // queue backup that resolves on retry.
-      const isRetryable = /too many requests|429|rate.?limit|network|timeout/i.test(msg);
+      // 2026-05-01 — also retry on `Cannot read properties of undefined`.
+      // Observed on GNFC at 10:12 IST during a token re-auth window: the
+      // Kite SDK threw this when the API briefly returned a malformed body
+      // (200 OK without the expected data.candles shape). Same root cause
+      // as a transient — the next call after re-auth completes succeeds.
+      const isRetryable = /too many requests|429|rate.?limit|network|timeout|cannot read prop/i.test(msg);
       if (isRetryable && attempt < MAX_ATTEMPTS) {
         const backoff = 1000 * Math.pow(2, attempt); // 2s, 4s
         await new Promise(r => setTimeout(r, backoff));
@@ -11219,6 +11224,13 @@ let _nifty1mRunning = false;
 async function ingestNifty50OneMinCandles() {
   if (_nifty1mRunning) return { skipped: true };
   if (!kite || !process.env.KITE_ACCESS_TOKEN) return { skipped: true, reason: 'no_kite' };
+  // 2026-05-01 — skip on holidays/weekends. Without this, the cron fired
+  // every 5 min with 0/51 syms, 0 bars (Kite returns empty arrays when
+  // market is closed) and produced log noise. The ON CONFLICT semantics
+  // mean nothing got written, so no data loss from skipping.
+  if (typeof isMarketOpen === 'function' && !isMarketOpen()) {
+    return { skipped: true, reason: 'market_closed' };
+  }
   _nifty1mRunning = true;
 
   const n50 = (UNIVERSE || []).filter(s => (s.grp || '').toUpperCase() === 'NIFTY50');
@@ -25377,10 +25389,19 @@ async function start() {
   // scanAndTrade has data for every stock from minute one. Force=true to
   // bypass the market-open check (cache hydrates even if booted off-hours).
   setTimeout(() => {
-    if (isMarketOpen() || (typeof _dayTradeCache !== 'undefined' && _dayTradeCache.length === 0)) {
-      console.log('🌱 Cold-start: kicking off full-universe seed scan...');
-      runUnifiedKitePipeline(true).catch(e => console.error('Seed scan error:', e.message));
+    // 2026-05-01 — only seed when market is actually open. Pre-fix, the
+    // empty-cache fallback caused a 16-min all-tiers pipeline run on
+    // Maharashtra Day boot (with cache=1, ops-agent's CACHE_EMPTY auto-
+    // remediation also fired). On a holiday/weekend we don't need fresh
+    // candles — the next real market-open boot will seed. The market-open
+    // gate cleanly avoids both the noise AND the proxy-saturation that
+    // produced ECONNABORTED cascades during off-hours.
+    if (!isMarketOpen()) {
+      console.log('🌱 Cold-start seed skipped — market closed (will seed on next market-open boot)');
+      return;
     }
+    console.log('🌱 Cold-start: kicking off full-universe seed scan...');
+    runUnifiedKitePipeline(true).catch(e => console.error('Seed scan error:', e.message));
   }, 90 * 1000); // 90s after boot — gives DB hydrate + token init time to complete
 
   // ── Outcome computation — daily after hours, 7 days a week ──────────────
