@@ -206,6 +206,10 @@ function dPipelineStalled(snap) {
 }
 
 function dCacheEmpty(snap) {
+  // 2026-05-01 — only fire on actual trading days. Pre-fix, fired on
+  // holidays/weekends because minsSinceOpen-from-clock was past 9:25 even
+  // though the market was closed. Observed on Maharashtra Day 2026-05-01.
+  if (!snap.marketOpen) return { hit: false };
   // After 9:25 IST the cache should have at least CACHE_MIN_PICKS_AFTER_925 entries.
   if (snap.minsSinceOpen < 10) return { hit: false };
   const n = snap.dayTradeCacheSize;
@@ -239,6 +243,9 @@ function dCandidatesEmpty(snap) {
 }
 
 function dNoTradesBy1030(snap) {
+  // 2026-05-01 — only fire on actual trading days. Pre-fix, fired on
+  // holidays/weekends because clock-derived minsSinceOpen was past 75.
+  if (!snap.marketOpen) return { hit: false };
   // 10:30 IST = 75 min after open.
   if (snap.minsSinceOpen < 75) return { hit: false };
   if (snap.minsSinceOpen > 120) return { hit: false }; // only fires in 10:30-11:00 window
@@ -298,6 +305,9 @@ function dEodUnreconciled(snap) {
 }
 
 function dStalePicks(snap) {
+  // 2026-05-01 — only fire on actual trading days. Pre-fix, fired on
+  // holidays/weekends and produced 14 STALE_PICKS warnings on 2026-05-01.
+  if (!snap.marketOpen) return { hit: false };
   if (!snap.dayTradeCacheUpdatedAt) return { hit: false };
   if (snap.minsSinceOpen < 10) return { hit: false };
   // 2026-04-29 — boot grace: pick cache may be loaded but stale from

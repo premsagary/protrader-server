@@ -4171,10 +4171,11 @@ async function scanAndTrade() {
         _lastKiteExpiredIncidentAt = Date.now();
         try {
           await pool.query(
-            `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
-             VALUES ('KITE_TOKEN_EXPIRED', 'critical', $1, $2, 'BLOCK_SCAN', 'ok', 'scan_skipped_until_reauth', NOW())`,
+            `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+             VALUES ($3, 'KITE_TOKEN_EXPIRED', 'critical', $1, $2, 'BLOCK_SCAN', 'ok', 'scan_skipped_until_reauth', NOW())`,
             [`Smart scan blocked — token ${_kiteAgeH.toFixed(1)}h old, re-auth required`,
-             JSON.stringify({ ageH: _kiteAgeH, setAt: _kiteSetAt })]
+             JSON.stringify({ ageH: _kiteAgeH, setAt: _kiteSetAt }),
+             `kite-token-gate-${Date.now()}`]
           );
         } catch (_) {}
       }
@@ -8879,11 +8880,25 @@ app.get('/api/admin/daily-report', async (req, res) => {
       },
       {
         label: 'Kite connectivity healthy',
-        pass: !errList.some(e => /KITE/i.test(e.kind) && Number(e.count) >= 10),
+        // 2026-05-01 — was checking per-pattern count only, so 4 distinct
+        // KITE_TOKEN patterns of 4 each (16 total) passed under the 10-row
+        // threshold. Now: sum across all KITE_* patterns AND check if any
+        // KITE_TOKEN_* pattern appears at all (token errors are critical
+        // even at low count — they mean re-auth required).
+        pass: (() => {
+          const kiteErr = errList.filter(e => /KITE/i.test(e.kind));
+          const totalKite = kiteErr.reduce((s, e) => s + Number(e.count || 0), 0);
+          const hasTokenErr = kiteErr.some(e => /KITE_TOKEN/i.test(e.kind));
+          return totalKite < 10 && !hasTokenErr;
+        })(),
         detail: (() => {
           const kiteErr = errList.filter(e => /KITE/i.test(e.kind));
-          return kiteErr.length === 0 ? 'no Kite errors'
-            : kiteErr.slice(0, 3).map(e => `${e.kind}×${e.count}`).join(', ');
+          if (kiteErr.length === 0) return 'no Kite errors';
+          const totalKite = kiteErr.reduce((s, e) => s + Number(e.count || 0), 0);
+          const tokErr = kiteErr.filter(e => /KITE_TOKEN/i.test(e.kind));
+          const tokSum = tokErr.reduce((s, e) => s + Number(e.count || 0), 0);
+          return `${totalKite} total Kite errors (${kiteErr.length} unique)` +
+            (tokSum ? ` · ⚠ ${tokSum} KITE_TOKEN — re-auth required` : '');
         })(),
       },
     ];
@@ -19869,11 +19884,12 @@ async function checkLiveTradesEodReconciled(reason = 'eod-1525') {
     // Surface as ops_incidents so the daily report flags it RED.
     try {
       await pool.query(
-        `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
-         VALUES ('LIVE_EOD_UNRECONCILED', 'critical', $1, $2, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
+        `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+         VALUES ($3, 'LIVE_EOD_UNRECONCILED', 'critical', $1, $2, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
         [
           `${rows.length} live position(s) still OPEN past 15:20 IST: ${symbols}`,
           JSON.stringify({ count: rows.length, symbols: rows.map(r => r.symbol), ids: rows.map(r => r.id) }),
+          `live-eod-${reason}-${Date.now()}`,
         ]
       );
     } catch (e) {
@@ -19929,9 +19945,10 @@ async function checkKiteTokenFreshness(reason = 'morning') {
     console.warn(`⚠ [kite-token:${reason}] ${severity}: ${summary}`);
     try {
       await pool.query(
-        `INSERT INTO ops_incidents (kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
-         VALUES ('KITE_TOKEN_AGING', $1, $2, $3, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
-        [severity, summary, JSON.stringify({ ageH, hasToken: !!tok, setAt })]
+        `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+         VALUES ($4, 'KITE_TOKEN_AGING', $1, $2, $3, 'NOTIFY_ONLY', 'ok', 'human_attention_required', NOW())`,
+        [severity, summary, JSON.stringify({ ageH, hasToken: !!tok, setAt }),
+         `kite-token-${reason}-${Date.now()}`]
       );
     } catch (e) {
       console.warn(`[kite-token:${reason}] failed to write ops_incidents: ${e.message}`);
