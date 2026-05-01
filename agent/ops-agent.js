@@ -220,12 +220,14 @@ function dCacheEmpty(snap) {
 }
 
 function dKiteTokenExpired(snap) {
-  // 2026-05-02 — only fire within ±45 min of market open on actual trading days.
-  // Pre-fix, fired on holidays/weekends from 08:30 IST onwards because the
-  // -45min check used clock time, not the trading-day calendar. Floods
-  // ops_incidents on closed days.
-  if (!snap.marketOpen && snap.minsSinceOpen < -45) return { hit: false };
-  if (!snap.marketOpen && snap.minsSinceOpen > 30) return { hit: false };
+  // 2026-05-02 — flat guard. Pre-fix attempt left a leak window between
+  // minsSinceOpen ∈ [-45, 30] on holidays — the morning-of-holiday
+  // window where minsSinceOpen still reflects the clock time relative
+  // to a hypothetical 09:15. The right rule: don't fire on closed days
+  // at all. The morning-cron `checkKiteTokenFreshness` handles real
+  // pre-open notification on trading days.
+  if (!snap.marketOpen) return { hit: false };
+  // Within trading day: fire any time the env token is missing.
   if (snap.minsSinceOpen < -45) return { hit: false };
   return {
     hit: !snap.kiteTokenPresent,

@@ -3276,9 +3276,21 @@ function _hydratePeakEquity(currentEquity) {
         // No stored peak — anchor to max(current equity, ACCOUNT_SIZE) so a
         // cold-start with negative cumulative PnL doesn't immediately HALT.
         _peakEquity = Math.max(currentEquity, CONFIG.ACCOUNT_SIZE);
-        // Backfill so the kv row exists going forward.
-        try { await dbSet('drawdown_peak_equity', String(_peakEquity)); } catch (_) {}
-        _lastPersistedPeak = _peakEquity;
+        // 2026-05-02 — only mark as persisted if dbSet actually succeeds.
+        // Pre-fix, `_lastPersistedPeak = _peakEquity` ran unconditionally,
+        // so a failed dbSet (network blip, pool exhausted) left the kv
+        // row empty but in-memory state thought it was persisted. Future
+        // calls saw `_peakEquity === _lastPersistedPeak` and skipped the
+        // write forever, producing a zombie state where peak was never
+        // actually saved to DB.
+        try {
+          await dbSet('drawdown_peak_equity', String(_peakEquity));
+          _lastPersistedPeak = _peakEquity;
+        } catch (e) {
+          console.warn(`[drawdown] backfill dbSet failed at hydrate: ${e.message}`);
+          // Leave _lastPersistedPeak as NaN so the next checkDrawdown call
+          // will retry the persist.
+        }
       }
     } catch (_) {
       // dbGet failure shouldn't block scan — fall through with current peak.
@@ -4178,6 +4190,16 @@ async function scanAndTrade() {
   if (!process.env.KITE_ACCESS_TOKEN||!kite){console.log("No token");return;}
   if (!isMarketOpen()){console.log("Market closed");return;}
 
+  // 2026-05-02 — concurrency lock check moved BEFORE the token-freshness
+  // dbGet. Pre-fix, 5 concurrent cron ticks during a hot moment all paid
+  // a dbGet roundtrip (~10ms each = 50ms wasted) before any one took the
+  // lock. The lock check is sync and has no side effects on the early-
+  // return path, so it's the cheapest gate and goes first.
+  if (_scanAndTradeRunning) {
+    console.log('⟳ Smart scan skipped — previous run still in progress');
+    return;
+  }
+
   // ── Token freshness gate (Apr-2026) ──────────────────────────────────
   // 2026-04-30 — Scenario 2 fix. Pre-fix, scanAndTrade only checked token
   // existence. If KITE_ACCESS_TOKEN was set but expired (>24h old per
@@ -4283,10 +4305,29 @@ async function scanAndTrade() {
     const _orphans = openTrades.filter(t => !_univSet.has(t.symbol));
     for (const t of _orphans) {
       try {
-        const entryPx  = parseFloat(t.price || 0);
-        const cached   = livePrices && livePrices[t.symbol] && livePrices[t.symbol].price;
-        const exitPx   = (cached && cached > 0) ? cached : entryPx;
-        const realistic = computeRealisticExitPnL(entryPx, exitPx, t.quantity);
+        // 2026-05-02 — input validation. Pre-fix, parseFloat(null) → NaN,
+        // and computeRealisticExitPnL(NaN, NaN, NaN) propagated NaN
+        // through gross/net/pnlPct, writing "NaN" (PG accepts as null but
+        // corrupts the row's PnL accounting). Skip rows with non-positive
+        // or non-finite price/qty — log them as an ops_incident so the
+        // operator can investigate the upstream INSERT bug.
+        const entryPx = parseFloat(t.price);
+        const qty     = parseFloat(t.quantity);
+        if (!Number.isFinite(entryPx) || entryPx <= 0 || !Number.isFinite(qty) || qty <= 0) {
+          console.warn(`[orphan-exit] skipping ${t.symbol} (id=${t.id}) — invalid price=${t.price} qty=${t.quantity}`);
+          continue;
+        }
+        const cached  = livePrices && livePrices[t.symbol] && livePrices[t.symbol].price;
+        const exitPx  = (Number.isFinite(cached) && cached > 0) ? cached : entryPx;
+        const realistic = computeRealisticExitPnL(entryPx, exitPx, qty);
+        // Defense-in-depth: if computeRealisticExitPnL ever returns NaN
+        // (qty/price edge cases we missed), do not write to DB.
+        if (!Number.isFinite(realistic.exitPrice) ||
+            !Number.isFinite(realistic.pnl) ||
+            !Number.isFinite(realistic.pnlPct)) {
+          console.warn(`[orphan-exit] skipping ${t.symbol} (id=${t.id}) — pnl computation produced non-finite values`);
+          continue;
+        }
         await pool.query(
           `UPDATE paper_trades
               SET status='CLOSED', exit_price=$1, exit_time=NOW(),
@@ -8952,9 +8993,11 @@ app.get('/api/admin/daily-report', async (req, res) => {
       ch19MinPass:    CONFIG.CH19_MIN_PASS,
       universeGroups: process.env.UNIVERSE_GROUPS || 'NIFTY50,NEXT50',
       universeSize:   Array.isArray(UNIVERSE) ? UNIVERSE.length : null,
-      ddPeakEquity:   typeof _peakEquity === 'number' ? _peakEquity : null,
+      // 2026-05-02 — Number.isFinite() check. Pre-fix, NaN passed the
+      // `typeof === 'number'` check and rendered "₹NaN" in the panel.
+      ddPeakEquity:   Number.isFinite(_peakEquity) ? _peakEquity : null,
       ddHydrated:     !!_peakEquityHydrated,
-      ddHaltPct:      CONFIG.DD_HALT_PCT,
+      ddHaltPct:      Number.isFinite(CONFIG.DD_HALT_PCT) ? CONFIG.DD_HALT_PCT : 0.2,
     };
     // Token freshness: read live, don't fail report if dbGet hiccups.
     try {
@@ -13628,9 +13671,14 @@ let _dtScoringRunning   = false;   // 5-min candles + setup detectors + cache re
 // force=true allows off-hours scans (startup warm-up, manual admin refresh)
 // — scoreDayTrade() already has a last-trading-day fallback.
 async function scanDayTrades(force = false) {
-  if (_dayTradeScanning) return;
-  if (!force && !isMarketOpen()) return;
-  if (!kite || !process.env.KITE_ACCESS_TOKEN) return;
+  // 2026-05-02 — return structured markers on early-out paths so callers
+  // (notably opsRefreshCache) can distinguish 'skipped' from 'no_effect'.
+  // Pre-fix, all three guards returned undefined, the auto-remediation
+  // wrapper saw `r && r.skipped` as false, and overlap/market-closed/
+  // missing-token paths all got bucketed as 'no_effect'.
+  if (_dayTradeScanning) return { skipped: 'already_running' };
+  if (!force && !isMarketOpen()) return { skipped: 'market_closed' };
+  if (!kite || !process.env.KITE_ACCESS_TOKEN) return { skipped: 'no_token' };
 
   _dayTradeScanning = true;
   const t0 = Date.now();
@@ -14019,9 +14067,17 @@ async function runUnifiedKitePipeline(force = false, tierFilter = null) {
     // VERY visible — silent overlap-skip is how we lose Tier 2/3 cycles.
     // Auditable in scan_log + ops-incidents for after-the-fact root cause.
     console.warn(`⚠ Unified pipeline OVERLAP-SKIP: ${tierTag} skipped because previous run still active (started ${_pipelineLastRun?.startedAt}). If frequent, add a watchdog or stagger crons further.`);
-    return;
+    // 2026-05-02 — return a structured marker so the auto-remediation
+    // wrapper (opsRerunUnifiedPipeline) can classify this as 'skipped'
+    // rather than 'no_effect'. Pre-fix, returning undefined caused the
+    // wrapper to bucket overlap-skip as no_effect, polluting the daily-
+    // report's "Auto-remediation effective" metric.
+    return { skipped: 'overlap', tierTag };
   }
-  if (!force && !isMarketOpen()) { console.log('🔄 Pipeline skipped: market closed (force=false)'); return; }
+  if (!force && !isMarketOpen()) {
+    console.log('🔄 Pipeline skipped: market closed (force=false)');
+    return { skipped: 'market_closed', tierTag };
+  }
 
   // Auto-recover Kite token from DB if env var missing
   if (!process.env.KITE_ACCESS_TOKEN) {
@@ -14035,7 +14091,7 @@ async function runUnifiedKitePipeline(force = false, tierFilter = null) {
   if (!kite) { initKite(process.env.KITE_ACCESS_TOKEN); }
   if (!kite || !process.env.KITE_ACCESS_TOKEN) {
     console.log('🔄 Pipeline skipped: no Kite token available');
-    return;
+    return { skipped: 'no_token', tierTag };
   }
 
   _unifiedPipelineRunning = true;
@@ -25317,21 +25373,45 @@ async function start() {
     console.log("✅ Token loaded (from "+(process.env.KITE_ACCESS_TOKEN===token&&!await dbGet('kite_access_token')?'env':'DB')+") - starting smart engine...");
 
     // 2026-04-30 — Scenario 7 fix (relocated). kite is now initialized, so the
-    // probe can actually call kite.getMargins. If kite_access_token_set_at is
-    // missing, verify the token works before stamping fresh — a failed probe
-    // leaves set_at unset so the morning cron and scanAndTrade entry gate
-    // continue to behave correctly with the stale token.
+    // probe can actually call kite. If kite_access_token_set_at is missing,
+    // verify the token works before stamping fresh — a failed probe leaves
+    // set_at unset so the morning cron and scanAndTrade entry gate continue
+    // to behave correctly with the stale token.
+    // 2026-05-02 — switched probe from `getMargins('equity')` (segment-
+    // specific, fails on F&O-only accounts) to a cascade: try getProfile
+    // first (universal, lightweight), then argless getMargins, then
+    // segment-specific getMargins. Any one success is sufficient — we
+    // only need to confirm the token authenticates.
     try {
       const _existingSetAt = await dbGet('kite_access_token_set_at');
       if (!_existingSetAt) {
-        try {
+        const _tryProbe = async () => {
           if (kite && typeof kite.setAccessToken === 'function') {
             kite.setAccessToken(token);
           }
-          await Promise.race([
-            kite.getMargins('equity'),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('boot-token-probe timeout')), 15000)),
-          ]);
+          const _probeFns = [
+            () => typeof kite.getProfile === 'function' && kite.getProfile(),
+            () => typeof kite.getMargins === 'function' && kite.getMargins(),
+            () => typeof kite.getMargins === 'function' && kite.getMargins('equity'),
+          ];
+          let lastErr = null;
+          for (const fn of _probeFns) {
+            try {
+              const r = fn();
+              if (r === false) continue; // method not present
+              await Promise.race([
+                Promise.resolve(r),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 15000)),
+              ]);
+              return; // success
+            } catch (e) {
+              lastErr = e;
+            }
+          }
+          throw lastErr || new Error('all token probes failed');
+        };
+        try {
+          await _tryProbe();
           await dbSet('kite_access_token_set_at', String(Date.now()));
           console.log('🕒 Initialized kite_access_token_set_at at boot (token probe succeeded)');
         } catch (probeErr) {
@@ -29292,9 +29372,9 @@ app.get('/api/ai/validation', async (req, res) => {
         // "ran cleanly and refreshed timestamp" (the latter is a real heal
         // even if size is unchanged).
         const before = _dayTradeCache.length;
-        const beforeTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const beforeTs = (typeof _dayTradeCacheTs !== 'undefined' && _dayTradeCacheTs) || null;
         const r = await runUnifiedKitePipeline(true);
-        const afterTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const afterTs = (typeof _dayTradeCacheTs !== 'undefined' && _dayTradeCacheTs) || null;
         // Distinguish operational outcomes:
         //  - skipped:   pipeline early-returned (overlap, no token, market closed)
         //  - refreshed: cache size unchanged but timestamp advanced (new data)
@@ -29329,9 +29409,9 @@ app.get('/api/ai/validation', async (req, res) => {
         // can classify uniformly. Pre-fix, this handler always returned
         // ok:true and the agent never detected a no-op.
         const before = _dayTradeCache.length;
-        const beforeTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const beforeTs = (typeof _dayTradeCacheTs !== 'undefined' && _dayTradeCacheTs) || null;
         const r = await scanDayTrades(true);
-        const afterTs = (typeof _dayTradeCacheUpdatedAt !== 'undefined' && _dayTradeCacheUpdatedAt) || null;
+        const afterTs = (typeof _dayTradeCacheTs !== 'undefined' && _dayTradeCacheTs) || null;
         let outcome = 'ok';
         if (r && r.skipped) {
           outcome = 'skipped';
