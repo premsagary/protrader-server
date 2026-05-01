@@ -9173,6 +9173,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
   <a href="?">Today</a>
   <a href="?date=${esc(istDate)}">${esc(istDate)}</a>
   <a href="?format=json&amp;date=${esc(istDate)}">JSON</a>
+  <a href="/api/admin/strategy-performance?days=30"><strong>📊 Strategy Performance</strong></a>
   <a href="/api/ops-health">ops-health</a>
   <a href="/api/app-errors?minutes=1440">app-errors</a>
   <a href="/api/trade-forensics">trade-forensics</a>
@@ -20126,6 +20127,702 @@ app.post('/api/admin/squareoff-paper', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// ────────────────────────────────────────────────────────────────────────
+// Strategy Performance Dashboard (2026-05-02)
+// ────────────────────────────────────────────────────────────────────────
+// Single source of truth for "is the trading strategy working?" Computes
+// trade-level, daily, and benchmark-relative metrics over a configurable
+// window. All thresholds are encoded as decision criteria for go/no-go on
+// real money.
+//
+// Endpoints:
+//   GET /api/admin/strategy-performance?days=30                  → HTML
+//   GET /api/admin/strategy-performance?days=30&format=json      → JSON
+//
+// Metric tiers:
+//   1. Survival   — Net PnL, Alpha, Max DD
+//   2. Edge       — Win rate, Profit factor, Expectancy, R-multiples
+//   3. Consistency— Sharpe, Sortino, max consec losses
+//   4. Costs      — Gross/net split, cost ratio
+//   5. Diagnostic — by setup, regime, exit_reason
+// ────────────────────────────────────────────────────────────────────────
+
+// Helper — compute Sharpe/Sortino on a daily-returns series.
+// Returns { sharpe, sortino, mean, std, downsideStd } annualized to 252d.
+function _computeRiskRatios(dailyReturns) {
+  const n = dailyReturns.length;
+  if (n < 2) return { sharpe: null, sortino: null, mean: null, std: null, downsideStd: null };
+  const mean = dailyReturns.reduce((s, r) => s + r, 0) / n;
+  const variance = dailyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / (n - 1);
+  const std = Math.sqrt(variance);
+  const downside = dailyReturns.filter(r => r < 0);
+  const downsideStd = downside.length > 1
+    ? Math.sqrt(downside.reduce((s, r) => s + r ** 2, 0) / (downside.length - 1))
+    : null;
+  const SQRT_252 = Math.sqrt(252);
+  return {
+    sharpe:      std > 0 ? +((mean / std) * SQRT_252).toFixed(2) : null,
+    sortino:     downsideStd && downsideStd > 0 ? +((mean / downsideStd) * SQRT_252).toFixed(2) : null,
+    mean:        +mean.toFixed(4),
+    std:         +std.toFixed(4),
+    downsideStd: downsideStd != null ? +downsideStd.toFixed(4) : null,
+  };
+}
+
+// Helper — find max drawdown in a cumulative-PnL series.
+// Returns { maxDdPct, maxDdAbsolute, currentDdDays }
+function _computeDrawdown(cumulativeSeries, capital) {
+  if (!cumulativeSeries.length) return { maxDdPct: 0, maxDdAbsolute: 0, currentDdDays: 0 };
+  let peak = 0;
+  let maxDd = 0;
+  let currentDdDays = 0;
+  let lastPeakIdx = 0;
+  cumulativeSeries.forEach((cum, i) => {
+    const equity = capital + cum;
+    const equityPeak = capital + peak;
+    if (cum > peak) { peak = cum; lastPeakIdx = i; }
+    const dd = (equityPeak - equity) / equityPeak;
+    if (dd > maxDd) maxDd = dd;
+  });
+  currentDdDays = cumulativeSeries.length - 1 - lastPeakIdx;
+  return {
+    maxDdPct:      +(maxDd * 100).toFixed(2),
+    maxDdAbsolute: +(peak - cumulativeSeries[cumulativeSeries.length - 1]).toFixed(2),
+    currentDdDays,
+  };
+}
+
+// Helper — fetch NIFTY 50 daily closes for a date range.
+// Returns array of { date, close } or null if Kite fetch fails.
+async function _fetchNiftyDailySeries(startMs, endMs) {
+  try {
+    const candles = await fetchKiteDaily('NIFTY 50');
+    if (!Array.isArray(candles) || !candles.length) return null;
+    return candles
+      .filter(c => {
+        const t = c.date instanceof Date ? c.date.getTime() : Date.parse(c.date);
+        return Number.isFinite(t) && t >= startMs && t <= endMs;
+      })
+      .map(c => ({
+        date:  (c.date instanceof Date ? c.date : new Date(c.date)).toISOString().slice(0, 10),
+        close: +c.close,
+      }));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Core helper — computes the full metrics object for a given window.
+async function _computeStrategyMetrics(startMs, endMs, capital) {
+  const startDate = new Date(startMs);
+  const endDate   = new Date(endMs);
+
+  // ── Trade-level aggregates (CLOSED trades in window) ──────────────────
+  const tradesQuery = await pool.query(
+    `SELECT id, symbol, strategy, regime, exit_reason,
+            price, stop_loss, target, quantity,
+            pnl, pnl_pct, gross_pnl, costs,
+            entry_time, exit_time
+       FROM paper_trades
+      WHERE status = 'CLOSED'
+        AND exit_time >= $1
+        AND exit_time <  $2
+      ORDER BY exit_time ASC`,
+    [startDate, endDate]
+  );
+  const trades = tradesQuery.rows;
+  const nTrades = trades.length;
+
+  // ── Open positions snapshot (current state, not historical) ───────────
+  const openQuery = await pool.query(
+    `SELECT id, symbol, price, quantity, entry_time
+       FROM paper_trades
+      WHERE status = 'OPEN'`
+  );
+  const openTrades = openQuery.rows;
+
+  // ── Today PnL (separate from window) ──────────────────────────────────
+  const istNow      = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const istToday    = istNow.toISOString().slice(0, 10);
+  const istTodayUtc = new Date(istToday + 'T00:00:00+05:30');
+  const istTomUtc   = new Date(istTodayUtc.getTime() + 24 * 3600 * 1000);
+  const todayQuery = await pool.query(
+    `SELECT COALESCE(SUM(pnl), 0)::float AS pnl,
+            COUNT(*)::int                AS n
+       FROM paper_trades
+      WHERE status='CLOSED' AND exit_time >= $1 AND exit_time < $2`,
+    [istTodayUtc, istTomUtc]
+  );
+
+  // ── If no trades, return empty shape but valid ────────────────────────
+  if (nTrades === 0) {
+    return {
+      windowStart: startDate.toISOString(),
+      windowEnd:   endDate.toISOString(),
+      capital,
+      current: {
+        openTrades: openTrades.length,
+        unrealizedPnl: null,
+        todayPnl:    +todayQuery.rows[0].pnl,
+        todayTrades: todayQuery.rows[0].n,
+      },
+      performance: { nTrades: 0, nTradingDays: 0 },
+      risk:        {},
+      benchmark:   {},
+      bySetup:     [],
+      byRegime:    [],
+      byExitReason:[],
+      dailyPnl:    [],
+      goNoGo:      { pass: false, summary: 'No closed trades in window — paper-trade for at least 30 days before evaluation.' },
+    };
+  }
+
+  // ── Trade-level stats ────────────────────────────────────────────────
+  const wins      = trades.filter(t => +t.pnl > 0);
+  const losses    = trades.filter(t => +t.pnl < 0);
+  const breakeven = trades.filter(t => +t.pnl === 0);
+  const sumWins   = wins.reduce((s, t) => s + +t.pnl, 0);
+  const sumLosses = losses.reduce((s, t) => s + +t.pnl, 0);
+  const netPnl    = trades.reduce((s, t) => s + +t.pnl, 0);
+  const grossPnl  = trades.reduce((s, t) => s + (+t.gross_pnl || 0), 0);
+  const totalCosts = trades.reduce((s, t) => s + (+t.costs || 0), 0);
+
+  const avgWinner  = wins.length   ? sumWins   / wins.length   : 0;
+  const avgLoser   = losses.length ? sumLosses / losses.length : 0;
+  const winRate    = (wins.length + losses.length) > 0
+    ? wins.length / (wins.length + losses.length)
+    : 0;
+
+  const profitFactor = sumLosses < 0 ? Math.abs(sumWins / sumLosses) : null;
+  const expectancy   = winRate * avgWinner + (1 - winRate) * avgLoser;
+  const bestTrade    = trades.reduce((m, t) => +t.pnl > m ? +t.pnl : m, -Infinity);
+  const worstTrade   = trades.reduce((m, t) => +t.pnl < m ? +t.pnl : m, +Infinity);
+
+  // ── R-multiples (pnl / risk-per-trade) ────────────────────────────────
+  // R = (entry_price - stop_loss) × quantity for BUY. Falls back to null
+  // when stop_loss is missing or below 0.
+  const rMultiples = trades.map(t => {
+    const entry = +t.price;
+    const sl    = +t.stop_loss;
+    const qty   = +t.quantity;
+    if (!Number.isFinite(entry) || !Number.isFinite(sl) || !Number.isFinite(qty)) return null;
+    const risk = (entry - sl) * qty;
+    if (!(risk > 0)) return null;
+    return +t.pnl / risk;
+  }).filter(r => r != null && Number.isFinite(r));
+  const avgR    = rMultiples.length ? rMultiples.reduce((s, r) => s + r, 0) / rMultiples.length : null;
+  const medianR = rMultiples.length ? [...rMultiples].sort((a, b) => a - b)[Math.floor(rMultiples.length / 2)] : null;
+
+  // ── Holding time (winners vs losers) ──────────────────────────────────
+  const holdMin = (t) => (new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 60000;
+  const avgHoldWin  = wins.length   ? wins.reduce((s, t) => s + holdMin(t), 0)   / wins.length   : null;
+  const avgHoldLose = losses.length ? losses.reduce((s, t) => s + holdMin(t), 0) / losses.length : null;
+
+  // ── Consecutive losses (in trade-time order) ──────────────────────────
+  let maxConsecLoss = 0;
+  let curConsecLoss = 0;
+  for (const t of trades) {
+    if (+t.pnl < 0) { curConsecLoss++; if (curConsecLoss > maxConsecLoss) maxConsecLoss = curConsecLoss; }
+    else            { curConsecLoss = 0; }
+  }
+
+  // ── Daily series ──────────────────────────────────────────────────────
+  const dayMap = new Map(); // 'YYYY-MM-DD' → { pnl, n }
+  for (const t of trades) {
+    const d = new Date(t.exit_time);
+    const istDay = new Date(d.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    const cur = dayMap.get(istDay) || { pnl: 0, n: 0 };
+    cur.pnl += +t.pnl;
+    cur.n   += 1;
+    dayMap.set(istDay, cur);
+  }
+  const dailyPnl = [...dayMap.entries()]
+    .sort((a, b) => a[0] < b[0] ? -1 : 1)
+    .map(([date, v]) => ({ date, pnl: +v.pnl.toFixed(2), nTrades: v.n }));
+  let cum = 0;
+  const dailyPnlWithCum = dailyPnl.map(d => { cum += d.pnl; return { ...d, cumulative: +cum.toFixed(2) }; });
+  const dailyReturns = dailyPnl.map(d => d.pnl / capital);
+
+  // Consecutive losing days
+  let maxConsecLossDays = 0, curConsecLossDays = 0;
+  for (const d of dailyPnl) {
+    if (d.pnl < 0) { curConsecLossDays++; if (curConsecLossDays > maxConsecLossDays) maxConsecLossDays = curConsecLossDays; }
+    else           { curConsecLossDays = 0; }
+  }
+
+  // Drawdown + risk ratios
+  const cumSeries = dailyPnlWithCum.map(d => d.cumulative);
+  const drawdown  = _computeDrawdown(cumSeries, capital);
+  const ratios    = _computeRiskRatios(dailyReturns);
+
+  // Best / worst day
+  const bestDay  = dailyPnl.length ? dailyPnl.reduce((m, d) => d.pnl > m.pnl ? d : m, dailyPnl[0]) : null;
+  const worstDay = dailyPnl.length ? dailyPnl.reduce((m, d) => d.pnl < m.pnl ? d : m, dailyPnl[0]) : null;
+
+  // ── By setup ──────────────────────────────────────────────────────────
+  const setupMap = new Map();
+  for (const t of trades) {
+    const k = t.strategy || 'UNKNOWN';
+    const cur = setupMap.get(k) || { setup: k, n: 0, wins: 0, totalPnl: 0, holdMin: 0 };
+    cur.n++;
+    if (+t.pnl > 0) cur.wins++;
+    cur.totalPnl += +t.pnl;
+    cur.holdMin += holdMin(t);
+    setupMap.set(k, cur);
+  }
+  const bySetup = [...setupMap.values()].map(s => ({
+    setup: s.setup, n: s.n, wins: s.wins,
+    winRate:    s.n ? +(s.wins / s.n * 100).toFixed(1) : 0,
+    avgPnl:     s.n ? +(s.totalPnl / s.n).toFixed(2)   : 0,
+    totalPnl:   +s.totalPnl.toFixed(2),
+    avgHoldMin: s.n ? Math.round(s.holdMin / s.n) : 0,
+  })).sort((a, b) => b.n - a.n);
+
+  // ── By regime ─────────────────────────────────────────────────────────
+  const regMap = new Map();
+  for (const t of trades) {
+    const k = t.regime || 'UNKNOWN';
+    const cur = regMap.get(k) || { regime: k, n: 0, wins: 0, totalPnl: 0 };
+    cur.n++;
+    if (+t.pnl > 0) cur.wins++;
+    cur.totalPnl += +t.pnl;
+    regMap.set(k, cur);
+  }
+  const byRegime = [...regMap.values()].map(r => ({
+    regime: r.regime, n: r.n, wins: r.wins,
+    winRate:  r.n ? +(r.wins / r.n * 100).toFixed(1) : 0,
+    avgPnl:   r.n ? +(r.totalPnl / r.n).toFixed(2)   : 0,
+    totalPnl: +r.totalPnl.toFixed(2),
+  })).sort((a, b) => b.n - a.n);
+
+  // ── By exit reason ────────────────────────────────────────────────────
+  const exitMap = new Map();
+  for (const t of trades) {
+    const k = t.exit_reason || 'UNKNOWN';
+    const cur = exitMap.get(k) || { reason: k, n: 0, totalPnl: 0, holdMin: 0 };
+    cur.n++;
+    cur.totalPnl += +t.pnl;
+    cur.holdMin += holdMin(t);
+    exitMap.set(k, cur);
+  }
+  const byExitReason = [...exitMap.values()].map(r => ({
+    reason: r.reason, n: r.n,
+    totalPnl:   +r.totalPnl.toFixed(2),
+    avgPnl:     r.n ? +(r.totalPnl / r.n).toFixed(2) : 0,
+    avgHoldMin: r.n ? Math.round(r.holdMin / r.n) : 0,
+  })).sort((a, b) => b.n - a.n);
+
+  // ── Benchmark vs NIFTY ────────────────────────────────────────────────
+  let benchmark = { available: false };
+  try {
+    const niftySeries = await _fetchNiftyDailySeries(startMs, endMs);
+    if (niftySeries && niftySeries.length >= 2) {
+      const niftyStart = niftySeries[0].close;
+      const niftyEnd   = niftySeries[niftySeries.length - 1].close;
+      const niftyRetPct = ((niftyEnd / niftyStart) - 1) * 100;
+      const stratRetPct = (netPnl / capital) * 100;
+      // Daily-returns alignment for beta/IR
+      const niftyByDate = new Map(niftySeries.map((c, i) => [
+        c.date,
+        i === 0 ? 0 : (c.close / niftySeries[i - 1].close - 1)
+      ]));
+      const aligned = dailyPnl.map(d => ({
+        date:  d.date,
+        strat: d.pnl / capital,
+        nifty: niftyByDate.get(d.date) ?? null,
+      })).filter(p => p.nifty != null);
+      let beta = null, infoRatio = null, daysOutperformed = null;
+      if (aligned.length >= 5) {
+        const meanS = aligned.reduce((s, p) => s + p.strat, 0) / aligned.length;
+        const meanN = aligned.reduce((s, p) => s + p.nifty, 0) / aligned.length;
+        const cov = aligned.reduce((s, p) => s + (p.strat - meanS) * (p.nifty - meanN), 0) / (aligned.length - 1);
+        const varN = aligned.reduce((s, p) => s + (p.nifty - meanN) ** 2, 0) / (aligned.length - 1);
+        beta = varN > 0 ? +(cov / varN).toFixed(2) : null;
+        const trackingErr = Math.sqrt(
+          aligned.reduce((s, p) => s + (p.strat - p.nifty) ** 2, 0) / (aligned.length - 1)
+        );
+        infoRatio = trackingErr > 0 ? +(((meanS - meanN) / trackingErr) * Math.sqrt(252)).toFixed(2) : null;
+        daysOutperformed = aligned.filter(p => p.strat > p.nifty).length;
+      }
+      benchmark = {
+        available:     true,
+        niftyReturn:   +niftyRetPct.toFixed(2),
+        strategyReturn:+stratRetPct.toFixed(2),
+        alpha:         +(stratRetPct - niftyRetPct).toFixed(2),
+        beta,
+        informationRatio: infoRatio,
+        daysOutperformed,
+        daysCompared:  aligned.length,
+        niftyStart:    +niftyStart.toFixed(2),
+        niftyEnd:      +niftyEnd.toFixed(2),
+      };
+    }
+  } catch (_) { /* benchmark stays unavailable */ }
+
+  // ── Go/No-Go decision matrix ──────────────────────────────────────────
+  const thresholds = {
+    netPnlPositive:      netPnl > 0,
+    alphaPositive:       benchmark.available ? benchmark.alpha > 0 : null,
+    profitFactorOver15:  profitFactor != null && profitFactor > 1.5,
+    sharpeOver1:         ratios.sharpe != null && ratios.sharpe > 1.0,
+    maxDdUnder15Pct:     drawdown.maxDdPct < 15,
+    costRatioUnder30:    grossPnl !== 0 ? Math.abs(totalCosts / grossPnl) < 0.30 : true,
+    nTradesOver100:      nTrades >= 100,
+    nTradingDaysOver30:  dailyPnl.length >= 30,
+  };
+  const passCount = Object.values(thresholds).filter(v => v === true).length;
+  const totalChecks = Object.values(thresholds).filter(v => v != null).length;
+  const allPass = passCount === totalChecks;
+  const failures = Object.entries(thresholds)
+    .filter(([_, v]) => v === false)
+    .map(([k, _]) => k);
+
+  return {
+    windowStart: startDate.toISOString(),
+    windowEnd:   endDate.toISOString(),
+    capital,
+    current: {
+      openTrades:    openTrades.length,
+      unrealizedPnl: null, // computed live elsewhere; not needed here
+      todayPnl:      +todayQuery.rows[0].pnl,
+      todayTrades:   todayQuery.rows[0].n,
+    },
+    performance: {
+      netPnl:       +netPnl.toFixed(2),
+      netPnlPct:    +((netPnl / capital) * 100).toFixed(2),
+      grossPnl:     +grossPnl.toFixed(2),
+      totalCosts:   +totalCosts.toFixed(2),
+      costRatioPct: grossPnl !== 0 ? +((Math.abs(totalCosts) / Math.abs(grossPnl)) * 100).toFixed(1) : null,
+      nTrades,
+      nTradingDays: dailyPnl.length,
+      avgTradesPerDay: dailyPnl.length ? +(nTrades / dailyPnl.length).toFixed(2) : 0,
+      nWins:        wins.length,
+      nLosses:      losses.length,
+      nBreakeven:   breakeven.length,
+      winRate:      +(winRate * 100).toFixed(1),
+      avgWinner:    +avgWinner.toFixed(2),
+      avgLoser:     +avgLoser.toFixed(2),
+      bestTrade:    Number.isFinite(bestTrade) ? +bestTrade.toFixed(2) : null,
+      worstTrade:   Number.isFinite(worstTrade) ? +worstTrade.toFixed(2) : null,
+      profitFactor: profitFactor != null ? +profitFactor.toFixed(2) : null,
+      expectancy:   +expectancy.toFixed(2),
+      avgRMultiple: avgR != null ? +avgR.toFixed(2) : null,
+      medianRMultiple: medianR != null ? +medianR.toFixed(2) : null,
+      avgHoldWinMin:  avgHoldWin  != null ? Math.round(avgHoldWin)  : null,
+      avgHoldLoseMin: avgHoldLose != null ? Math.round(avgHoldLose) : null,
+      maxConsecutiveLosses:    maxConsecLoss,
+      maxConsecutiveLossDays:  maxConsecLossDays,
+    },
+    risk: {
+      maxDrawdownPct:  drawdown.maxDdPct,
+      maxDdAbsolute:   drawdown.maxDdAbsolute,
+      currentDdDays:   drawdown.currentDdDays,
+      sharpeAnnualized:  ratios.sharpe,
+      sortinoAnnualized: ratios.sortino,
+      dailyMean:       ratios.mean != null ? +(ratios.mean * capital).toFixed(2) : null,
+      dailyStd:        ratios.std  != null ? +(ratios.std  * capital).toFixed(2) : null,
+      bestDay:         bestDay  ? { date: bestDay.date,  pnl: bestDay.pnl }   : null,
+      worstDay:        worstDay ? { date: worstDay.date, pnl: worstDay.pnl } : null,
+    },
+    benchmark,
+    bySetup,
+    byRegime,
+    byExitReason,
+    dailyPnl: dailyPnlWithCum,
+    goNoGo: {
+      thresholds,
+      passCount,
+      totalChecks,
+      pass: allPass,
+      summary: allPass
+        ? '✓ All decision thresholds met. Consider 10% live deploy.'
+        : `${totalChecks - passCount} thresholds failing: ${failures.join(', ') || '—'}`,
+    },
+  };
+}
+
+app.get('/api/admin/strategy-performance', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
+    const endMs   = Date.now();
+    const startMs = endMs - days * 24 * 3600 * 1000;
+    const capital = +CONFIG.ACCOUNT_SIZE || 90000;
+    const metrics = await _computeStrategyMetrics(startMs, endMs, capital);
+    metrics.windowDays = days;
+
+    if (String(req.query.format || '').toLowerCase() === 'json') {
+      return res.json(metrics);
+    }
+
+    // ── HTML render ──────────────────────────────────────────────────────
+    const esc = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const fmtInr = (n) => (n == null || !Number.isFinite(+n)) ? '—'
+      : (+n < 0 ? '−₹' : '₹') + Math.abs(+n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const fmtPct = (n, dp = 2) => (n == null || !Number.isFinite(+n)) ? '—' : `${(+n).toFixed(dp)}%`;
+    const fmtNum = (n, dp = 2) => (n == null || !Number.isFinite(+n)) ? '—' : (+n).toFixed(dp);
+    const cls = (n) => n == null ? '' : (+n > 0 ? 'pos' : (+n < 0 ? 'neg' : ''));
+
+    const p = metrics.performance, r = metrics.risk, b = metrics.benchmark, g = metrics.goNoGo;
+
+    const checkRow = (label, pass, value) => `
+      <tr>
+        <td>${esc(label)}</td>
+        <td class="${pass === true ? 'pos' : pass === false ? 'neg' : 'mute'}">${pass === true ? '✓' : pass === false ? '✗' : '—'}</td>
+        <td class="mute">${esc(value)}</td>
+      </tr>`;
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Strategy Performance — ${metrics.windowDays}d</title>
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --mute:#7d8590; --card:#161b22; --border:#30363d;
+          --green:#3fb950; --red:#f85149; --accent:#2f81f7; }
+  body { background:var(--bg); color:var(--fg); font-family:-apple-system,'SF Pro Text',sans-serif;
+         margin:0; padding:24px; font-size:14px; line-height:1.5; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .muted, .mute { color: var(--mute); }
+  .nav { display: flex; gap: 14px; margin-bottom: 16px; font-size: 12px; }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin: 16px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+  .card .label { color: var(--mute); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .sub { color: var(--mute); font-size: 12px; margin-top: 2px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border);
+          border-radius: 6px; overflow: hidden; font-size: 13px; margin: 8px 0; }
+  th { background: #1c2128; text-align: left; padding: 8px 12px; font-weight: 600; color: var(--mute);
+       font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .verdict { padding: 16px 20px; border-radius: 8px; font-weight: 600; font-size: 16px;
+             margin: 16px 0; display: flex; align-items: center; gap: 12px; }
+  .verdict-go { background: rgba(63,185,80,0.15); border: 1px solid var(--green); color: var(--green); }
+  .verdict-no { background: rgba(248,81,73,0.15); border: 1px solid var(--red); color: var(--red); }
+</style></head>
+<body><div class="container">
+
+<div class="nav">
+  <a href="?days=7">7d</a>
+  <a href="?days=30">30d</a>
+  <a href="?days=60">60d</a>
+  <a href="?days=90">90d</a>
+  <a href="?days=${metrics.windowDays}&format=json">JSON</a>
+  <a href="/api/admin/daily-report">Daily Report</a>
+</div>
+
+<h1>Strategy Performance</h1>
+<div class="muted">Window: ${esc(metrics.windowStart.slice(0, 10))} → ${esc(metrics.windowEnd.slice(0, 10))} · ${metrics.windowDays}d · capital ₹${metrics.capital.toLocaleString('en-IN')}</div>
+
+<div class="verdict ${g.pass ? 'verdict-go' : 'verdict-no'}">
+  <span style="font-size:24px">${g.pass ? '✓' : '✗'}</span>
+  <div>
+    <div>${g.pass ? 'GO — all decision thresholds met' : 'NO-GO — strategy not validated for live deploy'}</div>
+    <div style="font-size:13px;font-weight:400;opacity:0.85;margin-top:4px">${esc(g.summary)}</div>
+  </div>
+</div>
+
+${p.nTrades === 0 ? `
+<div class="card" style="text-align:center;padding:40px;color:var(--mute)">
+  <div style="font-size:48px;margin-bottom:12px">📊</div>
+  <div style="font-size:16px;color:var(--fg);margin-bottom:8px">No closed trades in window</div>
+  <div>Paper-trade for at least 30 days, then check this dashboard for go/no-go.</div>
+</div>
+` : `
+
+<h2>Tier 1 — Survival</h2>
+<div class="grid">
+  <div class="card">
+    <div class="label">Net PnL</div>
+    <div class="value ${cls(p.netPnl)}">${fmtInr(p.netPnl)}</div>
+    <div class="sub ${cls(p.netPnlPct)}">${fmtPct(p.netPnlPct)} of capital</div>
+  </div>
+  ${b.available ? `
+  <div class="card">
+    <div class="label">Alpha vs NIFTY 50</div>
+    <div class="value ${cls(b.alpha)}">${fmtPct(b.alpha)}</div>
+    <div class="sub">strat ${fmtPct(b.strategyReturn)} − nifty ${fmtPct(b.niftyReturn)}</div>
+  </div>` : ''}
+  <div class="card">
+    <div class="label">Max Drawdown</div>
+    <div class="value ${p.netPnl > 0 ? '' : 'neg'}">${fmtPct(r.maxDrawdownPct)}</div>
+    <div class="sub">${r.currentDdDays} days in current DD</div>
+  </div>
+  <div class="card">
+    <div class="label">Trading Days</div>
+    <div class="value">${p.nTradingDays}</div>
+    <div class="sub">${p.nTrades} trades · ${fmtNum(p.avgTradesPerDay, 1)}/day</div>
+  </div>
+</div>
+
+<h2>Tier 2 — Edge</h2>
+<div class="grid">
+  <div class="card">
+    <div class="label">Win Rate</div>
+    <div class="value">${fmtPct(p.winRate, 1)}</div>
+    <div class="sub">${p.nWins}W / ${p.nLosses}L${p.nBreakeven ? ` / ${p.nBreakeven}BE` : ''}</div>
+  </div>
+  <div class="card">
+    <div class="label">Avg Winner / Loser</div>
+    <div class="value" style="font-size:16px"><span class="pos">${fmtInr(p.avgWinner)}</span> / <span class="neg">${fmtInr(p.avgLoser)}</span></div>
+    <div class="sub">best ${fmtInr(p.bestTrade)} · worst ${fmtInr(p.worstTrade)}</div>
+  </div>
+  <div class="card">
+    <div class="label">Profit Factor</div>
+    <div class="value ${p.profitFactor != null && p.profitFactor > 1.5 ? 'pos' : 'neg'}">${fmtNum(p.profitFactor, 2)}</div>
+    <div class="sub">target &gt; 1.5</div>
+  </div>
+  <div class="card">
+    <div class="label">Expectancy</div>
+    <div class="value ${cls(p.expectancy)}">${fmtInr(p.expectancy)}</div>
+    <div class="sub">per trade · avg R = ${fmtNum(p.avgRMultiple, 2)}</div>
+  </div>
+</div>
+
+<h2>Tier 3 — Consistency</h2>
+<div class="grid">
+  <div class="card">
+    <div class="label">Sharpe (annualized)</div>
+    <div class="value ${r.sharpeAnnualized != null && r.sharpeAnnualized > 1 ? 'pos' : 'neg'}">${fmtNum(r.sharpeAnnualized, 2)}</div>
+    <div class="sub">target &gt; 1.0</div>
+  </div>
+  <div class="card">
+    <div class="label">Sortino</div>
+    <div class="value">${fmtNum(r.sortinoAnnualized, 2)}</div>
+    <div class="sub">downside-only</div>
+  </div>
+  <div class="card">
+    <div class="label">Max Consec Losses</div>
+    <div class="value ${p.maxConsecutiveLosses > 8 ? 'neg' : ''}">${p.maxConsecutiveLosses}</div>
+    <div class="sub">trades in a row</div>
+  </div>
+  <div class="card">
+    <div class="label">Best / Worst Day</div>
+    <div class="value" style="font-size:14px">
+      <span class="pos">${r.bestDay ? fmtInr(r.bestDay.pnl) : '—'}</span><br/>
+      <span class="neg">${r.worstDay ? fmtInr(r.worstDay.pnl) : '—'}</span>
+    </div>
+    <div class="sub">${r.bestDay ? r.bestDay.date : ''} / ${r.worstDay ? r.worstDay.date : ''}</div>
+  </div>
+</div>
+
+<h2>Tier 4 — Costs</h2>
+<div class="grid">
+  <div class="card">
+    <div class="label">Gross PnL</div>
+    <div class="value ${cls(p.grossPnl)}">${fmtInr(p.grossPnl)}</div>
+  </div>
+  <div class="card">
+    <div class="label">Total Costs</div>
+    <div class="value neg">${fmtInr(p.totalCosts)}</div>
+  </div>
+  <div class="card">
+    <div class="label">Cost Ratio</div>
+    <div class="value ${p.costRatioPct != null && p.costRatioPct > 30 ? 'neg' : ''}">${fmtPct(p.costRatioPct, 1)}</div>
+    <div class="sub">target &lt; 30%</div>
+  </div>
+  <div class="card">
+    <div class="label">Avg Hold</div>
+    <div class="value" style="font-size:14px">
+      W <span class="pos">${p.avgHoldWinMin || '—'}m</span> / L <span class="neg">${p.avgHoldLoseMin || '—'}m</span>
+    </div>
+    <div class="sub">winners vs losers</div>
+  </div>
+</div>
+
+<h2>Decision Thresholds (go-live readiness)</h2>
+<table>
+  <thead><tr><th>Check</th><th>Pass</th><th>Detail</th></tr></thead>
+  <tbody>
+    ${checkRow('Net PnL > 0',                g.thresholds.netPnlPositive,      fmtInr(p.netPnl))}
+    ${checkRow('Alpha > 0 (beat NIFTY)',     g.thresholds.alphaPositive,       b.available ? fmtPct(b.alpha) : 'NIFTY data unavailable')}
+    ${checkRow('Profit factor > 1.5',         g.thresholds.profitFactorOver15,  fmtNum(p.profitFactor, 2))}
+    ${checkRow('Sharpe > 1.0',                g.thresholds.sharpeOver1,         fmtNum(r.sharpeAnnualized, 2))}
+    ${checkRow('Max DD < 15%',                g.thresholds.maxDdUnder15Pct,     fmtPct(r.maxDrawdownPct))}
+    ${checkRow('Cost ratio < 30%',            g.thresholds.costRatioUnder30,    fmtPct(p.costRatioPct, 1))}
+    ${checkRow('≥ 100 trades',                g.thresholds.nTradesOver100,      `${p.nTrades} trades`)}
+    ${checkRow('≥ 30 trading days',           g.thresholds.nTradingDaysOver30,  `${p.nTradingDays} days`)}
+  </tbody>
+</table>
+
+<h2>By Setup</h2>
+<table>
+  <thead><tr><th>Setup</th><th>N</th><th>Win Rate</th><th>Avg PnL</th><th>Total PnL</th><th>Avg Hold</th></tr></thead>
+  <tbody>
+    ${metrics.bySetup.map(s => `
+      <tr>
+        <td><strong>${esc(s.setup)}</strong></td>
+        <td>${s.n}</td>
+        <td class="${s.winRate >= 50 ? 'pos' : 'neg'}">${fmtPct(s.winRate, 1)}</td>
+        <td class="${cls(s.avgPnl)}">${fmtInr(s.avgPnl)}</td>
+        <td class="${cls(s.totalPnl)}">${fmtInr(s.totalPnl)}</td>
+        <td class="mute">${s.avgHoldMin}m</td>
+      </tr>`).join('')}
+  </tbody>
+</table>
+
+<h2>By Regime</h2>
+<table>
+  <thead><tr><th>Regime</th><th>N</th><th>Win Rate</th><th>Avg PnL</th><th>Total PnL</th></tr></thead>
+  <tbody>
+    ${metrics.byRegime.map(r => `
+      <tr>
+        <td><strong>${esc(r.regime)}</strong></td>
+        <td>${r.n}</td>
+        <td class="${r.winRate >= 50 ? 'pos' : 'neg'}">${fmtPct(r.winRate, 1)}</td>
+        <td class="${cls(r.avgPnl)}">${fmtInr(r.avgPnl)}</td>
+        <td class="${cls(r.totalPnl)}">${fmtInr(r.totalPnl)}</td>
+      </tr>`).join('')}
+  </tbody>
+</table>
+
+<h2>By Exit Reason</h2>
+<table>
+  <thead><tr><th>Reason</th><th>N</th><th>Avg PnL</th><th>Total PnL</th><th>Avg Hold</th></tr></thead>
+  <tbody>
+    ${metrics.byExitReason.map(r => `
+      <tr>
+        <td>${esc(r.reason)}</td>
+        <td>${r.n}</td>
+        <td class="${cls(r.avgPnl)}">${fmtInr(r.avgPnl)}</td>
+        <td class="${cls(r.totalPnl)}">${fmtInr(r.totalPnl)}</td>
+        <td class="mute">${r.avgHoldMin}m</td>
+      </tr>`).join('')}
+  </tbody>
+</table>
+
+<h2>Daily PnL</h2>
+<table>
+  <thead><tr><th>Date</th><th>Trades</th><th>Day PnL</th><th>Cumulative</th></tr></thead>
+  <tbody>
+    ${metrics.dailyPnl.slice().reverse().map(d => `
+      <tr>
+        <td>${esc(d.date)}</td>
+        <td>${d.nTrades}</td>
+        <td class="${cls(d.pnl)}">${fmtInr(d.pnl)}</td>
+        <td class="${cls(d.cumulative)}">${fmtInr(d.cumulative)}</td>
+      </tr>`).join('')}
+  </tbody>
+</table>
+
+`}
+
+</div></body></html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (e) {
+    console.warn('strategy-performance error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Cold-start: fetch once at boot if it's a weekday and we don't have a
 // recent value. Wrapped in setTimeout so this doesn't slow down boot —
 // 30s gives the rest of the system time to come up first.
