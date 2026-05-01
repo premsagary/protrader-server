@@ -8822,7 +8822,14 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const errIncidents   = incList.filter(i => i.severity === 'error').length;
     const warnIncidents  = incList.filter(i => i.severity === 'warn').length;
     const actionsTried   = incList.filter(i => i.action_attempted && i.action_attempted !== 'NONE').length;
-    const actionsOk      = incList.filter(i => i.action_result === 'ok').length;
+    // 2026-05-02 — count 'skipped' and 'refreshed' as healthy outcomes alongside
+    // 'ok'. The 3f9fcb7 classifier began emitting those for legitimately-good
+    // states ('skipped' = early-return like market-closed or in-flight overlap;
+    // 'refreshed' = cache size unchanged but timestamp advanced — a real heal).
+    // Pre-fix, the metric counted only 'ok' so a weekend-only ops day with 5
+    // skipped remediations would falsely show 0/5 and trip the RED verdict.
+    const HEALTHY_RESULTS = new Set(['ok', 'skipped', 'refreshed']);
+    const actionsOk      = incList.filter(i => HEALTHY_RESULTS.has(i.action_result)).length;
     // 2026-04-29 — track 'no_effect' separately so we can flag remediations
     // that ran without exception but didn't actually heal the symptom (e.g.
     // STALE_PICKS rerun but cache size unchanged).
