@@ -2823,15 +2823,23 @@ async function computeKelly() {
 // Everything is gated by STRUCTURE_CONFIG.slippageSimulationEnabled so legacy
 // trades keep their original math.
 // ──────────────────────────────────────────────────────────────────────────
-function applyEntrySlippage(price) {
+// 2026-05-06: optional `isShort` param. Default false preserves all existing
+// long call sites unchanged. Slippage always works AGAINST the trader:
+//   - Long entry (BUY)   → fill HIGHER (+bps)
+//   - Long exit  (SELL)  → fill LOWER  (−bps)
+//   - Short entry (SELL) → fill LOWER  (−bps)  ← flipped
+//   - Short exit  (BUY)  → fill HIGHER (+bps)  ← flipped
+function applyEntrySlippage(price, isShort = false) {
   if (!STRUCTURE_CONFIG.slippageSimulationEnabled) return price;
   const bps = +STRUCTURE_CONFIG.slippageBps || 0;
-  return +(price * (1 + bps / 10000)).toFixed(4);
+  const sign = isShort ? -1 : +1;
+  return +(price * (1 + sign * bps / 10000)).toFixed(4);
 }
-function applyExitSlippage(price) {
+function applyExitSlippage(price, isShort = false) {
   if (!STRUCTURE_CONFIG.slippageSimulationEnabled) return price;
   const bps = +STRUCTURE_CONFIG.slippageBps || 0;
-  return +(price * (1 - bps / 10000)).toFixed(4);
+  const sign = isShort ? +1 : -1;
+  return +(price * (1 + sign * bps / 10000)).toFixed(4);
 }
 // Round-trip brokerage as absolute ₹ cost on notional (both legs together)
 function computeRoundTripCost(entryPrice, exitPrice, qty) {
@@ -2842,7 +2850,8 @@ function computeRoundTripCost(entryPrice, exitPrice, qty) {
 }
 // Full realistic PnL on exit — includes slippage + brokerage
 function computeRealisticExitPnL(entryPriceAdj, rawExitPrice, qty, isShort = false) {
-  const exitAdj = applyExitSlippage(rawExitPrice);
+  // Direction-aware slippage: short exit is a BUY → slippage adds.
+  const exitAdj = applyExitSlippage(rawExitPrice, isShort);
   // Long: profit when exit > entry. Short: profit when entry > exit (price dropped).
   // Default isShort=false preserves all existing call sites unchanged.
   const gross   = isShort
@@ -5313,8 +5322,9 @@ async function scanAndTrade() {
     const decisionJson = candidate.decisionObject || null;
     const confVal      = candidate.decisionObject?.confidence ?? null;
 
-    // Phase 3 · Part 2 — apply entry slippage to the recorded fill price
-    const entryFill = applyEntrySlippage(price);
+    // Phase 3 · Part 2 — apply entry slippage to the recorded fill price.
+    // Direction-aware: short entry is a SELL → slippage subtracts.
+    const entryFill = applyEntrySlippage(price, isShortCandidate);
 
     // Phase 3 · Part 4 — A/B experiment tagging (what filters were in effect)
     const experimentJson = STRUCTURE_CONFIG.abTestingEnabled ? {
