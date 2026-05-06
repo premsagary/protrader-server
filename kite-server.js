@@ -4462,7 +4462,11 @@ async function scanAndTrade() {
         }
         const cached  = livePrices && livePrices[t.symbol] && livePrices[t.symbol].price;
         const exitPx  = (Number.isFinite(cached) && cached > 0) ? cached : entryPx;
-        const realistic = computeRealisticExitPnL(entryPx, exitPx, qty);
+        // 2026-05-06 — direction-aware P&L for orphan close (caught by pre-push
+        // audit). Without this, a SHORT row caught by orphan sweep is priced
+        // as a LONG → sign-flipped P&L. Default 'LONG' for backfill rows.
+        const _isShortOrphan = (t.direction || 'LONG') === 'SHORT';
+        const realistic = computeRealisticExitPnL(entryPx, exitPx, qty, _isShortOrphan);
         // Defense-in-depth: if computeRealisticExitPnL ever returns NaN
         // (qty/price edge cases we missed), do not write to DB.
         if (!Number.isFinite(realistic.exitPrice) ||
@@ -4690,7 +4694,12 @@ async function scanAndTrade() {
             [exitFill,pnl,pnlPct,reason,grossPnL,costs,openPos.id]
           );
 
-          if (LIVE_TRADING && kite) {
+          // 2026-05-06 — CRITICAL guard: SHORTS are paper-only. The entry path at
+          // line 5391 already blocks live for short candidates; the exit path
+          // must mirror that. Without this, a paper SHORT exit would fire a real
+          // naked SELL on Kite (wrong side too — covering a short is a BUY) for
+          // shares the user does not own. Caught by pre-push audit 2026-05-06.
+          if (LIVE_TRADING && kite && !isShort) {
             try {
               // 2026-04-21 — Kite rejects MARKET orders without market_protection
               // ("Market orders without market protection are not allowed via API").
@@ -5265,6 +5274,24 @@ async function scanAndTrade() {
     const qty = posSize.shares;
     if (posSize.slSource === 'swing_low' || posSize.slSource === 'swing_high') {
       result.detail = (result.detail||'') + ` [SL:${posSize.slSource}@${sl}]`;
+    }
+
+    // 2026-05-06 — Defensive R:R floor (added per pre-push audit). Long path
+    // already enforces this via Ch19 retroactive correction inside scoreDayTrade;
+    // short path's ch19Short.rrRatio is a true-placeholder that's only correct
+    // by algebra (target = entry − stopDist × CONFIG.RISK_REWARD with R = 1.5).
+    // Recompute the actual R:R from final SL/TGT here as a structural floor —
+    // catches any future drift in the position-sizing math.
+    {
+      const _stopDist  = isShortCandidate ? (sl - price) : (price - sl);
+      const _rewardDist = isShortCandidate ? (price - tgt) : (tgt - price);
+      const _actualRR   = _stopDist > 0 ? _rewardDist / _stopDist : 0;
+      if (_actualRR < 1.5) {
+        console.log(`  ⊘ SKIP ${stock.sym} (${candidate.direction || 'LONG'}) — R:R ${_actualRR.toFixed(2)} < 1.5 (Varsity Ch19 §6 floor)`);
+        _latestPass2Debug.skippedRR = (_latestPass2Debug.skippedRR || 0) + 1;
+        recordPass2(candidate, 'SKIPPED', `rr_below_floor_${_actualRR.toFixed(2)}`);
+        continue;
+      }
     }
 
     // ── Dedup guard — skip if same symbol bought within last 60 seconds ──
@@ -20427,7 +20454,7 @@ cron.schedule('0 10-15 * * 1-5', () => fetchVixOnly('hourly'),  { timezone: 'Asi
 async function squareOffPaperTrades(reason = 'eod') {
   try {
     const { rows: open } = await pool.query(
-      `SELECT id, symbol, price, quantity, entry_time, stop_loss, target
+      `SELECT id, symbol, price, quantity, entry_time, stop_loss, target, direction
          FROM paper_trades WHERE status = 'OPEN'`
     );
     if (!open.length) {
@@ -20443,7 +20470,10 @@ async function squareOffPaperTrades(reason = 'eod') {
         const exitPx = (cached && Number.isFinite(cached.price) && cached.price > 0)
           ? cached.price
           : Number(t.price);
-        const realistic = computeRealisticExitPnL(Number(t.price), exitPx, Number(t.quantity));
+        // 2026-05-06 — direction-aware P&L for EOD squareoff (caught by pre-push
+        // audit). Default 'LONG' for any pre-migration rows.
+        const _isShortEod = (t.direction || 'LONG') === 'SHORT';
+        const realistic = computeRealisticExitPnL(Number(t.price), exitPx, Number(t.quantity), _isShortEod);
         await pool.query(
           `UPDATE paper_trades
               SET status = 'CLOSED', exit_price = $1, exit_time = NOW(),
