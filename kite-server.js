@@ -136,7 +136,8 @@ async function initDB() {
         regime        VARCHAR(20),
         indicators    TEXT,
         exit_reason   VARCHAR(50),
-        status        VARCHAR(10)   DEFAULT 'OPEN'
+        status        VARCHAR(10)   DEFAULT 'OPEN',
+        direction     VARCHAR(5)    DEFAULT 'LONG'
       )
     `);
     // Part 6: structured JSON columns for Structure Filter + LLM analytics
@@ -152,6 +153,10 @@ async function initDB() {
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS ranking_json   JSONB`).catch(()=>{});
     // Phase 5 — trailing high-water mark persisted so stops survive restarts (robotrade-guards.js)
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS hwm_price      DECIMAL(18,8)`).catch(()=>{});
+    // 2026-05-06 — short trades. Existing rows default to 'LONG' so all
+    // existing analytics + exit logic behave unchanged.
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS direction      VARCHAR(5) DEFAULT 'LONG'`).catch(()=>{});
+    await pool.query(`UPDATE paper_trades SET direction = 'LONG' WHERE direction IS NULL`).catch(()=>{});
     // Phase 4 — Part 9: rejected candidates table with forward-tracking columns
     await pool.query(`
       CREATE TABLE IF NOT EXISTS rejected_candidates (
@@ -2570,6 +2575,14 @@ const CONFIG = {
   // Set CH19_BINARY_MODE=false to revert to composite scoring.
   CH19_BINARY_MODE: (process.env.CH19_BINARY_MODE || 'on').toLowerCase() !== 'off',
   CH19_MIN_PASS:   parseInt(process.env.CH19_MIN_PASS || '4', 10),
+  // 2026-05-06 — SHORT-side Varsity Ch19 binary gate. Same default ≥4-of-5 as
+  // longs. Set CH19_MIN_PASS_SHORT=5 for stricter (only perfect-checklist
+  // shorts) or CH19_MIN_PASS_SHORT=6 to disable shorts entirely (never reachable).
+  CH19_MIN_PASS_SHORT: parseInt(process.env.CH19_MIN_PASS_SHORT || '4', 10),
+  // Master kill-switch for shorts. SHORTS_ENABLED=false short-circuits the
+  // entire short pipeline — no scoring, no candidates, no INSERTs. Defaults to
+  // ON because shorts are paper-only and skip live execution explicitly.
+  SHORTS_ENABLED: (process.env.SHORTS_ENABLED || 'on').toLowerCase() !== 'off',
 };
 
 // NSE trading holidays — update annually.
@@ -2641,6 +2654,29 @@ function findSwingLow(candles, entryPrice) {
   return valid.length > 0 ? valid[0].level : null;
 }
 
+// SHORT-side mirror of findSwingLow — pivot HIGH ABOVE entry to anchor SL.
+// Varsity Ch19 §Checkpoint 4 verbatim: "Short trades: Resistance should
+// coincide with stoploss." Same 60-candle lookback, same 0.3%-3% distance band.
+function findSwingHigh(candles, entryPrice) {
+  if (!candles || candles.length < 20) return null;
+  const recent = candles.slice(-60);
+  const swingHighs = [];
+  for (let i = 2; i < recent.length - 2; i++) {
+    const c = recent[i];
+    if (c.high > recent[i-1].high && c.high > recent[i-2].high &&
+        c.high > recent[i+1].high && c.high > recent[i+2].high) {
+      swingHighs.push(c.high);
+    }
+  }
+  if (swingHighs.length === 0) return null;
+  const valid = swingHighs
+    .filter(sh => sh > entryPrice)                                    // ABOVE entry (flipped)
+    .map(sh => ({ level: sh, dist: (sh - entryPrice) / entryPrice }))
+    .filter(s => s.dist >= 0.003 && s.dist <= 0.03)
+    .sort((a, b) => a.dist - b.dist);
+  return valid.length > 0 ? valid[0].level : null;
+}
+
 // Live account equity from Kite — cached, refreshed every 5 minutes
 let _liveAccountEquity = null;
 let _liveEquityFetchedAt = 0;
@@ -2708,6 +2744,53 @@ function computePositionSize(entryPrice, atrValue, regime, accountEquity=null, k
   };
 }
 
+// SHORT-side position sizing — Varsity Ch19 §Checkpoint 4: "Resistance should
+// coincide with stoploss." SL anchored at swing-high ABOVE entry, with 0.1%
+// buffer. TGT below entry. Risk math identical to long: riskAmt / stopDist.
+function computeShortPositionSize(entryPrice, atrValue, regime, accountEquity=null, kellyRisk=null, candles=null) {
+  const equity   = accountEquity || _liveAccountEquity || CONFIG.ACCOUNT_SIZE;
+  const riskPct  = kellyRisk || CONFIG.RISK_PCT_PER_TRADE;
+  const riskAmt  = equity * Math.min(Math.max(riskPct, CONFIG.MIN_RISK_PCT), CONFIG.MAX_RISK_PCT);
+  const mult     = CONFIG.ATR_MULT[regime] || CONFIG.ATR_MULT.UNKNOWN;
+  const atrStopDist = Math.max(atrValue * mult, entryPrice * 0.005);
+
+  // SL = nearest swing high ABOVE entry (Varsity: resistance), 0.1% buffer
+  const swingHigh = candles ? findSwingHigh(candles, entryPrice) : null;
+  let stopLoss, stopDist, slSource;
+  if (swingHigh) {
+    stopLoss = +(swingHigh * 1.001).toFixed(2);     // 0.1% buffer ABOVE
+    stopDist = stopLoss - entryPrice;                // SL > entry → positive
+    slSource = 'swing_high';
+  } else {
+    stopDist = atrStopDist;
+    stopLoss = +(entryPrice + stopDist).toFixed(2); // ABOVE entry
+    slSource = 'atr';
+  }
+
+  // TGT BELOW entry by R × stopDist
+  const target = +(entryPrice - stopDist * CONFIG.RISK_REWARD).toFixed(2);
+  let shares = Math.max(1, Math.floor(riskAmt / stopDist));
+
+  // Same 20% per-position cap
+  const maxCapitalPerPosition = equity * 0.20;
+  const rawCapital = shares * entryPrice;
+  if (rawCapital > maxCapitalPerPosition) {
+    shares = Math.max(1, Math.floor(maxCapitalPerPosition / entryPrice));
+  }
+
+  const capital = shares * entryPrice;
+  return {
+    shares,
+    capital:  +capital.toFixed(0),
+    stopLoss,
+    target,
+    atrStop:  +atrStopDist.toFixed(2),
+    riskAmt:  +riskAmt.toFixed(0),
+    riskPct:  CONFIG.RISK_PCT_PER_TRADE * 100,
+    slSource, // 'swing_high' or 'atr'
+  };
+}
+
 // Kelly Criterion from paper trade history — Varsity M9 Ch 13
 async function computeKelly() {
   try {
@@ -2758,9 +2841,13 @@ function computeRoundTripCost(entryPrice, exitPrice, qty) {
   return +(notional * (bps / 10000)).toFixed(4);
 }
 // Full realistic PnL on exit — includes slippage + brokerage
-function computeRealisticExitPnL(entryPriceAdj, rawExitPrice, qty) {
+function computeRealisticExitPnL(entryPriceAdj, rawExitPrice, qty, isShort = false) {
   const exitAdj = applyExitSlippage(rawExitPrice);
-  const gross   = (exitAdj - entryPriceAdj) * qty;
+  // Long: profit when exit > entry. Short: profit when entry > exit (price dropped).
+  // Default isShort=false preserves all existing call sites unchanged.
+  const gross   = isShort
+    ? (entryPriceAdj - exitAdj) * qty
+    : (exitAdj - entryPriceAdj) * qty;
   const costs   = computeRoundTripCost(entryPriceAdj, exitAdj, qty);
   const net     = gross - costs;
   return {
@@ -4524,38 +4611,48 @@ async function scanAndTrade() {
         const sl  = parseFloat(openPos.stop_loss);
         const tgt = parseFloat(openPos.target);
         const entryPrice = parseFloat(openPos.price);
+        // 2026-05-06 — direction-aware exit logic. Existing rows default to
+        // 'LONG' (column NOT NULL with default) so isShort is false → all
+        // existing long behavior is preserved exactly.
+        const isShort = (openPos.direction || 'LONG') === 'SHORT';
 
         // Trailing stop — regime-aware (2026-04-29).
-        // Pre-fix: fixed 1.5×ATR trail distance regardless of regime.
-        // Observed 2026-04-29: 0% win rate — both closed trades exited
-        // via trailing SL on a RANGING-regime day with normal pullbacks.
-        // Now: widen trail to 2.0×ATR in RANGING regime so normal range
-        // noise doesn't whipsaw the position. Keep 1.5×ATR for MOMENTUM /
-        // TRENDING / BREAKOUT — those regimes mean directional moves
-        // where a tighter trail is appropriate.
         const highs = candles.slice(-14).map(c=>c.high);
         const lows  = candles.slice(-14).map(c=>c.low);
         const trs   = highs.map((h,i)=>h-lows[i]);
         const atr   = trs.reduce((a,b)=>a+b,0)/trs.length;
-        const profit = cmp - entryPrice;
+        // Profit direction flips for shorts: profit when price drops below entry.
+        const profit = isShort ? (entryPrice - cmp) : (cmp - entryPrice);
         let trailSL = sl;
-        // Per-stock regime from the most recent strategy run for THIS stock.
         const _trailRegime = (result && result.regime) || 'UNKNOWN';
         const trailMult = (_trailRegime === 'RANGING') ? 2.0 : 1.5;
         if (profit > atr) {
-          const trailLevel = cmp - (atr * trailMult);
-          if (trailLevel > sl) {
+          // Long: trail SL UP behind price (cmp - atr*mult). Short: trail SL
+          // DOWN above price (cmp + atr*mult). "Move trail only if it's better"
+          // means UP for long (trailLevel > sl), DOWN for short (trailLevel < sl).
+          const trailLevel = isShort
+            ? cmp + (atr * trailMult)
+            : cmp - (atr * trailMult);
+          const moved = isShort ? (trailLevel < sl) : (trailLevel > sl);
+          if (moved) {
             trailSL = +trailLevel.toFixed(2);
             await pool.query('UPDATE paper_trades SET stop_loss=$1 WHERE id=$2', [trailSL, openPos.id]);
           }
         }
 
-        const hitSL  = cmp <= Math.max(sl, trailSL);
-        const hitTgt = cmp >= tgt;
-        const exitSig = result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
-        // Phase 5 · Part 2 — time-decay exit (Varsity M9: don't hold intraday
-        // setups past their thesis window). Uses per-setup overrides so
-        // breakouts close faster than mean-reversion plays.
+        // SL hit: long when price drops to SL; short when price rises to SL.
+        // Trailed SL: longs use Math.max (SL only goes up); shorts use Math.min
+        // (SL only goes down).
+        const hitSL  = isShort
+          ? cmp >= Math.min(sl, trailSL)
+          : cmp <= Math.max(sl, trailSL);
+        // TGT hit: long when price rises to target; short when price drops.
+        const hitTgt = isShort ? cmp <= tgt : cmp >= tgt;
+        // Strategy exit: for longs, ≥2 SELL votes is exit signal; for shorts,
+        // ≥2 BUY votes is the exit signal (mirror).
+        const exitSig = isShort
+          ? result.buyVotes  >= CONFIG.CONSENSUS_NEEDED
+          : result.sellVotes >= CONFIG.CONSENSUS_NEEDED;
         const timeExit = robotradeGuards.shouldTimeExit(openPos, Date.now(), {
           MAX_HOLD_HOURS:           CONFIG.MAX_HOLD_HOURS,
           MAX_HOLD_HOURS_BY_SETUP:  CONFIG.MAX_HOLD_HOURS_BY_SETUP,
@@ -4563,17 +4660,19 @@ async function scanAndTrade() {
         });
 
         if (hitSL||hitTgt||exitSig||timeExit.exit) {
-          // Phase 3 · Part 2 — slippage + brokerage-adjusted exit pricing
-          const realistic = computeRealisticExitPnL(entryPrice, cmp, openPos.quantity);
+          // Direction-aware P&L: short flips entry/exit subtraction.
+          const realistic = computeRealisticExitPnL(entryPrice, cmp, openPos.quantity, isShort);
           const exitFill  = realistic.exitPrice;
           const pnl       = realistic.pnl;
           const pnlPct    = realistic.pnlPct;
           const grossPnL  = realistic.grossPnL;
           const costs     = realistic.costs;
+          const _votesForExit = isShort ? result.buyVotes : result.sellVotes;
+          const _exitVoteLabel = isShort ? 'BUY' : 'SELL';
           const reason = hitSL  ? "Stop Loss (trailing)"
                        : hitTgt ? "Target Hit"
                        : timeExit.exit ? `Time Exit (${timeExit.heldHours}h/${timeExit.maxHours}h)`
-                       :                 `Strategy Exit (${result.sellVotes}/3 SELL)`;
+                       :                 `Strategy Exit (${_votesForExit}/3 ${_exitVoteLabel})`;
           await pool.query(
             `UPDATE paper_trades
                 SET status='CLOSED', exit_price=$1, exit_time=NOW(),
@@ -4634,86 +4733,103 @@ async function scanAndTrade() {
           signalCount++;
         }
 
-      // ── COLLECT BUY CANDIDATES ──
-      // 2026-04-30 — two paths: Varsity Ch19 binary mode (default), or
-      // legacy composite scoring (CH19_BINARY_MODE=off).
+      // ── COLLECT BUY/SHORT CANDIDATES ──
+      // 2026-04-30: two paths — Varsity Ch19 binary mode (default), legacy
+      // composite scoring (CH19_BINARY_MODE=off).
+      // 2026-05-06: Ch19 binary mode now also evaluates SHORT Ch19. Either
+      // direction passing ≥4-of-5 promotes the stock to a candidate. Same
+      // symbol cannot have BOTH a long AND short candidate in one scan —
+      // the openPos guard above already prevents pyramiding either way.
       } else if (canEnterNew && CONFIG.CH19_BINARY_MODE) {
         // ── Ch19 binary mode ──────────────────────────────────────────
-        // Trade fires on Ch19 ≥4-of-5 alone. No score/vote thresholds.
-        // scoreDayTrade is the Varsity scorer; it returns null on
-        // preflight failure (penny / illiquid / junk fundamentals /
-        // abnormal candle range) — that's the hard floor.
-        // 2026-04-30 — log scoreDayTrade exceptions instead of silently
-        // swallowing. A bug inside the 12K-line scorer would otherwise
-        // skip the stock with zero trace.
         let dts = null;
         try { dts = scoreDayTrade(candles, stock.sym); }
         catch (e) { console.warn(`[ch19-mode] scoreDayTrade(${stock.sym}) threw: ${e && e.message}`); }
         if (!dts) continue;
-        const passCount = dts.ch19PassCount || 0;
-        if (passCount < CONFIG.CH19_MIN_PASS) continue;
+        const passCount      = dts.ch19PassCount      || 0;
+        const passCountShort = dts.ch19PassCountShort || 0;
+        const longOk  = passCount      >= CONFIG.CH19_MIN_PASS;
+        // Short master kill-switch: if SHORTS_ENABLED=false, treat all shorts
+        // as ineligible regardless of Ch19 pass count.
+        const shortOk = CONFIG.SHORTS_ENABLED &&
+                        passCountShort >= (CONFIG.CH19_MIN_PASS_SHORT || CONFIG.CH19_MIN_PASS);
+        if (!longOk && !shortOk) continue;
 
-        // Override result fields with Varsity setup-derived values so
-        // Pass 2 + INSERT use structural SL/TGT (VWAP-reclaim / OR-mid /
-        // gap-fill) rather than strategy-engine SL. dts.sl / dts.tgt are
-        // top-level fields on the scoreDayTrade return; bestSetup is a
-        // string identifier (e.g. 'VWAP_RECLAIM').
-        if (dts.sl)  result.sl       = dts.sl;
-        if (dts.tgt) result.tgt      = dts.tgt;
-        if (dts.bestSetup) result.strategy = dts.bestSetup;
-        // 2026-04-30 — when Ch19 disagrees with the strategy router
-        // (e.g. router consensus is SELL but Ch19 ≥4 says trade),
-        // log it explicitly so it's auditable. The override is the
-        // whole point of binary mode — we trust Varsity's checklist
-        // over the multi-strategy vote — but we want the divergence
-        // visible in trade indicators for post-hoc analysis.
-        const _routerSignal = result.signal;
-        result.signal       = 'BUY';
-        if (_routerSignal !== 'BUY') {
-          result.detail = (result.detail || '') + ` [router-signal:${_routerSignal} → Ch19-override:BUY]`;
-        }
-        // Surface Ch19 pass-count as the score so ranking + UI use it.
-        // Old composite score (0-10) was scaled from weighted-strategy
-        // result; in binary mode it's no longer meaningful, so replace
-        // with passCount-derived value (0-10 range preserved for
-        // downstream calls expecting a score).
-        result.score         = +((passCount / 5) * 10).toFixed(2);
-        result.ch19PassCount = passCount;
-        const ch19 = dts.ch19Items || {};
-        result.detail     = (result.detail || '') +
-                            ` [CH19: ${passCount}/5 — pa:${ch19.priceAction?'✓':'✗'} ` +
-                            `vol:${ch19.volume?'✓':'✗'} sr:${ch19.srContext?'✓':'✗'} ` +
-                            `ind:${ch19.indicators?'✓':'✗'} rr:${ch19.rrRatio?'✓':'✗'}]`;
+        // ──────────── LONG candidate (existing path) ────────────
+        if (longOk) {
+          // Override result with long Varsity-derived values
+          if (dts.sl)  result.sl       = dts.sl;
+          if (dts.tgt) result.tgt      = dts.tgt;
+          if (dts.bestSetup) result.strategy = dts.bestSetup;
+          const _routerSignal = result.signal;
+          result.signal       = 'BUY';
+          if (_routerSignal !== 'BUY') {
+            result.detail = (result.detail || '') + ` [router-signal:${_routerSignal} → Ch19-override:BUY]`;
+          }
+          result.score         = +((passCount / 5) * 10).toFixed(2);
+          result.ch19PassCount = passCount;
+          const ch19 = dts.ch19Items || {};
+          result.detail     = (result.detail || '') +
+                              ` [CH19: ${passCount}/5 — pa:${ch19.priceAction?'✓':'✗'} ` +
+                              `vol:${ch19.volume?'✓':'✗'} sr:${ch19.srContext?'✓':'✗'} ` +
+                              `ind:${ch19.indicators?'✓':'✗'} rr:${ch19.rrRatio?'✓':'✗'}]`;
 
-        // ── Day-level regime gate (2026-05-06) ──
-        // Block GAP_AND_GO when day has been ≥60% RANGING for 10+ scans.
-        // GAP_AND_GO needs trending tape; RANGING days bleed it via 3h Time
-        // Exit. EOD 2026-05-06 evidence: 0/4 GAP_AND_GO winners on a
-        // RANGING-dominant day. VWAP_RECLAIM / BREAKOUT / OVERSOLD_BOUNCE
-        // continue normally — those are designed for RANGING tape.
-        if (dts.bestSetup === 'GAP_AND_GO' && _isDayRangingDominant()) {
-          _bumpGapAndGoBlocked();
-          const rPct = Math.round((_dayRegimeTally.counts.RANGING / _dayRegimeTally.totalScans) * 100);
-          console.log(`  ⊘ ${stock.sym}: GAP_AND_GO blocked — day-regime gate (RANGING ${rPct}% of ${_dayRegimeTally.totalScans} scans)`);
-          // Persist into rejected_candidates so EOD report counts it under
-          // rejectReasons alongside structure-filter rejects. Helper exists
-          // in shiva-ui's pipeline (line ~3080) — use the same shape.
-          try {
-            await persistRejectedCandidate(
-              { stock, result, last, adjustedScore: dts.dayTradeScore || result.score || 0 },
-              'DAY_REGIME_GATE',
-              `GAP_AND_GO blocked — RANGING ${rPct}% of day`
-            );
-          } catch (_) { /* non-fatal */ }
-          continue; // skip push to buyCandidates
+          // Day-level regime gate — block GAP_AND_GO when RANGING-dominant
+          if (dts.bestSetup === 'GAP_AND_GO' && _isDayRangingDominant()) {
+            _bumpGapAndGoBlocked();
+            const rPct = Math.round((_dayRegimeTally.counts.RANGING / _dayRegimeTally.totalScans) * 100);
+            console.log(`  ⊘ ${stock.sym}: GAP_AND_GO blocked — day-regime gate (RANGING ${rPct}% of ${_dayRegimeTally.totalScans} scans)`);
+            try {
+              await persistRejectedCandidate(
+                { stock, result, last, adjustedScore: dts.dayTradeScore || result.score || 0 },
+                'DAY_REGIME_GATE',
+                `GAP_AND_GO blocked — RANGING ${rPct}% of day`
+              );
+            } catch (_) {}
+            // fall through — short may still be eligible below
+          } else {
+            buyCandidates.push({
+              stock, result, candles, last,
+              dayTradeScore:    dts.dayTradeScore,
+              varsityBestSetup: dts.bestSetup,
+              ch19PassCount:    passCount,
+              direction:        'LONG',
+            });
+          }
         }
 
-        buyCandidates.push({
-          stock, result, candles, last,
-          dayTradeScore:    dts.dayTradeScore,
-          varsityBestSetup: dts.bestSetup,
-          ch19PassCount:    passCount,
-        });
+        // ──────────── SHORT candidate (Varsity Ch19 mirror — added 2026-05-06) ────────────
+        // Each direction is independent: a stock can be a long candidate, a short
+        // candidate, neither, or — theoretically — both (rare, since Ch19 short
+        // requires bear pattern + prior uptrend, which contradicts long requirements).
+        // openPos guard above prevents same-symbol overlap with open paper trade.
+        if (shortOk) {
+          // Build a separate shortResult so we don't stomp the long result fields
+          // with bear values when both qualify in the same scan.
+          const shortResult = { ...result };
+          // SL/TGT for shorts are NOT set on dts directly (dts.sl/tgt are long-side).
+          // We pass the candidate to Pass 2 with direction='SHORT'; Pass 2's sizing
+          // routes through computeShortPositionSize which derives SL ABOVE / TGT BELOW.
+          shortResult.signal       = 'SELL';
+          shortResult.strategy     = dts.bestShortSetup;
+          shortResult.score        = +((passCountShort / 5) * 10).toFixed(2);
+          shortResult.ch19PassCount = passCountShort;
+          const ch19s = dts.ch19ItemsShort || {};
+          shortResult.detail = (shortResult.detail || '') +
+                               ` [SHORT CH19: ${passCountShort}/5 — pa:${ch19s.priceAction?'✓':'✗'} ` +
+                               `vol:${ch19s.volume?'✓':'✗'} sr:${ch19s.srContext?'✓':'✗'} ` +
+                               `ind:${ch19s.indicators?'✓':'✗'} rr:${ch19s.rrRatio?'✓':'✗'}]`;
+
+          buyCandidates.push({
+            stock, result: shortResult, candles, last,
+            dayTradeScore:    dts.dayTradeScore,           // composite long score (informational)
+            varsityBestSetup: dts.bestShortSetup,          // bear setup name
+            ch19PassCount:    passCountShort,
+            direction:        'SHORT',
+          });
+          console.log(`  📉 SHORT cand ${stock.sym}: ${dts.bestShortSetup} (Ch19 ${passCountShort}/5)`);
+        }
+        continue; // both branches handled — move to next stock
 
       // ── Legacy composite-score path (CH19_BINARY_MODE=off) ────────
       } else if (canEnterNew
@@ -5125,21 +5241,21 @@ async function scanAndTrade() {
     };
 
     // ATR-based position sizing + S/R-anchored SL + Kelly
+    // 2026-05-06: direction-aware. Long (default) uses swing-low + SL below.
+    // Short uses swing-high + SL above. Both apply same 2% account-risk math.
+    const isShortCandidate = candidate.direction === 'SHORT';
     const price   = last.close;
     const highs14 = candles.slice(-14).map(c=>c.high);
     const lows14  = candles.slice(-14).map(c=>c.low);
     const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
-    const posSize = computePositionSize(
-      price, atrVal, result.regime,
-      ddStatus.equity * sizeMult,
-      kellyRisk,
-      candles
-    );
+    const posSize = isShortCandidate
+      ? computeShortPositionSize(price, atrVal, result.regime, ddStatus.equity * sizeMult, kellyRisk, candles)
+      : computePositionSize     (price, atrVal, result.regime, ddStatus.equity * sizeMult, kellyRisk, candles);
     const sl  = posSize.stopLoss;
     const tgt = posSize.target;
     const qty = posSize.shares;
-    if (posSize.slSource === 'swing_low') {
-      result.detail = (result.detail||'') + ` [SL:swing_low@${sl}]`;
+    if (posSize.slSource === 'swing_low' || posSize.slSource === 'swing_high') {
+      result.detail = (result.detail||'') + ` [SL:${posSize.slSource}@${sl}]`;
     }
 
     // ── Dedup guard — skip if same symbol bought within last 60 seconds ──
@@ -5235,9 +5351,15 @@ async function scanAndTrade() {
     }
 
     // Paper trade
+    // 2026-05-06: direction-aware. type='BUY' for longs (open by buying),
+    // 'SELL' for shorts (open by selling). direction='LONG'/'SHORT' is the
+    // canonical lifecycle marker — exit logic reads this column to flip
+    // operators (cmp<=sl ↔ cmp>=sl etc.).
+    const _entryType = isShortCandidate ? 'SELL' : 'BUY';
+    const _direction = isShortCandidate ? 'SHORT' : 'LONG';
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json)
-       VALUES ($1,$2,'BUY',$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17)`,
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction)
+       VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19)`,
       [stock.sym,stock.n,entryFill,qty,+(qty*entryFill).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
        +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
        structureJson ? JSON.stringify(structureJson) : null,
@@ -5245,17 +5367,18 @@ async function scanAndTrade() {
        decisionJson  ? JSON.stringify(decisionJson)  : null,
        confVal,
        experimentJson ? JSON.stringify(experimentJson) : null,
-       rankingJson    ? JSON.stringify(rankingJson)    : null]
+       rankingJson    ? JSON.stringify(rankingJson)    : null,
+       _entryType,
+       _direction]
     );
 
     // Live order
-    // 2026-04-22 — MARKET with market_protection: 2. A LIMIT at signal price
-    // can sit un-filled when price pops past the level (paper-mode can't see
-    // this because paper always simulates a fill via applyEntrySlippage).
-    // MARKET guarantees execution; market_protection caps slippage at 2% so
-    // a thin-book freak print can't fill at a pathological price. Kite
-    // requires market_protection for MARKET orders since 2026-04-21.
-    if (LIVE_TRADING && kite) {
+    // 2026-04-22 — MARKET with market_protection: 2.
+    // 2026-05-06 — SHORTS are PAPER-ONLY (Phase 3 live execution not built).
+    //   Skip the live block entirely for short candidates so we never accidentally
+    //   place a real SELL via Kite when LIVE_TRADING is on. Long-only live path
+    //   is unchanged.
+    if (LIVE_TRADING && kite && !isShortCandidate) {
       try {
         // product: 'MIS' — intraday-with-auto-squareoff. Zerodha closes any
         // remaining MIS positions at 3:20 PM IST. Switched from CNC on
@@ -8760,13 +8883,15 @@ app.get('/api/admin/daily-report', async (req, res) => {
       safeQuery(
         `SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
-                exit_reason, status, order_id, exit_order_id, 'live'::text AS trade_mode
+                exit_reason, status, order_id, exit_order_id, 'live'::text AS trade_mode,
+                'LONG'::text AS direction
            FROM live_trades
           WHERE entry_time >= $1 AND entry_time < $2
           UNION ALL
          SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
-                exit_reason, status, NULL::varchar AS order_id, NULL::varchar AS exit_order_id, 'paper'::text AS trade_mode
+                exit_reason, status, NULL::varchar AS order_id, NULL::varchar AS exit_order_id, 'paper'::text AS trade_mode,
+                COALESCE(direction, 'LONG')::text AS direction
            FROM paper_trades
           WHERE entry_time >= $1 AND entry_time < $2
           ORDER BY entry_time DESC`,
@@ -12176,6 +12301,12 @@ function scoreDayTrade(candles, sym, ctx) {
       const idx = todayCandles.length - 6 + i;
       return idx >= 0 && todayCandles[idx] && todayCandles[idx].close < v;
     });
+  // Mirror for VWAP Breakdown — price was recently above VWAP, now crossing below
+  const recentVWAPAbove = todayVWAPs.length >= 4 &&
+    todayVWAPs.slice(-6, -1).some((v, i) => {
+      const idx = todayCandles.length - 6 + i;
+      return idx >= 0 && todayCandles[idx] && todayCandles[idx].close > v;
+    });
 
   const rsiArr   = rsi(C, 14);
   const lastRSI  = rsiArr[n - 1];
@@ -13016,6 +13147,223 @@ function scoreDayTrade(candles, sym, ctx) {
   if (lastRSI > 45) { bounceScore = 0; bounceDetail = ['Not oversold']; }
   bounceScore = Math.max(0, Math.min(100, bounceScore));
 
+  // ════════════════════════════════════════════════════════════════════════
+  // SHORT-SIDE SETUPS — Varsity Ch19 explicitly handles both directions.
+  // Same indicator block as longs, just direction-flipped logic.
+  // Added 2026-05-06.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── SHORT SETUP 1: VWAP BREAKDOWN (Varsity M2 Ch13) ──
+  // Price was above VWAP recently, now breaking below with volume.
+  // Mirror of VWAP_RECLAIM.
+  let vwapBreakdownScore = 0, vwapBreakdownDetail = [];
+  if (recentVWAPAbove && pctVWAP > -2.0 && pctVWAP < 0.3) {
+    if (pctVWAP < -0.1 && pctVWAP > -2.0) {
+      vwapBreakdownScore += _gain('VWAP_BD', 30, `Lost VWAP (${pctVWAP.toFixed(1)}%)`);
+      vwapBreakdownDetail.push(`Lost VWAP (${pctVWAP.toFixed(1)}%)`);
+    } else if (pctVWAP <= 0.1 && pctVWAP >= -0.1) {
+      vwapBreakdownScore += _gain('VWAP_BD', 20, 'Testing VWAP from above');
+      vwapBreakdownDetail.push('Testing VWAP from above');
+    }
+  }
+  if (volRatio > 2.0) { vwapBreakdownScore += _gain('VWAP_BD', 15, `Vol ${volRatio.toFixed(1)}x surge`); vwapBreakdownDetail.push(`Vol ${volRatio.toFixed(1)}x surge`); }
+  else if (volRatio > 1.5) { vwapBreakdownScore += _gain('VWAP_BD', 10, `Vol ${volRatio.toFixed(1)}x`); vwapBreakdownDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
+  if (lastRSI < 60 && lastRSI > 40) { vwapBreakdownScore += _gain('VWAP_BD', 8, 'RSI neutral zone'); vwapBreakdownDetail.push('RSI neutral zone'); }
+  if (ema9[n - 1] < ema20[n - 1]) { vwapBreakdownScore += _gain('VWAP_BD', 8, 'EMA9<20 bearish'); vwapBreakdownDetail.push('EMA9<20 bearish'); }
+  if (!macdBull) { vwapBreakdownScore += _gain('VWAP_BD', 8, 'MACD bear'); vwapBreakdownDetail.push('MACD bear'); }
+  if (!stBull) { vwapBreakdownScore += _gain('VWAP_BD', 5, 'ST bear'); vwapBreakdownDetail.push('ST bear'); }
+  if (stochK > 20 && stochK < 80) { vwapBreakdownScore += _gain('VWAP_BD', 4, 'Stoch healthy'); vwapBreakdownDetail.push('Stoch healthy'); }
+  // Near PDH = institutional resistance level (mirror of "near PDL support" for longs)
+  if (Math.abs(px - pdHigh) / pdHigh < 0.01) { vwapBreakdownScore += _gain('VWAP_BD', 5, 'Near PDH resistance'); vwapBreakdownDetail.push('Near PDH resistance'); }
+  // Penalty: too far below VWAP = chasing
+  if (pctVWAP < -2.0) { vwapBreakdownScore += _penalty('VWAP_BD', 20, 'Extended below VWAP — chasing'); vwapBreakdownDetail.push('Extended below VWAP — chasing'); }
+  if (pctVWAP > 1.5) { vwapBreakdownScore += _penalty('VWAP_BD', 25, 'Still well above VWAP'); vwapBreakdownDetail.push('Still well above VWAP'); }
+  // Bear candle pattern confirming the breakdown
+  if (bearPattern && vwapBreakdownScore > 0) {
+    const bonus = Math.round(bearPattern.weight * 0.6);
+    vwapBreakdownScore += _gain('VWAP_BD', bonus, `${bearPattern.name} at breakdown`);
+    vwapBreakdownDetail.push(`${bearPattern.name} at breakdown`);
+  }
+  // Bearish divergence strengthens any breakdown setup
+  if (rsiBearDiv && vwapBreakdownScore > 0) { vwapBreakdownScore += _gain('VWAP_BD', 8, 'RSI bearish divergence'); vwapBreakdownDetail.push('RSI bear div'); }
+  if (macdBearDiv && vwapBreakdownScore > 0) { vwapBreakdownScore += _gain('VWAP_BD', 5, 'MACD bearish divergence'); vwapBreakdownDetail.push('MACD bear div'); }
+  // Underperforming Nifty = relative weakness
+  if (relStrength !== null && relStrength < -1.0 && vwapBreakdownScore > 0) { vwapBreakdownScore += _gain('VWAP_BD', 5, `Underperforming Nifty by ${Math.abs(relStrength).toFixed(1)}%`); vwapBreakdownDetail.push(`RS ${relStrength.toFixed(1)}%`); }
+  // OBV bear div = distribution underneath weak price
+  if (obvBearDiv && vwapBreakdownScore > 0) { vwapBreakdownScore += _gain('VWAP_BD', 5, 'OBV bearish divergence'); vwapBreakdownDetail.push('OBV bear div'); }
+  vwapBreakdownScore = Math.max(0, Math.min(100, vwapBreakdownScore));
+
+  // ── SHORT SETUP 2: GAP & DROP (Varsity M2 Ch7 — gap-down + follow-through) ──
+  // Mirror of GAP_AND_GO.
+  let gapAndDropScore = 0, gapAndDropDetail = [];
+  if (gapPct < 0 && Math.abs(gapPct) >= 1.0 && Math.abs(gapPct) <= 6.0) {
+    gapAndDropScore += _gain('GAP_DN', 20, `Gap ${gapPct.toFixed(1)}%`);
+    gapAndDropDetail.push(`Gap ${gapPct.toFixed(1)}%`);
+  }
+  if (gapUnfilled && gapPct < 0 && Math.abs(gapPct) >= 1.0) {
+    gapAndDropScore += _gain('GAP_DN', 15, 'Gap unfilled — strong conviction');
+    gapAndDropDetail.push('Gap unfilled — strong conviction');
+  }
+  // Follow-through: bear gap with break below OR low
+  if (gapPct < -0.5 && px < orLow) {
+    gapAndDropScore += _gain('GAP_DN', 20, 'Gap-down break below OR');
+    gapAndDropDetail.push('Gap-down break below OR');
+  }
+  // Volume confirms gap
+  if (volRatio > 2.5) { gapAndDropScore += _gain('GAP_DN', 20, `Vol spike ${volRatio.toFixed(1)}x`); gapAndDropDetail.push(`Vol spike ${volRatio.toFixed(1)}x`); }
+  else if (volRatio > 2.0) { gapAndDropScore += _gain('GAP_DN', 15, `Vol ${volRatio.toFixed(1)}x`); gapAndDropDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
+  else if (volRatio > 1.5) { gapAndDropScore += _gain('GAP_DN', 8, `Vol ${volRatio.toFixed(1)}x`); gapAndDropDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
+  if (adxVal > 25) { gapAndDropScore += _gain('GAP_DN', 8, `ADX ${adxVal.toFixed(0)} trending`); gapAndDropDetail.push(`ADX ${adxVal.toFixed(0)} trending`); }
+  // RSI in bear momentum zone (25-50)
+  if (gapPct < 0 && lastRSI > 25 && lastRSI < 50) { gapAndDropScore += _gain('GAP_DN', 6, 'RSI bear-momentum zone'); gapAndDropDetail.push('RSI bear zone'); }
+  if (gapPct < 0 && ema9[n - 1] < ema20[n - 1]) { gapAndDropScore += _gain('GAP_DN', 5, 'EMA aligned bearish'); gapAndDropDetail.push('EMA aligned bearish'); }
+  // Penalty: gap too wide — fade risk
+  if (Math.abs(gapPct) > 6) { gapAndDropScore += _penalty('GAP_DN', 20, 'Gap too wide — fade risk'); gapAndDropDetail.push('Gap too wide — fade risk'); }
+  else if (Math.abs(gapPct) > 4) { gapAndDropScore += _penalty('GAP_DN', 5, 'Wide gap — partial fade risk'); gapAndDropDetail.push('Wide gap — partial fade risk'); }
+  if (!gapUnfilled && gapPct < 0 && Math.abs(gapPct) >= 1.0) { gapAndDropScore += _penalty('GAP_DN', 15, 'Gap filled — weak'); gapAndDropDetail.push('Gap filled — weak'); }
+  if (Math.abs(gapPct) < 0.5 || gapPct >= 0) { gapAndDropScore = 0; gapAndDropDetail = ['No bear gap']; }
+  // Narrow CPR = directional day, perfect for gap-and-drop too
+  if (cpr && cpr.type === 'NARROW' && gapAndDropScore > 0) { gapAndDropScore += _gain('GAP_DN', 8, `Narrow CPR (${cpr.widthPct.toFixed(2)}%) — trending day`); gapAndDropDetail.push('Narrow CPR — trending day'); }
+  else if (cpr && cpr.type === 'WIDE') { gapAndDropScore += _penalty('GAP_DN', 5, `Wide CPR — range day, gaps fade`); gapAndDropDetail.push('Wide CPR — fade risk'); }
+  // Bearish gap below S1 = directional breakdown below pivot support → continuation
+  if (cpr && gapPct < 0 && px < cpr.S1) { gapAndDropScore += _gain('GAP_DN', 7, 'Price below S1 — pivot breakdown'); gapAndDropDetail.push('Below S1'); }
+  // Bear pattern confirming gap direction
+  if (bearPattern && gapPct < 0 && gapAndDropScore > 0) {
+    const bonus = Math.round(bearPattern.weight * 0.5);
+    gapAndDropScore += _gain('GAP_DN', bonus, `${bearPattern.name} confirming gap-down`);
+    gapAndDropDetail.push(`${bearPattern.name} confirm`);
+  }
+  // Bullish pattern on a gap-down = exhaustion/reversal risk
+  if (bullPattern && gapPct < 0 && bullPattern.weight >= 12) { gapAndDropScore += _penalty('GAP_DN', 10, `${bullPattern.name} — exhaustion on gap-down`); gapAndDropDetail.push(`${bullPattern.name} exhaustion`); }
+  // Bullish divergence on gap-down = fade
+  if (rsiBullDiv && gapPct < 0) { gapAndDropScore += _penalty('GAP_DN', 8, 'RSI bullish divergence on gap-down'); gapAndDropDetail.push('RSI bull div'); }
+  if (macdBullDiv && gapPct < 0) { gapAndDropScore += _penalty('GAP_DN', 4, 'MACD bullish divergence'); gapAndDropDetail.push('MACD bull div'); }
+  // Gap classification — same buckets, applied to bear direction
+  if (gapClass === 'BREAKAWAY' && gapPct < 0) { gapAndDropScore += _gain('GAP_DN', gapClassBonus, 'Breakaway gap-down (from tight range + vol)'); gapAndDropDetail.push('Breakaway'); }
+  else if (gapClass === 'CONTINUATION' && gapPct < 0) { gapAndDropScore += _gain('GAP_DN', gapClassBonus, 'Continuation gap-down (trend-aligned)'); gapAndDropDetail.push('Continuation'); }
+  else if (gapClass === 'EXHAUSTION' && gapPct < 0) { gapAndDropScore += _penalty('GAP_DN', Math.abs(gapClassBonus), 'Exhaustion gap-down'); gapAndDropDetail.push('Exhaustion'); }
+  // Underperforming Nifty during gap-down
+  if (relStrength !== null && gapPct < 0 && relStrength < -1.5) { gapAndDropScore += _gain('GAP_DN', 5, `Underperforming Nifty (${relStrength.toFixed(1)}%)`); gapAndDropDetail.push(`RS ${relStrength.toFixed(1)}%`); }
+  if (adrUsedPct > 80 && gapPct < 0) { gapAndDropScore += _penalty('GAP_DN', 8, `ADR ${adrUsedPct}% used — gap already spent the move`); gapAndDropDetail.push(`ADR ${adrUsedPct}%`); }
+  gapAndDropScore = Math.max(0, Math.min(100, gapAndDropScore));
+
+  // ── SHORT SETUP 3: BREAKDOWN (Varsity M2 Ch7+16) ──
+  // Price below day low / OR low / PDL with volume. Mirror of BREAKOUT.
+  let breakdownScore = 0, breakdownDetail = [];
+  const nearDayLow = px <= dayLow * 1.002;  // within 0.2% of day low
+  const belowOR    = px < orLow;
+  const belowPDL   = px < pdLow;
+  if (nearDayLow) { breakdownScore += _gain('BRK_DN', 20, 'At day low'); breakdownDetail.push('At day low'); }
+  if (belowOR) { breakdownScore += _gain('BRK_DN', 15, 'Below OR'); breakdownDetail.push('Below OR'); }
+  if (belowPDL) { breakdownScore += _gain('BRK_DN', 10, 'Below PDL — strong'); breakdownDetail.push('Below PDL — strong'); }
+  if (volRatio > 2.5) { breakdownScore += _gain('BRK_DN', 20, `Vol ${volRatio.toFixed(1)}x surge`); breakdownDetail.push(`Vol ${volRatio.toFixed(1)}x surge`); }
+  else if (volRatio > 2.0) { breakdownScore += _gain('BRK_DN', 15, `Vol ${volRatio.toFixed(1)}x`); breakdownDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
+  else if (volRatio > 1.5) { breakdownScore += _gain('BRK_DN', 8, `Vol ${volRatio.toFixed(1)}x`); breakdownDetail.push(`Vol ${volRatio.toFixed(1)}x`); }
+  // BB lower-band breakout (price below lower band = bear breakdown)
+  if (bbPct < 0.05) { breakdownScore += _gain('BRK_DN', 10, 'BB lower breakdown'); breakdownDetail.push('BB lower breakdown'); }
+  if (adxVal > 30) { breakdownScore += _gain('BRK_DN', 10, `ADX ${adxVal.toFixed(0)} strong trend`); breakdownDetail.push(`ADX ${adxVal.toFixed(0)} strong trend`); }
+  else if (adxVal > 25) { breakdownScore += _gain('BRK_DN', 6, `ADX ${adxVal.toFixed(0)} trending`); breakdownDetail.push(`ADX ${adxVal.toFixed(0)} trending`); }
+  if (ema9[n - 1] < ema20[n - 1]) { breakdownScore += _gain('BRK_DN', 5, 'EMA aligned bear'); breakdownDetail.push('EMA aligned bear'); }
+  if (!stBull) { breakdownScore += _gain('BRK_DN', 5, 'ST bear'); breakdownDetail.push('ST bear'); }
+  if (!macdBull) { breakdownScore += _gain('BRK_DN', 5, 'MACD bear'); breakdownDetail.push('MACD bear'); }
+  if (stochK > 15 && stochK < 50) { breakdownScore += _gain('BRK_DN', 4, 'Stoch confirming'); breakdownDetail.push('Stoch confirming'); }
+  if (orRange > 0 && orRange / px < 0.015) { breakdownScore += _gain('BRK_DN', 3, 'Tight OR range'); breakdownDetail.push('Tight OR range'); }
+  // Penalty: breakdown with weak volume = fake-out
+  if (nearDayLow && volRatio < 1.0) { breakdownScore += _penalty('BRK_DN', 25, 'Low vol — likely fake-out'); breakdownDetail.push('Low vol — likely fake-out'); }
+  // Penalty: RSI oversold = exhaustion breakdown
+  if (lastRSI < 20) { breakdownScore += _penalty('BRK_DN', 15, 'RSI exhaustion zone'); breakdownDetail.push('RSI exhaustion zone'); }
+  else if (lastRSI < 25) { breakdownScore += _penalty('BRK_DN', 8, 'RSI oversold'); breakdownDetail.push('RSI oversold'); }
+  // CPR pivot supports breaking down
+  if (cpr && px < cpr.S2) { breakdownScore += _gain('BRK_DN', 10, 'Below S2 — strong pivot breakdown'); breakdownDetail.push('Below S2'); }
+  else if (cpr && px < cpr.S1) { breakdownScore += _gain('BRK_DN', 6, 'Below S1 — pivot breakdown'); breakdownDetail.push('Below S1'); }
+  if (cpr && cpr.type === 'NARROW' && breakdownScore >= 30) { breakdownScore += _gain('BRK_DN', 6, `Narrow CPR — trending day`); breakdownDetail.push('Narrow CPR'); }
+  else if (cpr && cpr.type === 'WIDE') { breakdownScore += _penalty('BRK_DN', 8, `Wide CPR — range day fade risk`); breakdownDetail.push('Wide CPR range day'); }
+  // Bearish pattern confirming the breakdown
+  if (bearPattern && bearPattern.weight >= 12 && breakdownScore >= 30) {
+    const bonus = Math.round(bearPattern.weight * 0.5);
+    breakdownScore += _gain('BRK_DN', bonus, `${bearPattern.name} confirming breakdown`);
+    breakdownDetail.push(`${bearPattern.name}`);
+  }
+  // Bullish reversal pattern at day low = classic fake-out signal
+  if (bullPattern && bullPattern.weight >= 12 && nearDayLow) {
+    breakdownScore += _penalty('BRK_DN', bullPattern.weight, `${bullPattern.name} at lows — fake-out risk`);
+    breakdownDetail.push(`${bullPattern.name} at lows`);
+  }
+  // Bullish divergence at breakdown = classic bear-trap warning
+  if (rsiBullDiv) { breakdownScore += _penalty('BRK_DN', 12, 'RSI bullish divergence — bear-trap risk'); breakdownDetail.push('RSI bull div'); }
+  if (macdBullDiv) { breakdownScore += _penalty('BRK_DN', 6, 'MACD bullish divergence'); breakdownDetail.push('MACD bull div'); }
+  // RSI 50 midline cross down = momentum bias flipped bearish
+  if (rsiArr.length >= 2 && rsiArr[n - 2] >= 50 && lastRSI < 50) { breakdownScore += _gain('BRK_DN', 6, 'RSI crossed 50 midline down'); breakdownDetail.push('RSI<50 cross'); }
+  else if (!rsiAboveMidline && breakdownScore >= 40) { breakdownScore += _gain('BRK_DN', 3, 'RSI below 50 (bear zone)'); breakdownDetail.push('RSI<50'); }
+  // Volume contracting on breakdown = late-stage move
+  if (volExpanding) { breakdownScore += _gain('BRK_DN', 6, 'Volume expanding 3-bar'); breakdownDetail.push('Vol expanding'); }
+  else if (volContracting && breakdownScore >= 40) { breakdownScore += _penalty('BRK_DN', 5, 'Volume contracting — late-stage move'); breakdownDetail.push('Vol contracting'); }
+  // MACD histogram crossing zero down = fresh bear momentum
+  if (macdHistPrev >= 0 && macdHist < 0) { breakdownScore += _gain('BRK_DN', 8, 'MACD histogram zero-cross down'); breakdownDetail.push('Hist 0-cross down'); }
+  else if (macdHist < macdHistPrev && macdHistPrev <= macdHistPrev2) { breakdownScore += _gain('BRK_DN', 4, 'MACD histogram declining'); breakdownDetail.push('Hist declining'); }
+  // Below VWAP -2σ band = statistically overextended (fade risk for shorts)
+  if (below2Sigma) { breakdownScore += _penalty('BRK_DN', 8, 'Below VWAP -2σ band — statistically overextended'); breakdownDetail.push('<VWAP -2σ'); }
+  // Underperforming Nifty
+  if (relStrength !== null && relStrength < -1.5) { breakdownScore += _gain('BRK_DN', 5, `Weak vs Nifty (${relStrength.toFixed(1)}%)`); breakdownDetail.push(`RS ${relStrength.toFixed(1)}%`); }
+  else if (relStrength !== null && relStrength > 1.0 && breakdownScore >= 40) { breakdownScore += _penalty('BRK_DN', 5, 'Breaking down but outperforming Nifty'); breakdownDetail.push(`RS +${relStrength.toFixed(1)}%`); }
+  // ADR exhaustion: stock has burned >80% of typical range = breakdown late-stage
+  if (adrUsedPct > 80) { breakdownScore += _penalty('BRK_DN', 8, `ADR ${adrUsedPct}% used — likely exhausted`); breakdownDetail.push(`ADR ${adrUsedPct}%`); }
+  else if (adrUsedPct > 0 && adrUsedPct < 40) { breakdownScore += _gain('BRK_DN', 4, `ADR ${adrUsedPct}% used — room to run`); breakdownDetail.push(`ADR ${adrUsedPct}%`); }
+  breakdownScore = Math.max(0, Math.min(100, breakdownScore));
+
+  // ── SHORT SETUP 4: OVERBOUGHT REJECTION (Varsity M2 Ch14+15+18) ──
+  // RSI > 70, BB %B > 0.85, Stoch > 80, bearish pattern at top.
+  // Mirror of OVERSOLD_BOUNCE.
+  let overboughtScore = 0, overboughtDetail = [];
+  if (lastRSI > 75) { overboughtScore += _gain('REJECT', 30, `RSI ${lastRSI.toFixed(0)} extreme`); overboughtDetail.push(`RSI ${lastRSI.toFixed(0)} extreme`); }
+  else if (lastRSI > 70) { overboughtScore += _gain('REJECT', 25, `RSI ${lastRSI.toFixed(0)} overbought`); overboughtDetail.push(`RSI ${lastRSI.toFixed(0)} overbought`); }
+  else if (lastRSI > 65) { overboughtScore += _gain('REJECT', 15, `RSI ${lastRSI.toFixed(0)} near overbought`); overboughtDetail.push(`RSI ${lastRSI.toFixed(0)} near overbought`); }
+  else if (lastRSI > 60) { overboughtScore += _gain('REJECT', 5, `RSI ${lastRSI.toFixed(0)}`); overboughtDetail.push(`RSI ${lastRSI.toFixed(0)}`); }
+  // Stochastic overbought
+  if (stochK > 85) { overboughtScore += _gain('REJECT', 12, `Stoch ${stochK.toFixed(0)} extreme`); overboughtDetail.push(`Stoch ${stochK.toFixed(0)} extreme`); }
+  else if (stochK > 80) { overboughtScore += _gain('REJECT', 8, `Stoch ${stochK.toFixed(0)} overbought`); overboughtDetail.push(`Stoch ${stochK.toFixed(0)} overbought`); }
+  // Price at upper BB = statistical extreme
+  if (bbPct > 0.95) { overboughtScore += _gain('REJECT', 18, 'Above upper BB'); overboughtDetail.push('Above upper BB'); }
+  else if (bbPct > 0.85) { overboughtScore += _gain('REJECT', 10, 'Near upper BB'); overboughtDetail.push('Near upper BB'); }
+  // VWAP above = deeply premium vs session average
+  if (pctVWAP > 2.0) { overboughtScore += _gain('REJECT', 10, 'Well above VWAP'); overboughtDetail.push('Well above VWAP'); }
+  else if (pctVWAP > 1.0) { overboughtScore += _gain('REJECT', 5, 'Above VWAP'); overboughtDetail.push('Above VWAP'); }
+  // Near PDH resistance
+  if (Math.abs(px - pdHigh) / pdHigh < 0.008) { overboughtScore += _gain('REJECT', 5, 'Near PDH resistance'); overboughtDetail.push('Near PDH resistance'); }
+  // Volume = blow-off / exhaustion
+  if (volRatio > 3.0) { overboughtScore += _gain('REJECT', 15, 'Blow-off vol spike'); overboughtDetail.push('Blow-off vol spike'); }
+  else if (volRatio > 2.0) { overboughtScore += _gain('REJECT', 10, 'High vol exhaustion'); overboughtDetail.push('High vol exhaustion'); }
+  else if (volRatio > 1.5) { overboughtScore += _gain('REJECT', 5, 'Elevated vol'); overboughtDetail.push('Elevated vol'); }
+  // Bearish reversal pattern — Hammer-equivalent at top is Hanging Man / Shooting Star
+  if (bearPattern) {
+    overboughtScore += _gain('REJECT', bearPattern.weight, bearPattern.name);
+    overboughtDetail.push(bearPattern.name);
+  }
+  // Bounce rejection at CPR resistance (R1, R2)
+  if (cpr) {
+    const atR1 = Math.abs(px - cpr.R1) / px < 0.008;
+    const atR2 = Math.abs(px - cpr.R2) / px < 0.008;
+    const atTC = Math.abs(px - cpr.TC) / px < 0.008;
+    if (atR2) { overboughtScore += _gain('REJECT', 10, 'At R2 — deep pivot resistance'); overboughtDetail.push('At R2'); }
+    else if (atR1) { overboughtScore += _gain('REJECT', 7, 'At R1 — pivot resistance'); overboughtDetail.push('At R1'); }
+    else if (atTC) { overboughtScore += _gain('REJECT', 5, 'At TC — central pivot ceiling'); overboughtDetail.push('At TC'); }
+  }
+  // Bearish divergence — single most reliable reversal signal
+  if (rsiBearDiv) { overboughtScore += _gain('REJECT', 15, 'RSI bearish divergence'); overboughtDetail.push('RSI bear div'); }
+  if (macdBearDiv) { overboughtScore += _gain('REJECT', 8, 'MACD bearish divergence'); overboughtDetail.push('MACD bear div'); }
+  // OBV bearish div = distribution
+  if (obvBearDiv) { overboughtScore += _gain('REJECT', 10, 'OBV bearish divergence — distribution'); overboughtDetail.push('OBV bear div'); }
+  // Above VWAP +2σ = 95% statistical extreme, strong mean-reversion
+  if (above2Sigma) { overboughtScore += _gain('REJECT', 12, 'Above VWAP +2σ band (95% extreme)'); overboughtDetail.push('>VWAP +2σ'); }
+  // Relative strength: outperforming Nifty + overbought = exhaustion candidate
+  if (relStrength !== null && relStrength > 1.5) { overboughtScore += _gain('REJECT', 5, `Strong vs Nifty (${relStrength.toFixed(1)}%) — overbought setup`); overboughtDetail.push(`RS +${relStrength.toFixed(1)}%`); }
+  // MACD turning down — momentum shift
+  if (!macdBull && macdLine[n - 2] >= sigLine[n - 2]) { overboughtScore += _gain('REJECT', 10, 'MACD turning down'); overboughtDetail.push('MACD turning down'); }
+  else if (!macdBull) { overboughtScore += _gain('REJECT', 4, 'MACD bear'); overboughtDetail.push('MACD bear'); }
+  // Penalty: not actually overbought — RSI < 55 kills the thesis
+  if (lastRSI < 55) { overboughtScore = 0; overboughtDetail = ['Not overbought']; }
+  overboughtScore = Math.max(0, Math.min(100, overboughtScore));
+
   // ── PICK BEST SETUP ────────────────────────────────────────────────────
   const setups = [
     { type: 'VWAP_RECLAIM', score: vwapScore, detail: vwapDetail, emoji: '🔵' },
@@ -13025,6 +13373,16 @@ function scoreDayTrade(candles, sym, ctx) {
   ];
   setups.sort((a, b) => b.score - a.score);
   const best = setups[0];
+
+  // ── PICK BEST SHORT SETUP (separate ranking — short side independent) ──
+  const setupsShort = [
+    { type: 'VWAP_BREAKDOWN',     score: vwapBreakdownScore, detail: vwapBreakdownDetail, emoji: '🔻' },
+    { type: 'GAP_AND_DROP',       score: gapAndDropScore,    detail: gapAndDropDetail,    emoji: '💥' },
+    { type: 'BREAKDOWN',          score: breakdownScore,     detail: breakdownDetail,     emoji: '📉' },
+    { type: 'OVERBOUGHT_REJECTION', score: overboughtScore,  detail: overboughtDetail,    emoji: '🚫' },
+  ];
+  setupsShort.sort((a, b) => b.score - a.score);
+  const bestShort = setupsShort[0];
 
   // Overall day trade score = best setup score, boosted by multi-setup confirmation
   const secondary = setups[1];
@@ -13276,6 +13634,32 @@ function scoreDayTrade(candles, sym, ctx) {
   if (ch19PassCount >= 4) overall = Math.min(100, overall + _gain('MULTI', 8, `M2 Ch 19 checklist: ${ch19PassCount}/5 passed`));
   else if (ch19PassCount === 3) overall = Math.min(100, overall + _gain('MULTI', 4, 'M2 Ch 19 checklist: 3/5 passed'));
   else if (ch19PassCount <= 1) overall = Math.max(0, overall + _penalty('MULTI', 6, `M2 Ch 19 checklist: only ${ch19PassCount}/5 — weak setup`));
+
+  // ── Varsity M2 Ch 19 — SHORT-side checklist (mirror of long ch19 above) ──
+  // Same 5 boxes, direction-flipped. Box #4 explicitly takes Varsity's verbatim
+  // guidance: "Short trades: Resistance should coincide with stoploss" — so
+  // S/R context for shorts means price near a RESISTANCE level above (PDH,
+  // OR high, R1/R2, Fib above price, round number above price).
+  //
+  // Box #1 has a prior-uptrend pre-flight: Varsity Ch19 §Checkpoint 2 verbatim:
+  // "Bearish patterns need prior UPTREND. Look back 25-30 candles minimum."
+  const priorN = Math.min(30, n - 1);
+  const priorTrendUp = priorN > 5 && (C[n - 1] / C[n - priorN - 1] - 1) > 0.005; // >0.5% gain over ~30 candles
+  const ch19Short = {
+    priceAction: !!bearPattern && priorTrendUp,                                  // ✅ bear pattern + Varsity prior-uptrend prereq
+    volume:      volRatio >= 1.5,                                                // ✅ same as long — volume direction-agnostic
+    srContext:   !!(
+      (cpr && (Math.abs(px - cpr.R1) / px < 0.008 || Math.abs(px - cpr.R2) / px < 0.008)) ||
+      (nearFib && nearFib.level > px) ||                                          // Fib above price = resistance
+      (atRoundNumber && round && round.level > px) ||                             // round above
+      Math.abs(px - pdHigh) / pdHigh < 0.01 ||                                    // at PDH (Varsity: resistance)
+      Math.abs(px - orHigh) / orHigh < 0.01                                       // at OR high
+    ),
+    indicators:  [ema9[n - 1] < ema20[n - 1], !macdBull, !stBull, stochK > 20 && stochK < 80]
+                   .filter(Boolean).length >= 2,                                  // ✅ ≥2 of 4 BEAR-aligned indicators
+    rrRatio:     true,  // placeholder; recomputed below using SHORT R:R formula
+  };
+  let ch19PassCountShort = [ch19Short.priceAction, ch19Short.volume, ch19Short.srContext, ch19Short.indicators, ch19Short.rrRatio].filter(Boolean).length;
 
   // ── Commit 1: ADR-used soft gates ─────────────────────────────────────
   // Apply the exhaustion penalty / room bonus computed above. The hard >=90%
@@ -13616,6 +14000,12 @@ function scoreDayTrade(candles, sym, ctx) {
     ch19Items: ch19,
     bestSetup: best.type, bestSetupEmoji: best.emoji, bestSetupScore: best.score,
     bestDetail: best.detail.join(' · '),
+    // ── SHORT-side outputs (Varsity Ch19 binary, mirror of long fields) ──
+    ch19PassCountShort,
+    ch19ItemsShort: ch19Short,
+    bestShortSetup: bestShort.type, bestShortSetupEmoji: bestShort.emoji, bestShortSetupScore: bestShort.score,
+    bestShortDetail: bestShort.detail.join(' · '),
+    vwapBreakdownScore, gapAndDropScore, breakdownScore, overboughtScore,
     // All setup scores
     vwapScore, gapScore, breakoutScore, bounceScore,
     // Technicals
