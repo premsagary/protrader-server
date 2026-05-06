@@ -3177,6 +3177,57 @@ async function updateRejectedTracking(livePrices) {
 // Drawdown circuit breaker — Varsity M9 Ch 6
 let _peakEquity = CONFIG.ACCOUNT_SIZE;
 let _ddPaused   = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Day-level regime gate — added 2026-05-06 after EOD review showed:
+//   - Day was 83% RANGING (128/155 scans)
+//   - GAP_AND_GO went 0/4 (every trade lost or timed out)
+//   - VWAP_RECLAIM went 3/4 (the strategy designed for ranging tape)
+// Net: −₹411 on a day that VWAP-only would have been +₹425.
+//
+// This tally tracks how the day has skewed across scans. When >=60% of the
+// last 10+ scans labelled the market RANGING, we block GAP_AND_GO entries —
+// the setup needs trending momentum that simply isn't there. VWAP_RECLAIM,
+// BREAKOUT, and OVERSOLD_BOUNCE continue normally.
+//
+// Gate is conservative: requires 10 scans of evidence before kicking in
+// (~30 min into session) so we don't over-react to the noisy first prints.
+// Resets at IST midnight via _todayIST() comparison.
+// ─────────────────────────────────────────────────────────────────────────────
+let _dayRegimeTally = { dateIST: null, counts: {}, totalScans: 0 };
+
+function _todayIST() {
+  return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+}
+
+function _updateDayRegimeTally(scanDominantRegime) {
+  const today = _todayIST();
+  if (_dayRegimeTally.dateIST !== today) {
+    _dayRegimeTally = { dateIST: today, counts: {}, totalScans: 0 };
+  }
+  if (!scanDominantRegime || scanDominantRegime === 'UNKNOWN') return;
+  _dayRegimeTally.counts[scanDominantRegime] = (_dayRegimeTally.counts[scanDominantRegime] || 0) + 1;
+  _dayRegimeTally.totalScans++;
+}
+
+function _isDayRangingDominant() {
+  if (_dayRegimeTally.dateIST !== _todayIST()) return false; // stale tally
+  if (_dayRegimeTally.totalScans < 10) return false;          // need ≥10 scans
+  const sorted = Object.entries(_dayRegimeTally.counts).sort((a, b) => b[1] - a[1]);
+  const dom = sorted[0]?.[0];
+  const domShare = (sorted[0]?.[1] || 0) / _dayRegimeTally.totalScans;
+  return dom === 'RANGING' && domShare >= 0.60;
+}
+
+// Counter for the daily report — incremented every time the gate blocks a pick.
+let _gapAndGoBlockedToday = { dateIST: null, count: 0 };
+function _bumpGapAndGoBlocked() {
+  const today = _todayIST();
+  if (_gapAndGoBlockedToday.dateIST !== today) {
+    _gapAndGoBlockedToday = { dateIST: today, count: 0 };
+  }
+  _gapAndGoBlockedToday.count++;
+}
 async function checkDrawdownCircuitBreaker() {
   try {
     const { rows } = await pool.query(`
@@ -4268,12 +4319,30 @@ async function scanAndTrade() {
           const origStrategy = result.strategy;
           result.strategy = dts.bestSetup;
           result._origStrategy = origStrategy; // kept for debug / analytics
-          buyCandidates.push({
-            stock, result, candles, last,
-            dayTradeScore: dts.dayTradeScore || null,
-            varsityBestSetup: dts.bestSetup,
-            pickRef: dts,
-          });
+
+          // ── Day-level regime gate (2026-05-06) ──
+          // When the day has been dominantly RANGING (≥60% of last 10+ scans),
+          // skip GAP_AND_GO entries. Setup needs trending tape; in pure
+          // RANGING it bleeds via 3h Time Exit (4/4 losers on 2026-05-06).
+          if (dts.bestSetup === 'GAP_AND_GO' && _isDayRangingDominant()) {
+            _bumpGapAndGoBlocked();
+            const rPct = Math.round((_dayRegimeTally.counts.RANGING/_dayRegimeTally.totalScans)*100);
+            console.log(`  ⊘ ${stock.sym}: GAP_AND_GO blocked — day-regime gate (RANGING-dominant ${rPct}% of ${_dayRegimeTally.totalScans} scans)`);
+            // Persist into rejected_candidates so the EOD report counts it
+            // under "rejectReasons" alongside the structure-filter rejects.
+            await persistRejectedCandidate(
+              { stock, result, last, adjustedScore: dts.dayTradeScore || result.score || 0 },
+              'DAY_REGIME_GATE',
+              `GAP_AND_GO blocked — RANGING ${rPct}% of day`
+            );
+          } else {
+            buyCandidates.push({
+              stock, result, candles, last,
+              dayTradeScore: dts.dayTradeScore || null,
+              varsityBestSetup: dts.bestSetup,
+              pickRef: dts,
+            });
+          }
         }
       }
 
@@ -4854,6 +4923,10 @@ async function scanAndTrade() {
 
   // Dominant regime across this scan
   dominantRegime = Object.entries(regimeCounts).sort((a,b)=>b[1]-a[1])[0]?.[0]||"UNKNOWN";
+
+  // Roll into the day-level tally so the next scan's GAP_AND_GO gate
+  // has fresh evidence. _isDayRangingDominant() reads this.
+  _updateDayRegimeTally(dominantRegime);
 
   broadcast({ type:"tick", prices:livePrices });
 
