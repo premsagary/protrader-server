@@ -9098,6 +9098,24 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const buyCount     = tradesList.filter(t => t.type === 'BUY').length;
     const sellCount    = tradesList.filter(t => t.type === 'SELL').length;
 
+    // 2026-05-06 — direction-aware aggregations. type='BUY'/'SELL' was the
+    // open-action when the bot was long-only, but with shorts now writing
+    // type='SELL' as their OPEN action, those counters mislabel reality.
+    // direction is the canonical truth — read it with 'LONG' fallback.
+    const _dir = (t) => (t.direction || 'LONG');
+    const longTrades   = tradesList.filter(t => _dir(t) === 'LONG');
+    const shortTrades  = tradesList.filter(t => _dir(t) === 'SHORT');
+    const closedLongs  = closedTrades.filter(t => _dir(t) === 'LONG');
+    const closedShorts = closedTrades.filter(t => _dir(t) === 'SHORT');
+    const openLongs    = openTrades.filter(t => _dir(t) === 'LONG');
+    const openShorts   = openTrades.filter(t => _dir(t) === 'SHORT');
+    const longPnl      = closedLongs.reduce((s, t) => s + Number(t.pnl || 0), 0);
+    const shortPnl     = closedShorts.reduce((s, t) => s + Number(t.pnl || 0), 0);
+    const longWins     = closedLongs.filter(t => Number(t.pnl) > 0).length;
+    const shortWins    = closedShorts.filter(t => Number(t.pnl) > 0).length;
+    const longWinRate  = closedLongs.length  ? +(longWins  / closedLongs.length  * 100).toFixed(1) : null;
+    const shortWinRate = closedShorts.length ? +(shortWins / closedShorts.length * 100).toFixed(1) : null;
+
     const critIncidents  = incList.filter(i => i.severity === 'critical').length;
     const errIncidents   = incList.filter(i => i.severity === 'error').length;
     const warnIncidents  = incList.filter(i => i.severity === 'warn').length;
@@ -9341,6 +9359,11 @@ app.get('/api/admin/daily-report', async (req, res) => {
         metrics: {
           trades: tradesList.length, openTrades: openTrades.length, closedTrades: closedTrades.length,
           buyCount, sellCount, totalPnl,
+          // 2026-05-06 — direction-segmented counters (LONG/SHORT)
+          longTrades:  longTrades.length,  shortTrades:  shortTrades.length,
+          openLongs:   openLongs.length,   openShorts:   openShorts.length,
+          closedLongs: closedLongs.length, closedShorts: closedShorts.length,
+          longPnl, shortPnl, longWinRate, shortWinRate,
           scanCount, pipelineCount,
           candidatesLogged: topCandList.length,
           incidents: incList.length, critIncidents, errIncidents, warnIncidents,
@@ -9481,7 +9504,24 @@ app.get('/api/admin/daily-report', async (req, res) => {
   <div class="card">
     <div class="label">Trades</div>
     <div class="value">${tradesList.length}</div>
-    <div class="sub">${buyCount} BUY · ${sellCount} SELL</div>
+    <div class="sub">
+      ${longTrades.length} LONG · ${shortTrades.length} SHORT
+      ${openTrades.length ? ` · ${openLongs.length}L/${openShorts.length}S open` : ''}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Long P&amp;L (closed)</div>
+    <div class="value ${longPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(longPnl)}</div>
+    <div class="sub">
+      ${closedLongs.length} closed · WR ${longWinRate == null ? '—' : longWinRate + '%'}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Short P&amp;L (closed)</div>
+    <div class="value ${shortPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${fmtInr(shortPnl)}</div>
+    <div class="sub">
+      ${closedShorts.length} closed · WR ${shortWinRate == null ? '—' : shortWinRate + '%'}
+    </div>
   </div>
   <div class="card">
     <div class="label">Candidates scored</div>
@@ -9794,17 +9834,23 @@ ${backtest.trades && backtest.trades.length ? `
 })()}
 
 <!-- Trades -->
-<h2>Trades (${tradesList.length})</h2>
+<h2>Trades (${tradesList.length}${shortTrades.length ? ` · ${longTrades.length}L / ${shortTrades.length}S` : ''})</h2>
 ${tradesList.length === 0 ? `<div class="empty">No trades executed today.</div>` : `
 <table>
   <thead><tr>
-    <th>Symbol</th><th>Type</th><th>Qty</th><th>Entry</th><th>Exit</th>
+    <th>Symbol</th><th>Dir</th><th>Type</th><th>Qty</th><th>Entry</th><th>Exit</th>
     <th>Entry time</th><th>Exit time</th><th>P&amp;L</th><th>P&amp;L %</th><th>Status</th><th>Exit reason</th>
   </tr></thead>
   <tbody>
-    ${tradesList.map(t => `
+    ${tradesList.map(t => {
+      const _d = (t.direction || 'LONG');
+      const _dirTag = _d === 'SHORT'
+        ? '<span class="tag" style="background:#fef2f2;color:#991b1b">📉 SHORT</span>'
+        : '<span class="tag" style="background:#f0fdf4;color:#166534">📈 LONG</span>';
+      return `
       <tr>
         <td><strong>${esc(t.symbol)}</strong></td>
+        <td>${_dirTag}</td>
         <td>${esc(t.type)}</td>
         <td>${esc(t.quantity)}</td>
         <td>${fmtNum(t.price)}</td>
@@ -9816,7 +9862,7 @@ ${tradesList.length === 0 ? `<div class="empty">No trades executed today.</div>`
         <td><span class="tag">${esc(t.status)}</span></td>
         <td>${esc(t.exit_reason || '')}</td>
       </tr>
-    `).join('')}
+    `;}).join('')}
   </tbody>
 </table>
 `}
