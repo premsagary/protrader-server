@@ -8079,6 +8079,8 @@ app.post("/api/token/update", async(req,res)=>{
     tokenValid    = true;
     startTicker(token);
     await dbSet('kite_access_token', token); // persist across restarts
+    await dbSet('kite_access_token_set_at', String(Date.now())); // track for freshness check
+    await _resolveKiteTokenAgingIncidents('manual_token_update');
     console.log('🔑 Kite token updated and saved to DB');
     res.json({ success: true, message: 'Token updated and ticker restarted' });
   } catch(e) {
@@ -20018,6 +20020,34 @@ async function checkLiveTradesEodReconciled(reason = 'eod-1525') {
 }
 cron.schedule('25 15 * * 1-5', () => checkLiveTradesEodReconciled('eod-1525'), { timezone: 'Asia/Kolkata' });
 
+// 2026-05-06 — auto-resolve KITE_TOKEN_AGING incidents when a fresh
+// token is set. Without this, the daily report stays RED forever even
+// after the user re-auth'd successfully — observed 2026-05-06 EOD where
+// 2 critical alerts from 01:15 + 02:02 IST never cleared even though
+// re-auth happened at 02:16 IST and tokenStatus was already "fresh".
+//
+// Called from both /api/token/update (manual token paste) and
+// /auth/callback (OAuth flow). Marks every open KITE_TOKEN_AGING row as
+// resolved with a timestamp and a brief detail string. Idempotent —
+// safe to call multiple times; rows already resolved are no-ops.
+async function _resolveKiteTokenAgingIncidents(reason) {
+  try {
+    const r = await pool.query(
+      `UPDATE ops_incidents
+          SET resolved_at = NOW(),
+              action_detail = COALESCE(action_detail, '') || ' · auto-resolved: ' || $1
+        WHERE kind = 'KITE_TOKEN_AGING'
+          AND resolved_at IS NULL`,
+      [reason]
+    );
+    if (r.rowCount > 0) {
+      console.log(`✅ KITE_TOKEN_AGING auto-resolved (${r.rowCount} row${r.rowCount === 1 ? '' : 's'}, reason=${reason})`);
+    }
+  } catch (e) {
+    console.warn(`⚠ KITE_TOKEN_AGING auto-resolve failed: ${e.message}`);
+  }
+}
+
 // 2026-04-29 — Kite token expiry warning. Tokens are good for ~24h;
 // official expiry is 06:00 IST next trading day. Pre-fix, the system
 // just stopped working when the token expired (KITE_TOKEN errors
@@ -25597,6 +25627,9 @@ app.get("/auth/callback", async(req,res)=>{
     // Kite tokens are good for ~24h from generation (officially expire at
     // 06:00 IST next trading day per Zerodha docs).
     await dbSet('kite_access_token_set_at', String(Date.now()));
+    // 2026-05-06 — clear any open KITE_TOKEN_AGING alerts now that we have
+    // a fresh token. Without this the daily report stays RED forever.
+    await _resolveKiteTokenAgingIncidents('oauth_callback');
     startTicker(token);
     res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center">
       <h2 style="color:#22c55e">✅ Connected! Token saved to DB - survives restarts.</h2>
