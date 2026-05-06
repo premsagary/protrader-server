@@ -4627,7 +4627,14 @@ async function scanAndTrade() {
         // 2026-05-06 — direction-aware exit logic. Existing rows default to
         // 'LONG' (column NOT NULL with default) so isShort is false → all
         // existing long behavior is preserved exactly.
-        const isShort = (openPos.direction || 'LONG') === 'SHORT';
+        // Audit-added: warn on unexpected direction values so external DB
+        // tampering or future writers using lowercase 'short' don't silently
+        // run LONG exit logic on a SHORT position.
+        const _rawDir = openPos.direction || 'LONG';
+        if (_rawDir !== 'LONG' && _rawDir !== 'SHORT') {
+          console.warn(`[exit] ${stock.sym} id=${openPos.id} unexpected direction="${_rawDir}" — defaulting to LONG behavior`);
+        }
+        const isShort = _rawDir === 'SHORT';
 
         // Trailing stop — regime-aware (2026-04-29).
         const highs = candles.slice(-14).map(c=>c.high);
@@ -4686,11 +4693,23 @@ async function scanAndTrade() {
                        : hitTgt ? "Target Hit"
                        : timeExit.exit ? `Time Exit (${timeExit.heldHours}h/${timeExit.maxHours}h)`
                        :                 `Strategy Exit (${_votesForExit}/3 ${_exitVoteLabel})`;
+          // 2026-05-06 — NaN guard (caught by 8-agent audit). Mirror of the
+          // orphan-exit defense at line ~4471. Without this, a degenerate
+          // entry/exit/qty combo (price=0, qty=0) writes NaN into pnl/pnl_pct
+          // and corrupts daily-report aggregations.
+          if (!Number.isFinite(exitFill) || !Number.isFinite(pnl) || !Number.isFinite(pnlPct)) {
+            console.warn(`[exit] skipping ${stock.sym} (id=${openPos.id}) — non-finite values: exitFill=${exitFill} pnl=${pnl} pnlPct=${pnlPct}`);
+            continue;
+          }
+          // 2026-05-06 — `AND status='OPEN'` guard (caught by audit). Idempotent
+          // exit even if the watchdog force-released the scan lock and a parallel
+          // run already closed this row. Pre-fix, two scans could race-write
+          // exit_price/pnl/exit_time for the same row twice.
           await pool.query(
             `UPDATE paper_trades
                 SET status='CLOSED', exit_price=$1, exit_time=NOW(),
                     pnl=$2, pnl_pct=$3, exit_reason=$4, gross_pnl=$5, costs=$6
-              WHERE id=$7`,
+              WHERE id=$7 AND status='OPEN'`,
             [exitFill,pnl,pnlPct,reason,grossPnL,costs,openPos.id]
           );
 
@@ -5392,6 +5411,13 @@ async function scanAndTrade() {
     // 'SELL' for shorts (open by selling). direction='LONG'/'SHORT' is the
     // canonical lifecycle marker — exit logic reads this column to flip
     // operators (cmp<=sl ↔ cmp>=sl etc.).
+    // Audit-added: belt-and-suspenders enum check. candidate.direction must
+    // be 'SHORT' or absent/'LONG'. Anything else is a bug — refuse to insert.
+    if (candidate.direction != null && candidate.direction !== 'LONG' && candidate.direction !== 'SHORT') {
+      console.error(`[entry] REFUSING insert for ${stock.sym} — invalid candidate.direction="${candidate.direction}"`);
+      recordPass2(candidate, 'SKIPPED', `invalid_direction_${candidate.direction}`);
+      continue;
+    }
     const _entryType = isShortCandidate ? 'SELL' : 'BUY';
     const _direction = isShortCandidate ? 'SHORT' : 'LONG';
     await pool.query(
