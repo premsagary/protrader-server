@@ -167,6 +167,10 @@ async function initDB() {
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_exit_pnl         DECIMAL(18,4)`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS initial_risk_per_share   DECIMAL(18,4)`).catch(()=>{});
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS time_stop_breakeven_set  BOOLEAN DEFAULT FALSE`).catch(()=>{});
+    // 🚀 v2.0 wave 3 — tier attribution (A / B / SKIP at entry, frozen)
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS tier                     VARCHAR(8)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS day_bias_tier            VARCHAR(16)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS trend_day_active         BOOLEAN`).catch(()=>{});
     // Phase 4 — Part 9: rejected candidates table with forward-tracking columns
     await pool.query(`
       CREATE TABLE IF NOT EXISTS rejected_candidates (
@@ -6280,9 +6284,14 @@ async function scanAndTrade() {
     // R-multiple math (time stop @ 0.5R, partial profit @ 1.5R). Once trail
     // moves stop_loss, the original risk distance is otherwise lost.
     const _initRPS = +Math.abs(entryFill - sl).toFixed(4);
+    // 🚀 v2.0 wave 3 — tier attribution snapshot at entry (frozen)
+    const _tierInfo  = CONFIG.V2_SETUPS_MODE ? getStockTier(stock.sym) : { tier: null };
+    const _tierAtEntry = _tierInfo.tier || null;
+    const _dayBiasAtEntry = CONFIG.V2_SETUPS_MODE ? (getCurrentDayBias().tier || null) : null;
+    const _trendDayAtEntry = CONFIG.V2_SETUPS_MODE ? !!(getTrendDayState().active) : null;
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction,initial_risk_per_share)
-       VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19,$20)`,
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction,initial_risk_per_share,tier,day_bias_tier,trend_day_active)
+       VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23)`,
       [stock.sym,stock.n,entryFill,qty,+(qty*entryFill).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
        +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
        structureJson ? JSON.stringify(structureJson) : null,
@@ -6293,7 +6302,10 @@ async function scanAndTrade() {
        rankingJson    ? JSON.stringify(rankingJson)    : null,
        _entryType,
        _direction,
-       _initRPS]
+       _initRPS,
+       _tierAtEntry,
+       _dayBiasAtEntry,
+       _trendDayAtEntry]
     );
     // Observability: dedicated log line emitted only after INSERT succeeded so
     // operators can grep `📉 SHORT entry` and trust each line maps to a real row.
@@ -10013,14 +10025,18 @@ app.get('/api/admin/daily-report', async (req, res) => {
         `SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
                 exit_reason, status, order_id, exit_order_id, 'live'::text AS trade_mode,
-                'LONG'::text AS direction
+                'LONG'::text AS direction,
+                NULL::varchar AS tier, NULL::varchar AS day_bias_tier, NULL::boolean AS trend_day_active,
+                NULL::numeric AS initial_risk_per_share, FALSE AS partial_taken
            FROM live_trades
           WHERE entry_time >= $1 AND entry_time < $2
           UNION ALL
          SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
                 exit_reason, status, NULL::varchar AS order_id, NULL::varchar AS exit_order_id, 'paper'::text AS trade_mode,
-                COALESCE(direction, 'LONG')::text AS direction
+                COALESCE(direction, 'LONG')::text AS direction,
+                tier::varchar, day_bias_tier::varchar, trend_day_active::boolean,
+                initial_risk_per_share::numeric, COALESCE(partial_taken, FALSE) AS partial_taken
            FROM paper_trades
           WHERE entry_time >= $1 AND entry_time < $2
           ORDER BY entry_time DESC`,
@@ -10253,9 +10269,65 @@ app.get('/api/admin/daily-report', async (req, res) => {
     // strategy is dominating regardless of regime.
     const tradeStrategyCounts = {};
     for (const t of tradesList) {
-      const s = t.strategy || 'UNKNOWN';
+      // 🚀 v2.0 — strip ":PARTIAL" suffix so partial-exit rows attribute to parent setup
+      const sRaw = t.strategy || 'UNKNOWN';
+      const s = sRaw.replace(/:PARTIAL$/, '');
       tradeStrategyCounts[s] = (tradeStrategyCounts[s] || 0) + 1;
     }
+    // 🚀 v2.0 — exit-reason breakdown (time-stop / partial / SL / target / strategy / EOD)
+    const exitReasonsCounts = {};
+    let partialCount = 0, timeStopCount = 0;
+    for (const t of closedTrades) {
+      const r = t.exit_reason || 'UNKNOWN';
+      // Bucket common patterns to keep the report readable
+      let bucket;
+      if (/^Stop Loss/i.test(r)) bucket = 'Stop Loss (trailing)';
+      else if (/^Target Hit/i.test(r)) bucket = 'Target Hit';
+      else if (/^Partial Profit/i.test(r)) { bucket = 'Partial Profit (+1.5R)'; partialCount++; }
+      else if (/^Time-stop|^Time Exit/i.test(r) || (r === 'Time Exit')) { bucket = 'Time Stop / Max-hold'; timeStopCount++; }
+      else if (/^Strategy Exit/i.test(r)) bucket = 'Strategy Exit (vote)';
+      else if (/^EOD Squareoff|^Orphan close/i.test(r)) bucket = 'EOD/Orphan';
+      else bucket = r.length > 40 ? r.slice(0, 37) + '...' : r;
+      exitReasonsCounts[bucket] = (exitReasonsCounts[bucket] || 0) + 1;
+    }
+    // 🚀 v2.0 wave 3 — tier-attributed P&L (paper trades only; live trades have NULL tier)
+    const tierAttribution = { A: { trades:0, pnl:0, wins:0 }, B: { trades:0, pnl:0, wins:0 }, NONE: { trades:0, pnl:0, wins:0 } };
+    for (const t of closedTrades) {
+      const tier = t.tier || 'NONE';
+      const bucket = tierAttribution[tier] || tierAttribution.NONE;
+      bucket.trades++;
+      bucket.pnl += parseFloat(t.pnl || 0);
+      if (parseFloat(t.pnl || 0) > 0) bucket.wins++;
+    }
+    for (const k of Object.keys(tierAttribution)) {
+      const b = tierAttribution[k];
+      b.pnl = +b.pnl.toFixed(2);
+      b.winRate = b.trades > 0 ? +(b.wins / b.trades * 100).toFixed(1) : null;
+    }
+    // 🚀 v2.0 wave 3 — per-setup expectancy + SQN summary (today only, capped)
+    const setupSqnToday = (() => {
+      const grouped = {};
+      for (const t of closedTrades) {
+        if (t.initial_risk_per_share == null || !(parseFloat(t.initial_risk_per_share) > 0)) continue;
+        if (!(parseFloat(t.quantity) > 0)) continue;
+        const setup = (t.strategy || 'UNKNOWN').replace(/:PARTIAL$/, '');
+        const key = `${setup}_${t.direction || 'LONG'}`;
+        if (!grouped[key]) grouped[key] = [];
+        const R = parseFloat(t.pnl) / (parseFloat(t.initial_risk_per_share) * parseFloat(t.quantity));
+        if (Number.isFinite(R)) grouped[key].push(R);
+      }
+      const out = [];
+      for (const [setup, rs] of Object.entries(grouped)) {
+        if (rs.length < 2) { out.push({ setup, trades: rs.length, status: 'INSUFFICIENT' }); continue; }
+        const n = rs.length;
+        const avgR = rs.reduce((a,b)=>a+b,0) / n;
+        const stdR = Math.sqrt(rs.reduce((a,b)=>a+(b-avgR)**2,0)/n);
+        const sqn  = stdR > 0 ? (avgR / stdR) * Math.sqrt(Math.min(n, 100)) : 0;
+        out.push({ setup, trades: n, expectancy: +avgR.toFixed(3), sqn: +sqn.toFixed(2) });
+      }
+      out.sort((a,b) => (b.sqn||0) - (a.sqn||0));
+      return out;
+    })();
 
     const portfolioRegime = typeof marketRegime !== 'undefined' ? marketRegime : null;
     const portfolioRegimeData = (typeof marketRegimeData !== 'undefined' && marketRegimeData) || {};
@@ -10422,6 +10494,27 @@ app.get('/api/admin/daily-report', async (req, res) => {
       }
     }
 
+    // 🚀 v2.0 wave 3 — bundle current strategy context for daily report
+    const _v2Status = (() => {
+      try {
+        const pre = (typeof getCurrentDayBias === 'function')      ? getCurrentDayBias()      : null;
+        const td  = (typeof getTrendDayState  === 'function')      ? getTrendDayState()       : null;
+        const ib  = (typeof getInitialBalance === 'function')      ? getInitialBalance()      : null;
+        const tierCounts = (typeof _stockTierCache !== 'undefined' && _stockTierCache && _stockTierCache.values)
+          ? Array.from(_stockTierCache.values()).reduce((acc, v) => { acc[v.tier] = (acc[v.tier]||0)+1; return acc; }, {})
+          : null;
+        return {
+          v2SetupsMode:   !!CONFIG.V2_SETUPS_MODE,
+          premarket:      pre,
+          trendDay:       td,
+          initialBalance: ib,
+          tierCounts,
+          partialExitsToday: partialCount,
+          timeStopsToday:    timeStopCount,
+        };
+      } catch (e) { return { error: e.message }; }
+    })();
+
     // JSON mode
     if (String(req.query.format || '').toLowerCase() === 'json') {
       return res.json({
@@ -10436,6 +10529,9 @@ app.get('/api/admin/daily-report', async (req, res) => {
           openLongs:   openLongs.length,   openShorts:   openShorts.length,
           closedLongs: closedLongs.length, closedShorts: closedShorts.length,
           longPnl, shortPnl, longWinRate, shortWinRate,
+          // 🚀 v2.0 — partial profits and time stops are intentional behavior
+          partialExits: partialCount,
+          timeStops:    timeStopCount,
           scanCount, pipelineCount,
           candidatesLogged: topCandList.length,
           incidents: incList.length, critIncidents, errIncidents, warnIncidents,
@@ -10444,6 +10540,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
           vix: vixVal, niftyPct: typeof _niftyDailyChangePct !== 'undefined' ? _niftyDailyChangePct : null,
         },
         mode: _modeCtx,
+        v2: _v2Status,
+        exitReasons: exitReasonsCounts,
+        tierAttribution,
+        setupSqnToday,
         backtest,
         regime: {
           intradayLatest:  intradayRegime,
@@ -10600,6 +10700,40 @@ app.get('/api/admin/daily-report', async (req, res) => {
     <div class="value">${topCandList.length}</div>
     <div class="sub">${scanCount} scans · ${pipelineCount} pipelines</div>
   </div>
+  ${_v2Status && _v2Status.v2SetupsMode ? `
+  <div class="card" style="background:linear-gradient(135deg,#1a2332,#0f1722);border:1px solid #2a3a52">
+    <div class="label">v2 Day Bias</div>
+    <div class="value">${esc(_v2Status.premarket?.tier || '—')}</div>
+    <div class="sub">
+      score=${_v2Status.premarket?.dayBiasScore ?? '—'} ·
+      Gift ${_v2Status.premarket?.giftGapPct != null ? (_v2Status.premarket.giftGapPct*100).toFixed(2)+'%' : '—'} ·
+      VIXΔ ${_v2Status.premarket?.vixDelta != null ? (_v2Status.premarket.vixDelta*100).toFixed(2)+'%' : '—'}
+    </div>
+  </div>
+  <div class="card" style="background:linear-gradient(135deg,${_v2Status.trendDay?.active ? '#1a3322,#0f2217' : '#221a17,#1a1411'});border:1px solid ${_v2Status.trendDay?.active ? '#2a523a' : '#523a2a'}">
+    <div class="label">Trend Day</div>
+    <div class="value">${_v2Status.trendDay?.active ? `🚀 ${esc(_v2Status.trendDay.direction || '')}` : 'NORMAL'}</div>
+    <div class="sub">
+      Bull ${_v2Status.trendDay?.bullSignals ?? 0}/4 · Bear ${_v2Status.trendDay?.bearSignals ?? 0}/4 ·
+      A/D ${_v2Status.trendDay?.adRatio ?? '—'} · Sec ${_v2Status.trendDay?.sectorsGreen ?? 0}/${_v2Status.trendDay?.sectorsRed ?? 0}
+    </div>
+  </div>
+  <div class="card" style="background:linear-gradient(135deg,#1a1a32,#0f0f22);border:1px solid #2a2a52">
+    <div class="label">Initial Balance</div>
+    <div class="value">${esc(_v2Status.initialBalance?.dayType || '—')}</div>
+    <div class="sub">
+      ${_v2Status.initialBalance?.iL != null ? `${_v2Status.initialBalance.iL.toFixed(0)}-${_v2Status.initialBalance.iH.toFixed(0)}` : 'not computed'} ·
+      ${_v2Status.initialBalance?.fraction != null ? (_v2Status.initialBalance.fraction*100).toFixed(0)+'% ADR' : ''}
+    </div>
+  </div>
+  <div class="card" style="background:linear-gradient(135deg,#321a32,#220f22);border:1px solid #522a52">
+    <div class="label">Universe Tiers</div>
+    <div class="value">A:${_v2Status.tierCounts?.A ?? 0} B:${_v2Status.tierCounts?.B ?? 0}</div>
+    <div class="sub">
+      ${_v2Status.tierCounts?.SKIP ?? 0} skipped ·
+      ${_v2Status.partialExitsToday ?? 0} partials · ${_v2Status.timeStopsToday ?? 0} time-stops
+    </div>
+  </div>` : ''}
   <div class="card">
     <div class="label">Incidents</div>
     <div class="value" style="color:${incList.length ? '#d29922' : '#3fb950'}">${incList.length}</div>
