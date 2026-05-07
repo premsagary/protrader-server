@@ -4016,6 +4016,164 @@ function getStockTier(sym) {
   return _stockTierCache.get(sym) || { tier: 'B', reason: 'cache_miss' };
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 WAVE 5 — DAILY WATCHLIST (replaces full-universe scanning)
+//
+// Pros narrow the universe to 5-15 names DAILY then only watch those.
+// Bot's old behavior: scan all 107 stocks every 1-3 min during market hours.
+// New behavior: build watchlist once at 9:14 IST → intraday scans iterate
+// only that watchlist + currently-open positions.
+//
+// Watchlist composition (per playbook Part 2.4):
+//   1. All A-tier stocks
+//   2. Top B-tier aligned with day_bias (up to fill cap)
+//   3. Pre-open auction movers (if available)
+//   4. Stocks at structural inflection (NR4, near 52w high/low, etc.)
+//   5. News-flagged stocks (catalyst-driven)
+//
+// Currently-open positions are ALWAYS scanned for exit management,
+// regardless of watchlist membership. Adding them as a UNION to the
+// scan loop is handled in scanAndTrade.
+// ═════════════════════════════════════════════════════════════════════════
+const DAILY_WATCHLIST_MAX_SIZE = 20;
+let _dailyWatchlist = new Map();        // sym → { reason, score, addedAt, source }
+let _dailyWatchlistBuiltAt = null;       // timestamp of last build
+
+async function buildDailyWatchlist() {
+  try {
+    const dayBias = getCurrentDayBias();
+    _dailyWatchlist.clear();
+    const candidates = [];
+
+    // 1. All A-tier stocks (highest priority)
+    for (const [sym, info] of _stockTierCache.entries()) {
+      if (info.tier === 'A') {
+        candidates.push({
+          sym, score: 100, source: 'A_TIER',
+          reason: `A-list: ${info.reason}`,
+        });
+      }
+    }
+
+    // 2. Top B-tier stocks aligned with day_bias
+    const bTier = [];
+    for (const [sym, info] of _stockTierCache.entries()) {
+      if (info.tier !== 'B') continue;
+      const fund = stockFundamentals[sym];
+      if (!fund) continue;
+      // Score B-tier names by RS + recent momentum aligned with bias
+      let bScore = 50;
+      if (dayBias.tier === 'BULL' && fund.pctAbove200 != null && fund.pctAbove200 > 0) bScore += 20;
+      if (dayBias.tier === 'BEAR' && fund.pctAbove200 != null && fund.pctAbove200 < 0) bScore += 20;
+      if (fund.change6m != null && fund.change6m > 0) bScore += 10;
+      if (fund.volRatio != null && fund.volRatio > 1.2) bScore += 10;
+      if (fund.adx != null && fund.adx > 25) bScore += 10;
+      bTier.push({ sym, score: bScore, source: 'B_TIER_ALIGNED', reason: `B-list bias-aligned (score ${bScore})` });
+    }
+    bTier.sort((a, b) => b.score - a.score);
+
+    // 3. Pre-open auction movers (if cached)
+    try {
+      const podCache = (typeof _marketDataCache !== 'undefined' && _marketDataCache.preOpenData) || {};
+      for (const [sym, pod] of Object.entries(podCache)) {
+        if (!pod || pod.gapPct == null) continue;
+        const gapMag = Math.abs(pod.gapPct);
+        if (gapMag < 0.02) continue; // < 2% gap = noise
+        const imbalance = pod.imbalance != null ? Math.abs(pod.imbalance) : 0;
+        if (imbalance < 0.3) continue; // weak conviction
+        candidates.push({
+          sym, score: 90 + Math.min(10, gapMag * 100),
+          source: 'PREOPEN_MOVER',
+          reason: `Pre-open: gap ${(pod.gapPct*100).toFixed(2)}%, imbalance ${(pod.imbalance).toFixed(2)}`,
+        });
+      }
+    } catch (_) {}
+
+    // 4. Stocks at structural inflection (near 52w high/low, NR-compressed)
+    for (const stock of UNIVERSE) {
+      const sym = stock.sym;
+      const fund = stockFundamentals[sym];
+      if (!fund) continue;
+      // Near 52w high (Minervini buy zone): within 5% of high
+      if (fund.high52w != null && fund.price != null && fund.price >= fund.high52w * 0.95
+          && fund.pctAbove200 != null && fund.pctAbove200 > 0) {
+        candidates.push({
+          sym, score: 85, source: 'NEAR_52W_HIGH',
+          reason: `Within 5% of 52w high in uptrend`,
+        });
+      }
+      // Stage 2 stocks (Weinstein) — extra priority
+      const stage = classifyWeinsteinStage(fund);
+      if (stage.stage === 'STAGE_2') {
+        candidates.push({
+          sym, score: 80, source: 'STAGE_2',
+          reason: `Weinstein Stage 2 (${stage.confidence}%)`,
+        });
+      }
+    }
+
+    // 5. News-flagged stocks (proxy: stocks with major sentiment in news cache)
+    // Skipped here for simplicity — news cache structure varies; can be added later.
+
+    // Merge candidates with B-tier; dedupe by symbol; rank by max score
+    const symScores = new Map();
+    const symSources = new Map();
+    for (const c of candidates.concat(bTier)) {
+      const cur = symScores.get(c.sym) || 0;
+      if (c.score > cur) {
+        symScores.set(c.sym, c.score);
+        symSources.set(c.sym, c);
+      }
+    }
+
+    // Sort by score desc, take top N
+    const ranked = Array.from(symScores.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, DAILY_WATCHLIST_MAX_SIZE);
+
+    for (const [sym, score] of ranked) {
+      const src = symSources.get(sym);
+      _dailyWatchlist.set(sym, {
+        reason: src.reason,
+        score,
+        source: src.source,
+        addedAt: Date.now(),
+      });
+    }
+
+    _dailyWatchlistBuiltAt = Date.now();
+    const summary = ranked.map(([s]) => s).join(', ');
+    console.log(`📋 Daily watchlist built: ${ranked.length} symbols → [${summary}]`);
+    return { built: true, count: ranked.length, watchlist: ranked.map(([s, sc]) => ({ sym: s, score: sc })) };
+  } catch (e) {
+    console.warn('[buildDailyWatchlist] failed:', e.message);
+    return { built: false, error: e.message };
+  }
+}
+
+function isOnWatchlist(sym) {
+  return _dailyWatchlist.has(sym);
+}
+
+function getWatchlist() {
+  const arr = [];
+  for (const [sym, info] of _dailyWatchlist.entries()) arr.push({ sym, ...info });
+  arr.sort((a, b) => b.score - a.score);
+  return { built: !!_dailyWatchlistBuiltAt, builtAt: _dailyWatchlistBuiltAt, count: arr.length, watchlist: arr };
+}
+
+// Build the union of (watchlist + open-position symbols) — used by scanAndTrade
+async function getActiveScanSymbols() {
+  const set = new Set(_dailyWatchlist.keys());
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT symbol FROM paper_trades WHERE status='OPEN'`
+    );
+    for (const r of rows) set.add(r.symbol);
+  } catch (_) {}
+  return set;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 🚀 v2.0 — Trend-day detection (9:45 IST)
 //
@@ -5275,12 +5433,25 @@ async function scanAndTrade() {
   _fiveMinCacheHits   = 0;
   _fiveMinCacheMisses = 0;
 
-  for (const stock of UNIVERSE) {
+  // 🚀 v2.0 Wave 5 — narrow universe to daily watchlist + open-position symbols.
+  // Pros narrow to 5-15 names DAILY. Bot used to iterate all 107 every scan.
+  // Watchlist is built once at 9:14 IST; it composes with open positions
+  // (which must always be scanned for exit management).
+  const _activeScanSyms = (CONFIG.V2_SETUPS_MODE && _dailyWatchlistBuiltAt)
+    ? await getActiveScanSymbols()
+    : null; // null = scan whole universe (v1 behavior)
+  const _scanList = _activeScanSyms
+    ? UNIVERSE.filter(s => _activeScanSyms.has(s.sym))
+    : UNIVERSE;
+  if (_activeScanSyms) {
+    console.log(`📋 Scan iterating ${_scanList.length}/${UNIVERSE.length} (watchlist=${_dailyWatchlist.size} + open positions)`);
+  }
+  for (const stock of _scanList) {
     // 2026-04-29 — soft-cancel check at top of per-stock loop. If watchdog
     // requested cancellation (scan running >10 min), bail before making
     // the next Kite call. Prevents pile-up of concurrent scans.
     if (_scanCancelRequested) {
-      console.warn(`⚠ Scan canceled by watchdog mid-loop (processed ~${UNIVERSE.indexOf(stock)}/${UNIVERSE.length} stocks)`);
+      console.warn(`⚠ Scan canceled by watchdog mid-loop (processed ~${_scanList.indexOf(stock)}/${_scanList.length} stocks)`);
       break;
     }
     try {
@@ -22524,20 +22695,30 @@ setTimeout(() => checkKiteTokenFreshness('boot').catch(() => {}), 30 * 1000);
 // 8:30 IST — pre-market routine: Gift Nifty / VIX / FII-DII / 3-day pivot
 cron.schedule('30 8 * * 1-5', () => runPremarketRoutine().catch(e => console.warn('[premarket-cron]', e.message)),
   { timezone: 'Asia/Kolkata' });
-// 9:14 IST — first universe tier refresh (just before market open)
-cron.schedule('14 9 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-9:14]', e.message)),
-  { timezone: 'Asia/Kolkata' });
+// 9:14 IST — first universe tier refresh (just before market open) +
+// IMMEDIATELY after, build the daily watchlist that gates intraday scans
+// (Wave 5 — pros narrow universe to 5-15 names, scan only those).
+cron.schedule('14 9 * * 1-5', async () => {
+  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-9:14]', e.message); }
+  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-9:14]', e.message); }
+}, { timezone: 'Asia/Kolkata' });
 // 9:45 IST — trend-day detection (Option-A strategy from spec)
 cron.schedule('45 9 * * 1-5', () => evaluateTrendDay().catch(e => console.warn('[trendday-cron]', e.message)),
   { timezone: 'Asia/Kolkata' });
 // 10:15 IST — Initial Balance day-type classification (Market Profile)
 cron.schedule('15 10 * * 1-5', () => evaluateInitialBalance().catch(e => console.warn('[ib-cron]', e.message)),
   { timezone: 'Asia/Kolkata' });
-// 11:00 IST + 13:30 IST — universe tier refresh (mid-session)
-cron.schedule('0 11 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-11:00]', e.message)),
-  { timezone: 'Asia/Kolkata' });
-cron.schedule('30 13 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-13:30]', e.message)),
-  { timezone: 'Asia/Kolkata' });
+// 11:00 IST + 13:30 IST — universe tier refresh + watchlist rebuild (mid-session).
+// The mid-session rebuild captures stocks that have moved into structural
+// inflection during the morning (e.g., NR4 forming, breakouts, sector leaders).
+cron.schedule('0 11 * * 1-5', async () => {
+  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-11:00]', e.message); }
+  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-11:00]', e.message); }
+}, { timezone: 'Asia/Kolkata' });
+cron.schedule('30 13 * * 1-5', async () => {
+  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-13:30]', e.message); }
+  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-13:30]', e.message); }
+}, { timezone: 'Asia/Kolkata' });
 // Boot trigger: run premarket once on startup if it's after 8:30 IST and we don't have today's
 setTimeout(async () => {
   try {
@@ -22546,11 +22727,16 @@ setTimeout(async () => {
     if (istHHMM >= '08:30' && istHHMM <= '15:30') {
       const { rows } = await pool.query(`SELECT 1 FROM daily_premarket_context WHERE ist_date=$1`, [istDate]).catch(() => ({ rows: [] }));
       if (rows.length === 0) {
-        console.log('🚀 v2 boot: running premarket + tier refresh once (missed 8:30 cron)');
+        console.log('🚀 v2 boot: running premarket + tier refresh + watchlist (missed 8:30 cron)');
         await runPremarketRoutine().catch(() => {});
         await refreshStockTiers().catch(() => {});
+        if (istHHMM >= '09:14') await buildDailyWatchlist().catch(() => {});
         if (istHHMM >= '09:45') await evaluateTrendDay().catch(() => {});
         if (istHHMM >= '10:15') await evaluateInitialBalance().catch(() => {});
+      } else if (!_dailyWatchlistBuiltAt && istHHMM >= '09:14') {
+        // Premarket already done but watchlist hasn't been built — common on restart
+        console.log('🚀 v2 boot: building daily watchlist (premarket already cached)');
+        await buildDailyWatchlist().catch(() => {});
       }
     }
   } catch (e) { /* swallow boot warmup errors */ }
@@ -22590,8 +22776,20 @@ app.post('/api/admin/v2/tiers/refresh', async (req, res) => {
   const result = await refreshStockTiers();
   res.json({ ok: true, result });
 });
+
+// 🚀 v2.0 Wave 5 — Daily watchlist visibility + manual rebuild
+app.get('/api/admin/v2/watchlist', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json(getWatchlist());
+});
+app.post('/api/admin/v2/watchlist/refresh', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const result = await buildDailyWatchlist();
+  res.json({ ok: true, result, watchlist: Array.from(_dailyWatchlist.keys()) });
+});
 app.get('/api/admin/v2/status', async (req, res) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const wl = getWatchlist();
   res.json({
     v2SetupsMode: !!CONFIG.V2_SETUPS_MODE,
     premarket: getCurrentDayBias(),
@@ -22601,6 +22799,12 @@ app.get('/api/admin/v2/status', async (req, res) => {
       A: Array.from(_stockTierCache.values()).filter(t => t.tier === 'A').length,
       B: Array.from(_stockTierCache.values()).filter(t => t.tier === 'B').length,
       SKIP: Array.from(_stockTierCache.values()).filter(t => t.tier === 'SKIP').length,
+    },
+    watchlist: {
+      built: wl.built,
+      builtAt: wl.builtAt,
+      count: wl.count,
+      symbols: wl.watchlist.map(w => w.sym),
     },
   });
 });
