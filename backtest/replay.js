@@ -104,7 +104,7 @@ async function replayDate(dateStr, deps, cfg = {}) {
       if (exit) {
         const pnl = _computePnL(t, exit.price, C);
         closedTrades.push({
-          sym, sector: t.sector, setup: t.setup,
+          sym, sector: t.sector, setup: t.setup, direction: t.direction || 'LONG',
           entryTs: t.entryTs, entryPrice: t.entryPrice, qty: t.qty,
           exitTs: barTs, exitPrice: exit.price, exitReason: exit.reason,
           slPlanned: t.sl, targetPlanned: t.target,
@@ -127,7 +127,7 @@ async function replayDate(dateStr, deps, cfg = {}) {
         if (!bar) continue;
         const pnl = _computePnL(t, bar.close, C);
         closedTrades.push({
-          sym, sector: t.sector, setup: t.setup,
+          sym, sector: t.sector, setup: t.setup, direction: t.direction || 'LONG',
           entryTs: t.entryTs, entryPrice: t.entryPrice, qty: t.qty,
           exitTs: barTs, exitPrice: bar.close, exitReason: 'EOD_SQUAREOFF',
           slPlanned: t.sl, targetPlanned: t.target,
@@ -164,12 +164,6 @@ async function replayDate(dateStr, deps, cfg = {}) {
       }
       if (!result || !result.dayTradeScore) continue;
       if (result.dayTradeScore < C.minScoreThreshold) continue;
-      // Binary-only gate: require ≥N of 5 Varsity Ch19 binary checks to
-      // pass. When false, this gate is a no-op (composite-score path).
-      if (C.binaryOnly) {
-        const ch19 = (typeof result.ch19PassCount === 'number') ? result.ch19PassCount : 0;
-        if (ch19 < C.ch19MinPassCount) continue;
-      }
 
       // Don't re-enter same symbol in same session
       if (enteredToday.has(sym)) continue;
@@ -178,14 +172,51 @@ async function replayDate(dateStr, deps, cfg = {}) {
       const sector = (deps.sectorOf && deps.sectorOf(sym)) || 'UNKNOWN';
       if ((sectorCount.get(sector) || 0) >= 2) continue;
 
-      candidates.push({
-        sym, sector,
-        score: result.dayTradeScore,
-        setup: result.bestSetup && result.bestSetup.type,
-        sl:    result.sl    || result.stopLoss   || result.bestSetup?.sl,
-        target:result.target|| result.bestSetup?.target,
-        last:  window[window.length - 1].close,
-      });
+      const lastPx = window[window.length - 1].close;
+
+      // ── LONG candidate (Ch19 binary or composite gate) ──
+      let longOk = true;
+      if (C.binaryOnly) {
+        const ch19 = (typeof result.ch19PassCount === 'number') ? result.ch19PassCount : 0;
+        if (ch19 < C.ch19MinPassCount) longOk = false;
+      }
+      if (longOk) {
+        candidates.push({
+          sym, sector, direction: 'LONG',
+          score: result.dayTradeScore,
+          setup: result.bestSetup && result.bestSetup.type,
+          sl:    result.sl    || result.stopLoss   || result.bestSetup?.sl,
+          target:result.target|| result.bestSetup?.target,
+          last:  lastPx,
+        });
+      }
+
+      // ── SHORT candidate (Varsity Ch19 binary, mirror of long path) ──
+      // 2026-05-06: enabled when C.includeShorts is true. Falls back to
+      // long-only behavior when not configured. The replay assumes the
+      // backtest harness passes deps.shortsEnabled or C.includeShorts.
+      if (C.includeShorts !== false && typeof result.ch19PassCountShort === 'number') {
+        const ch19s = result.ch19PassCountShort;
+        const minShort = C.ch19MinPassCountShort || C.ch19MinPassCount || 4;
+        if (ch19s >= minShort && result.bestShortSetup) {
+          // Short SL/TGT aren't on the dts return — derive from entry +
+          // stopDist using the same RISK_REWARD as longs (1.5×). For a
+          // proper backtest we'd run findSwingHigh on the window; for now
+          // use ATR fallback with same bps assumption as live.
+          const _atr = _computeAtr(window, 14);
+          const _stopDist = Math.max(_atr * 1.5, lastPx * 0.005);
+          const _shortSl  = +(lastPx + _stopDist).toFixed(2);
+          const _shortTgt = +(lastPx - _stopDist * (C.riskReward || 1.5)).toFixed(2);
+          candidates.push({
+            sym, sector, direction: 'SHORT',
+            score: result.dayTradeScore,           // composite long score (informational)
+            setup: result.bestShortSetup,
+            sl:    _shortSl,
+            target:_shortTgt,
+            last:  lastPx,
+          });
+        }
+      }
     }
 
     // ── Step 6: pick top-N, attempt entries at NEXT bar's open
@@ -223,6 +254,7 @@ async function replayDate(dateStr, deps, cfg = {}) {
         sym: pick.sym, sector: pick.sector, setup: pick.setup,
         entryTs: nextBarTs, entryPrice, qty,
         sl: pick.sl, target: pick.target,
+        direction: pick.direction || 'LONG',  // 2026-05-06 — direction tag
       });
       enteredToday.add(pick.sym);
       sectorCount.set(pick.sector, (sectorCount.get(pick.sector) || 0) + 1);
@@ -235,7 +267,7 @@ async function replayDate(dateStr, deps, cfg = {}) {
     if (!lastBar) continue;
     const pnl = _computePnL(t, lastBar.close, C);
     closedTrades.push({
-      sym, sector: t.sector, setup: t.setup,
+      sym, sector: t.sector, setup: t.setup, direction: t.direction || 'LONG',
       entryTs: t.entryTs, entryPrice: t.entryPrice, qty: t.qty,
       exitTs: new Date(lastBar.ts), exitPrice: lastBar.close,
       exitReason: 'TIMELINE_END',
@@ -275,19 +307,37 @@ function _istHHmm(date) {
 }
 
 function _checkExit(t, bar, barTs, barTime, cfg) {
-  // Long-only assumption (consistent with scanAndTrade). Check SL hit first
-  // (worst case for trader), then target. Use bar's low/high as tested values.
-  if (bar.low != null && bar.low <= t.sl) {
-    return { reason: 'STOP_LOSS', price: t.sl };   // gap below SL → fill at SL
-  }
-  if (bar.high != null && bar.high >= t.target) {
-    return { reason: 'TARGET', price: t.target };
+  // 2026-05-06 — direction-aware exit. Long: SL below entry, TGT above.
+  // Short: SL above entry, TGT below. Default LONG for backwards-compat
+  // with any backtest run that pre-dates the direction tag.
+  const isShort = (t.direction || 'LONG') === 'SHORT';
+  if (isShort) {
+    // SHORT: SL hit when bar's HIGH crosses up through SL (above entry)
+    if (bar.high != null && bar.high >= t.sl) {
+      return { reason: 'STOP_LOSS', price: t.sl };
+    }
+    // SHORT: TGT hit when bar's LOW crosses down through TGT (below entry)
+    if (bar.low != null && bar.low <= t.target) {
+      return { reason: 'TARGET', price: t.target };
+    }
+  } else {
+    // LONG (original): SL hit when LOW crosses down, TGT when HIGH crosses up
+    if (bar.low != null && bar.low <= t.sl) {
+      return { reason: 'STOP_LOSS', price: t.sl };
+    }
+    if (bar.high != null && bar.high >= t.target) {
+      return { reason: 'TARGET', price: t.target };
+    }
   }
   return null;
 }
 
 function _computePnL(t, exitPrice, cfg) {
-  const grossPnl = (exitPrice - t.entryPrice) * t.qty;
+  // 2026-05-06 — direction-aware. Short profits when exit < entry.
+  const isShort = (t.direction || 'LONG') === 'SHORT';
+  const grossPnl = isShort
+    ? (t.entryPrice - exitPrice) * t.qty
+    : (exitPrice - t.entryPrice) * t.qty;
   const slippage = (t.entryPrice * t.qty + exitPrice * t.qty) * (cfg.slippageBps / 10000);
   const brokerage = cfg.brokerageRoundTrip;
   const netPnl = grossPnl - slippage - brokerage;
@@ -355,6 +405,26 @@ function _setupBreakdown(trades) {
     };
   }
   return out;
+}
+
+// 2026-05-06 — minimal ATR helper for short SL/TGT derivation. Live code
+// uses computeShortPositionSize with findSwingHigh; backtest uses the
+// simpler ATR floor since findSwingHigh would require porting the whole
+// swing-detection logic into replay. Acceptable approximation for a
+// validation harness.
+function _computeAtr(candles, period = 14) {
+  const slice = candles.slice(-period);
+  if (slice.length < 2) return 0;
+  let sum = 0, count = 0;
+  for (let i = 1; i < slice.length; i++) {
+    const tr = Math.max(
+      slice[i].high - slice[i].low,
+      Math.abs(slice[i].high - slice[i - 1].close),
+      Math.abs(slice[i].low  - slice[i - 1].close)
+    );
+    sum += tr; count++;
+  }
+  return count > 0 ? sum / count : 0;
 }
 
 module.exports = { replayDate, DEFAULT_CFG };

@@ -183,6 +183,10 @@ async function initDB() {
     `).catch(()=>{});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rejected_candidates_rejected_at ON rejected_candidates(rejected_at DESC)`).catch(()=>{});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rejected_candidates_symbol      ON rejected_candidates(symbol)`).catch(()=>{});
+    // 2026-05-06 — direction column on rejected_candidates so SHORT-side
+    // rejections (R:R floor, day-regime gate, structure filter) can be
+    // analyzed separately from LONG-side rejections.
+    await pool.query(`ALTER TABLE rejected_candidates ADD COLUMN IF NOT EXISTS direction VARCHAR(5) DEFAULT 'LONG'`).catch(()=>{});
     await pool.query(`
       CREATE TABLE IF NOT EXISTS live_trades (
         id            SERIAL PRIMARY KEY,
@@ -2501,6 +2505,10 @@ function selectAndRunStrategy(candles, dailyCandles=null) {
 let LIVE_TRADING = (process.env.LIVE_TRADING || '').toLowerCase() === 'true';
 console.log(`🔀 Trading mode: ${LIVE_TRADING ? '🔴 LIVE (real orders via Kite)' : '📝 PAPER (simulated only)'}`);
 
+// 2026-05-06 — runtime SHORTS toggle. Module-level let so /api/admin/shorts-mode
+// can flip without redeploy. Default mirrors CONFIG.SHORTS_ENABLED env var.
+let SHORTS_RUNTIME_ENABLED = (process.env.SHORTS_ENABLED || 'on').toLowerCase() !== 'off';
+
 // Restore persisted trading mode from DB on startup (runs after pool is ready)
 async function restoreTradingModeFromDB() {
   try {
@@ -2508,6 +2516,14 @@ async function restoreTradingModeFromDB() {
     if (rows.length > 0 && rows[0].value === 'true') {
       LIVE_TRADING = true;
       console.log('🔀 Restored LIVE trading mode from DB');
+    }
+  } catch(e) { /* table may not exist yet */ }
+  // Same pattern for SHORTS_ENABLED runtime toggle
+  try {
+    const { rows } = await pool.query(`SELECT value FROM app_config WHERE key='SHORTS_ENABLED'`);
+    if (rows.length > 0) {
+      SHORTS_RUNTIME_ENABLED = rows[0].value === 'true';
+      console.log(`📉 Restored SHORTS_ENABLED=${SHORTS_RUNTIME_ENABLED} from DB`);
     }
   } catch(e) { /* table may not exist yet */ }
 }
@@ -3248,8 +3264,8 @@ async function persistRejectedCandidate(candidate, stage, reason) {
     } : null;
     await pool.query(
       `INSERT INTO rejected_candidates
-         (symbol,name,entry_price,reject_reason,reject_stage,strategy,regime,score,confidence,structure_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+         (symbol,name,entry_price,reject_reason,reject_stage,strategy,regime,score,confidence,structure_json,direction)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         candidate.stock.sym,
         candidate.stock.n,
@@ -3261,6 +3277,7 @@ async function persistRejectedCandidate(candidate, stage, reason) {
         +(+(candidate.adjustedScore ?? candidate.result?.score ?? 0)).toFixed(2),
         candidate.decisionObject?.confidence ?? null,
         structureJson ? JSON.stringify(structureJson) : null,
+        candidate.direction || 'LONG',
       ]
     ).catch(()=>{});
   } catch (_) { /* non-fatal */ }
@@ -4766,7 +4783,10 @@ async function scanAndTrade() {
 
           // Update openTrades array so freed slot is available for pass 2
           openPos.status = 'CLOSED';
-          console.log(`  ▼ EXIT ${stock.sym} @ ₹${cmp} | ${reason} | ${pnl>=0?"+":""}₹${pnl} | ${result.regime} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
+          // Observability: prefix with 📉 SHORT for short exits so operators can
+          // grep them out of the long-exit firehose.
+          const _exitMarker = isShort ? '📉 SHORT ▼ EXIT' : '  ▼ EXIT';
+          console.log(`${_exitMarker} ${stock.sym} @ ₹${cmp} | ${reason} | ${pnl>=0?"+":""}₹${pnl} | ${result.regime} ${LIVE_TRADING?'[LIVE]':'[PAPER]'}`);
           signalCount++;
         }
 
@@ -4786,9 +4806,10 @@ async function scanAndTrade() {
         const passCount      = dts.ch19PassCount      || 0;
         const passCountShort = dts.ch19PassCountShort || 0;
         const longOk  = passCount      >= CONFIG.CH19_MIN_PASS;
-        // Short master kill-switch: if SHORTS_ENABLED=false, treat all shorts
-        // as ineligible regardless of Ch19 pass count.
-        const shortOk = CONFIG.SHORTS_ENABLED &&
+        // Short master kill-switch: if SHORTS_RUNTIME_ENABLED=false, treat all
+        // shorts as ineligible regardless of Ch19 pass count. Runtime var is
+        // hot-flippable via /api/admin/shorts-mode (no redeploy needed).
+        const shortOk = SHORTS_RUNTIME_ENABLED &&
                         passCountShort >= (CONFIG.CH19_MIN_PASS_SHORT || CONFIG.CH19_MIN_PASS);
         if (!longOk && !shortOk) continue;
 
@@ -5420,6 +5441,12 @@ async function scanAndTrade() {
     }
     const _entryType = isShortCandidate ? 'SELL' : 'BUY';
     const _direction = isShortCandidate ? 'SHORT' : 'LONG';
+    // Observability: dedicated log line at INSERT time so operators can grep
+    // for `📉 SHORT entry` to confirm shorts actually fired live (not just
+    // qualified at candidate stage).
+    if (isShortCandidate) {
+      console.log(`  📉 SHORT entry ${stock.sym} @ ₹${entryFill} qty=${qty} sl=₹${sl} tgt=₹${tgt} setup=${result.strategy}`);
+    }
     await pool.query(
       `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction)
        VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19)`,
@@ -8455,6 +8482,28 @@ app.post("/api/trading-mode", express.json(), async (req,res) => {
   });
 });
 
+// 2026-05-06 — runtime SHORTS mode toggle (no redeploy required).
+// GET returns current state; POST flips it and persists to app_config.
+app.get('/api/admin/shorts-mode', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json({ enabled: SHORTS_RUNTIME_ENABLED, source: 'runtime' });
+});
+app.post('/api/admin/shorts-mode', express.json(), async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { enabled } = req.body || {};
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'body.enabled must be boolean' });
+  SHORTS_RUNTIME_ENABLED = enabled;
+  try {
+    await pool.query(
+      `INSERT INTO app_config(key, value, updated_at) VALUES('SHORTS_ENABLED', $1, NOW())
+       ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
+      [enabled ? 'true' : 'false']
+    );
+  } catch (e) { console.error('Failed to persist SHORTS_ENABLED:', e.message); }
+  console.log(`📉 SHORTS_ENABLED toggled: ${enabled ? 'ON' : 'OFF'} (persisted to DB)`);
+  res.json({ ok: true, enabled: SHORTS_RUNTIME_ENABLED });
+});
+
 // ── Test buy endpoint — buy 1 share of a stock to verify Kite order placement works ──
 app.post("/api/test-buy", express.json(), async (req, res) => {
   try {
@@ -9046,17 +9095,20 @@ app.get('/api/admin/daily-report', async (req, res) => {
          LIMIT 10`,
         [start, end]
       ),
-      // HONASA-class regression: duplicate BUY on same symbol same day.
-      // Covers both live + paper so paper-mode dup-bugs surface too.
+      // HONASA-class regression: duplicate ENTRY on same symbol+direction
+      // same day. Covers both live + paper so paper-mode dup-bugs surface
+      // too. 2026-05-06 — group by (symbol, direction) so dup-shorts and
+      // dup-longs are detected separately. paper_trades shorts open with
+      // type='SELL' so the old type='BUY'-only filter missed them.
       safeQuery(
-        `SELECT symbol, COUNT(*)::int AS n FROM (
-            SELECT symbol FROM live_trades
+        `SELECT symbol, direction, COUNT(*)::int AS n FROM (
+            SELECT symbol, 'LONG'::text AS direction FROM live_trades
              WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
             UNION ALL
-            SELECT symbol FROM paper_trades
-             WHERE type = 'BUY' AND entry_time >= $1 AND entry_time < $2
+            SELECT symbol, COALESCE(direction, 'LONG')::text AS direction FROM paper_trades
+             WHERE entry_time >= $1 AND entry_time < $2
           ) t
-         GROUP BY symbol
+         GROUP BY symbol, direction
          HAVING COUNT(*) > 1`,
         [start, end]
       ),
@@ -20523,14 +20575,21 @@ cron.schedule('0 10-15 * * 1-5', () => fetchVixOnly('hourly'),  { timezone: 'Asi
 // force-close every OPEN paper_trade at the last cached price (or entry
 // price if no quote available — zero-P&L exit, more honest than fake
 // numbers).
-async function squareOffPaperTrades(reason = 'eod') {
+async function squareOffPaperTrades(reason = 'eod', directionFilter = null) {
   try {
+    // 2026-05-06 — optional directionFilter ('LONG' | 'SHORT') for surgical
+    // kill-switch on one side without touching the other. Default null = all.
+    const dirSql = directionFilter
+      ? `AND COALESCE(direction, 'LONG') = $1`
+      : '';
+    const dirParams = directionFilter ? [directionFilter] : [];
     const { rows: open } = await pool.query(
       `SELECT id, symbol, price, quantity, entry_time, stop_loss, target, direction
-         FROM paper_trades WHERE status = 'OPEN'`
+         FROM paper_trades WHERE status = 'OPEN' ${dirSql}`,
+      dirParams
     );
     if (!open.length) {
-      console.log(`[paper-eod:${reason}] no OPEN positions to square off`);
+      console.log(`[paper-eod:${reason}${directionFilter ? ':' + directionFilter : ''}] no OPEN positions to square off`);
       return { closed: 0 };
     }
     let closed = 0;
@@ -20745,6 +20804,32 @@ app.post('/api/admin/squareoff-paper', async (req, res) => {
   try {
     const r = await squareOffPaperTrades(req.query.reason || 'manual');
     res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// 2026-05-06 — surgical short-only squareoff. Closes ONLY paper rows with
+// direction='SHORT' and leaves longs untouched. Use this if shorts misfire
+// and need emergency-cleared without nuking legitimate live longs.
+app.post('/api/admin/squareoff-shorts', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const r = await squareOffPaperTrades(req.query.reason || 'manual-shorts', 'SHORT');
+    res.json({ ok: true, scope: 'SHORT', ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// 2026-05-06 — long-only counterpart for symmetry.
+app.post('/api/admin/squareoff-longs', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const r = await squareOffPaperTrades(req.query.reason || 'manual-longs', 'LONG');
+    res.json({ ok: true, scope: 'LONG', ...r });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
