@@ -113,12 +113,13 @@ export default function DayTrade() {
   const [forceMsg, setForceMsg] = useState('');
   const [totalScanned, setTotalScanned] = useState(null);
   const [copyMsg, setCopyMsg] = useState('');
+  const [v2Ctx, setV2Ctx] = useState(null);  // 🚀 Wave 13 — v2 systemic context block
   const mounted = useRef(false);
 
   const fetchPicks = () => {
     apiGet('/api/stocks/picks/daytrade')
       .then((d) => {
-        // Server returns { stocks, total, lastScannedAt, marketOpen }
+        // Server returns { stocks, total, lastScannedAt, marketOpen, v2 }
         // Be defensive — array in any of stocks/picks/results/d itself, else [].
         const arr = Array.isArray(d?.stocks) ? d.stocks
                   : Array.isArray(d?.picks) ? d.picks
@@ -128,6 +129,7 @@ export default function DayTrade() {
         setScannedAt(d?.lastScannedAt || d?.scannedAt || null);
         setMarketOpen(d?.marketOpen ?? null);
         setTotalScanned(typeof d?.total === 'number' ? d.total : null);
+        setV2Ctx(d?.v2 || null);  // 🚀 Wave 13 — capture v2 systemic context
         setLoading(false);
       })
       .catch((e) => { setError(e.message || 'Failed'); setLoading(false); });
@@ -312,6 +314,12 @@ export default function DayTrade() {
           </div>
         )}
       </div>
+
+      {/* ═══ 🚀 V2.0 STRATEGY BANNERS — Wave 13 ═══
+          Surfaces all v2 systemic gates the trader needs to see at-a-glance:
+          DD circuit-breaker tier, tilt status, pre-market context, trend-day
+          flag, and Initial Balance day-type. Only renders when V2_SETUPS_MODE=on. */}
+      <V2DayTradeBanner v2={v2Ctx} />
 
       {/* ═══ SYSTEMIC CONTEXT BANNER ═══
           Shows the market-wide state that shapes every per-pick score
@@ -616,7 +624,27 @@ function SetupMiniTable({ setup, rows }) {
             <tbody>
               {list.map((p) => (
                 <tr key={p.sym} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ ...miniTd, fontWeight: 700, color: 'var(--text)' }}>{p.sym}</td>
+                  <td style={{ ...miniTd, fontWeight: 700, color: 'var(--text)' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      {p.sym}
+                      {/* 🚀 Wave 13 — v2 tier badge per pick */}
+                      {p.v2Tier && (
+                        <span
+                          style={{
+                            fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 3,
+                            color: p.v2Tier === 'A' ? '#10b981' : p.v2Tier === 'B' ? '#3b82f6' : '#94a3b8',
+                            background: p.v2Tier === 'A' ? 'rgba(16,185,129,0.10)' : p.v2Tier === 'B' ? 'rgba(59,130,246,0.10)' : 'rgba(148,163,184,0.08)',
+                            border: `1px solid ${p.v2Tier === 'A' ? 'rgba(16,185,129,0.3)' : p.v2Tier === 'B' ? 'rgba(59,130,246,0.3)' : 'rgba(148,163,184,0.2)'}`,
+                            letterSpacing: '0.3px',
+                          }}
+                          title={`v2 tier: ${p.v2Tier}${p.v2TierReason ? ' · ' + p.v2TierReason : ''}${p.v2RiskPct != null ? ' · risk ' + p.v2RiskPct + '%' : ''}`}
+                        >
+                          {p.v2Tier}
+                          {p.v2RiskPct != null && p.v2RiskPct > 0 && <span style={{ marginLeft: 3, fontWeight: 600, opacity: 0.85 }}>{p.v2RiskPct}%</span>}
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="tabular-nums" style={{
                     ...miniTd, textAlign: 'right', fontWeight: 700,
                     color: (p.dayTradeScore || 0) >= 70 ? 'var(--green-text)' : (p.dayTradeScore || 0) >= 50 ? 'var(--amber-text)' : 'var(--text2)',
@@ -709,6 +737,161 @@ function formatAgo(ms) {
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   return `${h}h ago`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 Wave 13 — V2 DayTrade banner
+// Surfaces all v2 systemic gates at-a-glance: DD circuit-breaker tier,
+// tilt status, pre-market context, trend-day flag, and Initial Balance
+// day-type. Renders only when V2_SETUPS_MODE=on. Each module gets its
+// own colored chip with hover details.
+// ══════════════════════════════════════════════════════════════════════
+function V2DayTradeBanner({ v2 }) {
+  if (!v2 || !v2.v2SetupsMode) return null;
+  const dd = v2.dailyDD;
+  const tilt = v2.tilt;
+  const pm = v2.premarket;
+  const td = v2.trendDay;
+  const ib = v2.initialBalance;
+  const tc = v2.tierCounts;
+  const wl = v2.watchlist;
+
+  // ── DD tier color/style ──
+  const ddColor =
+    dd?.tier === 'BLACK'  ? '#1f2937' :
+    dd?.tier === 'RED'    ? '#ef4444' :
+    dd?.tier === 'ORANGE' ? '#f59e0b' :
+    dd?.tier === 'YELLOW' ? '#eab308' :
+    '#10b981';
+  const ddBg = dd?.tier === 'BLACK' ? 'rgba(31,41,55,0.18)' :
+               dd?.tier === 'RED' ? 'rgba(239,68,68,0.16)' :
+               dd?.tier === 'ORANGE' ? 'rgba(245,158,11,0.14)' :
+               dd?.tier === 'YELLOW' ? 'rgba(234,179,8,0.12)' :
+               'rgba(16,185,129,0.08)';
+  // Show DD as a top-priority alert when not NORMAL
+  const ddAlert = dd && dd.tier !== 'NORMAL';
+  // Tilt as alert when not NORMAL
+  const tiltAlert = tilt && tilt.state !== 'NORMAL';
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {/* CRITICAL ALERTS first (DD + Tilt) — full-width banners */}
+      {ddAlert && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 10,
+          background: ddBg,
+          border: `1.5px solid ${ddColor}`,
+          borderRadius: 10,
+          fontSize: 12, fontWeight: 700, color: ddColor, letterSpacing: '0.3px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10,
+        }}>
+          <div>
+            ⚠ DAILY DD: <b>{dd.tier}</b>
+            {' · '}Loss today: <span className="tabular-nums">{(dd.lossPct * 100).toFixed(2)}%</span>
+            {' · '}Size mult: <span className="tabular-nums">×{dd.sizeMult.toFixed(2)}</span>
+            {!dd.allowEntry && <> · <b style={{ color: '#fff', background: ddColor, padding: '1px 8px', borderRadius: 4, marginLeft: 4 }}>NO NEW TRADES</b></>}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 500 }}>
+            allowed tier: {dd.allowedTier}
+          </div>
+        </div>
+      )}
+      {tiltAlert && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 10,
+          background: tilt.state === 'STOPPED' ? 'rgba(239,68,68,0.16)' :
+                     tilt.state === 'PAUSED' ? 'rgba(245,158,11,0.14)' :
+                     'rgba(59,130,246,0.10)',
+          border: `1.5px solid ${tilt.state === 'STOPPED' ? '#ef4444' : tilt.state === 'PAUSED' ? '#f59e0b' : '#3b82f6'}`,
+          borderRadius: 10,
+          fontSize: 12, fontWeight: 700,
+          color: tilt.state === 'STOPPED' ? '#ef4444' : tilt.state === 'PAUSED' ? '#f59e0b' : '#3b82f6',
+          letterSpacing: '0.3px',
+        }}>
+          {tilt.state === 'STOPPED' && '🛑 '}
+          {tilt.state === 'PAUSED' && '⏸ '}
+          {tilt.state === 'OVERCONFIDENCE_WARNING' && '🎯 '}
+          TILT: <b>{tilt.state}</b>
+          {tilt.reason && <> · {tilt.reason}</>}
+          {tilt.consecutiveLosses > 0 && <> · L-streak: {tilt.consecutiveLosses}</>}
+          {tilt.consecutiveWins > 0 && <> · W-streak: {tilt.consecutiveWins}</>}
+        </div>
+      )}
+
+      {/* V2 status pills row (compact info bar) */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+        padding: '10px 14px',
+        background: 'linear-gradient(135deg, rgba(167,139,250,0.06), rgba(99,102,241,0.04))',
+        border: '1px solid rgba(167,139,250,0.18)',
+        borderRadius: 12,
+      }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: '#a78bfa', marginRight: 4 }}>
+          🚀 V2
+        </span>
+        {/* Pre-market */}
+        <V2Pill
+          color={pm?.tier === 'BULL' ? '#10b981' : pm?.tier === 'BEAR' ? '#ef4444' : '#94a3b8'}
+          title={`Pre-market routine (8:30 IST). Gift gap ${pm?.giftGapPct != null ? (pm.giftGapPct*100).toFixed(2) + '%' : '—'}, VIX Δ ${pm?.vixDelta != null ? (pm.vixDelta*100).toFixed(2) + '%' : '—'}`}
+        >
+          🌅 Bias: <b>{pm?.tier || '—'}</b>{pm?.dayBiasScore != null && <> ({pm.dayBiasScore > 0 ? '+' : ''}{pm.dayBiasScore})</>}
+        </V2Pill>
+        {/* Trend day */}
+        <V2Pill
+          color={td?.active ? (td.direction === 'BULL' ? '#10b981' : '#ef4444') : '#94a3b8'}
+          title={`Trend-day detection (9:45 IST). Bull ${td?.bullSignals ?? 0}/4, Bear ${td?.bearSignals ?? 0}/4 signals.`}
+        >
+          {td?.active ? '🚀' : '📊'} Trend: <b>{td?.active ? `${td.direction || 'YES'}` : (td?.evaluated ? 'NO' : '⏳')}</b>
+        </V2Pill>
+        {/* IB day type */}
+        <V2Pill
+          color={ib?.dayType === 'TREND' ? '#10b981' : ib?.dayType === 'BRACKETED' ? '#f59e0b' : ib?.dayType === 'BALANCED' ? '#3b82f6' : '#94a3b8'}
+          title={`Initial Balance (10:15 IST). Range ${ib?.range != null ? ib.range.toFixed(0) + ' pts' : '—'}, ${ib?.fraction != null ? (ib.fraction*100).toFixed(0) + '% of ADR' : ''}`}
+        >
+          📐 IB: <b>{ib?.dayType || '⏳'}</b>
+        </V2Pill>
+        {/* Tier counts */}
+        <V2Pill color="#a78bfa" title="Tier classification: A-list = aligned + sector strong, B-list = partial, SKIP = ATR/turnover fail">
+          🏷 Tiers: <b style={{ color: '#10b981' }}>{tc?.A ?? 0}A</b> / <b style={{ color: '#3b82f6' }}>{tc?.B ?? 0}B</b> / <b style={{ color: '#94a3b8' }}>{tc?.SKIP ?? 0}SKIP</b>
+        </V2Pill>
+        {/* Watchlist */}
+        <V2Pill color={wl?.built ? '#10b981' : '#94a3b8'} title="Daily watchlist built at 9:14 IST from tier cache">
+          📋 Watchlist: <b>{wl?.count ?? 0}</b>{wl?.built ? '' : ' ⏳'}
+        </V2Pill>
+        {/* DD chip when normal (alert handled above) */}
+        {!ddAlert && dd && (
+          <V2Pill color="#10b981" title="Daily drawdown circuit breaker (calendar-resets at IST midnight)">
+            🛡 DD: <b>NORMAL</b>
+          </V2Pill>
+        )}
+        {/* Tilt chip when normal */}
+        {!tiltAlert && tilt && (
+          <V2Pill color="#10b981" title="Tilt management — pause after 3 losses, stop day after 5">
+            🧠 Tilt: <b>NORMAL</b>
+          </V2Pill>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function V2Pill({ children, color, title }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '5px 10px', borderRadius: 6,
+        fontSize: 11, fontWeight: 600,
+        background: `${color}10`,
+        border: `1px solid ${color}40`,
+        color: 'var(--text2)',
+        whiteSpace: 'nowrap',
+      }}
+      title={title}
+    >
+      {children}
+    </span>
+  );
 }
 
 // ══════════════════════════════════════════════════════════════════════

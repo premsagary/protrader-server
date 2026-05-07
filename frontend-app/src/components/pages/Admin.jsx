@@ -45,6 +45,15 @@ export default function Admin() {
   const [testBuyQty, setTestBuyQty] = useState(1);
   const [testBuyBusy, setTestBuyBusy] = useState(false);
   const [testBuyMsg, setTestBuyMsg] = useState('');
+  // ── 🚀 v2.0 Wave 13 — V2 Control Panel state ──
+  // Polls /api/admin/v2/status every 30s for system-wide v2 regime view.
+  // Polls /api/admin/setup-sqn separately because it's heavier (DB query
+  // over closed trades). Both are admin-gated; failures swallowed silently.
+  const [v2Status, setV2Status] = useState(null);   // { v2SetupsMode, premarket, trendDay, initialBalance, tierCounts, watchlist }
+  const [v2Sqn, setV2Sqn]       = useState(null);   // { results: [{setup, sqn, tier, ...}], legend }
+  const [v2BusyTier, setV2BusyTier] = useState(false);
+  const [v2BusyWl, setV2BusyWl]     = useState(false);
+  const [v2OpsMsg, setV2OpsMsg]     = useState('');
 
   useEffect(() => {
     apiGet('/api/admin/users').then((d) => setUsers(Array.isArray(d?.users) ? d.users : Array.isArray(d) ? d : [])).catch(() => {});
@@ -66,6 +75,9 @@ export default function Admin() {
       apiGet('/api/admin/pipeline-status').then(setPipelineStatus).catch(() => {});
       apiGet('/api/admin/llm-budget').then(setLlmBudget).catch(() => {});
       apiGet('/api/trading-mode').then(setTradingMode).catch(() => {});
+      // 🚀 v2.0 Wave 13 — v2 systemic state
+      apiGet('/api/admin/v2/status').then(setV2Status).catch(() => {});
+      apiGet('/api/admin/setup-sqn?window=30&minTrades=5').then(setV2Sqn).catch(() => {});
     };
     pollStatus();
     const id2 = setInterval(pollStatus, 30000);
@@ -212,6 +224,28 @@ export default function Admin() {
       setForceRefreshMsg(`✓ ${res.message || 'Done'}`);
     } catch (e) { setForceRefreshMsg(`Error: ${e.message}`); }
     setTimeout(() => setForceRefreshMsg(''), 4000);
+  };
+
+  // 🚀 v2.0 Wave 13 — V2 manual operations
+  const handleV2RefreshTiers = async () => {
+    setV2BusyTier(true); setV2OpsMsg('');
+    try {
+      const r = await apiPost('/api/admin/v2/tiers/refresh');
+      setV2OpsMsg(`✓ Tiers refreshed: A=${r?.result?.aCount ?? '?'} B=${r?.result?.bCount ?? '?'} SKIP=${r?.result?.skipCount ?? '?'}`);
+      apiGet('/api/admin/v2/status').then(setV2Status).catch(() => {});
+    } catch (e) { setV2OpsMsg(`❌ ${e.message}`); }
+    setV2BusyTier(false);
+    setTimeout(() => setV2OpsMsg(''), 5000);
+  };
+  const handleV2RefreshWatchlist = async () => {
+    setV2BusyWl(true); setV2OpsMsg('');
+    try {
+      const r = await apiPost('/api/admin/v2/watchlist/refresh');
+      setV2OpsMsg(`✓ Watchlist rebuilt: ${(r?.watchlist || []).length} symbols`);
+      apiGet('/api/admin/v2/status').then(setV2Status).catch(() => {});
+    } catch (e) { setV2OpsMsg(`❌ ${e.message}`); }
+    setV2BusyWl(false);
+    setTimeout(() => setV2OpsMsg(''), 5000);
   };
 
   // ── Screener CSV upload (single file) ───────────────────────────────
@@ -546,6 +580,17 @@ export default function Admin() {
           )}
         </div>
       </div>
+
+      {/* ═══ 🚀 V2.0 STRATEGY CONTROL PANEL — Wave 13 ═══ */}
+      <V2ControlPanel
+        v2Status={v2Status}
+        v2Sqn={v2Sqn}
+        v2BusyTier={v2BusyTier}
+        v2BusyWl={v2BusyWl}
+        v2OpsMsg={v2OpsMsg}
+        onRefreshTiers={handleV2RefreshTiers}
+        onRefreshWatchlist={handleV2RefreshWatchlist}
+      />
 
       {/* ═══ FORCE-RUN UNIFIED PIPELINE — big prominent card ═══ */}
       <div className="card card-premium" style={{ padding: 0, marginBottom: 20, overflow: 'hidden' }}>
@@ -956,4 +1001,281 @@ function formatDuration(ms) {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 Wave 13 — V2 Control Panel
+// Surfaces every v2 strategy module: pre-market context, tier
+// classification, daily watchlist, trend-day detection, Initial
+// Balance day-type, per-setup SQN tracking. Polls /api/admin/v2/status
+// and /api/admin/setup-sqn every 30s. Provides manual refresh buttons
+// for tiers + watchlist (otherwise rebuilt by 9:14/11:00/13:30 IST cron).
+// ══════════════════════════════════════════════════════════════════════
+function V2ControlPanel({ v2Status, v2Sqn, v2BusyTier, v2BusyWl, v2OpsMsg, onRefreshTiers, onRefreshWatchlist }) {
+  const enabled = !!v2Status?.v2SetupsMode;
+  const pm = v2Status?.premarket;
+  const td = v2Status?.trendDay;
+  const ib = v2Status?.initialBalance;
+  const tc = v2Status?.tierCounts;
+  const wl = v2Status?.watchlist;
+
+  // Color helpers
+  const dayBiasColor = (tier) => tier === 'BULL' ? '#10b981' : tier === 'BEAR' ? '#ef4444' : '#94a3b8';
+  const trendDayColor = (active, dir) => !active ? '#94a3b8' : dir === 'BULL' ? '#10b981' : '#ef4444';
+  const ibTypeColor = (t) => t === 'TREND' ? '#10b981' : t === 'BRACKETED' ? '#f59e0b' : '#3b82f6';
+  const sqnTierColor = (tier) => ({
+    POOR: '#ef4444', AVERAGE: '#f59e0b', GOOD: '#10b981',
+    EXCELLENT: '#3b82f6', SUSPECT_OVERFIT: '#a855f7',
+  })[tier] || '#94a3b8';
+
+  return (
+    <div className="card card-premium" style={{
+      padding: 0,
+      marginBottom: 20,
+      overflow: 'hidden',
+      border: enabled ? '1px solid rgba(167,139,250,0.45)' : '1px solid var(--border)',
+      boxShadow: enabled ? '0 0 30px rgba(167,139,250,0.10)' : '0 8px 22px rgba(0,0,0,0.22)',
+    }}>
+      {/* Header */}
+      <div style={{
+        background: enabled
+          ? 'linear-gradient(135deg, rgba(167,139,250,0.18), rgba(99,102,241,0.10))'
+          : 'linear-gradient(135deg, rgba(148,163,184,0.10), rgba(100,116,139,0.06))',
+        padding: '20px 24px',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <span style={{ fontSize: 20 }}>🚀</span>
+              <h2 style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
+                V2.0 Strategy Control Panel
+              </h2>
+              <span className="chip" style={{
+                background: enabled ? 'var(--brand-bg)' : 'rgba(148,163,184,0.10)',
+                color: enabled ? 'var(--brand-text)' : 'var(--text3)',
+                border: '1px solid ' + (enabled ? 'rgba(99,102,241,0.35)' : 'var(--border)'),
+                fontWeight: 800, letterSpacing: '0.5px', fontSize: 10,
+              }}>
+                {enabled ? '● V2 ACTIVE' : '○ V2 DISABLED'}
+              </span>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5, maxWidth: 720 }}>
+              Top-trader playbook: pre-market routine, tier classification, daily watchlist, trend-day detection, Initial Balance, per-setup SQN.
+              Set env <code style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 5px', borderRadius: 3 }}>V2_SETUPS_MODE=on</code> to activate.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={onRefreshTiers}
+              disabled={!enabled || v2BusyTier}
+              className="btn btn-secondary"
+              style={{ height: 32, fontSize: 11, padding: '0 12px', opacity: !enabled || v2BusyTier ? 0.55 : 1 }}
+              title="Manually re-run classifyStockTier() over the universe"
+            >
+              {v2BusyTier ? '⏳' : '↻'} Tiers
+            </button>
+            <button
+              onClick={onRefreshWatchlist}
+              disabled={!enabled || v2BusyWl}
+              className="btn btn-secondary"
+              style={{ height: 32, fontSize: 11, padding: '0 12px', opacity: !enabled || v2BusyWl ? 0.55 : 1 }}
+              title="Manually rebuild the daily watchlist from current tier cache"
+            >
+              {v2BusyWl ? '⏳' : '↻'} Watchlist
+            </button>
+          </div>
+        </div>
+        {v2OpsMsg && (
+          <div style={{
+            marginTop: 10, fontSize: 12,
+            color: v2OpsMsg.startsWith('❌') ? 'var(--red-text)' : 'var(--green-text)',
+            fontWeight: 600,
+          }}>
+            {v2OpsMsg}
+          </div>
+        )}
+      </div>
+
+      {!enabled && (
+        <div style={{ padding: '32px 24px', fontSize: 13, color: 'var(--text3)', textAlign: 'center' }}>
+          V2 strategy is currently <b>disabled</b>. The bot is running v1 logic. Set <code>V2_SETUPS_MODE=on</code> in environment and restart to activate.
+        </div>
+      )}
+
+      {enabled && (
+        <div style={{ padding: '20px 24px' }}>
+          {/* Top row — 4 status cards: Pre-market / Trend Day / Initial Balance / Tier Cache */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
+            {/* Pre-market context */}
+            <div style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
+                Pre-market · 8:30 IST
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: dayBiasColor(pm?.tier), letterSpacing: '-0.5px' }}>
+                  {pm?.tier || '—'}
+                </span>
+                {pm?.dayBiasScore != null && (
+                  <span className="tabular-nums" style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>
+                    score {pm.dayBiasScore > 0 ? '+' : ''}{pm.dayBiasScore}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                Gift: <b style={{ color: 'var(--text)' }}>{pm?.giftGapPct != null ? `${(pm.giftGapPct * 100).toFixed(2)}%` : '—'}</b><br />
+                VIX Δ: <b style={{ color: 'var(--text)' }}>{pm?.vixDelta != null ? `${(pm.vixDelta * 100).toFixed(2)}%` : '—'}</b><br />
+                FII: <b style={{ color: 'var(--text)' }}>{pm?.fiiNet != null ? `₹${pm.fiiNet}cr` : '—'}</b> · DII: <b style={{ color: 'var(--text)' }}>{pm?.diiNet != null ? `₹${pm.diiNet}cr` : '—'}</b>
+              </div>
+              {pm?.stale && (
+                <div style={{ marginTop: 6, fontSize: 10, color: 'var(--amber-text)', fontWeight: 700 }}>
+                  ⚠ Stale — premarket cron didn't run
+                </div>
+              )}
+            </div>
+
+            {/* Trend Day */}
+            <div style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
+                Trend Day · 9:45 IST
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: trendDayColor(td?.active, td?.direction), letterSpacing: '-0.5px' }}>
+                  {td?.active ? `🚀 ${td.direction || 'ACTIVE'}` : td?.evaluated ? 'NORMAL' : 'PENDING'}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                Bull signals: <b style={{ color: 'var(--text)' }}>{td?.bullSignals ?? 0}/4</b><br />
+                Bear signals: <b style={{ color: 'var(--text)' }}>{td?.bearSignals ?? 0}/4</b><br />
+                A/D ratio: <b style={{ color: 'var(--text)' }}>{td?.adRatio ?? '—'}</b> · Sectors: <b style={{ color: 'var(--text)' }}>{td?.sectorsGreen ?? 0}↑/{td?.sectorsRed ?? 0}↓</b>
+              </div>
+            </div>
+
+            {/* Initial Balance */}
+            <div style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
+                Initial Balance · 10:15 IST
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: ibTypeColor(ib?.dayType), letterSpacing: '-0.5px' }}>
+                  {ib?.dayType || (ib?.computed === false ? 'PENDING' : '—')}
+                </span>
+              </div>
+              <div className="tabular-nums" style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                Range: <b style={{ color: 'var(--text)' }}>{ib?.range != null ? `${ib.iL?.toFixed(0)}–${ib.iH?.toFixed(0)}` : '—'}</b><br />
+                Width: <b style={{ color: 'var(--text)' }}>{ib?.range != null ? `${ib.range.toFixed(0)} pts` : '—'}</b><br />
+                ADR fraction: <b style={{ color: 'var(--text)' }}>{ib?.fraction != null ? `${(ib.fraction * 100).toFixed(0)}%` : '—'}</b>
+              </div>
+              {ib?.reason && (
+                <div style={{ marginTop: 6, fontSize: 10, color: 'var(--amber-text)' }}>{ib.reason}</div>
+              )}
+            </div>
+
+            {/* Tier Cache */}
+            <div style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
+                Tier Cache · 9:14 / 11:00 / 13:30
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
+                <div className="tabular-nums">
+                  <span style={{ fontSize: 18, fontWeight: 800, color: '#10b981', letterSpacing: '-0.5px' }}>{tc?.A ?? 0}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>A</span>
+                </div>
+                <div className="tabular-nums">
+                  <span style={{ fontSize: 18, fontWeight: 800, color: '#3b82f6', letterSpacing: '-0.5px' }}>{tc?.B ?? 0}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>B</span>
+                </div>
+                <div className="tabular-nums">
+                  <span style={{ fontSize: 18, fontWeight: 800, color: '#94a3b8', letterSpacing: '-0.5px' }}>{tc?.SKIP ?? 0}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 4 }}>SKIP</span>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                Watchlist built: <b style={{ color: wl?.built ? 'var(--green-text)' : 'var(--amber-text)' }}>{wl?.built ? 'YES' : 'NO'}</b> ({wl?.count ?? 0} sym)<br />
+                {wl?.builtAt && (
+                  <span>Built at: <b style={{ color: 'var(--text)' }}>{new Date(wl.builtAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} IST</b></span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Per-Setup SQN table */}
+          <div style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>
+                  Van Tharp · Per-Setup SQN
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                  SQN = (mean_R / stddev_R) × √N · last 30 trades per setup · min 5 trades
+                </div>
+              </div>
+              {v2Sqn?.generatedAt && (
+                <div style={{ fontSize: 10, color: 'var(--text3)' }}>
+                  Updated: {new Date(v2Sqn.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+            </div>
+            {v2Sqn?.results?.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tabular-nums" style={{ width: '100%', fontSize: 11.5, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ textAlign: 'left',  padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Setup</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Trades</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Win%</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Avg Win R</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Avg Loss R</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Expectancy</th>
+                      <th style={{ textAlign: 'right', padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>SQN</th>
+                      <th style={{ textAlign: 'left',  padding: '6px 10px 8px', color: 'var(--text3)', fontWeight: 600 }}>Tier</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {v2Sqn.results.map((r, i) => {
+                      const insufficient = r.status === 'INSUFFICIENT_DATA';
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '6px 10px', color: 'var(--text)', fontWeight: 600 }}>{r.setup}</td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--text2)' }}>{r.trades}</td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: 'var(--text2)' }}>{insufficient ? '—' : `${r.winRate}%`}</td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: insufficient ? 'var(--text3)' : 'var(--green-text)' }}>{insufficient ? '—' : `${r.avgWinR}R`}</td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: insufficient ? 'var(--text3)' : 'var(--red-text)' }}>{insufficient ? '—' : `${r.avgLossR}R`}</td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: insufficient ? 'var(--text3)' : (r.expectancy > 0 ? 'var(--green-text)' : 'var(--red-text)'), fontWeight: 700 }}>
+                            {insufficient ? '—' : `${r.expectancy > 0 ? '+' : ''}${r.expectancy}R`}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', color: insufficient ? 'var(--text3)' : 'var(--text)', fontWeight: 800 }}>
+                            {insufficient ? '—' : r.sqn}
+                          </td>
+                          <td style={{ padding: '6px 10px' }}>
+                            {insufficient ? (
+                              <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600 }}>need {r.minTrades}+</span>
+                            ) : (
+                              <span style={{
+                                fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+                                color: sqnTierColor(r.tier),
+                                background: `${sqnTierColor(r.tier)}14`,
+                                border: `1px solid ${sqnTierColor(r.tier)}40`,
+                                letterSpacing: '0.3px',
+                              }} title={r.recommendation}>
+                                {r.tier}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ padding: '20px 0', fontSize: 12, color: 'var(--text3)', textAlign: 'center' }}>
+                No closed v2 trades yet — SQN needs at least 5 closed trades per setup.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

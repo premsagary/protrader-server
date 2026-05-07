@@ -12,6 +12,7 @@ import React, { useState, useMemo } from 'react';
 const SECTIONS = [
   { id: 'overview',      label: 'Overview',          icon: '🏛' },
   { id: 'tabs',          label: 'Tab Map',           icon: '🗂' },
+  { id: 'v2',            label: 'V2 Strategy',       icon: '🚀' },  // 🚀 Wave 13
   { id: 'scoring',       label: 'Scoring Systems',   icon: '🎯' },
   { id: 'riskflags',     label: 'Risk Flags',        icon: '⚠' },
   { id: 'disqualifiers', label: 'Disqualifiers',     icon: '🚫' },
@@ -804,6 +805,98 @@ export default function Architecture() {
                 <span>{desc}</span>,
               ])}
             />
+          </SectionCard>
+
+          {/* ═══════════ 🚀 V2.0 STRATEGY (Wave 1-4 + 12-13) ═══════════ */}
+          <SectionCard id="v2" icon="🚀" title="V2.0 Strategy — Top-Trader Playbook"
+            subtitle="Synthesized from Raschke / Brooks / Fisher / Pani / Sundar / Tharp / Minervini / Weinstein / O'Neil / Market Profile. Lives on v2-strategy branch (NOT live PROD). Activate with env V2_SETUPS_MODE=on. Walked through 13 waves — from risk metering & DD breakers (Wave 1) to UI surfacing (Wave 12-13)."
+            accent="#a78bfa">
+
+            {/* Wave summary table */}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', margin: '0 0 10px 0' }}>
+                Wave-by-wave summary
+              </h3>
+              <Table
+                headers={['Wave', 'Theme', 'Highlights']}
+                colWidths={['80px', '180px', null]}
+                rows={[
+                  [<b>1</b>, <span style={{ color: '#10b981' }}>Risk metering</span>, '1% risk/trade · max 5 positions · max 2/sector · max 5 trades/day · 4-tier daily DD breaker (YELLOW 1% / ORANGE 2% / RED 3% / BLACK 4%) · tilt management (3-strike pause 1h, 5-strike stop day, 3-win warning -25%) · time stop (60min → BE) · partial profit @ 1.5R + trail 50%'],
+                  [<b>2</b>, <span style={{ color: '#3b82f6' }}>SQN measurement</span>, 'Per-setup Van Tharp SQN tracking via /api/admin/setup-sqn — last 30 trades per (strategy × direction). Tiers: POOR (<1.6) / AVERAGE / GOOD (2.4-3.0) / EXCELLENT (3.0-5.0) / SUSPECT_OVERFIT (>5)'],
+                  [<b>3</b>, <span style={{ color: '#f59e0b' }}>Strategy architecture</span>, '3 core setups (ORB+, VWAP_PULLBACK, COMPRESSION) + short mirrors · tier classification A-list/B-list/SKIP refreshed at 9:14/11:00/13:30 IST · trend-day detection at 9:45 IST · Initial Balance day-type at 10:15 IST · pre-market routine at 8:30 IST (Gift Nifty, VIX, FII/DII, 3-day pivot)'],
+                  [<b>4</b>, <span style={{ color: '#a855f7' }}>Top-trader playbook overlay</span>, 'Per-stock overlay applied to every Stock Pick / Holding / Deep Analyzer: Mark Minervini Trend Template (8 criteria), Stan Weinstein 4-stage analysis (iron rule: NEVER own Stage 4), William O\'Neil CANSLIM rubric (7 letters), VCP detection, Cup-with-Handle detection. Composite playbookScore.'],
+                  [<b>12</b>, <span style={{ color: '#10b981' }}>UI: Playbook surfacing</span>, 'Stock Picks PlaybookBadge (compact tags) · Holdings stage badge + aggregate alerts · DeepAnalyzer DeepAnalyzerPlaybook (full 8-checkbox + 7-letter cards)'],
+                  [<b>13</b>, <span style={{ color: '#a78bfa' }}>UI: V2 surfacing across tabs</span>, 'Admin V2 Control Panel (premarket / trend day / IB / tier counts / SQN table) · DayTrade V2 banners (DD alert / tilt alert / pre-market / trend day / IB / tier counts / watchlist) + per-pick tier badge · StocksRoboTrade direction-aware ▼SHORT/▲LONG (was hardcoded ▲ BUY) + tier badge + partial-taken / time-stop chips + R-multiple column + :PARTIAL row stripe'],
+                ]}
+              />
+            </div>
+
+            {/* Modules */}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', margin: '0 0 10px 0' }}>
+                V2 module map (kite-server.js)
+              </h3>
+              <Table
+                headers={['Module', 'Function', 'When']}
+                colWidths={['200px', null, '160px']}
+                rows={[
+                  [<b>Pre-market routine</b>, <><Code>runPremarketRoutine()</Code> — Gift gap, VIX delta, FII/DII flows, 3-day rolling pivot. Output: <Code>day_bias_score</Code> & tier (BULL/NEUTRAL/BEAR).</>, '8:30 IST cron'],
+                  [<b>Tier classification</b>, <><Code>classifyStockTier(sym, fund, dayBias)</Code> — A-list (sector strong + trend aligned) / B-list (one of two) / SKIP (ATR or turnover fail). Cache: <Code>_stockTierCache</Code>.</>, '9:14 / 11:00 / 13:30 IST'],
+                  [<b>Daily watchlist</b>, <><Code>buildDailyWatchlist()</Code> — top tier-A names + bias-aligned tier-B fillers. Visualization-only after Wave 5 revert (full universe still scanned).</>, '9:14 / 11:00 / 13:30 IST'],
+                  [<b>Trend-day detection</b>, <><Code>evaluateTrendDay()</Code> — 4 signals: A/D ratio ≥ 2.5 · ≥6/11 sectors green · VIX drop ≥ 1.5% · Gift gap held. Activates wider trail (2.0× ATR) + tier-A risk boost.</>, '9:45 IST cron'],
+                  [<b>Initial Balance</b>, <><Code>evaluateInitialBalance()</Code> — Nifty H/L of 9:15-10:15. Narrow IB (&lt;0.5× ADR) → TREND, normal → BALANCED, wide (&gt;1.5×) → BRACKETED.</>, '10:15 IST cron'],
+                  [<b>Daily DD circuit</b>, <><Code>checkDailyDDTier()</Code> — calendar-resets at IST midnight. Tracks realized P&amp;L of CLOSED trades today. Returns size multiplier + entry gate.</>, 'Every Pass 1'],
+                  [<b>Tilt management</b>, <><Code>checkTiltStatus()</Code> — walks today's CLOSED trades for current run. 3 losses → pause 1h, 5 losses → stop day, 3 wins → -25% size. Pre-fix Wave 9: pause re-armed every loss; now armed only on exact 3-strike crossing.</>, 'Every Pass 1'],
+                  [<b>Tier-based risk</b>, <><Code>getTierBasedRisk(sym, dir)</Code> — overrides flat <Code>RISK_PCT_PER_TRADE</Code> when V2_SETUPS_MODE=on. A-aligned 1.0% / A-neutral 0.75% / B-aligned 0.5% / B-counter 0%. Trend-day boost on A-aligned.</>, 'Pass 2 sizing'],
+                  [<b>Partial profit + time stop</b>, <>At +1.5R: exit 50% qty, INSERT <Code>:PARTIAL</Code> tagged CLOSED row, BE remainder. After 60min without +0.5R: SL → BE (idempotent via <Code>time_stop_breakeven_set</Code> flag).</>, 'Per-tick'],
+                  [<b>Module state persistence</b>, <>All v2 module state (tier cache, trend-day, IB, premarket) persisted to <Code>v2_module_state</Code> table. Restored on boot. Cron failures emit to <Code>ops_incidents</Code> with run_id.</>, 'Every state change'],
+                ]}
+              />
+            </div>
+
+            {/* Endpoints */}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', margin: '0 0 10px 0' }}>
+                V2 admin endpoints
+              </h3>
+              <Table
+                headers={['Endpoint', 'Returns']}
+                colWidths={['280px', null]}
+                rows={[
+                  [<Code>GET /api/admin/v2/status</Code>,        'Aggregate snapshot — premarket + trendDay + IB + tierCounts + watchlist'],
+                  [<Code>GET /api/admin/v2/premarket</Code>,     <><Code>getCurrentDayBias()</Code> — date, dayBiasScore, tier, giftGapPct, vixDelta, fiiNet, diiNet, pivot3day</>],
+                  [<Code>GET /api/admin/v2/trend-day</Code>,     <><Code>getTrendDayState()</Code> — active, direction, bullSignals/bearSignals, adRatio, sectors, vixDelta</>],
+                  [<Code>GET /api/admin/v2/initial-balance</Code>, <><Code>getInitialBalance()</Code> — iH/iL/range/fraction/dayType (TREND / BALANCED / BRACKETED)</>],
+                  [<Code>GET /api/admin/v2/tiers</Code>,         'Full tier cache + A/B/SKIP counts + refreshedAt'],
+                  [<Code>POST /api/admin/v2/tiers/refresh</Code>, 'Manually re-run classifier'],
+                  [<Code>GET /api/admin/v2/watchlist</Code>,     'Daily watchlist + builtAt + count'],
+                  [<Code>POST /api/admin/v2/watchlist/refresh</Code>, 'Manually rebuild from current tier cache'],
+                  [<Code>GET /api/admin/setup-sqn</Code>,        'Per-setup SQN: trades, win%, avg win R, avg loss R, expectancy, stddev, sqn, tier, recommendation'],
+                  [<Code>GET /api/stocks/picks/daytrade</Code>,  <>Now includes <Code>v2</Code> systemic context block + per-pick <Code>v2Tier</Code> / <Code>v2RiskPct</Code> (Wave 13)</>],
+                ]}
+              />
+            </div>
+
+            {/* New schema columns */}
+            <div>
+              <h3 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', margin: '0 0 10px 0' }}>
+                paper_trades — V2 schema additions
+              </h3>
+              <Table
+                headers={['Column', 'Purpose']}
+                colWidths={['260px', null]}
+                rows={[
+                  [<Code>direction VARCHAR(5)</Code>,           "LONG / SHORT (default LONG; pre-Wave-1 trades all LONG)"],
+                  [<Code>partial_taken BOOLEAN</Code>,          "TRUE on the parent row after 1.5R partial exit"],
+                  [<Code>partial_exit_price/qty/pnl</Code>,     "Realized half-exit fields"],
+                  [<Code>initial_risk_per_share</Code>,         "Recorded at entry — denominator for R-multiple calculation"],
+                  [<Code>time_stop_breakeven_set</Code>,        "Idempotent flag — once true, time-stop won't re-fire"],
+                  [<Code>tier VARCHAR(8)</Code>,                "A / B / SKIP at entry time (frozen)"],
+                  [<Code>day_bias_tier VARCHAR(16)</Code>,      "BULL / NEUTRAL / BEAR at entry"],
+                  [<Code>trend_day_active BOOLEAN</Code>,       "Whether trend-day was active at entry"],
+                ]}
+              />
+            </div>
           </SectionCard>
 
           {/* ═══════════ SCORING SYSTEMS ═══════════ */}

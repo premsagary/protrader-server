@@ -16444,6 +16444,18 @@ async function scanDayTrades(force = false) {
           scored.tsMs = lastC.date ? (lastC.date instanceof Date ? lastC.date.getTime() : Date.parse(lastC.date)) : Date.now();
           scored.sector = stockFundamentals[stock.sym]?.sector;
           scored.grp    = stockFundamentals[stock.sym]?.grp || stock.grp;
+          // 🚀 v2.0 Wave 13 — attach tier classification + tier-based risk so
+          // DayTrade UI can render per-row tier badge + per-row %risk preview.
+          // No-op when V2_SETUPS_MODE=off (getStockTier returns SKIP cache_miss).
+          if (CONFIG.V2_SETUPS_MODE) {
+            try {
+              const _tierInfo = getStockTier(stock.sym);
+              const _direction = scored.direction || (scored.bestSetup ? 'LONG' : (scored.bestSetupShort ? 'SHORT' : 'LONG'));
+              scored.v2Tier = _tierInfo.tier;
+              scored.v2TierReason = _tierInfo.reason;
+              scored.v2RiskPct = +getTierBasedRisk(stock.sym, _direction).toFixed(2);
+            } catch (_) { /* don't block scan on tier lookup error */ }
+          }
           // Log snapshot + last 5-min candle. Non-blocking, but now LOUD:
           // per-scan counters + capped first-N error logs make silent write
           // failures visible (was the OBEROIRLTY 2026-04-21 blind spot).
@@ -16614,17 +16626,50 @@ async function backfillOpenPositionCandles() {
   }
 }
 
-app.get('/api/stocks/picks/daytrade', (req, res) => {
+app.get('/api/stocks/picks/daytrade', async (req, res) => {
   const setupFilter = req.query.setup; // optional: VWAP_RECLAIM, GAP_AND_GO, BREAKOUT, OVERSOLD_BOUNCE
   let picks = _dayTradeCache;
   if (setupFilter && ['VWAP_RECLAIM', 'GAP_AND_GO', 'BREAKOUT', 'OVERSOLD_BOUNCE'].includes(setupFilter)) {
     picks = picks.filter(p => p.bestSetup === setupFilter);
+  }
+  // 🚀 v2.0 Wave 13 — attach systemic v2 context so DayTrade UI can render
+  // banners (DD tier, tilt, premarket, trend day, IB) without making N extra
+  // calls. Public endpoint — no PII, just regime state. All best-effort:
+  // any failure returns a fall-back so the picks list still renders.
+  let v2Context = null;
+  if (CONFIG.V2_SETUPS_MODE) {
+    try {
+      const [dailyDD, tilt] = await Promise.all([
+        checkDailyDDTier().catch(() => null),
+        checkTiltStatus().catch(() => null),
+      ]);
+      const wl = getWatchlist();
+      v2Context = {
+        v2SetupsMode: true,
+        dailyDD,
+        tilt,
+        premarket: getCurrentDayBias(),
+        trendDay: getTrendDayState(),
+        initialBalance: getInitialBalance(),
+        watchlist: { built: wl.built, builtAt: wl.builtAt, count: wl.count },
+        tierCounts: {
+          A: Array.from(_stockTierCache.values()).filter(t => t.tier === 'A').length,
+          B: Array.from(_stockTierCache.values()).filter(t => t.tier === 'B').length,
+          SKIP: Array.from(_stockTierCache.values()).filter(t => t.tier === 'SKIP').length,
+        },
+      };
+    } catch (e) {
+      v2Context = { v2SetupsMode: true, error: e.message };
+    }
+  } else {
+    v2Context = { v2SetupsMode: false };
   }
   res.json({
     stocks: picks,
     total: picks.length,
     lastScannedAt: _dayTradeCacheTs ? new Date(_dayTradeCacheTs).toISOString() : null,
     marketOpen: isMarketOpen(),
+    v2: v2Context,
   });
 });
 

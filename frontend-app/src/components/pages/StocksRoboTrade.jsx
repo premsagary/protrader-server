@@ -470,16 +470,52 @@ function PositionsTab() {
 }
 
 function PositionCard({ pos, prices }) {
+  // 🚀 Wave 13 — direction-aware P&L + chip + progress bar.
+  // Pre-fix: `(cmp - price) * qty` and `▲ BUY` were hardcoded, so SHORT
+  // trades displayed P&L with wrong sign and wrong direction badge.
+  const direction = (pos.direction || 'LONG').toUpperCase();
+  const isShort = direction === 'SHORT';
   const cmp = prices?.[pos.symbol]?.price ?? pos.price;
-  const pnl = +((cmp - pos.price) * pos.quantity).toFixed(2);
-  const pct = +(((cmp - pos.price) / pos.price) * 100).toFixed(2);
-  const denom = pos.target - pos.stop_loss;
-  const prog = denom > 0 ? Math.max(0, Math.min(100, ((cmp - pos.stop_loss) / denom) * 100)) : 0;
+  // For SHORT: profit when price falls — flip the sign
+  const rawPnl = isShort ? ((pos.price - cmp) * pos.quantity) : ((cmp - pos.price) * pos.quantity);
+  const pnl = +rawPnl.toFixed(2);
+  const rawPct = isShort ? (((pos.price - cmp) / pos.price) * 100) : (((cmp - pos.price) / pos.price) * 100);
+  const pct = +rawPct.toFixed(2);
+  // Progress bar: percentage of distance from SL toward TGT.
+  // LONG: SL low, TGT high. SHORT: SL high, TGT low.
+  const denom = isShort ? (pos.stop_loss - pos.target) : (pos.target - pos.stop_loss);
+  const numer = isShort ? (pos.stop_loss - cmp) : (cmp - pos.stop_loss);
+  const prog = denom > 0 ? Math.max(0, Math.min(100, (numer / denom) * 100)) : 0;
+  // v2 metadata
+  const tier = pos.tier || null;
+  const dayBiasTier = pos.day_bias_tier || null;
+  const trendDayActive = !!pos.trend_day_active;
+  const partialTaken = !!pos.partial_taken;
+  const timeStopBE = !!pos.time_stop_breakeven_set;
+  const initialRisk = pos.initial_risk_per_share != null ? Number(pos.initial_risk_per_share) : null;
+  // R-multiple: current MTM as multiple of initial risk
+  const rMultiple = (initialRisk && initialRisk > 0)
+    ? +((rawPnl / pos.quantity) / initialRisk).toFixed(2)
+    : null;
 
   return (
     <div className="card" style={{ padding: 16, borderLeft: `3px solid ${pnl >= 0 ? 'var(--green-text)' : 'var(--red-text)'}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Chip kind="g">▲ BUY</Chip>
+        <Chip kind={isShort ? 'r' : 'g'}>
+          {isShort ? '▼ SHORT' : '▲ LONG'}
+        </Chip>
+        {/* 🚀 Wave 13 — v2 tier badge */}
+        {tier && (
+          <span style={{
+            fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 4,
+            color: tier === 'A' ? '#10b981' : tier === 'B' ? '#3b82f6' : '#94a3b8',
+            background: tier === 'A' ? 'rgba(16,185,129,0.10)' : tier === 'B' ? 'rgba(59,130,246,0.10)' : 'rgba(148,163,184,0.08)',
+            border: `1px solid ${tier === 'A' ? 'rgba(16,185,129,0.3)' : tier === 'B' ? 'rgba(59,130,246,0.3)' : 'rgba(148,163,184,0.2)'}`,
+            letterSpacing: '0.5px',
+          }} title={`v2 tier ${tier}${dayBiasTier ? ' · day_bias=' + dayBiasTier : ''}${trendDayActive ? ' · trend-day' : ''}`}>
+            {tier}
+          </span>
+        )}
         <div>
           <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>
             {pos.symbol} <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 500 }}>× {pos.quantity}</span>
@@ -490,9 +526,49 @@ function PositionCard({ pos, prices }) {
         </div>
         <div style={{ marginLeft: 'auto', textAlign: 'right' }} className="tabular-nums">
           <div style={{ fontWeight: 800, fontSize: 20, color: clr(pnl) }}>{pnl >= 0 ? '+' : ''}{INR(pnl)}</div>
-          <div style={{ fontSize: 12, color: clr(pct), fontWeight: 600 }}>{pc(pct)}</div>
+          <div style={{ fontSize: 12, color: clr(pct), fontWeight: 600 }}>
+            {pc(pct)}
+            {rMultiple != null && (
+              <span style={{ marginLeft: 6, color: clr(rMultiple), fontWeight: 700 }} title="R-multiple = current P&L per share / initial risk per share">
+                · {rMultiple > 0 ? '+' : ''}{rMultiple}R
+              </span>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* 🚀 Wave 13 — v2 status chips row (partial / time-stop / trend-day) */}
+      {(partialTaken || timeStopBE || trendDayActive) && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          {partialTaken && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: '#a855f7', background: 'rgba(168,85,247,0.10)',
+              border: '1px solid rgba(168,85,247,0.3)', letterSpacing: '0.4px',
+            }} title={`Partial profit taken at 1.5R · pnl=${pos.partial_exit_pnl != null ? INR(pos.partial_exit_pnl) : '?'}`}>
+              ✂ 50% TAKEN @ 1.5R
+            </span>
+          )}
+          {timeStopBE && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: '#f59e0b', background: 'rgba(245,158,11,0.10)',
+              border: '1px solid rgba(245,158,11,0.3)', letterSpacing: '0.4px',
+            }} title="Time-stop fired: 60 min without +0.5R → SL moved to breakeven">
+              ⏱ TIME STOP → BE
+            </span>
+          )}
+          {trendDayActive && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: '#10b981', background: 'rgba(16,185,129,0.10)',
+              border: '1px solid rgba(16,185,129,0.3)', letterSpacing: '0.4px',
+            }} title="Entered on a TREND DAY — wider trail (2.0× ATR vs 1.5× normal)">
+              🚀 TREND DAY
+            </span>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginTop: 12 }}>
         {[
@@ -542,26 +618,72 @@ function ClosedTable({ rows }) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-              {['Stock', 'Qty', 'Entry', 'Exit', 'P&L', 'Return', 'Reason', 'Result'].map((h, i) => (
-                <th key={h} style={{ ...thStyle, textAlign: i === 0 ? 'left' : i < 6 ? 'right' : 'left' }}>{h}</th>
+              {/* 🚀 Wave 13 — added Dir + Tier + R columns; was: Stock/Qty/Entry/Exit/P&L/Return/Reason/Result */}
+              {['Dir', 'Stock', 'Tier', 'Qty', 'Entry', 'Exit', 'P&L', 'R', 'Return', 'Reason', 'Result'].map((h, i) => (
+                <th key={h} style={{ ...thStyle, textAlign: ['Stock', 'Reason', 'Result', 'Dir', 'Tier'].includes(h) ? 'left' : 'right' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((t, i) => (
-              <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--text)' }}>{t.symbol}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{t.quantity}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{INR(t.price)}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{t.exit_price ? INR(t.exit_price) : '—'}</td>
-                <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: clr(t.pnl) }} className="tabular-nums">
-                  {Number(t.pnl || 0) >= 0 ? '+' : ''}{INR(t.pnl)}
-                </td>
-                <td style={{ ...tdStyle, textAlign: 'right', color: clr(t.pnl_pct) }} className="tabular-nums">{pc(t.pnl_pct)}</td>
-                <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{t.exit_reason || '—'}</td>
-                <td style={tdStyle}>{Number(t.pnl || 0) >= 0 ? <Chip kind="g">Win</Chip> : <Chip kind="r">Loss</Chip>}</td>
-              </tr>
-            ))}
+            {rows.map((t, i) => {
+              const direction = (t.direction || 'LONG').toUpperCase();
+              const isShort = direction === 'SHORT';
+              const tier = t.tier;
+              // :PARTIAL rows are the partial-exit half from Wave 1 partial profit logic
+              const isPartial = (t.strategy || '').endsWith(':PARTIAL');
+              // R-multiple from initial_risk_per_share
+              const initialRisk = t.initial_risk_per_share != null ? Number(t.initial_risk_per_share) : null;
+              const rMult = (initialRisk && initialRisk > 0 && t.pnl != null && t.quantity)
+                ? +((Number(t.pnl) / Number(t.quantity)) / initialRisk).toFixed(2)
+                : null;
+              return (
+                <tr key={i} style={{
+                  borderTop: '1px solid var(--border)',
+                  // Subtle stripe for :PARTIAL rows so they're visibly half-exits
+                  background: isPartial ? 'rgba(168,85,247,0.04)' : undefined,
+                }}>
+                  <td style={tdStyle}>
+                    <Chip kind={isShort ? 'r' : 'g'}>{isShort ? '▼' : '▲'}</Chip>
+                  </td>
+                  <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--text)' }}>
+                    {t.symbol}
+                    {isPartial && (
+                      <span style={{
+                        marginLeft: 6, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                        color: '#a855f7', background: 'rgba(168,85,247,0.10)',
+                        border: '1px solid rgba(168,85,247,0.3)', letterSpacing: '0.3px',
+                      }} title="Partial-exit row from 1.5R take-profit (Wave 1)">
+                        PARTIAL
+                      </span>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {tier && (
+                      <span style={{
+                        fontSize: 9.5, fontWeight: 800, padding: '1px 6px', borderRadius: 3,
+                        color: tier === 'A' ? '#10b981' : tier === 'B' ? '#3b82f6' : '#94a3b8',
+                        background: tier === 'A' ? 'rgba(16,185,129,0.10)' : tier === 'B' ? 'rgba(59,130,246,0.10)' : 'rgba(148,163,184,0.08)',
+                        border: `1px solid ${tier === 'A' ? 'rgba(16,185,129,0.3)' : tier === 'B' ? 'rgba(59,130,246,0.3)' : 'rgba(148,163,184,0.2)'}`,
+                      }}>
+                        {tier}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{t.quantity}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{INR(t.price)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right' }} className="tabular-nums">{t.exit_price ? INR(t.exit_price) : '—'}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: clr(t.pnl) }} className="tabular-nums">
+                    {Number(t.pnl || 0) >= 0 ? '+' : ''}{INR(t.pnl)}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: rMult != null ? clr(rMult) : 'var(--text3)' }} className="tabular-nums" title="R-multiple = pnl per share / initial_risk_per_share (Van Tharp)">
+                    {rMult != null ? `${rMult > 0 ? '+' : ''}${rMult}R` : '—'}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: clr(t.pnl_pct) }} className="tabular-nums">{pc(t.pnl_pct)}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{t.exit_reason || '—'}</td>
+                  <td style={tdStyle}>{Number(t.pnl || 0) >= 0 ? <Chip kind="g">Win</Chip> : <Chip kind="r">Loss</Chip>}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
