@@ -532,6 +532,10 @@ function AnalysisResult({ data }) {
           color={(v) => v < 20 ? 'var(--green-text)' : v < 40 ? 'var(--amber-text)' : 'var(--red-text)'} />}
       </div>
 
+      {/* 🚀 v2.0 Wave 12 — Top-Trader Playbook Section
+           (Minervini Trend Template + Weinstein Stage + CANSLIM + VCP + Cup-Handle) */}
+      {a.playbook && !a.playbook.error && <DeepAnalyzerPlaybook playbook={a.playbook} />}
+
       {/* ═══ VARSITY 14-POINT CHECKLIST ═══ */}
       {Object.keys(checklist).length > 0 && (
         <Section title="Varsity 14-Point Checklist" subtitle={`${a.passCount || 0}/${a.totalChecks || 0} criteria pass · ${a.totalPts || 0}/${a.maxPts || 0} points · Varsity Modules 1-17`}>
@@ -1038,6 +1042,332 @@ function AnalysisResult({ data }) {
       <div style={{ marginTop: 28, padding: 16, background: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 10, fontSize: 11, color: 'var(--text3)', lineHeight: 1.55 }}>
         ⚠ <b>Disclaimer:</b> ProTrader is not SEBI-registered and does not provide financial advice. All data, scores, and AI outputs are for educational purposes only. Data may be delayed. You are responsible for your own investment decisions.
       </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 Wave 12 — Top-Trader Playbook Section
+// Detailed display of Minervini Trend Template, Weinstein Stage,
+// CANSLIM rubric, VCP, and Cup-with-Handle — full deep-dive depth
+// (compact PlaybookBadge lives in StockPicks.jsx; this is the expanded view)
+// ══════════════════════════════════════════════════════════════════════
+function DeepAnalyzerPlaybook({ playbook }) {
+  if (!playbook) return null;
+  const { stage, trendTemplate, canslim, vcp, cupHandle, verdict, verdictColor, playbookScore, stageMultiplier } = playbook;
+
+  const stageStr = stage?.stage || 'UNKNOWN';
+  const isStage4 = stageStr === 'STAGE_4';
+  const isStage3 = stageStr === 'STAGE_3';
+  const isStage2 = stageStr === 'STAGE_2';
+  const isStage1 = stageStr === 'STAGE_1';
+  const stageColor =
+    isStage4 ? '#ef4444'
+    : isStage3 ? '#f59e0b'
+    : isStage2 ? '#10b981'
+    : isStage1 ? '#3b82f6'
+    : '#94a3b8';
+  const stageBg =
+    isStage4 ? 'rgba(239,68,68,0.10)'
+    : isStage3 ? 'rgba(245,158,11,0.10)'
+    : isStage2 ? 'rgba(16,185,129,0.10)'
+    : isStage1 ? 'rgba(59,130,246,0.10)'
+    : 'rgba(148,163,184,0.10)';
+  const stageLabel = stageStr.replace('STAGE_', 'Stage ').replace('_TRANSITIONAL', ' (Transitional)').replace('UNKNOWN', 'Unknown');
+
+  const ttPassed = trendTemplate?.passed ?? 0;
+  const ttTotal = trendTemplate?.total ?? 8;
+  const ttQualifies = !!trendTemplate?.qualifies;
+  const ttCriteria = Array.isArray(trendTemplate?.criteria) ? trendTemplate.criteria : [];
+
+  return (
+    <div className="card" style={{
+      padding: 22,
+      marginBottom: 16,
+      background: 'linear-gradient(135deg, rgba(99,102,241,0.04), rgba(168,85,247,0.04))',
+      border: '1px solid rgba(168,85,247,0.25)',
+    }}>
+      {/* Header */}
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px', marginBottom: 4 }}>
+            🏆 Top-Trader Playbook
+          </h3>
+          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
+            Mark Minervini · Stan Weinstein · William O'Neil — composite verdict from 3 legendary trader frameworks
+          </div>
+        </div>
+        {playbookScore != null && (
+          <div style={{
+            padding: '8px 14px', background: 'rgba(0,0,0,0.25)',
+            border: `1px solid ${verdictColor || '#94a3b8'}40`, borderRadius: 10, textAlign: 'center', minWidth: 110,
+          }}>
+            <div style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 2 }}>
+              Composite
+            </div>
+            <div className="tabular-nums" style={{ fontSize: 22, fontWeight: 800, color: verdictColor || 'var(--text)', letterSpacing: '-0.5px' }}>
+              {playbookScore}
+            </div>
+            {stageMultiplier != null && (
+              <div style={{ fontSize: 9, color: 'var(--text4)', marginTop: 2 }}>
+                stage ×{stageMultiplier.toFixed(1)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Iron-rule banner for Stage 4 */}
+      {isStage4 && (
+        <div style={{
+          padding: '10px 14px',
+          background: 'rgba(239,68,68,0.16)',
+          border: '1.5px solid var(--red)',
+          borderRadius: 8,
+          fontSize: 12,
+          fontWeight: 800,
+          color: 'var(--red-text)',
+          letterSpacing: '0.3px',
+          marginBottom: 14,
+          lineHeight: 1.45,
+        }}>
+          ⚠ STAGE 4 — Weinstein iron rule: <b>NEVER OWN STAGE 4 STOCKS</b>
+          {stage?.warning && <div style={{ fontWeight: 600, marginTop: 4, fontSize: 11 }}>{stage.warning}</div>}
+        </div>
+      )}
+
+      {/* Verdict line */}
+      {verdict && !isStage4 && (
+        <div style={{
+          padding: '10px 14px',
+          background: `${verdictColor || '#94a3b8'}14`,
+          border: `1px solid ${verdictColor || '#94a3b8'}40`,
+          borderRadius: 8,
+          fontSize: 13,
+          fontWeight: 700,
+          color: verdictColor || 'var(--text)',
+          letterSpacing: '0.2px',
+          marginBottom: 14,
+        }}>
+          ▸ {verdict}
+        </div>
+      )}
+
+      {/* === Two-column grid: Weinstein Stage card + Combined patterns === */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 14 }}>
+        {/* Weinstein Stage card */}
+        <div style={{
+          padding: 14,
+          background: stageBg,
+          border: `1px solid ${stageColor}40`,
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6 }}>
+            Stan Weinstein · 4-Stage Analysis
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: stageColor, letterSpacing: '-0.5px' }}>
+              {stageLabel}
+            </div>
+            {stage?.confidence != null && (
+              <div style={{ fontSize: 10, color: 'var(--text4)', fontWeight: 600 }}>
+                {stage.confidence}% confidence
+              </div>
+            )}
+          </div>
+          {stage?.reason && (
+            <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.45, marginBottom: 6 }}>
+              {stage.reason}
+            </div>
+          )}
+          {stage?.recommendation && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: stageColor, lineHeight: 1.45 }}>
+              → {stage.recommendation}
+            </div>
+          )}
+          {stage?.warning && !isStage4 && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--amber-text)', lineHeight: 1.45, marginTop: 6 }}>
+              ⚠ {stage.warning}
+            </div>
+          )}
+        </div>
+
+        {/* Pattern Detection — VCP + Cup-Handle */}
+        <div style={{
+          padding: 14,
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
+            Pattern Detection
+          </div>
+          {/* VCP */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: vcp?.detected ? '#3b82f6' : 'var(--text4)' }}>
+              🎯 VCP <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text4)' }}>(Minervini)</span>
+            </div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+              color: vcp?.detected ? '#3b82f6' : 'var(--text4)',
+              background: vcp?.detected ? 'rgba(59,130,246,0.10)' : 'rgba(148,163,184,0.06)',
+              border: `1px solid ${vcp?.detected ? 'rgba(59,130,246,0.3)' : 'rgba(148,163,184,0.2)'}`,
+            }}>
+              {vcp?.detected ? `DETECTED · ${vcp.confidence}%` : 'NO'}
+            </span>
+          </div>
+          {vcp?.reason && (
+            <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4, marginBottom: 4 }}>
+              {vcp.reason}
+            </div>
+          )}
+          {vcp?.detected && vcp?.pivot != null && (
+            <div className="tabular-nums" style={{ fontSize: 10, color: 'var(--text4)', marginBottom: 10 }}>
+              Pivot: ₹{Number(vcp.pivot).toFixed(2)} · Stop: ₹{Number(vcp.stop).toFixed(2)}
+            </div>
+          )}
+          {/* Cup with Handle */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, marginTop: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: cupHandle?.detected ? '#a855f7' : 'var(--text4)' }}>
+              ☕ Cup-with-Handle <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text4)' }}>(O'Neil)</span>
+            </div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+              color: cupHandle?.detected ? '#a855f7' : 'var(--text4)',
+              background: cupHandle?.detected ? 'rgba(168,85,247,0.10)' : 'rgba(148,163,184,0.06)',
+              border: `1px solid ${cupHandle?.detected ? 'rgba(168,85,247,0.3)' : 'rgba(148,163,184,0.2)'}`,
+            }}>
+              {cupHandle?.detected ? `DETECTED · ${cupHandle.confidence}%` : 'NO'}
+            </span>
+          </div>
+          {cupHandle?.reason && (
+            <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
+              {cupHandle.reason}
+            </div>
+          )}
+          {cupHandle?.detected && cupHandle?.pivot != null && (
+            <div className="tabular-nums" style={{ fontSize: 10, color: 'var(--text4)', marginTop: 4 }}>
+              Pivot: ₹{Number(cupHandle.pivot).toFixed(2)} · Stop: ₹{Number(cupHandle.stop).toFixed(2)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* === Minervini Trend Template — 8 criteria checklist === */}
+      <div style={{
+        padding: 14,
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        marginBottom: 14,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
+              Mark Minervini · Trend Template
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+              All 8 criteria must pass for a true Stage 2 buy
+            </div>
+          </div>
+          <span style={{
+            fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 6, letterSpacing: '0.4px',
+            color: ttQualifies ? '#10b981' : ttPassed >= 6 ? '#f59e0b' : 'var(--text4)',
+            background: ttQualifies ? 'rgba(16,185,129,0.12)' : ttPassed >= 6 ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.06)',
+            border: `1px solid ${ttQualifies ? 'rgba(16,185,129,0.35)' : ttPassed >= 6 ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.2)'}`,
+          }}>
+            {ttPassed}/{ttTotal} {ttQualifies ? '✓ QUALIFIES' : ttPassed >= 6 ? 'CLOSE' : ''}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
+          {ttCriteria.map((c, i) => (
+            <div key={i} style={{
+              padding: 10,
+              background: c.pass ? 'rgba(52,211,153,0.08)' : 'rgba(255,255,255,0.02)',
+              border: `1px solid ${c.pass ? 'rgba(52,211,153,0.25)' : 'var(--border)'}`,
+              borderRadius: 8,
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: c.pass ? 'var(--green-text)' : 'var(--text)', marginBottom: 3 }}>
+                {c.pass ? '✓' : '○'} {c.name}
+              </div>
+              {c.detail && (
+                <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
+                  {c.detail}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* === O'Neil CANSLIM rubric — 7 letters === */}
+      {canslim?.letters && (
+        <div style={{
+          padding: 14,
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
+                William O'Neil · CANSLIM Rubric
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                7 letters · qualifies if ≥6 letters scored ≥70
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 6, letterSpacing: '0.4px',
+                color: canslim.qualifies ? '#10b981' : canslim.score >= 60 ? '#f59e0b' : 'var(--text4)',
+                background: canslim.qualifies ? 'rgba(16,185,129,0.12)' : canslim.score >= 60 ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.06)',
+                border: `1px solid ${canslim.qualifies ? 'rgba(16,185,129,0.35)' : canslim.score >= 60 ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.2)'}`,
+              }}>
+                {canslim.score}/100 · {canslim.passingLetters}/7 strong {canslim.qualifies ? '✓' : ''}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+            {Object.entries(canslim.letters).map(([letter, l]) => {
+              const isStrong = l.score != null && l.score >= 70;
+              const isMid = l.score != null && l.score >= 50 && l.score < 70;
+              const isWeak = l.score != null && l.score < 50;
+              const noData = l.score == null;
+              const color = isStrong ? '#10b981' : isMid ? '#f59e0b' : isWeak ? '#ef4444' : 'var(--text4)';
+              const bg = isStrong ? 'rgba(16,185,129,0.08)' : isMid ? 'rgba(245,158,11,0.06)' : isWeak ? 'rgba(239,68,68,0.06)' : 'rgba(148,163,184,0.04)';
+              return (
+                <div key={letter} style={{
+                  padding: 10,
+                  background: bg,
+                  border: `1px solid ${color}30`,
+                  borderRadius: 8,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 16, fontWeight: 900, color: color, letterSpacing: '-0.3px' }}>{letter}</span>
+                      <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600 }}>{l.name}</span>
+                    </div>
+                    <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 800, color: color }}>
+                      {noData ? '—' : l.score}
+                    </span>
+                  </div>
+                  {l.detail && (
+                    <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
+                      {l.detail}
+                    </div>
+                  )}
+                  {l.flag && (
+                    <div style={{ fontSize: 10, color: 'var(--amber-text)', fontWeight: 700, marginTop: 3, lineHeight: 1.4 }}>
+                      ⚠ {l.flag}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

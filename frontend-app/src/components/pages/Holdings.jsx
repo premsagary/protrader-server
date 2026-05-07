@@ -22,12 +22,35 @@ function normAvg(h)  { return Number(h?.avg_price ?? h?.avg_buy ?? 0); }
 function normCmp(h)  { return Number(h?.cmp ?? h?.ltp ?? normAvg(h) ?? 0); }
 function normSym(h)  { return h?.symbol || h?.sym || '—'; }
 
+// 🚀 v2.0 Wave 12 — Compact Weinstein stage badge (Holdings table)
+function HoldingsStageBadge({ stage }) {
+  const s = stage?.stage || 'UNKNOWN';
+  const isS4 = s === 'STAGE_4';
+  const isS3 = s === 'STAGE_3';
+  const isS2 = s === 'STAGE_2';
+  const color = isS4 ? '#ef4444' : isS3 ? '#f59e0b' : isS2 ? '#10b981' : '#94a3b8';
+  const label = s.replace('STAGE_', 'S').replace('_TRANSITIONAL', '*').replace('UNKNOWN','?');
+  return (
+    <span
+      style={{
+        fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 4,
+        color, background: `${color}1A`, border: `1px solid ${color}55`,
+        letterSpacing: '0.4px',
+      }}
+      title={stage?.reason ? `Weinstein ${s}: ${stage.reason}` : `Weinstein ${s}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export default function Holdings() {
   // 2026-04-30 — admin gate for Deep AI Review (5-model fan-out is
   // expensive; backend already 403s for non-admin per commit 51e6e0c).
   const isAdmin = useAppStore((s) => s.user?.role === 'admin');
   const [holdings, setHoldings] = useState([]);
   const [totals, setTotals] = useState(null);       // server-supplied totals, if any
+  const [playbookSummary, setPlaybookSummary] = useState(null); // 🚀 Wave 12 aggregate
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [form, setForm] = useState({ sym: '', qty: '', avgBuy: '' });
@@ -52,6 +75,7 @@ export default function Holdings() {
         const list = Array.isArray(d?.holdings) ? d.holdings : (Array.isArray(d) ? d : []);
         setHoldings(list);
         setTotals(d && typeof d.totals === 'object' ? d.totals : null);
+        setPlaybookSummary(d && typeof d.playbook === 'object' ? d.playbook : null);
         setLoading(false);
       })
       .catch((e) => { setError(e.message); setLoading(false); });
@@ -278,6 +302,87 @@ export default function Holdings() {
         )}
       </div>
 
+      {/* 🚀 v2.0 Wave 12 — Playbook alerts banner (Stage 4 / 30wk MA violations) */}
+      {playbookSummary && (Array.isArray(playbookSummary.criticalAlerts) && playbookSummary.criticalAlerts.length > 0) && (
+        <div style={{
+          padding: '12px 16px',
+          background: 'rgba(239,68,68,0.10)',
+          border: '1.5px solid var(--red)',
+          borderRadius: 8,
+          marginBottom: 18,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--red-text)', letterSpacing: '0.5px', marginBottom: 6 }}>
+            ⚠ {playbookSummary.criticalAlerts.length} CRITICAL — Weinstein Iron Rule Violation
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 8 }}>
+            {playbookSummary.recommendation}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {playbookSummary.criticalAlerts.slice(0, 10).map((a, i) => (
+              <span key={i} style={{
+                fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                color: 'var(--red-text)', background: 'rgba(239,68,68,0.15)',
+                border: '1px solid var(--red)',
+              }} title={a.message}>
+                {a.symbol}: {a.code}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {playbookSummary && Array.isArray(playbookSummary.warnAlerts) && playbookSummary.warnAlerts.length > 0 && (
+        <div style={{
+          padding: '10px 14px',
+          background: 'rgba(245,158,11,0.08)',
+          border: '1px solid rgba(245,158,11,0.4)',
+          borderRadius: 8,
+          marginBottom: 18,
+        }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--amber-text)', marginBottom: 6 }}>
+            ⚠ {playbookSummary.warnAlerts.length} WARN — Stage 3 distribution / weakening positions
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {playbookSummary.warnAlerts.slice(0, 10).map((a, i) => (
+              <span key={i} style={{
+                fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 4,
+                color: 'var(--amber-text)', background: 'rgba(245,158,11,0.10)',
+                border: '1px solid rgba(245,158,11,0.3)',
+              }} title={a.message}>
+                {a.symbol}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {playbookSummary && playbookSummary.stageCounts && (
+        <div style={{
+          padding: '10px 14px',
+          background: 'rgba(99,102,241,0.04)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          marginBottom: 18,
+          display: 'flex',
+          gap: 18,
+          alignItems: 'center',
+          fontSize: 11,
+        }}>
+          <span style={{ color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+            Stage Distribution
+          </span>
+          {Object.entries(playbookSummary.stageCounts).filter(([k,v]) => v > 0).map(([k, v]) => {
+            const isS4 = k === 'STAGE_4';
+            const isS3 = k === 'STAGE_3';
+            const isS2 = k === 'STAGE_2';
+            const color = isS4 ? '#ef4444' : isS3 ? '#f59e0b' : isS2 ? '#10b981' : '#94a3b8';
+            return (
+              <span key={k} style={{ color, fontWeight: 700 }}>
+                {k.replace('STAGE_', 'S').replace('_TRANSITIONAL', '*').replace('UNKNOWN','?')}: {v}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {/* ── Cap-wise mini-stat cards ────────────────────────────── */}
       {holdings.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
@@ -470,12 +575,37 @@ export default function Holdings() {
                       >
                         <td style={cellStyle}>{i + 1}</td>
                         <td style={{ ...cellStyle, fontWeight: 700 }}>
-                          <div>{sym}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span>{sym}</span>
+                            {/* 🚀 v2.0 Wave 12 — Weinstein stage badge */}
+                            {h.playbook?.stage?.stage && (
+                              <HoldingsStageBadge stage={h.playbook.stage} />
+                            )}
+                          </div>
                           {(h.name || h.sector) && (
                             <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 500, marginTop: 2 }}>
                               {h.name}{h.name && h.sector ? ' · ' : ''}{h.sector}
                             </div>
                           )}
+                          {/* 🚀 v2.0 Wave 12 — Critical alerts (Stage 4 / below 30wk MA falling) */}
+                          {Array.isArray(h.playbook?.alerts) && h.playbook.alerts.filter(a => a.severity === 'CRITICAL').map((a, ai) => (
+                            <div key={`crit-${ai}`} style={{
+                              fontSize: 9.5, fontWeight: 800, color: 'var(--red-text)', marginTop: 3,
+                              padding: '2px 6px', background: 'rgba(239,68,68,0.10)',
+                              border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4,
+                            }} title={a.message}>
+                              ⚠ {a.action}
+                            </div>
+                          ))}
+                          {Array.isArray(h.playbook?.alerts) && h.playbook.alerts.filter(a => a.severity === 'WARN').map((a, ai) => (
+                            <div key={`warn-${ai}`} style={{
+                              fontSize: 9, fontWeight: 700, color: 'var(--amber-text)', marginTop: 3,
+                              padding: '2px 6px', background: 'rgba(245,158,11,0.08)',
+                              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 4,
+                            }} title={a.message}>
+                              ⚠ {a.action}
+                            </div>
+                          ))}
                         </td>
                         <td className="tabular-nums" style={{ ...cellStyle, textAlign: 'right' }}>{qty}</td>
                         <td className="tabular-nums" style={{ ...cellStyle, textAlign: 'right' }}>{INR(avg)}</td>

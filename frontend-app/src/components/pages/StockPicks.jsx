@@ -1009,6 +1009,145 @@ function SortHeader({ label, sortKey, sort, onSort, align }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 Wave 12 — Playbook Badge
+// Renders the Top-Trader Playbook overlay (Minervini + Weinstein + O'Neil)
+// per stock. Color-coded by Weinstein stage with iron-rule warning for
+// Stage 4. Shows Trend Template (8 criteria), CANSLIM rubric score, VCP
+// + Cup-Handle pattern detection.
+// ══════════════════════════════════════════════════════════════════════
+function PlaybookBadge({ playbook }) {
+  if (!playbook) return null;
+  const { stage, trendTemplate, canslim, vcp, cupHandle, verdict, verdictColor } = playbook;
+  const stageStr = stage?.stage || 'UNKNOWN';
+  const isStage4 = stageStr === 'STAGE_4';
+  const isStage3 = stageStr === 'STAGE_3';
+  const isStage2 = stageStr === 'STAGE_2';
+  const stageBadgeColor =
+    isStage4 ? '#ef4444'
+    : isStage3 ? '#f59e0b'
+    : isStage2 ? '#10b981'
+    : '#94a3b8';
+  const stageBg =
+    isStage4 ? 'rgba(239,68,68,0.10)'
+    : isStage3 ? 'rgba(245,158,11,0.10)'
+    : isStage2 ? 'rgba(16,185,129,0.10)'
+    : 'rgba(148,163,184,0.10)';
+  const stageLabel = stageStr.replace('STAGE_', 'Stage ').replace('_TRANSITIONAL', '*').replace('UNKNOWN','?');
+  const ttPassed = trendTemplate?.passed ?? 0;
+  const ttTotal = trendTemplate?.total ?? 8;
+  const ttQualifies = !!trendTemplate?.qualifies;
+  const canslimScore = canslim?.score;
+  const canslimQualifies = !!canslim?.qualifies;
+  const vcpDetected = !!vcp?.detected;
+  const cupDetected = !!cupHandle?.detected;
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      {/* Iron-rule banner for Stage 4 */}
+      {isStage4 && (
+        <div style={{
+          padding: '6px 10px',
+          background: 'rgba(239,68,68,0.16)',
+          border: '1.5px solid var(--red)',
+          borderRadius: 6,
+          fontSize: 10,
+          fontWeight: 800,
+          color: 'var(--red-text)',
+          letterSpacing: '0.4px',
+          marginBottom: 6,
+        }}
+          title={stage?.warning || 'Weinstein iron rule'}
+        >
+          ⚠ STAGE 4 — Weinstein iron rule: NEVER OWN
+        </div>
+      )}
+
+      {/* Tags row: stage / trend template / canslim / VCP / Cup-Handle / verdict */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', marginBottom: 4 }}>
+        {/* Weinstein stage */}
+        <span
+          style={{
+            fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+            color: stageBadgeColor, background: stageBg, border: `1px solid ${stageBadgeColor}40`,
+            letterSpacing: '0.3px',
+          }}
+          title={stage?.reason ? `${stage.reason}${stage.confidence ? ' · '+stage.confidence+'% confidence' : ''}` : ''}
+        >
+          {stageLabel}
+        </span>
+        {/* Minervini Trend Template */}
+        <span
+          style={{
+            fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+            color: ttQualifies ? '#10b981' : ttPassed >= 6 ? '#f59e0b' : 'var(--text4)',
+            background: ttQualifies ? 'rgba(16,185,129,0.10)' : 'rgba(148,163,184,0.06)',
+            border: `1px solid ${ttQualifies ? 'rgba(16,185,129,0.3)' : 'rgba(148,163,184,0.2)'}`,
+            letterSpacing: '0.3px',
+          }}
+          title="Mark Minervini Trend Template — 8 criteria, all required for Stage 2 buy"
+        >
+          TT {ttPassed}/{ttTotal}{ttQualifies ? ' ✓' : ''}
+        </span>
+        {/* CANSLIM */}
+        {canslimScore != null && (
+          <span
+            style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: canslimQualifies ? '#10b981' : canslimScore >= 60 ? '#f59e0b' : 'var(--text4)',
+              background: canslimQualifies ? 'rgba(16,185,129,0.10)' : 'rgba(148,163,184,0.06)',
+              border: `1px solid ${canslimQualifies ? 'rgba(16,185,129,0.3)' : 'rgba(148,163,184,0.2)'}`,
+              letterSpacing: '0.3px',
+            }}
+            title="William O'Neil CANSLIM rubric — 7 letters: C/A/N/S/L/I/M"
+          >
+            CANSLIM {canslimScore}{canslimQualifies ? ' ✓' : ''}
+          </span>
+        )}
+        {/* VCP detected */}
+        {vcpDetected && (
+          <span
+            style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: '#3b82f6', background: 'rgba(59,130,246,0.10)',
+              border: '1px solid rgba(59,130,246,0.3)', letterSpacing: '0.3px',
+            }}
+            title={`Volatility Contraction Pattern (Minervini) — ${vcp?.confidence || '?'}% confidence · ${vcp?.reason || ''}`}
+          >
+            🎯 VCP
+          </span>
+        )}
+        {/* Cup with Handle detected */}
+        {cupDetected && (
+          <span
+            style={{
+              fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+              color: '#a855f7', background: 'rgba(168,85,247,0.10)',
+              border: '1px solid rgba(168,85,247,0.3)', letterSpacing: '0.3px',
+            }}
+            title={`Cup with Handle (O'Neil) — ${cupHandle?.confidence || '?'}% confidence · ${cupHandle?.reason || ''}`}
+          >
+            ☕ Cup-Handle
+          </span>
+        )}
+      </div>
+
+      {/* Verdict — full-width sub-line */}
+      {verdict && !isStage4 && (
+        <div
+          style={{
+            fontSize: 10, fontWeight: 700, color: verdictColor || 'var(--text3)',
+            letterSpacing: '0.2px', lineHeight: 1.3,
+          }}
+          title="Combined Top-Trader Playbook verdict (Minervini + Weinstein + O'Neil)"
+        >
+          ▸ {verdict}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Per-stock row — compact with expand-on-click to see AI reviews + flags
 // ══════════════════════════════════════════════════════════════════════
 function PickRow({
@@ -1187,6 +1326,9 @@ function PickRow({
           🚫 EXCLUDED — {String(disq.code || '').replace(/_/g, ' ')}
         </div>
       )}
+
+      {/* 🚀 v2.0 Wave 12 — Top-Trader Playbook overlay (Minervini + Weinstein + O'Neil) */}
+      {s.playbook && <PlaybookBadge playbook={s.playbook} />}
 
       {/* AI Review badges (council tally + judge verdict) */}
       {showAiBadges && hasReviews && (
