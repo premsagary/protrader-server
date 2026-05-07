@@ -3933,6 +3933,22 @@ function adjustCandidateScoreFromStructure(candidate, structure) {
   if (!structure) {
     return { rejected: false, reason: null, scoreBefore: baseScore, scoreAfter: baseScore, adjustments: ['no_structure_data'] };
   }
+  // 🔴 2026-05-06 audit fix — Pass 1.5 long-bias.
+  // Rules below ("at PDH w/o breakout", "stacked resistance overhead",
+  // "below VWAP in MOMENTUM/BREAKOUT") are written from a long-trader's
+  // POV and silently kill exactly the conditions that DEFINE a valid SHORT.
+  // Shorts have their own qualification path: Ch19 short checklist with
+  // priorTrendUp gate + swing-high based stops + Pass 2 R:R floor at line 5326.
+  // Bypass this filter for shorts entirely — let them through unscored.
+  if (candidate.direction === 'SHORT') {
+    return {
+      rejected: false,
+      reason: null,
+      scoreBefore: baseScore,
+      scoreAfter: baseScore,
+      adjustments: ['short_bypasses_long_structure_filter'],
+    };
+  }
   const f = structure.flags;
   const regime = candidate.result.regime;
   const adjustments = [];
@@ -5302,6 +5318,17 @@ async function scanAndTrade() {
     // 2026-05-06: direction-aware. Long (default) uses swing-low + SL below.
     // Short uses swing-high + SL above. Both apply same 2% account-risk math.
     const isShortCandidate = candidate.direction === 'SHORT';
+
+    // 🟠 2026-05-06 audit fix — Pass 2 SHORTS_RUNTIME_ENABLED race.
+    // Pass 1 (line 4812) already checks the toggle to qualify shorts, but a
+    // single scan can take minutes — admin can flip the toggle OFF mid-scan
+    // while shorts are queued in buyCandidates. Without this re-check, queued
+    // shorts continue to INSERT even after operator killed shorts.
+    if (isShortCandidate && !SHORTS_RUNTIME_ENABLED) {
+      console.log(`  ⊘ SKIP ${stock.sym} (SHORT) — SHORTS_RUNTIME_ENABLED flipped OFF mid-scan`);
+      recordPass2(candidate, 'SKIPPED', 'shorts_disabled_midscan');
+      continue;
+    }
     const price   = last.close;
     const highs14 = candles.slice(-14).map(c=>c.high);
     const lows14  = candles.slice(-14).map(c=>c.low);
@@ -5441,12 +5468,9 @@ async function scanAndTrade() {
     }
     const _entryType = isShortCandidate ? 'SELL' : 'BUY';
     const _direction = isShortCandidate ? 'SHORT' : 'LONG';
-    // Observability: dedicated log line at INSERT time so operators can grep
-    // for `📉 SHORT entry` to confirm shorts actually fired live (not just
-    // qualified at candidate stage).
-    if (isShortCandidate) {
-      console.log(`  📉 SHORT entry ${stock.sym} @ ₹${entryFill} qty=${qty} sl=₹${sl} tgt=₹${tgt} setup=${result.strategy}`);
-    }
+    // 🟡 2026-05-06 audit fix — moved SHORT entry log AFTER successful INSERT.
+    // Prior log was emitted before the INSERT, so a DB failure would leave
+    // operators with a "fired" log but no row in paper_trades — false positives.
     await pool.query(
       `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction)
        VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19)`,
@@ -5461,6 +5485,11 @@ async function scanAndTrade() {
        _entryType,
        _direction]
     );
+    // Observability: dedicated log line emitted only after INSERT succeeded so
+    // operators can grep `📉 SHORT entry` and trust each line maps to a real row.
+    if (isShortCandidate) {
+      console.log(`  📉 SHORT entry ${stock.sym} @ ₹${entryFill} qty=${qty} sl=₹${sl} tgt=₹${tgt} setup=${result.strategy}`);
+    }
 
     // Live order
     // 2026-04-22 — MARKET with market_protection: 2.
@@ -8453,7 +8482,12 @@ app.get("/api/trading-mode", async (req,res) => {
   });
 });
 app.post("/api/trading-mode", express.json(), async (req,res) => {
-  const { live, capital } = req.body;
+  // 🟠 2026-05-06 audit fix — admin gate. Endpoint mutates LIVE_TRADING,
+  // which controls real-money order routing. Was previously open to anyone
+  // with HTTP reach. Mirror the admin check used by /api/admin/shorts-mode.
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+
+  const { live, capital, force } = req.body;
   // Update capital if provided
   if (capital != null && typeof capital === 'number' && capital > 0) {
     CONFIG.ACCOUNT_SIZE = capital;
@@ -8461,16 +8495,60 @@ app.post("/api/trading-mode", express.json(), async (req,res) => {
   }
   if (typeof live === 'boolean') {
     if (live && !kite) return res.status(400).json({ error: 'Cannot enable LIVE mode — Kite is not connected. Login to Kite first.' });
-    LIVE_TRADING = live;
-    // Persist to DB so it survives deploys
+
+    // 🟠 2026-05-06 audit fix — LIVE→PAPER flip safety. If we have OPEN
+    // live positions and the operator flips to PAPER, the exit path's
+    // `LIVE_TRADING && kite` gate falls false → no live SELL order ever
+    // fires → position rides to Zerodha 15:20 MIS auto-squareoff with no
+    // app-level exit. Refuse the flip unless force=true is set.
+    if (LIVE_TRADING && !live) {
+      try {
+        const { rows } = await pool.query(`SELECT id, symbol, quantity FROM live_trades WHERE status='OPEN'`);
+        if (rows.length > 0 && !force) {
+          return res.status(409).json({
+            error: 'LIVE→PAPER flip refused: open live positions',
+            openLiveCount: rows.length,
+            openLiveSymbols: rows.map(r => r.symbol),
+            hint: 'Square off live positions first via /api/admin/squareoff-all, OR resend with body.force=true to flip anyway (positions will be exited by Zerodha MIS auto-squareoff at 15:20 IST).',
+          });
+        }
+      } catch (e) { console.warn('LIVE→PAPER pre-check failed (non-fatal):', e.message); }
+    }
+
+    // 🟡 2026-05-06 audit fix — DB-first persistence. Previously LIVE_TRADING
+    // was assigned BEFORE the DB write, so a write failure would leave
+    // in-memory state out of sync with persisted state across the next
+    // deploy. Now we write first; only flip in-memory on success.
+    const prev = LIVE_TRADING;
+    let persisted = false;
     try {
       await pool.query(
         `INSERT INTO app_config(key, value, updated_at) VALUES('LIVE_TRADING', $1, NOW())
          ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
         [live ? 'true' : 'false']
       );
-    } catch(e) { console.error('Failed to persist trading mode:', e.message); }
-    console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'} (persisted to DB)`);
+      persisted = true;
+    } catch(e) {
+      console.error('Failed to persist trading mode:', e.message);
+      return res.status(500).json({ error: 'DB persist failed; mode unchanged', detail: e.message });
+    }
+    if (persisted) {
+      LIVE_TRADING = live;
+      console.log(`🔀 Trading mode toggled: ${LIVE_TRADING ? '🔴 LIVE' : '📝 PAPER'} (persisted to DB)`);
+      // 🟡 ops_incidents audit trail for any LIVE↔PAPER flip
+      try {
+        await pool.query(
+          `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+           VALUES ($1, 'TRADING_MODE_TOGGLE', 'info', $2, $3, 'TOGGLE', 'ok', $4, NOW())`,
+          [
+            `mode-toggle-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+            `LIVE_TRADING flipped ${prev ? 'LIVE' : 'PAPER'} → ${live ? 'LIVE' : 'PAPER'}`,
+            JSON.stringify({ prev, next: live, by: req.user?.username || 'unknown', force: !!force }),
+            'persisted_app_config',
+          ]
+        );
+      } catch (e) { /* don't fail the request on incident log failure */ }
+    }
   }
   const liveEquity = await getLiveAccountEquity().catch(()=>CONFIG.ACCOUNT_SIZE);
   res.json({
@@ -8492,16 +8570,44 @@ app.post('/api/admin/shorts-mode', express.json(), async (req, res) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const { enabled } = req.body || {};
   if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'body.enabled must be boolean' });
-  SHORTS_RUNTIME_ENABLED = enabled;
+  // 🟡 2026-05-06 audit fix — DB-first; rollback in-memory if persist fails.
+  const prev = SHORTS_RUNTIME_ENABLED;
   try {
     await pool.query(
       `INSERT INTO app_config(key, value, updated_at) VALUES('SHORTS_ENABLED', $1, NOW())
        ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
       [enabled ? 'true' : 'false']
     );
-  } catch (e) { console.error('Failed to persist SHORTS_ENABLED:', e.message); }
+  } catch (e) {
+    console.error('Failed to persist SHORTS_ENABLED:', e.message);
+    return res.status(500).json({ error: 'DB persist failed; SHORTS toggle unchanged', detail: e.message });
+  }
+  SHORTS_RUNTIME_ENABLED = enabled;
   console.log(`📉 SHORTS_ENABLED toggled: ${enabled ? 'ON' : 'OFF'} (persisted to DB)`);
-  res.json({ ok: true, enabled: SHORTS_RUNTIME_ENABLED });
+  // 🟡 ops_incidents audit trail
+  let openShortCount = 0;
+  try {
+    const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM paper_trades WHERE status='OPEN' AND direction='SHORT'`);
+    openShortCount = rows[0]?.n || 0;
+  } catch (e) { /* swallow */ }
+  try {
+    await pool.query(
+      `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+       VALUES ($1, 'SHORTS_MODE_TOGGLE', 'info', $2, $3, 'TOGGLE', 'ok', $4, NOW())`,
+      [
+        `shorts-toggle-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        `SHORTS_RUNTIME_ENABLED flipped ${prev ? 'ON' : 'OFF'} → ${enabled ? 'ON' : 'OFF'} (existing open shorts: ${openShortCount})`,
+        JSON.stringify({ prev, next: enabled, by: req.user?.username || 'unknown', openShortCount }),
+        'persisted_app_config_existing_shorts_continue',
+      ]
+    );
+  } catch (e) { /* don't fail the request */ }
+  res.json({
+    ok: true,
+    enabled: SHORTS_RUNTIME_ENABLED,
+    openShortCount,
+    note: 'OFF blocks NEW short entries. Open shorts continue to ride per their normal SL/TGT/time-exit. Use /api/admin/squareoff-shorts to close them.',
+  });
 });
 
 // ── Test buy endpoint — buy 1 share of a stock to verify Kite order placement works ──
@@ -9249,7 +9355,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
     if (critIncidents > 0) {
       verdict = 'RED'; verdictReason = `${critIncidents} critical incident(s)`;
     } else if (dupBuys.length > 0) {
-      verdict = 'RED'; verdictReason = `Duplicate BUY detected: ${dupBuys.map(r => r.symbol).join(', ')}`;
+      // 🟡 2026-05-06 audit fix — direction-aware label. Was hardcoded "BUY"
+      // even when the dup row was a paper SHORT entry (type='SELL').
+      verdict = 'RED';
+      verdictReason = `Duplicate ENTRY detected: ${dupBuys.map(r => `${r.symbol} (${r.direction || 'LONG'}×${r.n})`).join(', ')}`;
     } else if (orphans.length > 0) {
       verdict = 'RED'; verdictReason = `${orphans.length} orphaned exit(s)`;
     } else if (errIncidents > 0) {
@@ -9265,10 +9374,10 @@ app.get('/api/admin/daily-report', async (req, res) => {
     // Known-issue regression checks (from this week's bugs)
     const checks = [
       {
-        label: 'No duplicate BUYs (HONASA bug class)',
+        label: 'No duplicate ENTRIES (HONASA bug class)',
         pass: dupBuys.length === 0,
         detail: dupBuys.length
-          ? dupBuys.map(r => `${r.symbol}×${r.n}`).join(', ')
+          ? dupBuys.map(r => `${r.symbol} (${r.direction || 'LONG'}×${r.n})`).join(', ')
           : 'none today',
       },
       {
@@ -13898,6 +14007,53 @@ function scoreDayTrade(candles, sym, ctx) {
     rrRatio = 1.5;
   }
 
+  // ── SHORT side: SL/TGT/RR computation (mirror of long block above) ──────
+  // 🟠 2026-05-06 audit fix — scoreDayTrade was returning short candidates
+  // without SL/TGT/RR populated, leaving ch19Short.rrRatio as a permanent
+  // `true` placeholder. Result: a SHORT with degenerate RR (e.g. 0.8) still
+  // counted 5/5 on the binary checklist. Mirror long's
+  // structural-then-ATR-then-1.5R-floor math, then recompute
+  // ch19Short.rrRatio + ch19PassCountShort honestly so the value returned to
+  // Pass 1's binary gate (line 4823) is the real count, not the placeholder.
+  let shortSL, shortTgt, shortRR;
+  {
+    const swingHighStruct = findSwingHigh(candles, px);
+    if (swingHighStruct) {
+      shortSL = +(swingHighStruct * 1.001).toFixed(2);          // anchor at resistance + buffer
+    } else if (bestShort.type === 'OVERBOUGHT_REJECTION') {
+      // SL above the rejection candle's high or day high — Varsity M9 mirror
+      shortSL = +(Math.max(dayHigh, last.high) * 1.003).toFixed(2);
+    } else if (bestShort.type === 'BREAKDOWN') {
+      // SL at OR midpoint — if price re-enters the range, breakdown failed
+      const orMid = (orHigh + orLow) / 2;
+      shortSL = +(Math.min(orMid, dayHigh * 1.002)).toFixed(2);
+    } else if (bestShort.type === 'GAP_AND_DROP') {
+      // SL at gap fill level (prev close) — gap-fill = thesis invalidated
+      shortSL = +(prevClose * 1.002).toFixed(2);
+    } else { // VWAP_BREAKDOWN
+      // SL above VWAP — failed breakdown if price reclaims VWAP
+      shortSL = +(lastVWAP * 1.005).toFixed(2);
+    }
+    // ATR widening — minSLDist already computed for the long path above (atr14val * betaSLMult)
+    if (shortSL - px < minSLDist) shortSL = +(px + minSLDist).toFixed(2);
+    // 2:1 R:R — same formula as long, direction-flipped
+    shortTgt = +(px - (shortSL - px) * 2).toFixed(2);
+    shortRR  = shortSL > px ? +((px - shortTgt) / (shortSL - px)).toFixed(2) : 0;
+    // 1.5R floor — mirror of long's floor at lines 13912-13915
+    if (shortRR < 1.5 && shortSL > px) {
+      shortTgt = +(px - (shortSL - px) * 1.5).toFixed(2);
+      shortRR  = 1.5;
+    }
+    // Sanity: shortTgt must stay > 0 (extreme SL widening on cheap stocks)
+    if (shortTgt <= 0) shortTgt = +(px * 0.95).toFixed(2);
+  }
+  // Recompute ch19Short.rrRatio honestly + ch19PassCountShort retroactively
+  ch19Short.rrRatio = shortRR >= 1.5;
+  ch19PassCountShort = [
+    ch19Short.priceAction, ch19Short.volume, ch19Short.srContext,
+    ch19Short.indicators, ch19Short.rrRatio,
+  ].filter(Boolean).length;
+
   // ── Commit 1: slippage + brokerage applied to net RR ──────────────────
   // The structural engine has a full slippage/brokerage sim (STRUCTURE_CONFIG)
   // but DayTrade's rrRatio was computed on raw prices. At 5bps slip + 3bps
@@ -14164,8 +14320,11 @@ function scoreDayTrade(candles, sym, ctx) {
     // ── SHORT-side outputs (Varsity Ch19 binary, mirror of long fields) ──
     ch19PassCountShort,
     ch19ItemsShort: ch19Short,
-    bestShortSetup: bestShort.type, bestShortSetupEmoji: bestShort.emoji, bestShortSetupScore: bestShort.score,
+    bestShortSetup: bestShort.score > 0 ? bestShort.type : 'NONE',  // 2026-05-06: report NONE when all 4 zero
+    bestShortSetupEmoji: bestShort.emoji, bestShortSetupScore: bestShort.score,
     bestShortDetail: bestShort.detail.join(' · '),
+    // SHORT side SL/TGT/RR — exposed for Pass 1.5/UI/audit (was missing pre-2026-05-06)
+    shortSL, shortTgt, shortRR,
     vwapBreakdownScore, gapAndDropScore, breakdownScore, overboughtScore,
     // All setup scores
     vwapScore, gapScore, breakoutScore, bounceScore,
@@ -26635,6 +26794,14 @@ app.post("/crypto/scan-now", (req,res) => { res.json({message:"Crypto scan start
 async function start() {
   await initDB();
 
+  // 🟠 2026-05-06 audit fix — boot ordering. Restore persisted LIVE_TRADING
+  // and SHORTS_RUNTIME_ENABLED toggles from DB BEFORE registering any cron
+  // schedules or starting the HTTP listener. Previous order had this call
+  // at the END of start(), so a deploy near 9:21 IST could fire scan crons
+  // (registered earlier in start()) with the env-default toggles instead of
+  // the operator-set values persisted in app_config.
+  await restoreTradingModeFromDB();
+
   // Phase 5 · Part 3 — rehydrate trailing-stop HWM map from paper_trades so
   // a restart mid-session doesn't reset every trailing stop back to entry.
   // Fire-and-forget: if it fails, in-memory tracking still works.
@@ -26973,8 +27140,8 @@ async function start() {
     await scanCrypto();
   }, { timezone: 'Asia/Kolkata' });
 
-  // Restore persisted trading mode from DB
-  await restoreTradingModeFromDB();
+  // Persisted trading mode now restored at the top of start() (audit fix 2026-05-06).
+  // Keeping this comment so future readers don't wonder where it went.
 
   const PORT=process.env.PORT||3001;
   server.listen(PORT, ()=>{
