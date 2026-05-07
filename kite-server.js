@@ -3758,14 +3758,22 @@ async function checkTiltStatus() {
       // breakeven (p === 0) breaks both streaks
       else break;
     }
+    // Detect a NEW loss vs prior tick — only re-arm pause when the streak grew
+    // 🚀 Wave 9 — pre-fix, every fresh loss after a 60-min pause expired would
+    // re-extend another 60-min pause if streak still ≥ 3. Now: pause only on
+    // the EXACT moment the streak crosses 3, and only once per streak.
+    const _prevLosses = _consecutiveLosses;
     _consecutiveLosses = losses;
     _consecutiveWins = wins;
     // 5-strike → stop day
     if (_consecutiveLosses >= CONFIG.TILT_STOP_DAY_AFTER_LOSSES) _tiltStopForDay = true;
-    // 3-strike → pause 1h (only set the pause once per breach)
-    if (_consecutiveLosses >= CONFIG.TILT_PAUSE_AFTER_LOSSES && _consecutiveLosses < CONFIG.TILT_STOP_DAY_AFTER_LOSSES) {
-      const newPauseUntil = Date.now() + CONFIG.TILT_PAUSE_DURATION_MIN * 60 * 1000;
-      if (_tiltPauseUntilTs < Date.now()) _tiltPauseUntilTs = newPauseUntil;
+    // 3-strike → pause 1h (only fire on the EXACT crossing of the threshold,
+    // not on every loss after that. After pause expires, trader is allowed to
+    // resume even with losses still on the day; another fresh 3-loss streak
+    // starting from a non-loss state is required to re-arm.)
+    if (_consecutiveLosses === CONFIG.TILT_PAUSE_AFTER_LOSSES
+        && _prevLosses < CONFIG.TILT_PAUSE_AFTER_LOSSES) {
+      _tiltPauseUntilTs = Date.now() + CONFIG.TILT_PAUSE_DURATION_MIN * 60 * 1000;
     }
     // Determine current state
     let state, sizeMult, allowEntry, reason;
@@ -5477,7 +5485,7 @@ async function scanAndTrade() {
   // choppy markets produced 15+ marginal entries and steady-state losses.
   // 🚀 v2.0 — trend-day mode allows TREND_DAY_EXTRA_TRADES additional entries
   // (default +2) to capture extended trend continuations.
-  const _v2TrendActive = CONFIG.V2_SETUPS_MODE && (typeof getTrendDayState === 'function') && getTrendDayState().active;
+  const _v2TrendActive = CONFIG.V2_SETUPS_MODE && getTrendDayState().active;
   const _effectiveMaxTrades = CONFIG.MAX_TRADES_PER_DAY + (_v2TrendActive ? CONFIG.TREND_DAY_EXTRA_TRADES : 0);
   const tradeCap = await robotradeGuards.checkTradeCountCap(pool, {
     MAX_TRADES_PER_DAY: _effectiveMaxTrades,
@@ -5610,7 +5618,7 @@ async function scanAndTrade() {
         //   • RANGING regime: 2.0× ATR
         //   • Default: 1.5× ATR (Pani consensus)
         const _istHHMMTrail = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16);
-        const _trendDayActiveTrail = (typeof getTrendDayState === 'function') && getTrendDayState().active;
+        const _trendDayActiveTrail = getTrendDayState().active;
         let trailMult;
         if (_istHHMMTrail >= CONFIG.EOD_TIGHTEN_TRAIL_TIME) trailMult = 1.0;
         else if (CONFIG.V2_SETUPS_MODE && _trendDayActiveTrail) trailMult = CONFIG.TREND_DAY_TRAIL_ATR_MULT;
@@ -5643,9 +5651,25 @@ async function scanAndTrade() {
           // initial_risk_per_share captured at entry (v2 column). Fallback for
           // legacy rows (NULL): use |entry - current sl|, which is accurate
           // when sl hasn't been trailed yet, approximate after.
-          const initRPS = (openPos.initial_risk_per_share != null && Number(openPos.initial_risk_per_share) > 0)
-            ? Number(openPos.initial_risk_per_share)
-            : Math.abs(entryPrice - sl);
+          // 🚀 Wave 9 audit fix — for legacy rows with NULL initial_risk_per_share,
+          // backfill the column from the original SL on first sight (sl is the
+          // CURRENT trailed value but for the first scan after restart, it's
+          // typically untrailed). This freezes a stable risk basis going forward
+          // instead of relying on the trailed sl which keeps shrinking.
+          let initRPS;
+          if (openPos.initial_risk_per_share != null && Number(openPos.initial_risk_per_share) > 0) {
+            initRPS = Number(openPos.initial_risk_per_share);
+          } else {
+            initRPS = Math.abs(entryPrice - sl);
+            if (initRPS > 0 && Number.isFinite(initRPS)) {
+              // Fire-and-forget backfill — first time we see this legacy row
+              pool.query(
+                `UPDATE paper_trades SET initial_risk_per_share=$1 WHERE id=$2 AND initial_risk_per_share IS NULL`,
+                [+initRPS.toFixed(4), openPos.id]
+              ).catch(() => {});
+              openPos.initial_risk_per_share = initRPS; // local cache
+            }
+          }
           if (initRPS > 0 && Number.isFinite(initRPS)) {
             const currentR = profit / initRPS; // direction-aware: profit is already sign-flipped for shorts above
             const heldMs   = Date.now() - new Date(openPos.entry_time).getTime();
@@ -10805,9 +10829,9 @@ app.get('/api/admin/daily-report', async (req, res) => {
     // 🚀 v2.0 wave 3 — bundle current strategy context for daily report
     const _v2Status = (() => {
       try {
-        const pre = (typeof getCurrentDayBias === 'function')      ? getCurrentDayBias()      : null;
-        const td  = (typeof getTrendDayState  === 'function')      ? getTrendDayState()       : null;
-        const ib  = (typeof getInitialBalance === 'function')      ? getInitialBalance()      : null;
+        const pre = getCurrentDayBias();
+        const td  = getTrendDayState();
+        const ib  = getInitialBalance();
         const tierCounts = (typeof _stockTierCache !== 'undefined' && _stockTierCache && _stockTierCache.values)
           ? Array.from(_stockTierCache.values()).reduce((acc, v) => { acc[v.tier] = (acc[v.tier]||0)+1; return acc; }, {})
           : null;
@@ -14360,7 +14384,7 @@ function scoreDayTrade(candles, sym, ctx) {
   // scoring block below via adrExhaustedPenalty.
   // 🚀 v2.0 — trend-day mode raises hard gate from 90% → 95% (continuations
   // can extend further than typical ADR on confirmed trend days).
-  const _trendDayActivePreflight = (typeof getTrendDayState === 'function') && getTrendDayState().active;
+  const _trendDayActivePreflight = getTrendDayState().active;
   const _adrHardGate = (CONFIG.V2_SETUPS_MODE && _trendDayActivePreflight)
     ? Math.round(CONFIG.TREND_DAY_RELAXED_ADR_CAP * 100)  // 95
     : 90;
@@ -15032,7 +15056,7 @@ function scoreDayTrade(candles, sym, ctx) {
   let orbPlusShortScore = 0, orbPlusShortDetail = [];
   {
     const orbCfg = CONFIG.V2_ORB_PLUS;
-    const _trendDayActiveSetup = (typeof getTrendDayState === 'function') && getTrendDayState().active;
+    const _trendDayActiveSetup = getTrendDayState().active;
     const inWindow = _inTimeWindow(orbCfg.ENTRY_WINDOW_START, orbCfg.ENTRY_WINDOW_END);
     const orFraction = orRange > 0 && _adrPctV2 > 0 ? (orRange / px) / (_adrPctV2 / 100) : 0;
     const orFracOk = orFraction >= orbCfg.OR_MIN_FRACTION_ADR && orFraction <= orbCfg.OR_MAX_FRACTION_ADR;
@@ -15525,9 +15549,17 @@ function scoreDayTrade(candles, sym, ctx) {
     tgt = +(px + (px - sl) * 2).toFixed(2);
   } else if (best.type === 'COMPRESSION') {
     // SL = opposite side of compression (NR4 low); TGT = compression range × 1.5 (measured move)
-    // Use last 4 candles' low as compression low approximation
-    const compRangeLow = Math.min(...candles.slice(-5, -1).map(c => c.low));
-    const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
+    // 🚀 Wave 9 — null-safety: if <5 candles available, fall back to dayLow/dayHigh
+    // (Math.min/max of empty array → ±Infinity, which corrupts SL/TGT downstream).
+    const compCandles = candles.length >= 5 ? candles.slice(-5, -1) : candles.slice(0, -1);
+    let compRangeLow, compRangeHigh;
+    if (compCandles.length > 0) {
+      compRangeLow  = Math.min(...compCandles.map(c => c.low));
+      compRangeHigh = Math.max(...compCandles.map(c => c.high));
+    } else {
+      compRangeLow  = dayLow;
+      compRangeHigh = dayHigh;
+    }
     const compRange = compRangeHigh - compRangeLow;
     sl  = +(compRangeLow * 0.998).toFixed(2);
     tgt = +(px + Math.max(compRange * 1.5, (px - sl) * 2)).toFixed(2);
@@ -15611,7 +15643,9 @@ function scoreDayTrade(candles, sym, ctx) {
       shortSL = +(Math.max(lastVWAP + 0.5 * atrLocal, dayHigh * 1.001)).toFixed(2);
     } else if (bestShort.type === 'COMPRESSION_SHORT') {
       // SL = opposite side of compression (NR4 high)
-      const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
+      // 🚀 Wave 9 — null-safety on <5 candles
+      const _ccS = candles.length >= 5 ? candles.slice(-5, -1) : candles.slice(0, -1);
+      const compRangeHigh = _ccS.length > 0 ? Math.max(..._ccS.map(c => c.high)) : dayHigh;
       shortSL = +(compRangeHigh * 1.002).toFixed(2);
     } else if (swingHighStruct) {
       shortSL = +(swingHighStruct * 1.001).toFixed(2);          // anchor at resistance + buffer
@@ -15642,8 +15676,10 @@ function scoreDayTrade(candles, sym, ctx) {
     if (bestShort.type === 'ORB_MINUS' || bestShort.type === 'BREAKDOWN') {
       shortTgt = +(px - Math.max(orRange, (shortSL - px) * 2)).toFixed(2);
     } else if (bestShort.type === 'COMPRESSION_SHORT') {
-      const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
-      const compRangeLow  = Math.min(...candles.slice(-5, -1).map(c => c.low));
+      // 🚀 Wave 9 — null-safety on <5 candles
+      const _ccT = candles.length >= 5 ? candles.slice(-5, -1) : candles.slice(0, -1);
+      const compRangeHigh = _ccT.length > 0 ? Math.max(..._ccT.map(c => c.high)) : dayHigh;
+      const compRangeLow  = _ccT.length > 0 ? Math.min(..._ccT.map(c => c.low))  : dayLow;
       const compRange = compRangeHigh - compRangeLow;
       shortTgt = +(px - Math.max(compRange * 1.5, (shortSL - px) * 2)).toFixed(2);
     } else if (bestShort.type === 'GAP_AND_DROP') {
@@ -15936,11 +15972,15 @@ function scoreDayTrade(candles, sym, ctx) {
     bestSetup: best.type, bestSetupEmoji: best.emoji, bestSetupScore: best.score,
     bestDetail: best.detail.join(' · '),
     // ── SHORT-side outputs (Varsity Ch19 binary, mirror of long fields) ──
+    // 🚀 Wave 9 — when bestShort.score === 0, ALL short-side fields collapse
+    // to NONE-state (was: only `bestShortSetup` was 'NONE' but emoji/score/
+    // detail still came from the picked-by-default first setup). Now consistent.
     ch19PassCountShort,
     ch19ItemsShort: ch19Short,
-    bestShortSetup: bestShort.score > 0 ? bestShort.type : 'NONE',  // 2026-05-06: report NONE when all 4 zero
-    bestShortSetupEmoji: bestShort.emoji, bestShortSetupScore: bestShort.score,
-    bestShortDetail: bestShort.detail.join(' · '),
+    bestShortSetup:      bestShort.score > 0 ? bestShort.type  : 'NONE',
+    bestShortSetupEmoji: bestShort.score > 0 ? bestShort.emoji : '',
+    bestShortSetupScore: bestShort.score > 0 ? bestShort.score : 0,
+    bestShortDetail:     bestShort.score > 0 ? bestShort.detail.join(' · ') : 'No short setup qualified',
     // SHORT side SL/TGT/RR — exposed for Pass 1.5/UI/audit (was missing pre-2026-05-06)
     shortSL, shortTgt, shortRR,
     // 🟡 2026-05-06 audit fix — SHORT-side composite score, direction-honest.
@@ -20872,9 +20912,13 @@ function scoreStockForPortfolio(f) {
     _adjustedComposite = Math.min(_adjustedComposite, 25);
     conviction = 'Avoid (Stage 4)';
     convColor = '#ef4444';
-  } else if (_playbookOverlay.playbook.stage.stage === 'STAGE_3' && _adjustedComposite >= 55) {
+  } else if (_playbookOverlay.playbook.stage.stage === 'STAGE_3') {
+    // 🚀 Wave 9 — apply Stage 3 cap and label override even when composite is
+    // < 55 (e.g., starts as "Accumulate"). Pre-fix, Accumulate trades on
+    // Stage 3 names retained their original label, hiding the distribution
+    // signal from the user.
     _adjustedComposite = Math.min(_adjustedComposite, 50);
-    if (conviction === 'Strong Buy' || conviction === 'Buy') {
+    if (conviction === 'Strong Buy' || conviction === 'Buy' || conviction === 'Accumulate') {
       conviction = 'Hold (Stage 3 distribution)';
       convColor = '#f59e0b';
     }
@@ -22902,33 +22946,50 @@ setTimeout(() => checkKiteTokenFreshness('boot').catch(() => {}), 30 * 1000);
 // Runs whether V2_SETUPS_MODE is on or off (data collection is cheap).
 // Output is consumed by Pass 1/2 only when V2_SETUPS_MODE=on, otherwise
 // just stored to DB for analysis/observability.
+// 🚀 Wave 9 — failures now insert ops_incidents so daily report flags them.
 // ═════════════════════════════════════════════════════════════════════════
+async function _v2CronRecordFailure(cronName, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    console.warn(`[${cronName}]`, e.message);
+    try {
+      await pool.query(
+        `INSERT INTO ops_incidents (run_id, kind, severity, summary, evidence, action_attempted, action_result, action_detail, detected_at)
+         VALUES ($1, 'V2_CRON_FAILURE', 'warn', $2, $3, 'NOTIFY_ONLY', 'failed', $4, NOW())`,
+        [
+          `v2-cron-${cronName}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          `v2 cron failed: ${cronName} — ${e.message}`,
+          JSON.stringify({ cron: cronName, error: e.message, stack: (e.stack || '').slice(0, 500) }),
+          'next_cron_tick_will_retry',
+        ]
+      );
+    } catch (_) {}
+  }
+}
 // 8:30 IST — pre-market routine: Gift Nifty / VIX / FII-DII / 3-day pivot
-cron.schedule('30 8 * * 1-5', () => runPremarketRoutine().catch(e => console.warn('[premarket-cron]', e.message)),
+cron.schedule('30 8 * * 1-5', () => _v2CronRecordFailure('premarket-8:30', runPremarketRoutine),
   { timezone: 'Asia/Kolkata' });
 // 9:14 IST — first universe tier refresh (just before market open) +
 // IMMEDIATELY after, build the daily watchlist that gates intraday scans
-// (Wave 5 — pros narrow universe to 5-15 names, scan only those).
 cron.schedule('14 9 * * 1-5', async () => {
-  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-9:14]', e.message); }
-  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-9:14]', e.message); }
+  await _v2CronRecordFailure('tier-9:14', refreshStockTiers);
+  await _v2CronRecordFailure('watchlist-9:14', buildDailyWatchlist);
 }, { timezone: 'Asia/Kolkata' });
 // 9:45 IST — trend-day detection (Option-A strategy from spec)
-cron.schedule('45 9 * * 1-5', () => evaluateTrendDay().catch(e => console.warn('[trendday-cron]', e.message)),
+cron.schedule('45 9 * * 1-5', () => _v2CronRecordFailure('trendday-9:45', evaluateTrendDay),
   { timezone: 'Asia/Kolkata' });
 // 10:15 IST — Initial Balance day-type classification (Market Profile)
-cron.schedule('15 10 * * 1-5', () => evaluateInitialBalance().catch(e => console.warn('[ib-cron]', e.message)),
+cron.schedule('15 10 * * 1-5', () => _v2CronRecordFailure('ib-10:15', evaluateInitialBalance),
   { timezone: 'Asia/Kolkata' });
 // 11:00 IST + 13:30 IST — universe tier refresh + watchlist rebuild (mid-session).
-// The mid-session rebuild captures stocks that have moved into structural
-// inflection during the morning (e.g., NR4 forming, breakouts, sector leaders).
 cron.schedule('0 11 * * 1-5', async () => {
-  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-11:00]', e.message); }
-  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-11:00]', e.message); }
+  await _v2CronRecordFailure('tier-11:00', refreshStockTiers);
+  await _v2CronRecordFailure('watchlist-11:00', buildDailyWatchlist);
 }, { timezone: 'Asia/Kolkata' });
 cron.schedule('30 13 * * 1-5', async () => {
-  try { await refreshStockTiers(); } catch (e) { console.warn('[tier-cron-13:30]', e.message); }
-  try { await buildDailyWatchlist(); } catch (e) { console.warn('[watchlist-cron-13:30]', e.message); }
+  await _v2CronRecordFailure('tier-13:30', refreshStockTiers);
+  await _v2CronRecordFailure('watchlist-13:30', buildDailyWatchlist);
 }, { timezone: 'Asia/Kolkata' });
 // Boot trigger: run premarket once on startup if it's after 8:30 IST and we don't have today's
 setTimeout(async () => {
@@ -27800,6 +27861,33 @@ If your two lenses agree, say so briefly. If they disagree, make the disagreemen
     if (px) dataPoints += `CURRENT PRICE: ₹${px}\n`;
     if (mktCap) dataPoints += `MARKET CAP: ₹${mktCap}Cr\n`;
 
+    // 🚀 v2.0 Wave 9 — include playbook overlay data for AI Review.
+    // Pre-fix, the LLMs received zero Minervini/Weinstein/CANSLIM/VCP context
+    // → reasoning was Varsity-only. Now LLM sees what top-trader frameworks
+    // say about this stock too.
+    try {
+      const _aiPlaybookFund = {
+        ...sf, sym, name: meta.n, sector, price: px,
+        high52w: sf.high52w || sf.wk52Hi,
+        low52w:  sf.low52w  || sf.wk52Lo,
+      };
+      const _aiPb = applyPlaybookOverlay(_aiPlaybookFund).playbook;
+      if (_aiPb) {
+        dataPoints += `\n--- TOP-TRADER PLAYBOOK ---\n`;
+        dataPoints += `Weinstein Stage: ${_aiPb.stage?.stage || 'UNKNOWN'} (${_aiPb.stage?.confidence ?? '?'}%): ${_aiPb.stage?.reason || ''}\n`;
+        if (_aiPb.stage?.warning) dataPoints += `  ⚠ Warning: ${_aiPb.stage.warning}\n`;
+        if (_aiPb.stage?.recommendation) dataPoints += `  → ${_aiPb.stage.recommendation}\n`;
+        dataPoints += `Minervini Trend Template: ${_aiPb.trendTemplate?.passed ?? 0}/8 criteria passed`;
+        dataPoints += _aiPb.trendTemplate?.qualifies ? ' (QUALIFIES as Stage 2 buy)\n' : '\n';
+        dataPoints += `CANSLIM rubric: ${_aiPb.canslim?.score ?? '?'}/100 (${_aiPb.canslim?.passingLetters ?? 0} of 7 letters ≥ 70)\n`;
+        if (_aiPb.canslim?.qualifies) dataPoints += `  → CANSLIM qualifies (≥6 letters strong)\n`;
+        if (_aiPb.vcp?.detected) dataPoints += `VCP DETECTED (${_aiPb.vcp.confidence}%): ${_aiPb.vcp.reason}\n`;
+        if (_aiPb.cupHandle?.detected) dataPoints += `CUP-WITH-HANDLE DETECTED (${_aiPb.cupHandle.confidence}%): ${_aiPb.cupHandle.reason}\n`;
+        dataPoints += `Playbook score: ${_aiPb.playbookScore ?? '?'}/100\n`;
+        dataPoints += `Playbook verdict: ${_aiPb.verdict || '—'}\n`;
+      }
+    } catch (e) { /* skip playbook section on error — don't block AI review */ }
+
     // ── VALUATION (Module 3, 13) ──
     dataPoints += `\n--- VALUATION ---\n`;
     dataPoints += _f('P/E', _v(sf.pe, ext.pe), 'x');
@@ -28438,10 +28526,10 @@ app.get("/api/stocks/recommendations/positional", async(req,res)=>{
 app.get("/api/v2/premarket-dashboard", async (req, res) => {
   if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   try {
-    const dayBias    = (typeof getCurrentDayBias === 'function')   ? getCurrentDayBias()   : null;
-    const trendDay   = (typeof getTrendDayState  === 'function')   ? getTrendDayState()    : null;
-    const initialBal = (typeof getInitialBalance === 'function')   ? getInitialBalance()   : null;
-    const watchlist  = (typeof getWatchlist      === 'function')   ? getWatchlist()        : { built: false, count: 0, watchlist: [] };
+    const dayBias    = getCurrentDayBias();
+    const trendDay   = getTrendDayState();
+    const initialBal = getInitialBalance();
+    const watchlist  = getWatchlist();
     const tierCounts = (typeof _stockTierCache !== 'undefined' && _stockTierCache && _stockTierCache.values)
       ? Array.from(_stockTierCache.values()).reduce((acc, v) => { acc[v.tier] = (acc[v.tier]||0)+1; return acc; }, {})
       : null;
@@ -31143,11 +31231,15 @@ app.get('/api/holdings', async (req, res) => {
         pnl_pct: totalPnlPct,
       },
       // 🚀 v2.0 Wave 4 — playbook summary
+      // 🚀 Wave 9 — empty-holdings recommendation copy fixed (was misleading
+      // "All holdings in healthy stages" when there were 0 holdings).
       playbook: {
         stageCounts,
         criticalAlerts,
         warnAlerts,
-        recommendation: criticalAlerts.length > 0
+        recommendation: enriched.length === 0
+          ? 'No holdings — add positions via POST /api/holdings to track stage classification'
+          : criticalAlerts.length > 0
           ? `${criticalAlerts.length} CRITICAL — exit Stage 4 / below-30wk holdings per Weinstein iron rule`
           : warnAlerts.length > 0
           ? `${warnAlerts.length} WARN — review Stage 3 / below-30wk holdings`
