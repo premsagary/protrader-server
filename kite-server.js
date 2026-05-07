@@ -19943,6 +19943,296 @@ function detectMarketRegime() {
 }
 
 // ── MULTI-FACTOR STOCK SCORING (Varsity M2+M3+M9: Quality×Valuation×Technical×Momentum×Risk) ──
+// ═════════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 WAVE 4 — PLAYBOOK OVERLAY (Minervini + Weinstein + O'Neil)
+//
+// Tags every stock with the swing/positional methodology of top traders.
+// Used by Stock Picks, Holdings, and Deep Analyzer tabs.
+//
+// Reference: INTRADAY_PLAYBOOK.md Parts 3.1, 3.2, 3.3, 4.6, 4.7, 4.8
+// ═════════════════════════════════════════════════════════════════════════
+
+// ── Mark Minervini's Trend Template (Part 3.1) ──
+// All 8 must be true for a stock to qualify as Stage 2 candidate.
+function computeMinerviniTrendTemplate(f) {
+  const result = { passed: 0, total: 8, criteria: [], qualifies: false };
+  const px = f.price || null;
+  if (!px) { result.criteria.push({ name: 'price', pass: false, detail: 'no_price' }); return result; }
+
+  // 1. Price above 150-day MA AND 200-day MA
+  const c1 = f.dma150 != null && f.dma200 != null && px > f.dma150 && px > f.dma200;
+  result.criteria.push({ name: 'Above 150 + 200 DMA', pass: !!c1, detail: f.dma200 ? `px=${px.toFixed(0)} dma200=${f.dma200.toFixed(0)}` : 'missing dma' });
+  if (c1) result.passed++;
+
+  // 2. 150-day MA above 200-day MA
+  const c2 = f.dma150 != null && f.dma200 != null && f.dma150 > f.dma200;
+  result.criteria.push({ name: '150 DMA > 200 DMA', pass: !!c2, detail: f.dma150 && f.dma200 ? `${f.dma150.toFixed(0)} > ${f.dma200.toFixed(0)}` : 'missing' });
+  if (c2) result.passed++;
+
+  // 3. 200-day MA trending up (proxy: price > 200DMA by > 5%)
+  const c3 = f.pctAbove200 != null && f.pctAbove200 > 5;
+  result.criteria.push({ name: '200 DMA rising', pass: !!c3, detail: f.pctAbove200 != null ? `pctAbove200=${f.pctAbove200.toFixed(1)}%` : 'missing' });
+  if (c3) result.passed++;
+
+  // 4. 50-day MA above both 150-day and 200-day MA
+  const c4 = f.dma50 != null && f.dma150 != null && f.dma200 != null && f.dma50 > f.dma150 && f.dma50 > f.dma200;
+  result.criteria.push({ name: '50 DMA > 150/200 DMA', pass: !!c4, detail: f.dma50 ? `dma50=${f.dma50.toFixed(0)}` : 'missing' });
+  if (c4) result.passed++;
+
+  // 5. Current price above 50-day MA
+  const c5 = f.dma50 != null && px > f.dma50;
+  result.criteria.push({ name: 'Price > 50 DMA', pass: !!c5, detail: f.dma50 ? `px=${px.toFixed(0)} dma50=${f.dma50.toFixed(0)}` : 'missing' });
+  if (c5) result.passed++;
+
+  // 6. Current price ≥ 30% above 52-week low
+  const c6 = f.low52w != null && px >= f.low52w * 1.30;
+  result.criteria.push({ name: '≥30% above 52-wk low', pass: !!c6, detail: f.low52w ? `px=${px.toFixed(0)} low52=${f.low52w.toFixed(0)}` : 'missing' });
+  if (c6) result.passed++;
+
+  // 7. Current price within 25% of 52-week high
+  const c7 = f.high52w != null && px >= f.high52w * 0.75;
+  result.criteria.push({ name: 'Within 25% of 52-wk high', pass: !!c7, detail: f.high52w ? `px=${px.toFixed(0)} high52=${f.high52w.toFixed(0)}` : 'missing' });
+  if (c7) result.passed++;
+
+  // 8. Relative Strength rating ≥ 70 (proxy: change6m vs Nifty in top 30%)
+  const rs6m = f.change6m != null ? (f.change6m - (typeof niftyBenchmark !== 'undefined' ? (niftyBenchmark['6m'] || 0) : 0)) : null;
+  const c8 = rs6m != null && rs6m > 0;  // simplified: outperforming Nifty over 6m
+  result.criteria.push({ name: 'RS rating ≥ 70 (vs Nifty 6M)', pass: !!c8, detail: rs6m != null ? `RS6M=${(rs6m*100).toFixed(1)}%` : 'missing' });
+  if (c8) result.passed++;
+
+  result.qualifies = result.passed === 8; // Minervini's rule: ALL 8 must pass
+  result.score = Math.round((result.passed / result.total) * 100);
+  return result;
+}
+
+// ── Stan Weinstein's 4-Stage Analysis (Part 3.3) ──
+// Iron rule: NEVER own a stock in Stage 4.
+function classifyWeinsteinStage(f) {
+  const px = f.price || null;
+  if (!px || f.dma200 == null) return { stage: 'UNKNOWN', confidence: 0, reason: 'insufficient_data' };
+
+  const above200 = px > f.dma200;
+  const dma200Rising = f.pctAbove200 != null && f.pctAbove200 > 0;
+  // 30-week MA proxy: use dma150 (close enough for our purposes)
+  const ma30wk = f.dma150 != null ? f.dma150 : f.dma200;
+  const above30wk = px > ma30wk;
+  const ma30wkRising = (f.dma50 != null && f.dma150 != null) ? f.dma50 > f.dma150 : null;
+  const change6m = f.change6m || 0;
+  const change3m = f.change3m || 0;
+  const change1m = f.change1m || 0;
+
+  // Stage 4: declining (price below MA, MA falling)
+  if (!above200 && !dma200Rising && change6m < -0.10) {
+    return { stage: 'STAGE_4', confidence: 90, reason: 'price below 200 DMA + DMA falling + 6m return < -10%', warning: 'Iron rule: NEVER OWN STAGE 4 STOCKS' };
+  }
+  // Stage 3: distribution (price still above MA but MA flattening, momentum weakening)
+  if (above200 && (ma30wkRising === false || (change3m < -0.05 && change1m < -0.03))) {
+    return { stage: 'STAGE_3', confidence: 75, reason: 'price > 200 DMA but momentum rolling over', warning: 'Distribution phase — take profits on existing positions' };
+  }
+  // Stage 2: advancing (price above MA, MA rising, momentum positive)
+  if (above200 && dma200Rising && (ma30wkRising === true || ma30wkRising === null) && change6m > 0.10) {
+    return { stage: 'STAGE_2', confidence: 90, reason: 'price > 200 DMA + DMA rising + 6m return > 10%', recommendation: 'BUY zone per Weinstein' };
+  }
+  // Stage 1: base (sideways, low momentum)
+  if (Math.abs(change6m) < 0.10 && Math.abs(change3m) < 0.05) {
+    return { stage: 'STAGE_1', confidence: 70, reason: 'sideways consolidation, low momentum', recommendation: 'WATCH for Stage 2 breakout' };
+  }
+  // Default: ambiguous
+  return { stage: 'STAGE_2_TRANSITIONAL', confidence: 50, reason: 'mixed signals — likely transitioning', recommendation: 'wait for clarity' };
+}
+
+// ── William O'Neil's CANSLIM rubric (Part 3.2) ──
+// Each letter scored independently; full pass = all 7 ≥ 70.
+function computeCanslim(f) {
+  const result = { letters: {}, score: 0, qualifies: false, passingLetters: 0 };
+  const grade = (cond, partial) => cond ? 100 : (partial ? 60 : 30);
+
+  // C — Current quarterly earnings up ≥ 25% YoY
+  const cQE = f.quarterlyEarningsGrowth || f.qoqEarningsGrowth || f.earGrowth || null;
+  result.letters.C = {
+    name: 'Current Quarterly Earnings',
+    score: cQE != null ? grade(cQE >= 25, cQE >= 15) : null,
+    detail: cQE != null ? `${cQE.toFixed(1)}% YoY` : 'missing',
+  };
+
+  // A — Annual earnings up ≥ 25% in last 3 years; ROE > 17%
+  const aEPS = f.epsGrowth3y || f.earGrowth || null;  // best available proxy
+  const aROE = f.roe || null;
+  const aPass = aEPS != null && aROE != null && aEPS >= 25 && aROE > 17;
+  const aPartial = aEPS != null && aROE != null && (aEPS >= 15 || aROE > 12);
+  result.letters.A = {
+    name: 'Annual Earnings + ROE',
+    score: aEPS != null && aROE != null ? grade(aPass, aPartial) : null,
+    detail: `EPS3y=${aEPS != null ? aEPS.toFixed(1) + '%' : '?'} ROE=${aROE != null ? aROE.toFixed(1) + '%' : '?'}`,
+  };
+
+  // N — New: at 52-week high or near it
+  const nNearHigh = f.high52w && f.price ? (f.price / f.high52w) >= 0.90 : null;
+  result.letters.N = {
+    name: 'New (high / product / mgmt)',
+    score: nNearHigh != null ? grade(nNearHigh, f.high52w && f.price ? (f.price / f.high52w) >= 0.80 : false) : null,
+    detail: nNearHigh != null && f.high52w ? `${((f.price/f.high52w)*100).toFixed(0)}% of 52w high` : 'missing',
+  };
+
+  // S — Supply/demand: float < 50M (proxy: smaller mktCap = lower float typically), volume > 50% above avg
+  const sFloat = f.mktCap != null && f.mktCap < 50000;  // < ₹50K cr proxies smaller float
+  const sVol = f.volRatio != null && f.volRatio > 1.5;
+  result.letters.S = {
+    name: 'Supply/Demand (float + volume)',
+    score: f.volRatio != null ? grade(sVol && sFloat, sVol || sFloat) : null,
+    detail: `mktCap=${f.mktCap || '?'}cr volRatio=${f.volRatio?.toFixed(2) || '?'}`,
+  };
+
+  // L — Leader (RS > 80) — proxy: outperforming Nifty significantly over 6m
+  const lRS = (f.change6m != null && typeof niftyBenchmark !== 'undefined') ? (f.change6m - (niftyBenchmark['6m'] || 0)) : null;
+  const lLeader = lRS != null && lRS > 0.10;  // > 10% outperformance
+  const lLagger = lRS != null && lRS < -0.05;  // > 5% underperformance
+  result.letters.L = {
+    name: 'Leader (RS rating)',
+    score: lRS != null ? grade(lLeader, lRS > 0) : null,
+    detail: lRS != null ? `RS6M=${(lRS * 100).toFixed(1)}%` : 'missing',
+    flag: lLagger ? 'LAGGARD — avoid' : null,
+  };
+
+  // I — Institutional sponsorship — proxy: promoter > 50% + delivery % healthy
+  const iProm = f.promoter || null;
+  const iInst = (iProm != null && iProm >= 50) || (f.fii != null && f.fii > 5);
+  result.letters.I = {
+    name: 'Institutional sponsorship',
+    score: iProm != null ? grade(iInst, iProm >= 35) : null,
+    detail: `promoter=${iProm != null ? iProm.toFixed(1) + '%' : '?'} fii=${f.fii != null ? f.fii.toFixed(1) + '%' : '?'}`,
+  };
+
+  // M — Market direction (use marketRegime if present)
+  const mBull = (typeof marketRegime !== 'undefined' && (marketRegime === 'BULL' || marketRegime === 'BULLISH'));
+  const mBear = (typeof marketRegime !== 'undefined' && (marketRegime === 'BEAR' || marketRegime === 'BEARISH'));
+  result.letters.M = {
+    name: 'Market direction',
+    score: mBull ? 100 : mBear ? 30 : 60,
+    detail: typeof marketRegime !== 'undefined' ? marketRegime : 'unknown',
+    flag: mBear ? 'BEAR market — sit in cash per O\'Neil' : null,
+  };
+
+  // Tally
+  const validLetters = Object.values(result.letters).filter(l => l.score != null);
+  if (validLetters.length === 0) return result;
+  const avg = validLetters.reduce((a, b) => a + b.score, 0) / validLetters.length;
+  result.score = +avg.toFixed(0);
+  result.passingLetters = validLetters.filter(l => l.score >= 70).length;
+  result.qualifies = result.passingLetters >= 6 && validLetters.length >= 6;  // 6 of 7 letters ≥ 70
+  return result;
+}
+
+// ── Volatility Contraction Pattern detection (simplified) — Part 4.6 ──
+// Detects progressive contractions in recent price action.
+// Requires recent OHLC array; works with what's in fundamentals.
+function detectVCP(f) {
+  // Simplified: check if stock has been consolidating (low volatility over 2-4 weeks)
+  // Real VCP needs intraday volatility decline; this is a daily proxy.
+  const result = { detected: false, confidence: 0, reason: '' };
+  if (f.annualVol == null || f.high52w == null || f.low52w == null || f.price == null) {
+    result.reason = 'missing data';
+    return result;
+  }
+  const range52w = f.high52w - f.low52w;
+  if (range52w <= 0) { result.reason = 'invalid range'; return result; }
+
+  // Proxy 1: must be in upper half of 52w range (Stage 2 territory)
+  const positionInRange = (f.price - f.low52w) / range52w;
+  if (positionInRange < 0.6) { result.reason = `lower-half of range (${(positionInRange*100).toFixed(0)}%)`; return result; }
+
+  // Proxy 2: pctFromHigh ≤ 10% (tight base near highs)
+  if (f.pctFromHigh == null || f.pctFromHigh < -10) {
+    result.reason = `${f.pctFromHigh}% from high — too far`;
+    return result;
+  }
+
+  // Proxy 3: annualized volatility low (consolidation)
+  if (f.annualVol > 35) { result.reason = `vol ${f.annualVol}% too high — no contraction`; return result; }
+
+  // Proxy 4: short-term momentum positive but small (consolidation)
+  if (f.change1m != null && (f.change1m > 0.15 || f.change1m < -0.05)) {
+    result.reason = `1m=${(f.change1m*100).toFixed(1)}% — not consolidating`;
+    return result;
+  }
+
+  result.detected = true;
+  result.confidence = 70;  // simplified detector — can't be 100% confident without intraday data
+  result.reason = `Near 52w high (${f.pctFromHigh.toFixed(1)}%), low vol (${f.annualVol.toFixed(0)}%), tight 1m`;
+  result.pivot = f.high52w;  // breakout level
+  result.stop = +(f.price * 0.93).toFixed(2);  // -7% stop per Minervini
+  return result;
+}
+
+// ── Cup with Handle detection (simplified) — Part 4.7 ──
+function detectCupWithHandle(f) {
+  const result = { detected: false, confidence: 0, reason: '' };
+  if (f.price == null || f.high52w == null || f.low52w == null) {
+    result.reason = 'missing data';
+    return result;
+  }
+  // Cup criteria proxies:
+  // 1. Prior uptrend (price > 200DMA, 6m return > 30%)
+  const uptrend = f.pctAbove200 != null && f.pctAbove200 > 0 && f.change6m != null && f.change6m > 0.30;
+  if (!uptrend) { result.reason = 'no prior 30%+ uptrend'; return result; }
+  // 2. 12-30% off the high (cup depth)
+  const pctFromHigh = Math.abs(f.pctFromHigh || 0);
+  if (pctFromHigh < 5 || pctFromHigh > 30) { result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% out of 12-30% range`; return result; }
+  // 3. Currently near right side of cup (forming handle): within 5-15% of high
+  const recoveringWell = pctFromHigh >= 5 && pctFromHigh <= 15;
+  if (!recoveringWell) { result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% — not in handle zone`; return result; }
+  // 4. RSI healthy (not overbought)
+  if (f.rsi != null && f.rsi > 70) { result.reason = `RSI ${f.rsi} overbought — handle should be calmer`; return result; }
+  // 5. Recent volume drying up (proxy: volRatio < 1.0)
+  if (f.volRatio != null && f.volRatio > 1.5) { result.reason = `volume ${f.volRatio.toFixed(1)}x — handle should have low volume`; return result; }
+
+  result.detected = true;
+  result.confidence = 60;  // pattern recognition without OHLC time series is approximate
+  result.reason = `Prior uptrend ${(f.change6m*100).toFixed(0)}%, ${pctFromHigh.toFixed(1)}% from high, low vol`;
+  result.pivot = f.high52w;
+  result.stop = +(f.price * 0.92).toFixed(2);  // -8% O'Neil hard rule
+  return result;
+}
+
+// ── Combined playbook overlay — applied to every Stock Pick ──
+function applyPlaybookOverlay(f) {
+  const trendTemplate = computeMinerviniTrendTemplate(f);
+  const stage = classifyWeinsteinStage(f);
+  const canslim = computeCanslim(f);
+  const vcp = detectVCP(f);
+  const cupHandle = detectCupWithHandle(f);
+
+  // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
+  let playbookScore = 0;
+  let stageMultiplier = 1.0;
+  if (stage.stage === 'STAGE_2') stageMultiplier = 1.0;
+  else if (stage.stage === 'STAGE_2_TRANSITIONAL') stageMultiplier = 0.7;
+  else if (stage.stage === 'STAGE_1') stageMultiplier = 0.5;
+  else if (stage.stage === 'STAGE_3') stageMultiplier = 0.3;
+  else if (stage.stage === 'STAGE_4') stageMultiplier = 0.0; // iron rule — kill the score
+  else stageMultiplier = 0.6;
+
+  playbookScore = +((trendTemplate.score * 0.4 + canslim.score * 0.4 + (vcp.detected ? 100 : 50) * 0.1 + (cupHandle.detected ? 100 : 50) * 0.1) * stageMultiplier).toFixed(1);
+
+  // Final verdict
+  let verdict, verdictColor;
+  if (stage.stage === 'STAGE_4') { verdict = 'AVOID — Stage 4'; verdictColor = '#ef4444'; }
+  else if (stage.stage === 'STAGE_3') { verdict = 'TAKE PROFITS — Stage 3'; verdictColor = '#f59e0b'; }
+  else if (trendTemplate.qualifies && canslim.qualifies) { verdict = 'STRONG BUY — Trend Template + CANSLIM'; verdictColor = '#10b981'; }
+  else if (trendTemplate.passed >= 6 && stage.stage === 'STAGE_2') { verdict = 'BUY — Stage 2 + 6+ Trend criteria'; verdictColor = '#22c55e'; }
+  else if (vcp.detected || cupHandle.detected) { verdict = 'WATCH — Pattern forming'; verdictColor = '#3b82f6'; }
+  else if (stage.stage === 'STAGE_1') { verdict = 'WATCH — Stage 1 base'; verdictColor = '#94a3b8'; }
+  else { verdict = 'NEUTRAL'; verdictColor = '#94a3b8'; }
+
+  return {
+    playbook: {
+      trendTemplate, stage, canslim, vcp, cupHandle,
+      playbookScore, stageMultiplier,
+      verdict, verdictColor,
+    },
+  };
+}
+
 function scoreStockForPortfolio(f) {
   const na = v => v != null && isFinite(v);
   // Price resolution chain: live ticker → cached fundamental → screener DB → FUND_EXT
@@ -20189,10 +20479,30 @@ function scoreStockForPortfolio(f) {
     && hasConfirmedDE && f.debtToEq <= (isSmall ? 1.0 : isMid ? 1.5 : 2.0);
   const faData = isFa ? scoreFallenAngel(f) : {};
 
+  // 🚀 v2.0 Wave 4 — Playbook overlay (Minervini + Weinstein + O'Neil)
+  // Adds: trendTemplate (8 criteria), Weinstein stage, CANSLIM rubric,
+  // VCP detection, Cup-with-Handle detection, playbookScore, verdict.
+  const _playbookOverlay = applyPlaybookOverlay(f);
+  // Fold playbook into composite when stage is unfavorable. Iron rule:
+  // Stage 4 = composite penalized to ≤30 (forces "Avoid" tier).
+  let _adjustedComposite = composite;
+  if (_playbookOverlay.playbook.stage.stage === 'STAGE_4') {
+    _adjustedComposite = Math.min(_adjustedComposite, 25);
+    conviction = 'Avoid (Stage 4)';
+    convColor = '#ef4444';
+  } else if (_playbookOverlay.playbook.stage.stage === 'STAGE_3' && _adjustedComposite >= 55) {
+    _adjustedComposite = Math.min(_adjustedComposite, 50);
+    if (conviction === 'Strong Buy' || conviction === 'Buy') {
+      conviction = 'Hold (Stage 3 distribution)';
+      convColor = '#f59e0b';
+    }
+  }
+
   return {
     sym: f.sym, name: f.name, grp: f.grp, sector: f.sector,
     price: px, faScore: faRawScore, valScore, taScore, momScore, riskScore,
-    composite, compositeRaw, compositeRiskFlags,
+    composite: _adjustedComposite, compositeRaw, compositeRiskFlags,
+    compositeBeforePlaybook: composite,  // for transparency
     conviction, convColor, checkCount: +checkCount.toFixed(1),
     ...faData, isFallenAngel: isFa,
     stopLoss: stopData?.stopLoss, target: stopData?.target,
@@ -20210,6 +20520,8 @@ function scoreStockForPortfolio(f) {
     volRatio: f.volRatio, adx: f.adx, adxPdi: f.adxPdi, adxNdi: f.adxNdi,
     bullishDiv: f.bullishDiv, bearishDiv: f.bearishDiv,
     earningsYield: f.earningsYield, divYield: f.divYield,
+    // 🚀 v2.0 Wave 4 — playbook overlay (Minervini + Weinstein + O'Neil)
+    ..._playbookOverlay,
   };
 }
 
@@ -26910,6 +27222,17 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     if(t.fibs) whenToBuy.push({type:'Fibonacci 61.8%',priority:'MEDIUM',price:`${t.fibs.r618}`,why:'Golden ratio support'});
     if(t.rsi14<35) whenToBuy.push({type:'NOW - RSI Oversold',priority:'HIGH',price:`${px?.toFixed(0)} (current)`,why:`RSI ${t.rsi14} in oversold territory`});
 
+    // 🚀 v2.0 Wave 4 — Deep Analyzer playbook overlay
+    // Adds Minervini Trend Template, Weinstein stage, CANSLIM rubric,
+    // VCP detection, Cup-with-Handle detection — same as Stock Picks tab.
+    const _playbookFund = { ...(f || {}), sym, price: px };
+    let _deepPlaybook = null;
+    try {
+      _deepPlaybook = applyPlaybookOverlay(_playbookFund).playbook;
+    } catch (e) {
+      _deepPlaybook = { error: e.message };
+    }
+
     res.json({
       sym,name:meta.n,grp:meta.grp,sector,price:px,
       tech:t,techWeek:tw,techMax:tm,
@@ -26924,6 +27247,8 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
       checklist,totalPts,maxPts,pctScore,passCount,totalChecks,
       verdict,verdictColor,verdictIcon,action,verdictTimeframe:timeframe,
       analysis,buyPlan,
+      // 🚀 v2.0 Wave 4 — Top-trader playbook overlay (Minervini + Weinstein + O'Neil)
+      playbook: _deepPlaybook,
       dataAvailable:{
         kiteDaily:cDay.length>0,kiteWeekly:cWeek.length>0,kiteMonthly:cMonth.length>0,
         maxCandles:cDay.length||cWeek.length||cMonth.length,
@@ -30129,7 +30454,7 @@ app.get('/api/holdings', async (req, res) => {
       if (!reviewMap[r.symbol]) reviewMap[r.symbol] = [];
       reviewMap[r.symbol].push(r);
     }
-    // Merge with live CMP for P&L
+    // Merge with live CMP for P&L + Weinstein stage classification
     const enriched = holdings.map(h => {
       const sf = stockFundamentals[h.symbol] || {};
       const cmp = (livePrices && livePrices[h.symbol]?.price) || sf.price || sf.ltp || 0;
@@ -30137,6 +30462,32 @@ app.get('/api/holdings', async (req, res) => {
       const current = +(h.quantity * cmp).toFixed(2);
       const pnl = +(current - invested).toFixed(2);
       const pnlPct = invested > 0 ? +(((current - invested) / invested) * 100).toFixed(2) : 0;
+
+      // 🚀 v2.0 Wave 4 — Weinstein stage + iron-rule alerts
+      // Use the same playbook overlay as Stock Picks for consistency.
+      const fundForOverlay = { ...sf, sym: h.symbol, price: cmp };
+      const stage = classifyWeinsteinStage(fundForOverlay);
+      const trendTemplate = computeMinerviniTrendTemplate(fundForOverlay);
+      // 30-week MA proxy: use 150 DMA (close enough for daily-data analysis)
+      const ma30wk = sf.dma150 != null ? sf.dma150 : sf.dma200;
+      const below30wk = ma30wk != null && cmp < ma30wk;
+      const ma30wkFalling = sf.pctAbove200 != null && sf.pctAbove200 < 0;
+      // Alert composition
+      const alerts = [];
+      if (stage.stage === 'STAGE_4') {
+        alerts.push({ severity: 'CRITICAL', code: 'STAGE_4', message: stage.warning || 'Weinstein iron rule: NEVER OWN STAGE 4', action: 'EXIT IMMEDIATELY' });
+      } else if (stage.stage === 'STAGE_3') {
+        alerts.push({ severity: 'WARN', code: 'STAGE_3', message: stage.warning || 'Distribution phase', action: 'CONSIDER PROFIT-TAKING' });
+      }
+      if (below30wk && ma30wkFalling) {
+        alerts.push({ severity: 'CRITICAL', code: 'BELOW_30WK_FALLING', message: `Price ${cmp.toFixed(2)} below falling 30-week MA ${ma30wk.toFixed(2)}`, action: 'EXIT per Weinstein iron rule' });
+      } else if (below30wk) {
+        alerts.push({ severity: 'WARN', code: 'BELOW_30WK', message: `Price ${cmp.toFixed(2)} below 30-week MA ${ma30wk.toFixed(2)}`, action: 'WATCH closely' });
+      }
+      // R-multiple of unrealized P&L (assumes 8% structural stop per O'Neil hard rule)
+      const initialRiskPerShare = h.avg_price * 0.08; // 8% structural risk
+      const rMultiple = initialRiskPerShare > 0 ? +(pnl / (initialRiskPerShare * h.quantity)).toFixed(2) : null;
+
       return {
         symbol: h.symbol,
         name: sf.name || h.symbol,
@@ -30151,12 +30502,35 @@ app.get('/api/holdings', async (req, res) => {
         created_at: h.created_at,
         updated_at: h.updated_at,
         ai_reviews: reviewMap[h.symbol] || [],
+        // 🚀 v2.0 Wave 4 — playbook overlay
+        playbook: {
+          stage,
+          trendTemplate: { passed: trendTemplate.passed, total: trendTemplate.total, qualifies: trendTemplate.qualifies },
+          ma30wk: ma30wk != null ? +ma30wk.toFixed(2) : null,
+          below30wk,
+          ma30wkFalling,
+          rMultiple,
+          alerts,
+        },
       };
     });
     const totalInvested = enriched.reduce((a, h) => a + h.invested, 0);
     const totalCurrent  = enriched.reduce((a, h) => a + h.current,  0);
     const totalPnl      = +(totalCurrent - totalInvested).toFixed(2);
     const totalPnlPct   = totalInvested > 0 ? +(((totalCurrent - totalInvested) / totalInvested) * 100).toFixed(2) : 0;
+    // 🚀 v2.0 Wave 4 — aggregate playbook alerts
+    const stageCounts = { STAGE_1: 0, STAGE_2: 0, STAGE_2_TRANSITIONAL: 0, STAGE_3: 0, STAGE_4: 0, UNKNOWN: 0 };
+    const criticalAlerts = [];
+    const warnAlerts = [];
+    for (const h of enriched) {
+      const st = h.playbook?.stage?.stage || 'UNKNOWN';
+      stageCounts[st] = (stageCounts[st] || 0) + 1;
+      for (const a of (h.playbook?.alerts || [])) {
+        const item = { symbol: h.symbol, ...a };
+        if (a.severity === 'CRITICAL') criticalAlerts.push(item);
+        else if (a.severity === 'WARN') warnAlerts.push(item);
+      }
+    }
     res.json({
       holdings: enriched,
       totals: {
@@ -30165,6 +30539,17 @@ app.get('/api/holdings', async (req, res) => {
         current: +totalCurrent.toFixed(2),
         pnl: totalPnl,
         pnl_pct: totalPnlPct,
+      },
+      // 🚀 v2.0 Wave 4 — playbook summary
+      playbook: {
+        stageCounts,
+        criticalAlerts,
+        warnAlerts,
+        recommendation: criticalAlerts.length > 0
+          ? `${criticalAlerts.length} CRITICAL — exit Stage 4 / below-30wk holdings per Weinstein iron rule`
+          : warnAlerts.length > 0
+          ? `${warnAlerts.length} WARN — review Stage 3 / below-30wk holdings`
+          : 'All holdings in healthy stages',
       },
     });
   } catch (e) {
