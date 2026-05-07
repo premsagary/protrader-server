@@ -2598,8 +2598,16 @@ const CONFIG = {
   // ─────────────────────────────────────────────────────────────────────────
   // 🚀 v2.0 WAVE 3 — Strategy architecture (3 core setups, tier classification,
   // pre-market routine, trend-day detection, IB day-type)
+  //
+  // v2-strategy branch: v2 setups are ALWAYS ON. No env-var toggle.
+  // The v1 setup code paths are retained inside scoreDayTrade() for safety,
+  // but unreachable because the v2 setup arrays unconditionally replace them.
+  //
+  // To revert to v1 entirely:
+  //   - deploy from tag v1-stable-shorts-2026-05-07
+  //   - OR git checkout shiva-ui (which doesn't have v2 code)
   // ─────────────────────────────────────────────────────────────────────────
-  V2_SETUPS_MODE: (process.env.V2_SETUPS_MODE || 'off').toLowerCase() === 'on',
+  V2_SETUPS_MODE: true,
   // Per-tier risk sizing (replaces flat RISK_PCT_PER_TRADE when V2_SETUPS_MODE=on)
   TIER_A_ALIGNED_RISK:   0.0100,  // 1.00% — A-list + day_bias aligned
   TIER_A_NEUTRAL_RISK:   0.0075,  // 0.75% — A-list + day_bias neutral
