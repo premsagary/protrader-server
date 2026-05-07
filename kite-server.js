@@ -2595,6 +2595,64 @@ const CONFIG = {
   EOD_NO_NEW_ENTRY_TIME:   '14:30', // IST — stop opening new positions
   EOD_TIGHTEN_TRAIL_TIME:  '15:00', // IST — tighten trail to 1.0× ATR
   EOD_SQUAREOFF_TIME:      '15:15', // IST — flat all positions before Zerodha 15:20
+  // ─────────────────────────────────────────────────────────────────────────
+  // 🚀 v2.0 WAVE 3 — Strategy architecture (3 core setups, tier classification,
+  // pre-market routine, trend-day detection, IB day-type)
+  // ─────────────────────────────────────────────────────────────────────────
+  V2_SETUPS_MODE: (process.env.V2_SETUPS_MODE || 'off').toLowerCase() === 'on',
+  // Per-tier risk sizing (replaces flat RISK_PCT_PER_TRADE when V2_SETUPS_MODE=on)
+  TIER_A_ALIGNED_RISK:   0.0100,  // 1.00% — A-list + day_bias aligned
+  TIER_A_NEUTRAL_RISK:   0.0075,  // 0.75% — A-list + day_bias neutral
+  TIER_B_ALIGNED_RISK:   0.0050,  // 0.50% — B-list + day_bias aligned
+  TIER_B_NEUTRAL_RISK:   0.0040,  // 0.40% — B-list + day_bias neutral
+  TIER_COUNTER_BIAS:     0,        // 0% — B-list against day_bias = SKIP
+  // Trend-day mode (auto-activated 9:45 IST if 3+ of 4 signals fire)
+  TREND_DAY_CHECK_TIME:        '09:45',
+  TREND_DAY_AD_RATIO_THRESH:   2.5,    // advance/decline ratio in 107-name universe
+  TREND_DAY_SECTOR_THRESH:     6,      // ≥ 6 of 11 sectors green
+  TREND_DAY_VIX_DROP_THRESH:  -0.015,  // VIX drop ≥ 1.5% from prior close
+  TREND_DAY_GIFT_HELD_THRESH:  0.005,  // Gift Nifty held ≥ 0.5% gap by 9:30
+  TREND_DAY_MIN_SIGNALS:       3,      // need 3 of 4 to activate trend mode
+  TREND_DAY_RELAXED_ADR_CAP:   0.95,   // [normal: 0.80] allow late-trend entries
+  TREND_DAY_RELAXED_VOL_MULT:  1.2,    // [normal: 1.5] vol confirmation softer
+  TREND_DAY_TRAIL_ATR_MULT:    2.0,    // [normal: 1.5] wider trail in trend mode
+  TREND_DAY_EXTRA_TRADES:      2,      // +2 trades allowed when trend day
+  TREND_DAY_TIER_A_RISK_BOOST: 0.0025, // +0.25% on tier-A risk during trend day
+  // Initial Balance (10:15 IST = 60 min after open)
+  IB_CHECK_TIME:               '10:15',
+  IB_NARROW_FRACTION:          0.5,    // IB < 0.5 × ADR = trend day signal
+  IB_WIDE_FRACTION:            1.5,    // IB > 1.5 × ADR = bracketed day
+  // Pre-market routine (8:30 IST)
+  PREMARKET_CHECK_TIME:        '08:30',
+  // Setup configurations for the 3 v2 core setups
+  V2_ORB_PLUS: {
+    OR_DURATION_MIN:        15,        // 9:15-9:30 opening range
+    ENTRY_WINDOW_START:     '09:30',
+    ENTRY_WINDOW_END:       '11:00',
+    OR_MIN_FRACTION_ADR:    0.5,
+    OR_MAX_FRACTION_ADR:    1.5,
+    VOL_CONFIRMATION_MULT:  1.5,
+    VWAP_DISTANCE_MAX_PCT:  2.0,       // skip if extended > 2% from VWAP
+    SL_AT_OR_MIDPOINT:      true,      // tighter than full OR opposite side
+  },
+  V2_VWAP_PULLBACK: {
+    ENTRY_WINDOW_START:     '10:00',
+    ENTRY_WINDOW_END:       '14:30',
+    MIN_ADX_15M:            25,
+    MIN_VWAP_DISTANCE_PCT:  1.0,       // trend established
+    MIN_TREND_DURATION_MIN: 30,        // price away from VWAP for ≥30 min
+    VWAP_TOLERANCE_PCT:     0.1,       // pullback "touches" VWAP within ±0.1%
+    SL_ATR_MULT:            0.5,       // 0.5× ATR beyond VWAP
+  },
+  V2_COMPRESSION: {
+    ENTRY_WINDOW_START:     '10:00',
+    ENTRY_WINDOW_END:       '14:00',
+    NUM_NARROWING_BARS:     4,
+    MAX_RANGE_FRACTION_ATR: 0.5,
+    REQUIRE_DAILY_TREND:    true,      // align with daily 50DMA direction
+    VOL_CONFIRMATION_MULT:  1.3,
+    TARGET_RANGE_MULT:      1.5,       // measured-move target = compression × 1.5
+  },
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
@@ -3703,6 +3761,417 @@ async function checkTiltStatus() {
     console.warn('[checkTiltStatus] failed:', e.message);
     return { state: 'NORMAL', sizeMult: 1.0, allowEntry: true, reason: null, consecutiveLosses: 0, consecutiveWins: 0, pauseUntilTs: 0 };
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 WAVE 3 — STRATEGY ARCHITECTURE
+//
+// Pre-market routine, tier classification, trend-day detection, Initial
+// Balance day-type detection, day_bias_score. These layers feed the v2
+// 3-setup pipeline (gated behind CONFIG.V2_SETUPS_MODE).
+//
+// All state is module-level + DB-persisted. State auto-resets at IST
+// midnight. Cron-driven where wall-clock time matters.
+// ═════════════════════════════════════════════════════════════════════════
+
+// In-memory state (DB-backed via daily_premarket_context table)
+let _premarketContext = null;     // { date, giftGapPct, vixDelta, fiiNet, diiNet, pivot3day, dayBiasScore }
+let _trendDayState    = null;     // { active, signals, activatedAt }
+let _initialBalance   = null;     // { iH, iL, range, fraction, dayType }
+let _stockTierCache   = new Map(); // sym → { tier: 'A'|'B'|'SKIP', score, refreshedAt }
+let _stockTierCacheRefreshedAt = 0;
+
+// IST date helper used everywhere below
+function _istDateStr() {
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+function _istHHMM() {
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Helper: 3-day rolling pivot (Mark Fisher ACD method)
+// pivot = (H + L + C) / 3 averaged over last 3 days. Bias = above/below = bull/bear.
+// ─────────────────────────────────────────────────────────────────────────
+async function compute3DayRollingPivot() {
+  try {
+    // Use daily_index_quotes if it exists, otherwise compute from 5min candles aggregated.
+    // Fallback approach: use Nifty 50 closes from last 3 trading days via livePrices snapshot
+    // OR query candles_5m for OHLC of last 3 trading days.
+    const { rows } = await pool.query(`
+      SELECT DATE(candle_time AT TIME ZONE 'Asia/Kolkata') AS dt,
+             MAX(high) AS h, MIN(low) AS l,
+             (ARRAY_AGG(close ORDER BY candle_time DESC))[1] AS c
+        FROM candles_5m
+       WHERE symbol IN ('NIFTY 50','NIFTY','^NSEI','NIFTY50')
+         AND candle_time >= NOW() - INTERVAL '7 days'
+       GROUP BY DATE(candle_time AT TIME ZONE 'Asia/Kolkata')
+       ORDER BY dt DESC
+       LIMIT 3
+    `).catch(() => ({ rows: [] }));
+    if (rows.length < 2) return null;
+    const pivots = rows.map(r => (parseFloat(r.h) + parseFloat(r.l) + parseFloat(r.c)) / 3);
+    const avgPivot = pivots.reduce((a, b) => a + b, 0) / pivots.length;
+    return +avgPivot.toFixed(2);
+  } catch (e) {
+    console.warn('[3-day-pivot] failed:', e.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Pre-market routine (8:30 IST cron)
+//
+// Captures: Gift Nifty gap, VIX overnight delta, FII/DII flows from D-1,
+// 3-day rolling pivot (Mark Fisher), pre-open call auction movers.
+// Computes day_bias_score on a -4 to +4 scale.
+//
+// Stored to DB so daily report can access it; in-memory for hot-path.
+// ─────────────────────────────────────────────────────────────────────────
+async function runPremarketRoutine() {
+  try {
+    const istDate = _istDateStr();
+    // 1. Gift Nifty / SGX Nifty gap (from market_data_cache or nearest source)
+    let giftGapPct = 0;
+    try {
+      // Best-effort: use cached pre-open data or live price feed
+      const cached = (typeof _marketDataCache !== 'undefined' && _marketDataCache.giftNifty)
+        ? _marketDataCache.giftNifty : null;
+      if (cached && cached.changePct != null) giftGapPct = parseFloat(cached.changePct);
+    } catch (_) {}
+
+    // 2. VIX overnight delta
+    let vixDelta = 0;
+    try {
+      const { rows } = await pool.query(`
+        SELECT close FROM candles_5m
+         WHERE symbol IN ('INDIA VIX','VIX','^INDIAVIX')
+           AND candle_time >= NOW() - INTERVAL '24 hours'
+         ORDER BY candle_time DESC LIMIT 1
+      `).catch(() => ({ rows: [] }));
+      if (rows.length > 0) {
+        const lastClose = parseFloat(rows[0].close);
+        // Compare against value from approx 18 hours ago (yesterday close)
+        const { rows: prev } = await pool.query(`
+          SELECT close FROM candles_5m
+           WHERE symbol IN ('INDIA VIX','VIX','^INDIAVIX')
+             AND candle_time >= NOW() - INTERVAL '40 hours'
+             AND candle_time <  NOW() - INTERVAL '18 hours'
+           ORDER BY candle_time DESC LIMIT 1
+        `).catch(() => ({ rows: [] }));
+        if (prev.length > 0) {
+          const prevClose = parseFloat(prev[0].close);
+          if (prevClose > 0) vixDelta = (lastClose - prevClose) / prevClose;
+        }
+      }
+    } catch (_) {}
+
+    // 3. FII/DII flows from D-1 (read from market_data_cache or skip)
+    let fiiNet = null, diiNet = null;
+    try {
+      const cached = (typeof _marketDataCache !== 'undefined' && _marketDataCache.fiiDii)
+        ? _marketDataCache.fiiDii : null;
+      if (cached) { fiiNet = cached.fiiNet; diiNet = cached.diiNet; }
+    } catch (_) {}
+
+    // 4. 3-day rolling pivot
+    const pivot3day = await compute3DayRollingPivot();
+
+    // 5. Compute day_bias_score on [-4, +4]
+    let dayBiasScore = 0;
+    if (giftGapPct > 0.005) dayBiasScore += 1;
+    else if (giftGapPct < -0.005) dayBiasScore -= 1;
+    if (vixDelta < -0.01) dayBiasScore += 1;       // VIX falling = risk-on
+    else if (vixDelta > 0.02) dayBiasScore -= 1;    // VIX rising = risk-off
+    if (fiiNet != null && fiiNet > 0) dayBiasScore += 1;
+    else if (fiiNet != null && fiiNet < -500) dayBiasScore -= 1;
+    if (diiNet != null && diiNet > 500) dayBiasScore += 1;
+    else if (diiNet != null && diiNet < 0) dayBiasScore -= 1;
+
+    _premarketContext = {
+      date: istDate,
+      giftGapPct,
+      vixDelta,
+      fiiNet,
+      diiNet,
+      pivot3day,
+      dayBiasScore,
+      tier: dayBiasScore >= 2 ? 'BULL' : dayBiasScore <= -2 ? 'BEAR' : 'NEUTRAL',
+      computedAt: new Date().toISOString(),
+    };
+
+    // Persist to DB (idempotent table)
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS daily_premarket_context (
+          ist_date DATE PRIMARY KEY,
+          gift_gap_pct  DECIMAL(8,4),
+          vix_delta     DECIMAL(8,4),
+          fii_net       DECIMAL(18,2),
+          dii_net       DECIMAL(18,2),
+          pivot_3day    DECIMAL(18,4),
+          day_bias_score INTEGER,
+          tier          VARCHAR(16),
+          computed_at   TIMESTAMP DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        INSERT INTO daily_premarket_context
+          (ist_date, gift_gap_pct, vix_delta, fii_net, dii_net, pivot_3day, day_bias_score, tier)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT(ist_date) DO UPDATE SET
+          gift_gap_pct=$2, vix_delta=$3, fii_net=$4, dii_net=$5,
+          pivot_3day=$6, day_bias_score=$7, tier=$8, computed_at=NOW()
+      `, [istDate, giftGapPct, vixDelta, fiiNet, diiNet, pivot3day, dayBiasScore, _premarketContext.tier]);
+    } catch (e) { console.warn('[premarket] persist failed:', e.message); }
+
+    console.log(`📋 Premarket ${istDate}: GiftGap=${(giftGapPct*100).toFixed(2)}% VIXΔ=${(vixDelta*100).toFixed(2)}% FII=${fiiNet} DII=${diiNet} Pivot3D=${pivot3day} → ${_premarketContext.tier} (${dayBiasScore})`);
+    return _premarketContext;
+  } catch (e) {
+    console.warn('[runPremarketRoutine] failed:', e.message);
+    return null;
+  }
+}
+
+// Public accessor for hot path
+function getCurrentDayBias() {
+  if (_premarketContext && _premarketContext.date === _istDateStr()) return _premarketContext;
+  return { date: _istDateStr(), dayBiasScore: 0, tier: 'NEUTRAL', stale: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Tier classification (A-list / B-list / SKIP)
+//
+// Filters 107-stock universe → 5-30 actionable names per scan. Tier is
+// based on:
+//   • Daily ATR ≥ 1% AND ≤ 4%  (must have juice but be manageable)
+//   • Daily turnover ≥ ₹50 cr (liquidity)
+//   • Sector strength (top 6 of 11 sector indices)
+//   • Daily trend alignment with day_bias
+//
+// A-list: all 4 criteria met
+// B-list: ATR + turnover OK, but missing sector or trend alignment
+// SKIP:   ATR or turnover fail
+//
+// Refreshed every 90 min during market hours.
+// ─────────────────────────────────────────────────────────────────────────
+function classifyStockTier(sym, fundData, dayBias) {
+  if (!fundData) return { tier: 'SKIP', reason: 'no_fundamentals' };
+  const adrPct = fundData.atrPct || fundData.adr_pct || null;
+  if (adrPct == null) return { tier: 'SKIP', reason: 'no_adr' };
+  if (adrPct < 1.0 || adrPct > 4.0) return { tier: 'SKIP', reason: `adr_${adrPct.toFixed(2)}_out_of_band` };
+  const turnoverCr = fundData.turnoverCr || fundData.daily_turnover_cr || null;
+  if (turnoverCr != null && turnoverCr < 50) return { tier: 'SKIP', reason: `turnover_${turnoverCr.toFixed(0)}cr_low` };
+
+  // Sector strength (top 6 of 11)
+  const sectorStrong = !!fundData.sectorTop6 || !!fundData.sector_top6 ||
+                       (fundData.sectorRank != null && fundData.sectorRank <= 6);
+  // Daily trend alignment with day_bias
+  let trendAligned = false;
+  if (dayBias && dayBias.tier === 'BULL' && fundData.pctAbove200 != null && fundData.pctAbove200 > 0) trendAligned = true;
+  else if (dayBias && dayBias.tier === 'BEAR' && fundData.pctAbove200 != null && fundData.pctAbove200 < 0) trendAligned = true;
+  else if (dayBias && dayBias.tier === 'NEUTRAL') trendAligned = true; // no bias to align with
+
+  if (sectorStrong && trendAligned) return { tier: 'A', reason: 'sector_strong_trend_aligned' };
+  if (sectorStrong || trendAligned) return { tier: 'B', reason: sectorStrong ? 'sector_only' : 'trend_only' };
+  return { tier: 'B', reason: 'baseline_inclusion' };
+}
+
+async function refreshStockTiers() {
+  try {
+    const dayBias = getCurrentDayBias();
+    _stockTierCache.clear();
+    let aCount = 0, bCount = 0, skipCount = 0;
+    for (const stock of UNIVERSE) {
+      const sym = stock.sym;
+      const fund = stockFundamentals[sym];
+      const cls = classifyStockTier(sym, fund, dayBias);
+      _stockTierCache.set(sym, { ...cls, refreshedAt: Date.now() });
+      if (cls.tier === 'A') aCount++;
+      else if (cls.tier === 'B') bCount++;
+      else skipCount++;
+    }
+    _stockTierCacheRefreshedAt = Date.now();
+    console.log(`🏷  Tier refresh: A=${aCount} B=${bCount} SKIP=${skipCount} (dayBias=${dayBias.tier})`);
+    return { aCount, bCount, skipCount };
+  } catch (e) {
+    console.warn('[refreshStockTiers] failed:', e.message);
+    return null;
+  }
+}
+
+function getStockTier(sym) {
+  return _stockTierCache.get(sym) || { tier: 'B', reason: 'cache_miss' };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Trend-day detection (9:45 IST)
+//
+// Evaluates 4 signals:
+//   1. A/D ratio in 107-name universe ≥ TREND_DAY_AD_RATIO_THRESH (default 2.5)
+//   2. ≥ TREND_DAY_SECTOR_THRESH of 11 sectors green (default 6)
+//   3. VIX dropping ≥ TREND_DAY_VIX_DROP_THRESH (default -1.5%)
+//   4. Gift Nifty gap held by 9:30 (gap not filled)
+//
+// If ≥ TREND_DAY_MIN_SIGNALS (default 3) fire, activates trend-day mode
+// for rest of session: relaxed ADR cap, wider trail, allow extra trades.
+// ─────────────────────────────────────────────────────────────────────────
+async function evaluateTrendDay() {
+  try {
+    const istDate = _istDateStr();
+    if (_trendDayState && _trendDayState.date === istDate && _trendDayState.evaluated) {
+      return _trendDayState; // idempotent — already decided today
+    }
+    let advanceCount = 0, declineCount = 0;
+    for (const stock of UNIVERSE) {
+      const sym = stock.sym;
+      const lp = livePrices[sym];
+      if (!lp || !Number.isFinite(lp.price) || !lp.previousClose) continue;
+      const change = (lp.price - lp.previousClose) / lp.previousClose;
+      if (change > 0.001) advanceCount++;
+      else if (change < -0.001) declineCount++;
+    }
+    const adRatio = declineCount > 0 ? advanceCount / declineCount : (advanceCount > 0 ? 99 : 0);
+    const adRatioBull = adRatio >= CONFIG.TREND_DAY_AD_RATIO_THRESH;
+    const adRatioBear = adRatio > 0 && (1 / adRatio) >= CONFIG.TREND_DAY_AD_RATIO_THRESH;
+
+    // Sector breadth (count of green sector indices)
+    let sectorsGreen = 0, sectorsRed = 0;
+    try {
+      const sectorIndices = ['NIFTY BANK','NIFTY IT','NIFTY AUTO','NIFTY FMCG','NIFTY METAL','NIFTY PHARMA','NIFTY ENERGY','NIFTY REALTY','NIFTY MEDIA','NIFTY PSU BANK','NIFTY PVT BANK'];
+      for (const idx of sectorIndices) {
+        const lp = livePrices[idx];
+        if (!lp || !lp.previousClose) continue;
+        const ch = (lp.price - lp.previousClose) / lp.previousClose;
+        if (ch > 0.001) sectorsGreen++;
+        else if (ch < -0.001) sectorsRed++;
+      }
+    } catch (_) {}
+    const sectorBull = sectorsGreen >= CONFIG.TREND_DAY_SECTOR_THRESH;
+    const sectorBear = sectorsRed >= CONFIG.TREND_DAY_SECTOR_THRESH;
+
+    // VIX delta
+    const ctx = getCurrentDayBias();
+    const vixDelta = ctx.vixDelta || 0;
+    const vixBull = vixDelta <= CONFIG.TREND_DAY_VIX_DROP_THRESH;
+    const vixBear = vixDelta >= 0.02;
+
+    // Gift gap held — proxy: current Nifty change pct vs gift gap pct (held if same sign + magnitude)
+    const niftyLp = livePrices['NIFTY 50'] || livePrices['NIFTY'] || null;
+    let giftHeldBull = false, giftHeldBear = false;
+    if (niftyLp && niftyLp.previousClose) {
+      const niftyCh = (niftyLp.price - niftyLp.previousClose) / niftyLp.previousClose;
+      const giftGap = ctx.giftGapPct || 0;
+      if (giftGap >= CONFIG.TREND_DAY_GIFT_HELD_THRESH && niftyCh >= giftGap * 0.7) giftHeldBull = true;
+      else if (giftGap <= -CONFIG.TREND_DAY_GIFT_HELD_THRESH && niftyCh <= giftGap * 0.7) giftHeldBear = true;
+    }
+
+    // Tally bull and bear signals separately
+    const bullSignals = [adRatioBull, sectorBull, vixBull, giftHeldBull].filter(Boolean).length;
+    const bearSignals = [adRatioBear, sectorBear, vixBear, giftHeldBear].filter(Boolean).length;
+    let active = false, direction = null;
+    if (bullSignals >= CONFIG.TREND_DAY_MIN_SIGNALS) { active = true; direction = 'BULL'; }
+    else if (bearSignals >= CONFIG.TREND_DAY_MIN_SIGNALS) { active = true; direction = 'BEAR'; }
+
+    _trendDayState = {
+      date: istDate, evaluated: true, active, direction,
+      bullSignals, bearSignals, adRatio: +adRatio.toFixed(2),
+      sectorsGreen, sectorsRed, vixDelta: +vixDelta.toFixed(4),
+      activatedAt: active ? new Date().toISOString() : null,
+    };
+    if (active) console.log(`🚀 TREND DAY DETECTED: ${direction} (${active === 'BULL' ? bullSignals : bearSignals}/4 signals)`);
+    else console.log(`📊 Trend-day check: bull=${bullSignals}/4 bear=${bearSignals}/4 — normal day`);
+    return _trendDayState;
+  } catch (e) {
+    console.warn('[evaluateTrendDay] failed:', e.message);
+    _trendDayState = { date: _istDateStr(), evaluated: true, active: false, direction: null, error: e.message };
+    return _trendDayState;
+  }
+}
+
+function getTrendDayState() {
+  if (_trendDayState && _trendDayState.date === _istDateStr()) return _trendDayState;
+  return { date: _istDateStr(), evaluated: false, active: false, direction: null };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Initial Balance day-type (10:15 IST)
+//
+// Computes Nifty 50 high/low of first 60 min (9:15-10:15 IST) — the IB.
+// Compares to ADR (average daily range) to classify the day:
+//   • Narrow IB (< 0.5 × ADR): TREND day likely
+//   • Normal IB:               BALANCED day
+//   • Wide IB (> 1.5 × ADR):   BRACKETED day (range-bound)
+//
+// Used for downstream sizing decisions and as a sanity check on
+// the trend-day detection result above.
+// ─────────────────────────────────────────────────────────────────────────
+async function evaluateInitialBalance() {
+  try {
+    const istDate = _istDateStr();
+    if (_initialBalance && _initialBalance.date === istDate) return _initialBalance;
+    const { rows } = await pool.query(`
+      SELECT MAX(high) AS h, MIN(low) AS l
+        FROM candles_5m
+       WHERE symbol IN ('NIFTY 50','NIFTY','^NSEI','NIFTY50')
+         AND candle_time >= ($1::date AT TIME ZONE 'Asia/Kolkata' + INTERVAL '9 hours 15 minutes')
+         AND candle_time <  ($1::date AT TIME ZONE 'Asia/Kolkata' + INTERVAL '10 hours 15 minutes')
+    `, [istDate]).catch(() => ({ rows: [] }));
+    if (!rows.length || rows[0].h == null) {
+      _initialBalance = { date: istDate, computed: false, reason: 'no_candle_data' };
+      return _initialBalance;
+    }
+    const iH = parseFloat(rows[0].h);
+    const iL = parseFloat(rows[0].l);
+    const range = iH - iL;
+    const niftyAvgRange = 250; // typical NIFTY ADR ~250 pts; could refine from history
+    const fraction = range / niftyAvgRange;
+    let dayType;
+    if (fraction < CONFIG.IB_NARROW_FRACTION) dayType = 'TREND';
+    else if (fraction > CONFIG.IB_WIDE_FRACTION) dayType = 'BRACKETED';
+    else dayType = 'BALANCED';
+    _initialBalance = { date: istDate, computed: true, iH, iL, range: +range.toFixed(2), fraction: +fraction.toFixed(2), dayType };
+    console.log(`📊 IB ${istDate}: ${iL.toFixed(0)}-${iH.toFixed(0)} (range=${range.toFixed(0)}, ${(fraction*100).toFixed(0)}% of ADR) → ${dayType}`);
+    return _initialBalance;
+  } catch (e) {
+    console.warn('[evaluateInitialBalance] failed:', e.message);
+    _initialBalance = { date: _istDateStr(), computed: false, error: e.message };
+    return _initialBalance;
+  }
+}
+
+function getInitialBalance() {
+  if (_initialBalance && _initialBalance.date === _istDateStr()) return _initialBalance;
+  return { date: _istDateStr(), computed: false };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Tier-based per-trade risk lookup
+//
+// Replaces flat CONFIG.RISK_PCT_PER_TRADE when V2_SETUPS_MODE=on.
+// Returns 0 if counter-bias B-list trade (skip).
+// ─────────────────────────────────────────────────────────────────────────
+function getTierBasedRisk(stockSym, candidateDirection) {
+  if (!CONFIG.V2_SETUPS_MODE) return CONFIG.RISK_PCT_PER_TRADE;
+  const tierInfo = getStockTier(stockSym);
+  const dayBias = getCurrentDayBias();
+  const trendDay = getTrendDayState();
+  const tier = tierInfo.tier;
+  if (tier === 'SKIP') return 0;
+  // Determine if candidate direction aligns with day_bias
+  let aligned = false;
+  if (dayBias.tier === 'BULL' && candidateDirection === 'LONG') aligned = true;
+  else if (dayBias.tier === 'BEAR' && candidateDirection === 'SHORT') aligned = true;
+  else if (dayBias.tier === 'NEUTRAL') aligned = true;
+  // B-list against bias = SKIP
+  if (tier === 'B' && !aligned) return 0;
+  // Look up base risk
+  let risk;
+  if (tier === 'A') risk = aligned ? CONFIG.TIER_A_ALIGNED_RISK : CONFIG.TIER_A_NEUTRAL_RISK;
+  else risk = aligned ? CONFIG.TIER_B_ALIGNED_RISK : CONFIG.TIER_B_NEUTRAL_RISK;
+  // Trend-day boost for tier-A aligned only
+  if (trendDay.active && tier === 'A' && aligned) risk += CONFIG.TREND_DAY_TIER_A_RISK_BOOST;
+  return Math.min(risk, CONFIG.MAX_RISK_PCT);
 }
 
 // Portfolio Sharpe/Sortino/Stats — Varsity M9 Ch 10
@@ -5648,9 +6117,22 @@ async function scanAndTrade() {
     const highs14 = candles.slice(-14).map(c=>c.high);
     const lows14  = candles.slice(-14).map(c=>c.low);
     const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
+    // 🚀 v2.0 — tier-based risk overrides flat RISK_PCT_PER_TRADE when V2_SETUPS_MODE=on.
+    // Returns 0 → SKIP (counter-bias B-list); positive → use as kellyRisk slot.
+    let v2EffectiveRisk = kellyRisk;
+    if (CONFIG.V2_SETUPS_MODE) {
+      const tierRisk = getTierBasedRisk(stock.sym, candidate.direction || 'LONG');
+      if (tierRisk === 0) {
+        const tinfo = getStockTier(stock.sym);
+        console.log(`  ⊘ SKIP ${stock.sym} — v2 tier=${tinfo.tier} counter-bias to dayBias=${getCurrentDayBias().tier}`);
+        recordPass2(candidate, 'SKIPPED', `v2_tier_${tinfo.tier}_counter_bias`);
+        continue;
+      }
+      v2EffectiveRisk = tierRisk;
+    }
     const posSize = isShortCandidate
-      ? computeShortPositionSize(price, atrVal, result.regime, ddStatus.equity * sizeMult, kellyRisk, candles)
-      : computePositionSize     (price, atrVal, result.regime, ddStatus.equity * sizeMult, kellyRisk, candles);
+      ? computeShortPositionSize(price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles)
+      : computePositionSize     (price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles);
     const sl  = posSize.stopLoss;
     const tgt = posSize.target;
     const qty = posSize.shares;
@@ -14069,23 +14551,182 @@ function scoreDayTrade(candles, sym, ctx) {
   if (lastRSI < 55) { overboughtScore = 0; overboughtDetail = ['Not overbought']; }
   overboughtScore = Math.max(0, Math.min(100, overboughtScore));
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // 🚀 v2.0 WAVE 3 — 3 CORE SETUPS (synthesized from top-trader research)
+  //
+  // Active when CONFIG.V2_SETUPS_MODE=on (env: V2_SETUPS_MODE=on).
+  // Otherwise, v1 8-setup pipeline above is unchanged.
+  //
+  // Each v2 setup has a long version + short mirror. Setup detection is
+  // pre-condition gates first (time, ADR, ADX, etc.), then a graded score.
+  // ═════════════════════════════════════════════════════════════════════════
+  const _istHHMMNow = (() => {
+    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+    return istNow.toISOString().slice(11, 16);
+  })();
+  const _inTimeWindow = (start, end) => _istHHMMNow >= start && _istHHMMNow <= end;
+  const _adrPctV2 = adrAvg > 0 ? adrAvg : 1.5; // fallback ~1.5% if unknown
+
+  // ── V2 SETUP 1: ORB+ (Pani ORB + Fisher ACD synthesis) ──────────────────
+  // Long: 5-min close above OR-high with vol confirmation, not extended.
+  // Short: 5-min close below OR-low.
+  let orbPlusScore = 0, orbPlusDetail = [];
+  let orbPlusShortScore = 0, orbPlusShortDetail = [];
+  {
+    const orbCfg = CONFIG.V2_ORB_PLUS;
+    const inWindow = _inTimeWindow(orbCfg.ENTRY_WINDOW_START, orbCfg.ENTRY_WINDOW_END);
+    const orFraction = orRange > 0 && _adrPctV2 > 0 ? (orRange / px) / (_adrPctV2 / 100) : 0;
+    const orFracOk = orFraction >= orbCfg.OR_MIN_FRACTION_ADR && orFraction <= orbCfg.OR_MAX_FRACTION_ADR;
+    const volOk = volRatio >= orbCfg.VOL_CONFIRMATION_MULT;
+    const notExtended = Math.abs(pctVWAP) <= orbCfg.VWAP_DISTANCE_MAX_PCT;
+    const adrOk = adrUsedPct < 80; // hard cap, relaxed via trend-day mode
+    // LONG: price broke above OR-high
+    if (inWindow && orFracOk && volOk && notExtended && adrOk && px > orHigh) {
+      orbPlusScore = 70;
+      orbPlusDetail.push(`ORB+ break ${px.toFixed(2)} > orHigh ${orHigh.toFixed(2)}`);
+      orbPlusDetail.push(`Vol ${volRatio.toFixed(1)}x`);
+      if (volRatio >= 2.0) { orbPlusScore += 10; orbPlusDetail.push('Strong vol'); }
+      if (orFraction <= 1.0) { orbPlusScore += 5; orbPlusDetail.push('Tight OR'); }
+      if (bullPattern) { orbPlusScore += 8; orbPlusDetail.push(bullPattern.name); }
+      if (adxVal >= 25) { orbPlusScore += 5; orbPlusDetail.push(`ADX ${adxVal.toFixed(0)}`); }
+      if (recentVWAPAbove) { orbPlusScore += 5; orbPlusDetail.push('Above VWAP'); }
+    }
+    // SHORT: price broke below OR-low
+    if (inWindow && orFracOk && volOk && notExtended && adrOk && px < orLow) {
+      orbPlusShortScore = 70;
+      orbPlusShortDetail.push(`ORB- break ${px.toFixed(2)} < orLow ${orLow.toFixed(2)}`);
+      orbPlusShortDetail.push(`Vol ${volRatio.toFixed(1)}x`);
+      if (volRatio >= 2.0) { orbPlusShortScore += 10; orbPlusShortDetail.push('Strong vol'); }
+      if (orFraction <= 1.0) { orbPlusShortScore += 5; orbPlusShortDetail.push('Tight OR'); }
+      if (bearPattern) { orbPlusShortScore += 8; orbPlusShortDetail.push(bearPattern.name); }
+      if (adxVal >= 25) { orbPlusShortScore += 5; orbPlusShortDetail.push(`ADX ${adxVal.toFixed(0)}`); }
+      if (!recentVWAPAbove) { orbPlusShortScore += 5; orbPlusShortDetail.push('Below VWAP'); }
+    }
+  }
+
+  // ── V2 SETUP 2: VWAP PULLBACK (Raschke Holy Grail intraday adaptation) ──
+  // Long: ADX>25, price was extended above VWAP, pulled back to touch VWAP, rejection candle.
+  // Short: same direction-flipped.
+  let vwapPullScore = 0, vwapPullDetail = [];
+  let vwapPullShortScore = 0, vwapPullShortDetail = [];
+  {
+    const cfg = CONFIG.V2_VWAP_PULLBACK;
+    const inWindow = _inTimeWindow(cfg.ENTRY_WINDOW_START, cfg.ENTRY_WINDOW_END);
+    const adxOk = adxVal >= cfg.MIN_ADX_15M;
+    const touchingVwap = Math.abs(pctVWAP) <= cfg.VWAP_TOLERANCE_PCT;
+    // Look at last 8 candles (40 min on 5min): was price above VWAP for ≥6 of them?
+    let recentAboveVwapCount = 0, recentBelowVwapCount = 0;
+    for (let i = Math.max(0, n - 8); i < n; i++) {
+      const c = candles[i];
+      // Use VWAP at that point (vwap array is computed earlier — vwapArr or similar)
+      // Fallback: compare close to current lastVWAP (approximation)
+      if (c.close > lastVWAP * 1.005) recentAboveVwapCount++;
+      else if (c.close < lastVWAP * 0.995) recentBelowVwapCount++;
+    }
+    const pullbackVolDrying = volRatio < 1.0;
+    // LONG: price touched VWAP after being extended above
+    if (inWindow && adxOk && touchingVwap && recentAboveVwapCount >= 6 && bullPattern && pullbackVolDrying) {
+      vwapPullScore = 70;
+      vwapPullDetail.push(`VWAP-pullback long: ADX ${adxVal.toFixed(0)}`);
+      vwapPullDetail.push(`${recentAboveVwapCount}/8 above VWAP`);
+      vwapPullDetail.push(bullPattern.name);
+      if (volRatio < 0.7) { vwapPullScore += 8; vwapPullDetail.push('Vol drying hard'); }
+      if (rsiCrossedMidlineUp) { vwapPullScore += 5; vwapPullDetail.push('RSI 50 cross up'); }
+      if (macdHistRising) { vwapPullScore += 5; vwapPullDetail.push('MACD rising'); }
+    }
+    // SHORT: price touched VWAP after being extended below
+    if (inWindow && adxOk && touchingVwap && recentBelowVwapCount >= 6 && bearPattern && pullbackVolDrying) {
+      vwapPullShortScore = 70;
+      vwapPullShortDetail.push(`VWAP-pullback short: ADX ${adxVal.toFixed(0)}`);
+      vwapPullShortDetail.push(`${recentBelowVwapCount}/8 below VWAP`);
+      vwapPullShortDetail.push(bearPattern.name);
+      if (volRatio < 0.7) { vwapPullShortScore += 8; vwapPullShortDetail.push('Vol drying hard'); }
+      if (!macdBull && macdHist < macdHistPrev) { vwapPullShortScore += 5; vwapPullShortDetail.push('MACD falling'); }
+    }
+  }
+
+  // ── V2 SETUP 3: COMPRESSION BREAKOUT (Pani NR4 + Brooks patience) ───────
+  // Long: 4 narrowing 15-min bars, total range < 0.5×ATR, breakout in trend direction.
+  // Short: same direction-flipped.
+  let compressionScore = 0, compressionDetail = [];
+  let compressionShortScore = 0, compressionShortDetail = [];
+  {
+    const cfg = CONFIG.V2_COMPRESSION;
+    const inWindow = _inTimeWindow(cfg.ENTRY_WINDOW_START, cfg.ENTRY_WINDOW_END);
+    const numBars = cfg.NUM_NARROWING_BARS;
+    if (inWindow && n >= numBars + 1) {
+      // Take the prior `numBars` candles (excluding current). Check if ranges narrow.
+      const ranges = [];
+      let cmpHigh = -Infinity, cmpLow = Infinity;
+      for (let i = n - numBars - 1; i < n - 1; i++) {
+        const c = candles[i];
+        if (!c) continue;
+        ranges.push(c.high - c.low);
+        if (c.high > cmpHigh) cmpHigh = c.high;
+        if (c.low < cmpLow)   cmpLow  = c.low;
+      }
+      const narrowing = ranges.length === numBars && ranges.every((r, i) => i === 0 || r <= ranges[i-1] * 1.05);
+      const totalRange = cmpHigh - cmpLow;
+      const compactEnough = atrVal > 0 && totalRange < atrVal * cfg.MAX_RANGE_FRACTION_ATR;
+      const volOk = volRatio >= cfg.VOL_CONFIRMATION_MULT;
+      // Daily trend alignment
+      const dailyBull = stockFundamentals[sym]?.pctAbove200 > 0 || stockFundamentals[sym]?.goldenCross;
+      const dailyBear = stockFundamentals[sym]?.pctAbove200 < 0 || stockFundamentals[sym]?.deathCross;
+      // LONG: break above compression high in bull daily trend
+      if (narrowing && compactEnough && volOk && dailyBull && px > cmpHigh) {
+        compressionScore = 70;
+        compressionDetail.push(`Compression: ${numBars} narrowing bars`);
+        compressionDetail.push(`Range ${totalRange.toFixed(2)} < ${(atrVal * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
+        compressionDetail.push(`Break ${px.toFixed(2)} > ${cmpHigh.toFixed(2)}`);
+        if (volRatio >= 2.0) { compressionScore += 10; compressionDetail.push('Strong vol'); }
+        if (bullPattern) { compressionScore += 8; compressionDetail.push(bullPattern.name); }
+      }
+      // SHORT: break below compression low in bear daily trend
+      if (narrowing && compactEnough && volOk && dailyBear && px < cmpLow) {
+        compressionShortScore = 70;
+        compressionShortDetail.push(`Compression: ${numBars} narrowing bars`);
+        compressionShortDetail.push(`Range ${totalRange.toFixed(2)} < ${(atrVal * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
+        compressionShortDetail.push(`Break ${px.toFixed(2)} < ${cmpLow.toFixed(2)}`);
+        if (volRatio >= 2.0) { compressionShortScore += 10; compressionShortDetail.push('Strong vol'); }
+        if (bearPattern) { compressionShortScore += 8; compressionShortDetail.push(bearPattern.name); }
+      }
+    }
+  }
+
   // ── PICK BEST SETUP ────────────────────────────────────────────────────
-  const setups = [
+  // Default v1 candidates
+  let setups = [
     { type: 'VWAP_RECLAIM', score: vwapScore, detail: vwapDetail, emoji: '🔵' },
     { type: 'GAP_AND_GO',   score: gapScore,  detail: gapDetail,  emoji: '🚀' },
     { type: 'BREAKOUT',     score: breakoutScore, detail: breakoutDetail, emoji: '📈' },
     { type: 'OVERSOLD_BOUNCE', score: bounceScore, detail: bounceDetail, emoji: '🔄' },
   ];
+  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 with 3 core setups only
+  if (CONFIG.V2_SETUPS_MODE) {
+    setups = [
+      { type: 'ORB_PLUS',       score: orbPlusScore,    detail: orbPlusDetail,    emoji: '🌅' },
+      { type: 'VWAP_PULLBACK',  score: vwapPullScore,   detail: vwapPullDetail,   emoji: '↩️' },
+      { type: 'COMPRESSION',    score: compressionScore, detail: compressionDetail, emoji: '🎯' },
+    ];
+  }
   setups.sort((a, b) => b.score - a.score);
   const best = setups[0];
 
   // ── PICK BEST SHORT SETUP (separate ranking — short side independent) ──
-  const setupsShort = [
+  let setupsShort = [
     { type: 'VWAP_BREAKDOWN',     score: vwapBreakdownScore, detail: vwapBreakdownDetail, emoji: '🔻' },
     { type: 'GAP_AND_DROP',       score: gapAndDropScore,    detail: gapAndDropDetail,    emoji: '💥' },
     { type: 'BREAKDOWN',          score: breakdownScore,     detail: breakdownDetail,     emoji: '📉' },
     { type: 'OVERBOUGHT_REJECTION', score: overboughtScore,  detail: overboughtDetail,    emoji: '🚫' },
   ];
+  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 short with 3 mirror setups
+  if (CONFIG.V2_SETUPS_MODE) {
+    setupsShort = [
+      { type: 'ORB_MINUS',           score: orbPlusShortScore,    detail: orbPlusShortDetail,    emoji: '🌅' },
+      { type: 'VWAP_PULLBACK_SHORT', score: vwapPullShortScore,   detail: vwapPullShortDetail,   emoji: '↩️' },
+      { type: 'COMPRESSION_SHORT',   score: compressionShortScore, detail: compressionShortDetail, emoji: '🎯' },
+    ];
+  }
   setupsShort.sort((a, b) => b.score - a.score);
   const bestShort = setupsShort[0];
 
@@ -21370,6 +22011,97 @@ async function checkKiteTokenFreshness(reason = 'morning') {
 cron.schedule('30 8 * * 1-5', () => checkKiteTokenFreshness('morning-0830'), { timezone: 'Asia/Kolkata' });
 // Also check at boot (give DB 30s to be ready)
 setTimeout(() => checkKiteTokenFreshness('boot').catch(() => {}), 30 * 1000);
+
+// ═════════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 WAVE 3 — Strategy architecture cron schedule
+//
+// Runs whether V2_SETUPS_MODE is on or off (data collection is cheap).
+// Output is consumed by Pass 1/2 only when V2_SETUPS_MODE=on, otherwise
+// just stored to DB for analysis/observability.
+// ═════════════════════════════════════════════════════════════════════════
+// 8:30 IST — pre-market routine: Gift Nifty / VIX / FII-DII / 3-day pivot
+cron.schedule('30 8 * * 1-5', () => runPremarketRoutine().catch(e => console.warn('[premarket-cron]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+// 9:14 IST — first universe tier refresh (just before market open)
+cron.schedule('14 9 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-9:14]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+// 9:45 IST — trend-day detection (Option-A strategy from spec)
+cron.schedule('45 9 * * 1-5', () => evaluateTrendDay().catch(e => console.warn('[trendday-cron]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+// 10:15 IST — Initial Balance day-type classification (Market Profile)
+cron.schedule('15 10 * * 1-5', () => evaluateInitialBalance().catch(e => console.warn('[ib-cron]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+// 11:00 IST + 13:30 IST — universe tier refresh (mid-session)
+cron.schedule('0 11 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-11:00]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+cron.schedule('30 13 * * 1-5', () => refreshStockTiers().catch(e => console.warn('[tier-cron-13:30]', e.message)),
+  { timezone: 'Asia/Kolkata' });
+// Boot trigger: run premarket once on startup if it's after 8:30 IST and we don't have today's
+setTimeout(async () => {
+  try {
+    const istHHMM = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16);
+    const istDate = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    if (istHHMM >= '08:30' && istHHMM <= '15:30') {
+      const { rows } = await pool.query(`SELECT 1 FROM daily_premarket_context WHERE ist_date=$1`, [istDate]).catch(() => ({ rows: [] }));
+      if (rows.length === 0) {
+        console.log('🚀 v2 boot: running premarket + tier refresh once (missed 8:30 cron)');
+        await runPremarketRoutine().catch(() => {});
+        await refreshStockTiers().catch(() => {});
+        if (istHHMM >= '09:45') await evaluateTrendDay().catch(() => {});
+        if (istHHMM >= '10:15') await evaluateInitialBalance().catch(() => {});
+      }
+    }
+  } catch (e) { /* swallow boot warmup errors */ }
+}, 60 * 1000);
+
+// Admin endpoints for v2 visibility
+app.get('/api/admin/v2/premarket', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json(getCurrentDayBias());
+});
+app.get('/api/admin/v2/trend-day', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json(getTrendDayState());
+});
+app.get('/api/admin/v2/initial-balance', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json(getInitialBalance());
+});
+app.get('/api/admin/v2/tiers', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const tiers = [];
+  for (const [sym, info] of _stockTierCache.entries()) tiers.push({ sym, ...info });
+  res.json({
+    refreshedAt: _stockTierCacheRefreshedAt ? new Date(_stockTierCacheRefreshedAt).toISOString() : null,
+    universeSize: UNIVERSE.length,
+    classifiedSize: tiers.length,
+    counts: {
+      A: tiers.filter(t => t.tier === 'A').length,
+      B: tiers.filter(t => t.tier === 'B').length,
+      SKIP: tiers.filter(t => t.tier === 'SKIP').length,
+    },
+    tiers,
+  });
+});
+app.post('/api/admin/v2/tiers/refresh', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const result = await refreshStockTiers();
+  res.json({ ok: true, result });
+});
+app.get('/api/admin/v2/status', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  res.json({
+    v2SetupsMode: !!CONFIG.V2_SETUPS_MODE,
+    premarket: getCurrentDayBias(),
+    trendDay: getTrendDayState(),
+    initialBalance: getInitialBalance(),
+    tierCounts: {
+      A: Array.from(_stockTierCache.values()).filter(t => t.tier === 'A').length,
+      B: Array.from(_stockTierCache.values()).filter(t => t.tier === 'B').length,
+      SKIP: Array.from(_stockTierCache.values()).filter(t => t.tier === 'SKIP').length,
+    },
+  });
+});
 
 // 2026-04-29 — admin endpoint to read current Kite token freshness
 // without waiting for cron. Useful when investigating "is auth currently
