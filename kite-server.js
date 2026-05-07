@@ -10391,8 +10391,12 @@ app.get('/api/admin/daily-report', async (req, res) => {
       // report shows 0 trades during paper mode even when the engine fires.
       // trade_mode column tags each row so the UI can label them.
       safeQuery(
+        // 🚀 v2 Wave 11 audit fix — added regime + indicators columns to UNION.
+        // Pre-fix, tradeRegimeCounts always reported UNKNOWN (the SELECT didn't
+        // project these fields, so t.regime was always undefined).
         `SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
+                regime, indicators,
                 exit_reason, status, order_id, exit_order_id, 'live'::text AS trade_mode,
                 'LONG'::text AS direction,
                 NULL::varchar AS tier, NULL::varchar AS day_bias_tier, NULL::boolean AS trend_day_active,
@@ -10402,6 +10406,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
           UNION ALL
          SELECT id, symbol, name, type, price, quantity, entry_time, exit_time,
                 exit_price, pnl, pnl_pct, stop_loss, target, signal_score, strategy,
+                regime, indicators,
                 exit_reason, status, NULL::varchar AS order_id, NULL::varchar AS exit_order_id, 'paper'::text AS trade_mode,
                 COALESCE(direction, 'LONG')::text AS direction,
                 tier::varchar, day_bias_tier::varchar, trend_day_active::boolean,
@@ -10514,15 +10519,21 @@ app.get('/api/admin/daily-report', async (req, res) => {
          HAVING COUNT(*) > 1`,
         [start, end]
       ),
-      // Orphan-exit regression: status=OPEN but exit_order_id already set.
-      // Scope to today's IST day. Only live_trades has order_id columns
-      // (paper_trades doesn't fire real Kite orders), so this stays
-      // live-only — orphan-exit is a Kite-side state mismatch, paper has
-      // no equivalent failure mode.
+      // Orphan-exit regression: status=OPEN but exit_order_id (live) or
+      // exit_reason (paper) already set. Scope to today's IST day.
+      // 🚀 Wave 11 audit fix — extended to paper_trades. The original logic
+      // assumed paper has no orphan failure mode, but squareOffPaperTrades or
+      // the partial-exit path can write exit_reason while leaving status='OPEN'
+      // if a transaction fails partway. Now both modes covered via UNION.
       safeQuery(
-        `SELECT id, symbol, entry_time, exit_order_id, status
+        `SELECT id, symbol, entry_time, exit_order_id::text AS exit_marker, status, 'live'::text AS mode
          FROM live_trades
          WHERE status = 'OPEN' AND exit_order_id IS NOT NULL
+           AND entry_time >= $1 AND entry_time < $2
+         UNION ALL
+         SELECT id, symbol, entry_time, exit_reason::text AS exit_marker, status, 'paper'::text AS mode
+         FROM paper_trades
+         WHERE status = 'OPEN' AND exit_reason IS NOT NULL
            AND entry_time >= $1 AND entry_time < $2
          LIMIT 20`,
         [start, end]
@@ -10570,9 +10581,16 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const longWinRate  = closedLongs.length  ? +(longWins  / closedLongs.length  * 100).toFixed(1) : null;
     const shortWinRate = closedShorts.length ? +(shortWins / closedShorts.length * 100).toFixed(1) : null;
 
-    const critIncidents  = incList.filter(i => i.severity === 'critical').length;
-    const errIncidents   = incList.filter(i => i.severity === 'error').length;
-    const warnIncidents  = incList.filter(i => i.severity === 'warn').length;
+    // 🚀 v2 Wave 11 audit fix — split UNRESOLVED incidents from auto-resolved ones.
+    // Pre-fix, KITE_TOKEN_AGING auto-resolved within minutes still flipped the
+    // entire day RED because the count included resolved incidents.
+    const critIncidentsAll      = incList.filter(i => i.severity === 'critical').length;
+    const errIncidentsAll       = incList.filter(i => i.severity === 'error').length;
+    const critIncidents         = incList.filter(i => i.severity === 'critical' && !i.resolved_at).length;
+    const errIncidents          = incList.filter(i => i.severity === 'error'    && !i.resolved_at).length;
+    const warnIncidents         = incList.filter(i => i.severity === 'warn'     && !i.resolved_at).length;
+    const critIncidentKinds     = incList.filter(i => i.severity === 'critical' && !i.resolved_at).map(i => i.kind);
+    const errIncidentKinds      = incList.filter(i => i.severity === 'error'    && !i.resolved_at).map(i => i.kind);
     const actionsTried   = incList.filter(i => i.action_attempted && i.action_attempted !== 'NONE').length;
     // 2026-05-02 — count 'skipped' and 'refreshed' as healthy outcomes alongside
     // 'ok'. The 3f9fcb7 classifier began emitting those for legitimately-good
@@ -10660,13 +10678,24 @@ app.get('/api/admin/daily-report', async (req, res) => {
       exitReasonsCounts[bucket] = (exitReasonsCounts[bucket] || 0) + 1;
     }
     // 🚀 v2.0 wave 3 — tier-attributed P&L (paper trades only; live trades have NULL tier)
+    // 🚀 Wave 11 audit fix — strip ":PARTIAL" suffix rows from this aggregate
+    // so a single trade that took partial+runner doesn't double-count as 2
+    // wins / 2 trades with both halves of P&L attributed to the tier.
+    // Counts the PARTIAL row's P&L into the parent's tier (the partial INSERT
+    // since Wave 8 carries the same `tier` value), but de-dupes on trade count.
     const tierAttribution = { A: { trades:0, pnl:0, wins:0 }, B: { trades:0, pnl:0, wins:0 }, NONE: { trades:0, pnl:0, wins:0 } };
     for (const t of closedTrades) {
       const tier = t.tier || 'NONE';
       const bucket = tierAttribution[tier] || tierAttribution.NONE;
-      bucket.trades++;
+      const isPartialRow = String(t.strategy || '').endsWith(':PARTIAL');
+      // P&L always accumulates (each row's pnl is its own slice — partial gets its
+      // half, parent gets the runner half). Trade count + win count only counts
+      // PARENT rows so a partial+runner pair = 1 trade, not 2.
       bucket.pnl += parseFloat(t.pnl || 0);
-      if (parseFloat(t.pnl || 0) > 0) bucket.wins++;
+      if (!isPartialRow) {
+        bucket.trades++;
+        if (parseFloat(t.pnl || 0) > 0) bucket.wins++;
+      }
     }
     for (const k of Object.keys(tierAttribution)) {
       const b = tierAttribution[k];
@@ -10674,16 +10703,45 @@ app.get('/api/admin/daily-report', async (req, res) => {
       b.winRate = b.trades > 0 ? +(b.wins / b.trades * 100).toFixed(1) : null;
     }
     // 🚀 v2.0 wave 3 — per-setup expectancy + SQN summary (today only, capped)
+    // 🚀 Wave 11 audit fix — combine partial+parent rows of the same trade
+    // into a single R-multiple before grouping. Pre-fix, the parent row had
+    // its `quantity` mutated to remainingQty after partial → R computed using
+    // half the original quantity → R inflated 2× → SQN inflated.
+    // Combine by (symbol, entry_time) which uniquely identifies a trade.
     const setupSqnToday = (() => {
-      const grouped = {};
+      // First pass: bucket rows by (symbol, entry_time) trade key
+      const tradeMap = new Map(); // key -> { setup, direction, totalPnl, totalRisk, parentRow }
       for (const t of closedTrades) {
         if (t.initial_risk_per_share == null || !(parseFloat(t.initial_risk_per_share) > 0)) continue;
         if (!(parseFloat(t.quantity) > 0)) continue;
-        const setup = (t.strategy || 'UNKNOWN').replace(/:PARTIAL$/, '');
-        const key = `${setup}_${t.direction || 'LONG'}`;
+        const tradeKey = `${t.symbol}|${new Date(t.entry_time).getTime()}`;
+        const setupRaw = t.strategy || 'UNKNOWN';
+        const setup = setupRaw.replace(/:PARTIAL$/, '');
+        const isPartialRow = setupRaw.endsWith(':PARTIAL');
+        const initRisk = parseFloat(t.initial_risk_per_share);
+        const qty = parseFloat(t.quantity);
+        const pnl = parseFloat(t.pnl);
+        const existing = tradeMap.get(tradeKey);
+        if (existing) {
+          existing.totalPnl += pnl;
+          existing.totalRisk += initRisk * qty;  // sum the risk dollars across both legs
+        } else {
+          tradeMap.set(tradeKey, {
+            setup, direction: t.direction || 'LONG',
+            totalPnl: pnl, totalRisk: initRisk * qty,
+            isParent: !isPartialRow,
+          });
+        }
+      }
+      // Second pass: compute R per consolidated trade and group by setup+direction
+      const grouped = {};
+      for (const trade of tradeMap.values()) {
+        if (trade.totalRisk <= 0) continue;
+        const R = trade.totalPnl / trade.totalRisk;
+        if (!Number.isFinite(R)) continue;
+        const key = `${trade.setup}_${trade.direction}`;
         if (!grouped[key]) grouped[key] = [];
-        const R = parseFloat(t.pnl) / (parseFloat(t.initial_risk_per_share) * parseFloat(t.quantity));
-        if (Number.isFinite(R)) grouped[key].push(R);
+        grouped[key].push(R);
       }
       const out = [];
       for (const [setup, rs] of Object.entries(grouped)) {
@@ -10701,11 +10759,51 @@ app.get('/api/admin/daily-report', async (req, res) => {
     const portfolioRegime = typeof marketRegime !== 'undefined' ? marketRegime : null;
     const portfolioRegimeData = (typeof marketRegimeData !== 'undefined' && marketRegimeData) || {};
 
+    // 🚀 v2 Wave 11 audit fix — anomaly row-level checks that the report previously
+    // didn't surface at all (NaN P&L, degenerate quantity/SL, time inversions,
+    // abnormal returns). Each becomes a verdict-tripping condition.
+    const _nanPnlRows = closedTrades.filter(t => !Number.isFinite(Number(t.pnl)));
+    const _degenerateQty = closedTrades.filter(t => !(Number(t.quantity) > 0));
+    const _zeroSL = closedTrades.filter(t => Number(t.stop_loss) === 0 || Number(t.stop_loss) === Number(t.price));
+    const _timeInversion = closedTrades.filter(t => t.exit_time && t.entry_time && new Date(t.exit_time) < new Date(t.entry_time));
+    const _abnormalReturn = closedTrades.filter(t => Math.abs(Number(t.pnl_pct || 0)) > 100);
+    const _postCutoffEntries = tradesList.filter(t => {
+      if (!t.entry_time) return false;
+      const istHHMM = new Date(new Date(t.entry_time).getTime() + 5.5*3600*1000).toISOString().slice(11,16);
+      return istHHMM >= '14:30';
+    });
+    // V2 readiness checks
+    const _v2Premarket  = _premarketContext  && _premarketContext.date  === istDate;
+    const _v2TrendDay   = _trendDayState     && _trendDayState.date     === istDate && _trendDayState.evaluated;
+    const _v2IB         = _initialBalance    && _initialBalance.date    === istDate;
+    const _v2TierA      = (typeof _stockTierCache !== 'undefined' && _stockTierCache && _stockTierCache.size > 0)
+      ? Array.from(_stockTierCache.values()).filter(t => t.tier === 'A').length
+      : 0;
+    const _v2WatchlistOk = !!_dailyWatchlistBuiltAt;
+    // Strategy diversity
+    const _topStrategy = Object.entries(tradeStrategyCounts).sort((a,b) => b[1] - a[1])[0];
+    const _strategyDominance = _topStrategy && tradesList.length > 0
+      ? _topStrategy[1] / tradesList.length : 0;
+    // Auto-loss / time-stop pile-up
+    const _winRate = closedTrades.length > 0 ? (closedTrades.filter(t => Number(t.pnl) > 0).length / closedTrades.length) : null;
+    const _allTimeStop = closedTrades.length >= 5 && timeStopCount >= closedTrades.length * 0.8;
+
     // Overall verdict
     let verdict = 'GREEN';
     let verdictReason = 'No anomalies detected';
-    if (critIncidents > 0) {
-      verdict = 'RED'; verdictReason = `${critIncidents} critical incident(s)`;
+    if (_nanPnlRows.length > 0) {
+      verdict = 'RED'; verdictReason = `NaN P&L on ${_nanPnlRows.length} row(s) — data corruption`;
+    } else if (_degenerateQty.length > 0) {
+      verdict = 'RED'; verdictReason = `${_degenerateQty.length} CLOSED row(s) with quantity ≤ 0`;
+    } else if (_timeInversion.length > 0) {
+      verdict = 'RED'; verdictReason = `${_timeInversion.length} row(s) with exit_time before entry_time`;
+    } else if (_abnormalReturn.length > 0) {
+      verdict = 'RED'; verdictReason = `${_abnormalReturn.length} row(s) with |return| > 100% — slippage/qty bug?`;
+    } else if (critIncidents > 0) {
+      verdict = 'RED';
+      // Name WHICH critical incident kinds, not just count (auto-resolved excluded above)
+      const _kinds = critIncidentKinds.slice(0, 3).join(', ');
+      verdictReason = `${critIncidents} unresolved critical: ${_kinds}${critIncidentKinds.length > 3 ? '…' : ''}`;
     } else if (dupBuys.length > 0) {
       // 🟡 2026-05-06 audit fix — direction-aware label. Was hardcoded "BUY"
       // even when the dup row was a paper SHORT entry (type='SELL').
@@ -10714,11 +10812,29 @@ app.get('/api/admin/daily-report', async (req, res) => {
     } else if (orphans.length > 0) {
       verdict = 'RED'; verdictReason = `${orphans.length} orphaned exit(s)`;
     } else if (errIncidents > 0) {
-      verdict = 'RED'; verdictReason = `${errIncidents} error-level incident(s)`;
+      verdict = 'RED';
+      const _kinds = errIncidentKinds.slice(0, 3).join(', ');
+      verdictReason = `${errIncidents} unresolved error: ${_kinds}${errIncidentKinds.length > 3 ? '…' : ''}`;
+    } else if (_postCutoffEntries.length > 0) {
+      verdict = 'YELLOW'; verdictReason = `${_postCutoffEntries.length} entries fired AFTER 14:30 IST cutoff`;
+    } else if (_strategyDominance >= 0.9 && tradesList.length >= 5) {
+      verdict = 'YELLOW'; verdictReason = `Strategy router stuck — ${_topStrategy[0]} = ${(_strategyDominance*100).toFixed(0)}% of ${tradesList.length} trades`;
+    } else if (_allTimeStop) {
+      verdict = 'YELLOW'; verdictReason = `${timeStopCount}/${closedTrades.length} trades exited via time-stop — system not catching moves`;
+    } else if (_winRate !== null && _winRate === 0 && closedTrades.length >= 10) {
+      verdict = 'YELLOW'; verdictReason = `0 winners out of ${closedTrades.length} closed trades`;
     } else if (warnIncidents > 0) {
       verdict = 'YELLOW'; verdictReason = `${warnIncidents} warning(s)`;
     } else if (errTotal > 50) {
       verdict = 'YELLOW'; verdictReason = `${errTotal} error rows across ${errList.length} patterns`;
+    } else if (CONFIG.V2_SETUPS_MODE && (!_v2Premarket || !_v2TrendDay || !_v2IB || _v2TierA === 0 || !_v2WatchlistOk)) {
+      const missing = [];
+      if (!_v2Premarket) missing.push('premarket');
+      if (!_v2TrendDay)  missing.push('trend-day');
+      if (!_v2IB)        missing.push('IB');
+      if (_v2TierA === 0) missing.push('tier-A=0');
+      if (!_v2WatchlistOk) missing.push('watchlist');
+      verdict = 'YELLOW'; verdictReason = `v2 readiness: missing ${missing.join(', ')}`;
     } else if (scanCount === 0 && pipelineCount === 0 && tradesList.length === 0) {
       verdict = 'YELLOW'; verdictReason = 'No pipeline/scan/trade activity';
     }
@@ -10765,10 +10881,56 @@ app.get('/api/admin/daily-report', async (req, res) => {
         detail: `${errTotal} total across ${errList.length} unique patterns`,
       },
       {
-        label: 'No critical ops-incidents',
+        label: 'No UNRESOLVED critical ops-incidents',
         pass: critIncidents === 0,
-        detail: critIncidents === 0 ? 'clean' : `${critIncidents} critical — investigate`,
+        detail: critIncidents === 0
+          ? (critIncidentsAll > 0 ? `clean (${critIncidentsAll} critical auto-resolved)` : 'clean')
+          : `${critIncidents} unresolved (kinds: ${critIncidentKinds.slice(0,3).join(', ')})`,
       },
+      // 🚀 Wave 11 — new anomaly checks for data corruption
+      {
+        label: 'No NaN/Infinity P&L rows',
+        pass: _nanPnlRows.length === 0,
+        detail: _nanPnlRows.length === 0 ? 'clean' : _nanPnlRows.slice(0,3).map(t => `id=${t.id}/${t.symbol}`).join(', '),
+      },
+      {
+        label: 'No degenerate quantity (≤ 0)',
+        pass: _degenerateQty.length === 0,
+        detail: _degenerateQty.length === 0 ? 'clean' : `${_degenerateQty.length} bad row(s)`,
+      },
+      {
+        label: 'No exit_time before entry_time',
+        pass: _timeInversion.length === 0,
+        detail: _timeInversion.length === 0 ? 'clean' : `${_timeInversion.length} time-inversion(s)`,
+      },
+      {
+        label: 'No abnormal returns (|pnl_pct| > 100%)',
+        pass: _abnormalReturn.length === 0,
+        detail: _abnormalReturn.length === 0 ? 'clean' : _abnormalReturn.slice(0,3).map(t => `${t.symbol}:${t.pnl_pct}%`).join(', '),
+      },
+      {
+        label: 'No entries past 14:30 IST cutoff',
+        pass: _postCutoffEntries.length === 0,
+        detail: _postCutoffEntries.length === 0 ? 'clean' : `${_postCutoffEntries.length} late entries`,
+      },
+      {
+        label: 'Strategy diversity (no single ≥ 90% of trades)',
+        pass: _strategyDominance < 0.9 || tradesList.length < 5,
+        detail: tradesList.length < 5
+          ? `only ${tradesList.length} trades — N/A`
+          : `top: ${_topStrategy ? _topStrategy[0] : '—'} = ${(_strategyDominance*100).toFixed(0)}%`,
+      },
+      ...(CONFIG.V2_SETUPS_MODE ? [{
+        label: 'v2 readiness (premarket + tier + watchlist + trend-day + IB)',
+        pass: _v2Premarket && _v2TrendDay && _v2IB && _v2TierA > 0 && _v2WatchlistOk,
+        detail: [
+          `premarket=${_v2Premarket ? 'OK' : 'MISSING'}`,
+          `tierA=${_v2TierA}`,
+          `watchlist=${_v2WatchlistOk ? 'OK' : 'MISSING'}`,
+          `trend=${_v2TrendDay ? 'OK' : 'MISSING'}`,
+          `IB=${_v2IB ? 'OK' : 'MISSING'}`,
+        ].join(' · '),
+      }] : []),
       {
         label: 'Auto-remediation effective (ok / attempted)',
         pass: actionsTried === 0 || actionsOk / Math.max(actionsTried, 1) >= 0.5,
