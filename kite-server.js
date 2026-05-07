@@ -5251,11 +5251,15 @@ async function scanAndTrade() {
   // Phase 5 · Part 4 — over-trading guard. Hard cap on new entries per
   // calendar day. Addresses the "death by a thousand cuts" failure where
   // choppy markets produced 15+ marginal entries and steady-state losses.
+  // 🚀 v2.0 — trend-day mode allows TREND_DAY_EXTRA_TRADES additional entries
+  // (default +2) to capture extended trend continuations.
+  const _v2TrendActive = CONFIG.V2_SETUPS_MODE && (typeof getTrendDayState === 'function') && getTrendDayState().active;
+  const _effectiveMaxTrades = CONFIG.MAX_TRADES_PER_DAY + (_v2TrendActive ? CONFIG.TREND_DAY_EXTRA_TRADES : 0);
   const tradeCap = await robotradeGuards.checkTradeCountCap(pool, {
-    MAX_TRADES_PER_DAY: CONFIG.MAX_TRADES_PER_DAY,
+    MAX_TRADES_PER_DAY: _effectiveMaxTrades,
   });
   if (tradeCap.tripped) {
-    console.log(`🛑 Daily trade cap hit — ${tradeCap.countToday}/${tradeCap.cap} trades today. Blocking new entries.`);
+    console.log(`🛑 Daily trade cap hit — ${tradeCap.countToday}/${tradeCap.cap} trades today${_v2TrendActive ? ' (trend-day boosted)' : ''}. Blocking new entries.`);
     canEnterNew = false;
   }
 
@@ -5368,7 +5372,18 @@ async function scanAndTrade() {
         const profit = isShort ? (entryPrice - cmp) : (cmp - entryPrice);
         let trailSL = sl;
         const _trailRegime = (result && result.regime) || 'UNKNOWN';
-        const trailMult = (_trailRegime === 'RANGING') ? 2.0 : 1.5;
+        // 🚀 v2.0 — trailing-stop multiplier tiers:
+        //   • Trend-day mode: 2.0× ATR (give winners room)
+        //   • Past 15:00 IST: 1.0× ATR (tighten as EOD approaches)
+        //   • RANGING regime: 2.0× ATR
+        //   • Default: 1.5× ATR (Pani consensus)
+        const _istHHMMTrail = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16);
+        const _trendDayActiveTrail = (typeof getTrendDayState === 'function') && getTrendDayState().active;
+        let trailMult;
+        if (_istHHMMTrail >= CONFIG.EOD_TIGHTEN_TRAIL_TIME) trailMult = 1.0;
+        else if (CONFIG.V2_SETUPS_MODE && _trendDayActiveTrail) trailMult = CONFIG.TREND_DAY_TRAIL_ATR_MULT;
+        else if (_trailRegime === 'RANGING') trailMult = 2.0;
+        else trailMult = CONFIG.TRAIL_ATR_MULT;
         if (profit > atr) {
           // Long: trail SL UP behind price (cmp - atr*mult). Short: trail SL
           // DOWN above price (cmp + atr*mult). "Move trail only if it's better"
@@ -6170,15 +6185,22 @@ async function scanAndTrade() {
       }
     }
 
-    // ── Dedup guard — skip if same symbol bought within last 60 seconds ──
+    // ── Dedup guard — skip if same symbol bought within last 60 MINUTES ──
+    // 🚀 v2.0 — was 60 seconds (dup-trade race protection only). v2 spec
+    // mandates 60-min minimum spacing so a stopped-out stock doesn't
+    // immediately re-enter. Includes both OPEN and recently-CLOSED rows.
     const { rows: recentDup } = await pool.query(
-      `SELECT id FROM paper_trades WHERE symbol=$1 AND status='OPEN' AND entry_time > NOW() - INTERVAL '60 seconds' LIMIT 1`,
+      `SELECT id FROM paper_trades
+        WHERE symbol=$1
+          AND (status='OPEN' OR (status='CLOSED' AND exit_time > NOW() - INTERVAL '60 minutes'))
+          AND entry_time > NOW() - INTERVAL '60 minutes'
+        LIMIT 1`,
       [stock.sym]
     );
     if (recentDup.length > 0) {
-      console.log(`  ⊘ SKIP ${stock.sym} — duplicate (already bought within 60s)`);
+      console.log(`  ⊘ SKIP ${stock.sym} — duplicate or recent (within 60-min cooldown)`);
       _latestPass2Debug.skippedDup += 1;
-      recordPass2(candidate, 'SKIPPED', 'dedup');
+      recordPass2(candidate, 'SKIPPED', 'dedup_60min');
       continue;
     }
 
@@ -6261,6 +6283,17 @@ async function scanAndTrade() {
     if (!isMarketOpen()) {
       console.log(`  ⊘ SKIP ${stock.sym} — market closed during scan (started in-hours, finishing out-of-hours)`);
       continue;
+    }
+    // 🚀 v2.0 — EOD no-new-entry cutoff at 14:30 IST (per spec layer 5)
+    // Pros stop entering ~1h before close to avoid getting caught by EOD
+    // squareoff timing. Existing positions still managed normally.
+    {
+      const istHHMM = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(11, 16);
+      if (istHHMM >= CONFIG.EOD_NO_NEW_ENTRY_TIME) {
+        console.log(`  ⊘ SKIP ${stock.sym} — past EOD no-entry cutoff ${CONFIG.EOD_NO_NEW_ENTRY_TIME} IST`);
+        recordPass2(candidate, 'SKIPPED', 'eod_no_entry_cutoff');
+        continue;
+      }
     }
 
     // Paper trade
@@ -14050,7 +14083,13 @@ function scoreDayTrade(candles, sym, ctx) {
   // daily range is almost always wrong — there's no room left to run before
   // ADR reversion kicks in. Hard reject at >=90%, soft penalty in each setup
   // scoring block below via adrExhaustedPenalty.
-  if (adrUsedPct >= 90) return null;
+  // 🚀 v2.0 — trend-day mode raises hard gate from 90% → 95% (continuations
+  // can extend further than typical ADR on confirmed trend days).
+  const _trendDayActivePreflight = (typeof getTrendDayState === 'function') && getTrendDayState().active;
+  const _adrHardGate = (CONFIG.V2_SETUPS_MODE && _trendDayActivePreflight)
+    ? Math.round(CONFIG.TREND_DAY_RELAXED_ADR_CAP * 100)  // 95
+    : 90;
+  if (adrUsedPct >= _adrHardGate) return null;
   const adrExhaustedPenalty = adrUsedPct >= 75 ? Math.min(20, (adrUsedPct - 75)) : 0;
   const adrRoomBonus        = adrUsedPct > 0 && adrUsedPct < 40 ? 5 : 0;
 
@@ -14712,16 +14751,21 @@ function scoreDayTrade(candles, sym, ctx) {
   // ── V2 SETUP 1: ORB+ (Pani ORB + Fisher ACD synthesis) ──────────────────
   // Long: 5-min close above OR-high with vol confirmation, not extended.
   // Short: 5-min close below OR-low.
+  // 🚀 v2.0 — trend-day mode relaxes vol confirmation (1.5×→1.2×) and
+  // raises the ADR cap (80%→95%) so late-trend continuations qualify.
   let orbPlusScore = 0, orbPlusDetail = [];
   let orbPlusShortScore = 0, orbPlusShortDetail = [];
   {
     const orbCfg = CONFIG.V2_ORB_PLUS;
+    const _trendDayActiveSetup = (typeof getTrendDayState === 'function') && getTrendDayState().active;
     const inWindow = _inTimeWindow(orbCfg.ENTRY_WINDOW_START, orbCfg.ENTRY_WINDOW_END);
     const orFraction = orRange > 0 && _adrPctV2 > 0 ? (orRange / px) / (_adrPctV2 / 100) : 0;
     const orFracOk = orFraction >= orbCfg.OR_MIN_FRACTION_ADR && orFraction <= orbCfg.OR_MAX_FRACTION_ADR;
-    const volOk = volRatio >= orbCfg.VOL_CONFIRMATION_MULT;
+    const _effectiveVolMult = _trendDayActiveSetup ? CONFIG.TREND_DAY_RELAXED_VOL_MULT : orbCfg.VOL_CONFIRMATION_MULT;
+    const _effectiveAdrCap  = _trendDayActiveSetup ? (CONFIG.TREND_DAY_RELAXED_ADR_CAP * 100) : 80;
+    const volOk = volRatio >= _effectiveVolMult;
     const notExtended = Math.abs(pctVWAP) <= orbCfg.VWAP_DISTANCE_MAX_PCT;
-    const adrOk = adrUsedPct < 80; // hard cap, relaxed via trend-day mode
+    const adrOk = adrUsedPct < _effectiveAdrCap;
     // LONG: price broke above OR-high
     if (inWindow && orFracOk && volOk && notExtended && adrOk && px > orHigh) {
       orbPlusScore = 70;
@@ -22020,6 +22064,10 @@ async function squareOffPaperTrades(reason = 'eod', directionFilter = null) {
 }
 // Cron: 15:20 IST every weekday — same time Zerodha squares off MIS.
 cron.schedule('20 15 * * 1-5', () => squareOffPaperTrades('eod-1520'), { timezone: 'Asia/Kolkata' });
+// 🚀 v2.0 — earlier squareoff at 15:15 IST per spec (5min before Zerodha auto-squareoff at 15:20).
+// Ensures we exit on our own price action at our own slippage budget rather than getting hit
+// by the Zerodha auto-squareoff which can have wider slippage.
+cron.schedule('15 15 * * 1-5', () => squareOffPaperTrades('eod-1515-v2'), { timezone: 'Asia/Kolkata' });
 
 // 2026-04-29 — Live-trades EOD safety net. Zerodha auto-squares MIS at
 // 15:20 IST; we check 5 min later (15:25). Anything still OPEN at that
