@@ -157,6 +157,16 @@ async function initDB() {
     // existing analytics + exit logic behave unchanged.
     await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS direction      VARCHAR(5) DEFAULT 'LONG'`).catch(()=>{});
     await pool.query(`UPDATE paper_trades SET direction = 'LONG' WHERE direction IS NULL`).catch(()=>{});
+    // 🚀 2026-05-07 v2.0 — exit-management state tracking
+    //   partial_taken: TRUE once 50% has been exited at +1.5R (prevents re-trigger)
+    //   time_stop_evaluated_at: tracks last time-stop check timestamp (avoid spam)
+    //   initial_risk_per_share: cached at entry — needed for R-multiple math on exit
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_taken            BOOLEAN DEFAULT FALSE`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_exit_price       DECIMAL(18,4)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_exit_qty         INTEGER`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS partial_exit_pnl         DECIMAL(18,4)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS initial_risk_per_share   DECIMAL(18,4)`).catch(()=>{});
+    await pool.query(`ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS time_stop_breakeven_set  BOOLEAN DEFAULT FALSE`).catch(()=>{});
     // Phase 4 — Part 9: rejected candidates table with forward-tracking columns
     await pool.query(`
       CREATE TABLE IF NOT EXISTS rejected_candidates (
@@ -2532,30 +2542,59 @@ const CONFIG = {
   BUY_SCORE:          2.5,
   SELL_SCORE:        -2.0,
   CONSENSUS_NEEDED:   2,
-  // Varsity M9: volatility-based position sizing replaces fixed amount
-  ACCOUNT_SIZE:       1000000, // ₹10 lakh trading capital (raised from 90K on 2026-05-06) — still overridden by live Kite margin when available
-  RISK_PCT_PER_TRADE: 0.02,    // 2% max risk per trade (Varsity M9 Ch 11)
-  MIN_RISK_PCT:       0.005,   // 0.5% floor
-  MAX_RISK_PCT:       0.03,    // 3% ceiling (half-Kelly floor)
-  MAX_POSITIONS:      10,
+  // ─────────────────────────────────────────────────────────────────────────
+  // 🚀 v2.0 STRATEGY — risk metering tightened to pro-trader consensus.
+  // See: ProTrader v2.0 Strategy Specification (synthesized from Raschke,
+  // Brooks, Fisher, Pani, Tharp, Sundar, Market Profile literature).
+  // Previous v1 values shown in [brackets] for rollback reference.
+  // ─────────────────────────────────────────────────────────────────────────
+  ACCOUNT_SIZE:       1000000, // ₹10 lakh trading capital
+  RISK_PCT_PER_TRADE: 0.010,   // [v1: 0.02] 1% per Tharp/Pani; pros use 0.5-1%
+  MIN_RISK_PCT:       0.004,   // [v1: 0.005] 0.4% floor (B-list neutral tier)
+  MAX_RISK_PCT:       0.0125,  // [v1: 0.03] 1.25% ceiling (A-list trend-day max)
+  MAX_POSITIONS:      5,       // [v1: 10] Concentration > diversification (Druckenmiller/Minervini)
   // ATR-based stops — Varsity M9 Ch 11
   ATR_MULT: { TRENDING:2.5, RANGING:1.5, BREAKOUT:2.0, MOMENTUM:2.0, UNKNOWN:2.0 },
   RISK_REWARD:        2.0,     // Varsity: minimum acceptable R:R
   // Portfolio risk limits
-  MAX_SECTOR_POSITIONS: 3,     // Varsity M9 Ch 8: concentration limit
+  MAX_SECTOR_POSITIONS: 2,     // [v1: 3] Tighter — pros run 1-2 per sector intraday
   MAX_CORRELATION:    0.7,     // Varsity M9 Ch 4: skip if >70% correlated with existing
   MAX_PORTFOLIO_BETA: 1.5,
-  // Drawdown circuit breaker — Varsity M9 Ch 6 (rolling high-water mark)
-  DD_REDUCE_PCT:  0.10,  // reduce size 50% at 10% drawdown
-  DD_PAUSE_PCT:   0.15,  // pause new entries at 15%
-  DD_HALT_PCT:    0.20,  // halt all trading at 20%
-  // NEW — Varsity M9 Ch 6: daily loss cap (calendar-reset at IST midnight)
-  // Complements DD_HALT_PCT: halts trading when TODAY's realized loss hits 2%.
-  DAILY_LOSS_CAP_PCT: 0.02,
-  // NEW — hard cap on number of trades opened per calendar day. Existing code
-  // had no such limit → death-by-1000-cuts on choppy days. 8 is generous but
-  // finite; reduce to 5-6 if over-trading continues.
-  MAX_TRADES_PER_DAY: 8,
+  // ─────────────────────────────────────────────────────────────────────────
+  // v2.0 — 4-tier daily DD circuit breaker (replaces old single-threshold).
+  // Prop-firm standard (Topstep/FTMO). Progressive size cuts + day-stop.
+  // Old DD_REDUCE_PCT/DD_PAUSE_PCT/DD_HALT_PCT kept as multi-day backstop only.
+  // ─────────────────────────────────────────────────────────────────────────
+  DD_YELLOW_PCT:      0.010,   // 1% daily DD → reduce size 50%
+  DD_ORANGE_PCT:      0.020,   // 2% daily DD → A+ only, size 25%
+  DD_RED_PCT:         0.030,   // 3% daily DD → 1 final A+ trade allowed
+  DD_BLACK_PCT:       0.040,   // 4% daily DD → STOP TRADING for the day
+  // Multi-day rolling drawdown (high-water mark) — kept as outer safety
+  DD_REDUCE_PCT:  0.10,  // reduce size 50% at 10% rolling DD
+  DD_PAUSE_PCT:   0.15,  // pause new entries at 15% rolling DD
+  DD_HALT_PCT:    0.20,  // halt all trading at 20% rolling DD
+  DAILY_LOSS_CAP_PCT: 0.04,    // [v1: 0.02] now matches DD_BLACK_PCT (single source of truth)
+  MAX_TRADES_PER_DAY: 5,       // [v1: 8] Pani: 1-3/day pros take. 5 is generous but finite.
+  // ─────────────────────────────────────────────────────────────────────────
+  // v2.0 — Tilt management (Pani 3-strike rule + post-streak overconfidence guard)
+  // ─────────────────────────────────────────────────────────────────────────
+  TILT_PAUSE_AFTER_LOSSES:    3,   // 3 consecutive losses → pause 1 hour
+  TILT_PAUSE_DURATION_MIN:   60,   // pause duration after 3-strike trip
+  TILT_STOP_DAY_AFTER_LOSSES: 5,   // 5 consecutive losses → stop day
+  WIN_STREAK_REDUCE_AFTER:    3,   // after 3 consecutive wins, reduce next size
+  WIN_STREAK_REDUCE_PCT:    0.25,  // 25% size reduction after 3-win streak
+  // ─────────────────────────────────────────────────────────────────────────
+  // v2.0 — Exit framework (was: SL + target + ATR trail. Now adds time-stop
+  // and partial-profit at 1.5R per Tharp/Minervini math optimum.)
+  // ─────────────────────────────────────────────────────────────────────────
+  TIME_STOP_MINUTES:        60,    // if no +0.5R in 60 min → exit at BE
+  TIME_STOP_BREAKEVEN_AT_R: 0.5,   // threshold for "trade is alive" check
+  PARTIAL_PROFIT_AT_R:     1.5,    // partial exit at 1.5R
+  PARTIAL_PROFIT_PCT:      0.5,    // 50% off, trail remainder
+  TRAIL_ATR_MULT:          1.5,    // [previously varied 0.5-1.0] Pani consensus 1.5-2.0
+  EOD_NO_NEW_ENTRY_TIME:   '14:30', // IST — stop opening new positions
+  EOD_TIGHTEN_TRAIL_TIME:  '15:00', // IST — tighten trail to 1.0× ATR
+  EOD_SQUAREOFF_TIME:      '15:15', // IST — flat all positions before Zerodha 15:20
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
@@ -3523,6 +3562,147 @@ async function checkDrawdownCircuitBreaker() {
     _ddPaused = false;
     return { action:'NORMAL', drawdown, equity, sizeMult:1.0 };
   } catch(e) { return { action:'NORMAL', drawdown:0, equity:CONFIG.ACCOUNT_SIZE, sizeMult:1.0 }; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — 4-Tier DAILY drawdown circuit breaker
+//
+// Computes ONLY today's realized P&L (resets at IST midnight). Independent
+// of the multi-day rolling DD breaker above, which uses high-water mark.
+//
+// Tiers (per ProTrader v2 spec, prop-firm standard):
+//   NORMAL: <1% loss      → full size
+//   YELLOW: 1-2% loss     → 50% size, A-list only
+//   ORANGE: 2-3% loss     → 25% size, A+ aligned only
+//   RED:    3-4% loss     → 1 final A+ trade allowed, then stop
+//   BLACK:  >4% loss      → STOP day, no exceptions
+//
+// Returns: { tier, dayPnl, dayPnlPct, sizeMult, allowEntry, allowedTier }
+// ─────────────────────────────────────────────────────────────────────────
+let _dailyDDLastResetISTDate = null;
+let _dailyDDRedFinalTradeUsed = false; // whether the RED-tier final trade was already taken
+async function checkDailyDDTier() {
+  try {
+    // IST date string (YYYY-MM-DD) for calendar boundaries
+    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const istDate = istNow.toISOString().slice(0, 10);
+    if (_dailyDDLastResetISTDate !== istDate) {
+      _dailyDDRedFinalTradeUsed = false;
+      _dailyDDLastResetISTDate = istDate;
+    }
+    // Realized P&L from trades CLOSED today (IST). entry_time/exit_time stored UTC.
+    const { rows } = await pool.query(`
+      SELECT COALESCE(SUM(pnl), 0) AS day_pnl
+        FROM paper_trades
+       WHERE status='CLOSED'
+         AND exit_time >= ($1::date AT TIME ZONE 'Asia/Kolkata')
+         AND exit_time <  ($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Kolkata'
+    `, [istDate]);
+    const dayPnl = parseFloat(rows[0]?.day_pnl || 0);
+    const equity = CONFIG.ACCOUNT_SIZE; // tiers measured against starting equity
+    const dayPnlPct = dayPnl / equity;
+    const lossPct = dayPnlPct < 0 ? -dayPnlPct : 0; // only losses trip tiers
+    let tier, sizeMult, allowEntry, allowedTier;
+    if (lossPct >= CONFIG.DD_BLACK_PCT) {
+      tier = 'BLACK'; sizeMult = 0; allowEntry = false; allowedTier = 'NONE';
+    } else if (lossPct >= CONFIG.DD_RED_PCT) {
+      tier = 'RED'; sizeMult = 0.25; allowedTier = 'A_ALIGNED_ONLY';
+      // Only ONE final trade allowed at this tier
+      allowEntry = !_dailyDDRedFinalTradeUsed;
+    } else if (lossPct >= CONFIG.DD_ORANGE_PCT) {
+      tier = 'ORANGE'; sizeMult = 0.25; allowEntry = true; allowedTier = 'A_ALIGNED_ONLY';
+    } else if (lossPct >= CONFIG.DD_YELLOW_PCT) {
+      tier = 'YELLOW'; sizeMult = 0.50; allowEntry = true; allowedTier = 'A_OR_B_ALIGNED';
+    } else {
+      tier = 'NORMAL'; sizeMult = 1.00; allowEntry = true; allowedTier = 'ALL';
+    }
+    return { tier, dayPnl, dayPnlPct, lossPct, sizeMult, allowEntry, allowedTier };
+  } catch (e) {
+    console.warn('[checkDailyDDTier] failed:', e.message);
+    return { tier: 'NORMAL', dayPnl: 0, dayPnlPct: 0, lossPct: 0, sizeMult: 1.0, allowEntry: true, allowedTier: 'ALL' };
+  }
+}
+// Helper for RED-tier "1 final trade" accounting — call this on successful entry.
+function markDailyDDRedFinalTradeUsed() { _dailyDDRedFinalTradeUsed = true; }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Tilt management (Pani 3-strike + post-streak overconfidence)
+//
+// State machine:
+//   • NORMAL: trade as usual
+//   • PAUSED: 3 consecutive losses → block entries for TILT_PAUSE_DURATION_MIN
+//   • STOPPED: 5 consecutive losses → block entries for rest of day
+//   • OVERCONFIDENCE_WARNING: 3 consecutive wins → next entry size × 0.75
+//
+// Streak counters reset at IST midnight. PAUSED expires automatically.
+// ─────────────────────────────────────────────────────────────────────────
+let _tiltStateLastResetISTDate = null;
+let _consecutiveLosses = 0;
+let _consecutiveWins = 0;
+let _tiltPauseUntilTs = 0;
+let _tiltStopForDay = false;
+async function checkTiltStatus() {
+  try {
+    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const istDate = istNow.toISOString().slice(0, 10);
+    if (_tiltStateLastResetISTDate !== istDate) {
+      _consecutiveLosses = 0;
+      _consecutiveWins = 0;
+      _tiltPauseUntilTs = 0;
+      _tiltStopForDay = false;
+      _tiltStateLastResetISTDate = istDate;
+    }
+    // Refresh streak counters from today's CLOSED trades, in chronological order.
+    // Walk from most-recent backward to find the current run.
+    const { rows } = await pool.query(`
+      SELECT pnl FROM paper_trades
+       WHERE status='CLOSED'
+         AND exit_time >= ($1::date AT TIME ZONE 'Asia/Kolkata')
+         AND exit_time <  ($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Kolkata'
+       ORDER BY exit_time DESC
+    `, [istDate]);
+    let losses = 0, wins = 0;
+    for (const r of rows) {
+      const p = parseFloat(r.pnl || 0);
+      if (p < 0) {
+        if (wins > 0) break; // streak broken
+        losses += 1;
+      } else if (p > 0) {
+        if (losses > 0) break;
+        wins += 1;
+      }
+      // breakeven (p === 0) breaks both streaks
+      else break;
+    }
+    _consecutiveLosses = losses;
+    _consecutiveWins = wins;
+    // 5-strike → stop day
+    if (_consecutiveLosses >= CONFIG.TILT_STOP_DAY_AFTER_LOSSES) _tiltStopForDay = true;
+    // 3-strike → pause 1h (only set the pause once per breach)
+    if (_consecutiveLosses >= CONFIG.TILT_PAUSE_AFTER_LOSSES && _consecutiveLosses < CONFIG.TILT_STOP_DAY_AFTER_LOSSES) {
+      const newPauseUntil = Date.now() + CONFIG.TILT_PAUSE_DURATION_MIN * 60 * 1000;
+      if (_tiltPauseUntilTs < Date.now()) _tiltPauseUntilTs = newPauseUntil;
+    }
+    // Determine current state
+    let state, sizeMult, allowEntry, reason;
+    if (_tiltStopForDay) {
+      state = 'STOPPED'; sizeMult = 0; allowEntry = false;
+      reason = `${_consecutiveLosses} consecutive losses — day stopped`;
+    } else if (Date.now() < _tiltPauseUntilTs) {
+      state = 'PAUSED'; sizeMult = 0; allowEntry = false;
+      const minLeft = Math.ceil((_tiltPauseUntilTs - Date.now()) / 60000);
+      reason = `Tilt-pause: ${_consecutiveLosses} losses, ${minLeft}min remaining`;
+    } else if (_consecutiveWins >= CONFIG.WIN_STREAK_REDUCE_AFTER) {
+      state = 'OVERCONFIDENCE_WARNING'; sizeMult = 1 - CONFIG.WIN_STREAK_REDUCE_PCT; allowEntry = true;
+      reason = `${_consecutiveWins} consecutive wins — size reduced ${CONFIG.WIN_STREAK_REDUCE_PCT*100}%`;
+    } else {
+      state = 'NORMAL'; sizeMult = 1.0; allowEntry = true; reason = null;
+    }
+    return { state, sizeMult, allowEntry, reason, consecutiveLosses, consecutiveWins, pauseUntilTs: _tiltPauseUntilTs };
+  } catch (e) {
+    console.warn('[checkTiltStatus] failed:', e.message);
+    return { state: 'NORMAL', sizeMult: 1.0, allowEntry: true, reason: null, consecutiveLosses: 0, consecutiveWins: 0, pauseUntilTs: 0 };
+  }
 }
 
 // Portfolio Sharpe/Sortino/Stats — Varsity M9 Ch 10
@@ -4543,8 +4723,37 @@ async function scanAndTrade() {
     console.log(`🛑 Trading halted — drawdown ${(ddStatus.drawdown*100).toFixed(1)}% exceeds ${CONFIG.DD_HALT_PCT*100}% limit`);
     return;
   }
-  const sizeMult = ddStatus.action === 'REDUCE_SIZE' ? 0.5 : 1.0;
+  let sizeMult = ddStatus.action === 'REDUCE_SIZE' ? 0.5 : 1.0;
   let canEnterNew = ddStatus.action !== 'PAUSE' && ddStatus.action !== 'HALT';
+
+  // 🚀 v2.0 — 4-tier DAILY DD check (independent of multi-day rolling DD above).
+  // Composes with sizeMult: e.g. multi-day REDUCE_SIZE × YELLOW = 0.5 × 0.5 = 0.25.
+  const dayDD = await checkDailyDDTier();
+  if (!dayDD.allowEntry) {
+    if (dayDD.tier === 'BLACK') {
+      console.log(`🛑 BLACK tier — day loss ${(dayDD.lossPct*100).toFixed(2)}% ≥ ${CONFIG.DD_BLACK_PCT*100}%. STOPPING for day.`);
+    } else {
+      console.log(`🛑 RED tier final-trade-already-used — day loss ${(dayDD.lossPct*100).toFixed(2)}%. No more entries today.`);
+    }
+    canEnterNew = false;
+  } else if (dayDD.tier !== 'NORMAL') {
+    console.log(`⚠ ${dayDD.tier} tier — day loss ${(dayDD.lossPct*100).toFixed(2)}%, sizeMult×${dayDD.sizeMult}, allowed=${dayDD.allowedTier}`);
+    sizeMult *= dayDD.sizeMult;
+  }
+  // Stash for downstream gating (tier-restricted setups in v2.x)
+  globalThis._currentDailyDDTier = dayDD.tier;
+  globalThis._currentDailyDDAllowedTier = dayDD.allowedTier;
+
+  // 🚀 v2.0 — Tilt management (3-strike rule, 5-strike rule, win-streak warning)
+  const tiltStatus = await checkTiltStatus();
+  if (!tiltStatus.allowEntry) {
+    console.log(`🛑 ${tiltStatus.state} — ${tiltStatus.reason}. Blocking entries.`);
+    canEnterNew = false;
+  } else if (tiltStatus.state === 'OVERCONFIDENCE_WARNING') {
+    console.log(`⚠ ${tiltStatus.reason}`);
+    sizeMult *= tiltStatus.sizeMult;
+  }
+  globalThis._currentTiltState = tiltStatus.state;
 
   // Phase 5 · Part 1 — daily loss cap (Varsity M9 Ch 6). Complements the
   // rolling DD check: halts NEW entries when today's realized loss hits
@@ -4691,6 +4900,108 @@ async function scanAndTrade() {
             trailSL = +trailLevel.toFixed(2);
             await pool.query('UPDATE paper_trades SET stop_loss=$1 WHERE id=$2', [trailSL, openPos.id]);
           }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 🚀 v2.0 — TIME STOP + PARTIAL PROFIT layer (NEW exit logic)
+        //
+        // Time stop: if no +0.5R in 60 min → move SL to breakeven (defensive).
+        // Partial:  at +1.5R, exit 50% of position, move SL to BE on remainder.
+        //
+        // Both are gated by direction (sign-flip for shorts) and idempotent
+        // (flagged in DB so they only fire once per trade).
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+          // initial_risk_per_share captured at entry (v2 column). Fallback for
+          // legacy rows (NULL): use |entry - current sl|, which is accurate
+          // when sl hasn't been trailed yet, approximate after.
+          const initRPS = (openPos.initial_risk_per_share != null && Number(openPos.initial_risk_per_share) > 0)
+            ? Number(openPos.initial_risk_per_share)
+            : Math.abs(entryPrice - sl);
+          if (initRPS > 0 && Number.isFinite(initRPS)) {
+            const currentR = profit / initRPS; // direction-aware: profit is already sign-flipped for shorts above
+            const heldMs   = Date.now() - new Date(openPos.entry_time).getTime();
+            const heldMin  = heldMs / 60000;
+
+            // ── TIME STOP: 60min + still <0.5R → SL to breakeven ──
+            if (!openPos.time_stop_breakeven_set
+                && heldMin >= CONFIG.TIME_STOP_MINUTES
+                && currentR < CONFIG.TIME_STOP_BREAKEVEN_AT_R) {
+              const beStop = +entryPrice.toFixed(2); // breakeven (no buffer; entry costs are sunk)
+              const beIsBetter = isShort ? (beStop < trailSL) : (beStop > trailSL);
+              if (beIsBetter) {
+                trailSL = beStop;
+                await pool.query(
+                  `UPDATE paper_trades SET stop_loss=$1, time_stop_breakeven_set=TRUE WHERE id=$2 AND status='OPEN'`,
+                  [trailSL, openPos.id]
+                );
+                console.log(`  ⏱ TIME-STOP ${stock.sym} (${_rawDir}) — held ${heldMin.toFixed(0)}min @ ${currentR.toFixed(2)}R, SL→BE @ ₹${trailSL}`);
+              } else {
+                // Trail already past BE. Just mark the flag so we don't re-check.
+                await pool.query(
+                  `UPDATE paper_trades SET time_stop_breakeven_set=TRUE WHERE id=$1 AND status='OPEN'`,
+                  [openPos.id]
+                );
+              }
+            }
+
+            // ── PARTIAL PROFIT: at +1.5R → exit 50% + move SL to BE ──
+            if (!openPos.partial_taken
+                && currentR >= CONFIG.PARTIAL_PROFIT_AT_R
+                && openPos.quantity >= 2) { // need ≥2 shares to half meaningfully
+              const partialQty   = Math.floor(openPos.quantity * CONFIG.PARTIAL_PROFIT_PCT);
+              const remainingQty = openPos.quantity - partialQty;
+              if (partialQty > 0 && remainingQty > 0) {
+                const partialFill = applyExitSlippage(cmp, isShort);
+                const partialReal = computeRealisticExitPnL(entryPrice, cmp, partialQty, isShort);
+                // Move SL to breakeven on the remaining position; reduce qty
+                const beStop = +entryPrice.toFixed(2);
+                const newSL  = isShort
+                  ? Math.min(trailSL, beStop)  // for shorts, lower of trailSL/BE (SL is above)
+                  : Math.max(trailSL, beStop); // for longs, higher of trailSL/BE
+                trailSL = newSL;
+                // Insert a CLOSED partial-exit row tagged so daily report sees it
+                await pool.query(
+                  `INSERT INTO paper_trades
+                     (symbol, name, type, price, quantity, capital, entry_time, exit_time,
+                      stop_loss, target, signal_score, strategy, regime, indicators,
+                      status, exit_price, exit_reason, gross_pnl, costs, pnl, pnl_pct, direction)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),
+                           $8,$9,$10,$11,$12,$13,
+                           'CLOSED',$14,$15,$16,$17,$18,$19,$20)`,
+                  [
+                    openPos.symbol, openPos.name, openPos.type, entryPrice, partialQty,
+                    +(partialQty * entryPrice).toFixed(2), openPos.entry_time,
+                    openPos.stop_loss, openPos.target, openPos.signal_score,
+                    openPos.strategy + ':PARTIAL', openPos.regime,
+                    (openPos.indicators || '') + ` [PARTIAL @ +${currentR.toFixed(2)}R]`,
+                    partialFill, `Partial Profit (+${CONFIG.PARTIAL_PROFIT_AT_R}R)`,
+                    partialReal.grossPnL, partialReal.costs, partialReal.pnl, partialReal.pnlPct,
+                    _rawDir,
+                  ]
+                );
+                // Update the original row: reduce qty, move SL to BE, flag partial_taken
+                await pool.query(
+                  `UPDATE paper_trades
+                      SET quantity=$1, capital=$2, stop_loss=$3, partial_taken=TRUE,
+                          partial_exit_price=$4, partial_exit_qty=$5, partial_exit_pnl=$6
+                    WHERE id=$7 AND status='OPEN'`,
+                  [
+                    remainingQty, +(remainingQty * entryPrice).toFixed(2), trailSL,
+                    partialFill, partialQty, partialReal.pnl, openPos.id,
+                  ]
+                );
+                // Update local state so subsequent code sees new qty
+                openPos.quantity = remainingQty;
+                openPos.partial_taken = true;
+                openPos.stop_loss = trailSL;
+                console.log(`  💰 PARTIAL ${stock.sym} (${_rawDir}) — sold ${partialQty}@₹${partialFill} (+${currentR.toFixed(2)}R) PnL ₹${partialReal.pnl.toFixed(0)}, remainder ${remainingQty} @ BE`);
+              }
+            }
+          }
+        } catch (e) {
+          // Don't break the exit loop on v2-layer errors — fall through to v1 exits.
+          console.warn(`[v2-exit] ${stock.sym}: ${e.message}`);
         }
 
         // SL hit: long when price drops to SL; short when price rises to SL.
@@ -5475,9 +5786,13 @@ async function scanAndTrade() {
     // 🟡 2026-05-06 audit fix — moved SHORT entry log AFTER successful INSERT.
     // Prior log was emitted before the INSERT, so a DB failure would leave
     // operators with a "fired" log but no row in paper_trades — false positives.
+    // 🚀 v2.0 — capture initial_risk_per_share at entry time for downstream
+    // R-multiple math (time stop @ 0.5R, partial profit @ 1.5R). Once trail
+    // moves stop_loss, the original risk distance is otherwise lost.
+    const _initRPS = +Math.abs(entryFill - sl).toFixed(4);
     await pool.query(
-      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction)
-       VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19)`,
+      `INSERT INTO paper_trades (symbol,name,type,price,quantity,capital,entry_time,stop_loss,target,signal_score,strategy,regime,indicators,status,structure_json,llm_json,decision_json,confidence,experiment,ranking_json,direction,initial_risk_per_share)
+       VALUES ($1,$2,$18,$3,$4,$5,NOW(),$6,$7,$8,$9,$10,$11,'OPEN',$12,$13,$14,$15,$16,$17,$19,$20)`,
       [stock.sym,stock.n,entryFill,qty,+(qty*entryFill).toFixed(2),+sl.toFixed(2),+tgt.toFixed(2),
        +(finalScore*10).toFixed(0),result.strategy,result.regime,enrichedDetail,
        structureJson ? JSON.stringify(structureJson) : null,
@@ -5487,7 +5802,8 @@ async function scanAndTrade() {
        experimentJson ? JSON.stringify(experimentJson) : null,
        rankingJson    ? JSON.stringify(rankingJson)    : null,
        _entryType,
-       _direction]
+       _direction,
+       _initRPS]
     );
     // Observability: dedicated log line emitted only after INSERT succeeded so
     // operators can grep `📉 SHORT entry` and trust each line maps to a real row.
@@ -9054,6 +9370,107 @@ app.get('/api/admin/backtest-replay', async (req, res) => {
 //   GET /api/admin/daily-report?date=YYYY-MM-DD    -> specific IST date
 //   GET /api/admin/daily-report?format=json        -> raw data JSON
 // ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// 🚀 v2.0 — Per-setup SQN (System Quality Number) endpoint
+//
+// Computes Tharp's expectancy + SQN per strategy over a rolling window.
+// SQN = (mean_R / stddev_R) × √N  with N capped at 100 per Tharp's prescription.
+//
+// Tier interpretation (from Tharp):
+//   < 1.6 = poor (retire setup)
+//   1.6-2.4 = average
+//   2.4-3.0 = good (keep)
+//   3.0-5.0 = excellent (consider larger size)
+//   > 5.0   = suspect (likely overfit)
+//
+// Requires: paper_trades.initial_risk_per_share populated (v2.0+ rows only).
+// Legacy rows without it are excluded automatically (NULL filter).
+// ─────────────────────────────────────────────────────────────────────────
+app.get('/api/admin/setup-sqn', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const window = parseInt(req.query.window || 30, 10); // trades per setup
+  const minTrades = parseInt(req.query.minTrades || 10, 10);
+  try {
+    const { rows } = await pool.query(`
+      SELECT strategy, direction, pnl, initial_risk_per_share, quantity
+        FROM paper_trades
+       WHERE status='CLOSED'
+         AND pnl IS NOT NULL
+         AND initial_risk_per_share IS NOT NULL
+         AND initial_risk_per_share > 0
+         AND quantity > 0
+       ORDER BY exit_time DESC
+    `);
+    // Group by base strategy (strip ":PARTIAL" suffix from partial-exit rows)
+    const bySetup = {};
+    for (const r of rows) {
+      const baseStrategy = (r.strategy || 'UNKNOWN').replace(/:PARTIAL$/, '');
+      const key = `${baseStrategy}_${r.direction || 'LONG'}`;
+      if (!bySetup[key]) bySetup[key] = [];
+      if (bySetup[key].length >= window) continue; // window cap per setup
+      // R-multiple = pnl / (initial_risk_per_share × quantity)
+      const R = parseFloat(r.pnl) / (parseFloat(r.initial_risk_per_share) * parseFloat(r.quantity));
+      if (Number.isFinite(R)) bySetup[key].push(R);
+    }
+    const results = [];
+    for (const [setup, rs] of Object.entries(bySetup)) {
+      const n = rs.length;
+      if (n < minTrades) {
+        results.push({ setup, trades: n, status: 'INSUFFICIENT_DATA', minTrades });
+        continue;
+      }
+      const wins   = rs.filter(r => r > 0);
+      const losses = rs.filter(r => r < 0);
+      const avgR   = rs.reduce((a, b) => a + b, 0) / n;
+      const varR   = rs.reduce((a, b) => a + (b - avgR) ** 2, 0) / n;
+      const stdR   = Math.sqrt(varR);
+      const sqnN   = Math.min(n, 100); // Tharp caps at 100
+      const sqn    = stdR > 0 ? (avgR / stdR) * Math.sqrt(sqnN) : 0;
+      const expect = avgR;
+      const winRate  = (wins.length / n) * 100;
+      const avgWin   = wins.length   > 0 ? wins.reduce((a,b)=>a+b,0)   / wins.length   : 0;
+      const avgLoss  = losses.length > 0 ? losses.reduce((a,b)=>a+b,0) / losses.length : 0;
+      let tier;
+      if (sqn < 1.6) tier = 'POOR';
+      else if (sqn < 2.4) tier = 'AVERAGE';
+      else if (sqn < 3.0) tier = 'GOOD';
+      else if (sqn < 5.0) tier = 'EXCELLENT';
+      else tier = 'SUSPECT_OVERFIT';
+      results.push({
+        setup,
+        trades: n,
+        winRate:    +winRate.toFixed(1),
+        avgWinR:    +avgWin.toFixed(2),
+        avgLossR:   +avgLoss.toFixed(2),
+        expectancy: +expect.toFixed(3),
+        stddev:     +stdR.toFixed(3),
+        sqn:        +sqn.toFixed(2),
+        tier,
+        recommendation:
+          sqn < 1.6 ? 'Retire — no positive edge over noise' :
+          sqn < 2.4 ? 'Continue measuring; consider tuning' :
+          sqn < 3.0 ? 'Keep — solid edge' :
+          sqn < 5.0 ? 'Excellent — consider increased size' :
+          'Suspicious; likely small-sample/overfit',
+      });
+    }
+    // Sort by SQN desc
+    results.sort((a, b) => (b.sqn || 0) - (a.sqn || 0));
+    res.json({
+      window,
+      minTrades,
+      generatedAt: new Date().toISOString(),
+      results,
+      legend: {
+        sqnTiers: { POOR: '< 1.6', AVERAGE: '1.6-2.4', GOOD: '2.4-3.0', EXCELLENT: '3.0-5.0', SUSPECT: '> 5.0' },
+        formula: 'SQN = (mean_R / stddev_R) × √N (N capped at 100, Van Tharp)',
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/admin/daily-report', async (req, res) => {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin only' });
