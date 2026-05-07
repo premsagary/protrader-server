@@ -2517,7 +2517,7 @@ const CONFIG = {
   SELL_SCORE:        -2.0,
   CONSENSUS_NEEDED:   2,
   // Varsity M9: volatility-based position sizing replaces fixed amount
-  ACCOUNT_SIZE:       90000,  // Default ₹90K — overridden by live Kite margin if available
+  ACCOUNT_SIZE:       1000000, // ₹10 lakh trading capital (raised from 90K on 2026-05-06) — still overridden by live Kite margin when available
   RISK_PCT_PER_TRADE: 0.02,    // 2% max risk per trade (Varsity M9 Ch 11)
   MIN_RISK_PCT:       0.005,   // 0.5% floor
   MAX_RISK_PCT:       0.03,    // 3% ceiling (half-Kelly floor)
@@ -21171,7 +21171,7 @@ app.get('/api/admin/strategy-performance', async (req, res) => {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days) || 30));
     const endMs   = Date.now();
     const startMs = endMs - days * 24 * 3600 * 1000;
-    const capital = +CONFIG.ACCOUNT_SIZE || 90000;
+    const capital = +CONFIG.ACCOUNT_SIZE || 1000000;
     const metrics = await _computeStrategyMetrics(startMs, endMs, capital);
     metrics.windowDays = days;
 
