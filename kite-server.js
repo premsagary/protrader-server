@@ -2642,29 +2642,47 @@ const CONFIG = {
     ENTRY_WINDOW_START:     '09:30',
     ENTRY_WINDOW_END:       '11:00',
     OR_MIN_FRACTION_ADR:    0.5,
-    OR_MAX_FRACTION_ADR:    1.5,
+    // 🚀 Wave 10 audit fix — was 1.5 (let exhaustion ORs through that already
+    // consumed 1.5× the day's average range). Capped at 1.0× ADR.
+    OR_MAX_FRACTION_ADR:    1.0,
     VOL_CONFIRMATION_MULT:  1.5,
-    VWAP_DISTANCE_MAX_PCT:  2.0,       // skip if extended > 2% from VWAP
+    // 🚀 Wave 10 audit fix — was 2.0% (allowed already-extended setups).
+    // Tightened to 1.0% so we don't chase extension.
+    VWAP_DISTANCE_MAX_PCT:  1.0,
     SL_AT_OR_MIDPOINT:      true,      // tighter than full OR opposite side
   },
   V2_VWAP_PULLBACK: {
     ENTRY_WINDOW_START:     '10:00',
     ENTRY_WINDOW_END:       '14:30',
     MIN_ADX_15M:            25,
-    MIN_VWAP_DISTANCE_PCT:  1.0,       // trend established
-    MIN_TREND_DURATION_MIN: 30,        // price away from VWAP for ≥30 min
-    VWAP_TOLERANCE_PCT:     0.1,       // pullback "touches" VWAP within ±0.1%
+    MIN_VWAP_DISTANCE_PCT:  1.0,       // trend established (now actually used)
+    MIN_TREND_DURATION_MIN: 30,        // price away from VWAP for ≥30 min (now actually used)
+    // 🚀 Wave 10 audit fix — was 0.1% (extreme — fired <5% of legitimate
+    // Holy Grail pullbacks because intra-bar touches close 0.2-0.4% off).
+    // Loosened to 0.4% so realistic touches qualify.
+    VWAP_TOLERANCE_PCT:     0.4,
     SL_ATR_MULT:            0.5,       // 0.5× ATR beyond VWAP
+    // 🚀 Wave 10 — was implicit volRatio < 1.0 inside the gate; relaxed
+    // to 1.2 so partial drying still qualifies.
+    PULLBACK_VOL_MAX:       1.2,
   },
   V2_COMPRESSION: {
     ENTRY_WINDOW_START:     '10:00',
     ENTRY_WINDOW_END:       '14:00',
     NUM_NARROWING_BARS:     4,
-    MAX_RANGE_FRACTION_ATR: 0.5,
+    // 🚀 Wave 10 audit fix — was 0.5 (only fired during lunch dead-zone).
+    // Loosened to 0.8× ATR — catches realistic NR4 compressions on liquid
+    // Nifty stocks (typical 60-min ranges 0.6-1.0× daily ATR).
+    MAX_RANGE_FRACTION_ATR: 0.8,
     REQUIRE_DAILY_TREND:    true,      // align with daily 50DMA direction
     VOL_CONFIRMATION_MULT:  1.3,
     TARGET_RANGE_MULT:      1.5,       // measured-move target = compression × 1.5
   },
+  // 🚀 Wave 10 — relaxed ADR caps so mid-morning entries still have room.
+  // Pre-fix, 80% normal / 95% trend-day had 60%+ of late-morning fires
+  // hitting time-stop before target.
+  V2_ADR_CAP_NORMAL:       60,         // was 80% (hard reject ≥)
+  V2_ADR_CAP_TREND_DAY:    75,         // was 95%
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
   // 🚀 v2.0 Wave 7 — added v2 setup names so MAX_HOLD_HOURS_BY_SETUP[type]
@@ -4071,7 +4089,10 @@ async function refreshStockTiers() {
 }
 
 function getStockTier(sym) {
-  return _stockTierCache.get(sym) || { tier: 'B', reason: 'cache_miss' };
+  // 🚀 v2.0 Wave 10 audit fix — fail closed on cache miss. Pre-fix returned
+  // 'B' which let trades fire at wrong size during cache-build window;
+  // returning 'SKIP' forces Pass 2 to skip until classifier has run.
+  return _stockTierCache.get(sym) || { tier: 'SKIP', reason: 'cache_miss' };
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -4840,6 +4861,22 @@ function adjustCandidateScoreFromStructure(candidate, structure) {
       scoreBefore: baseScore,
       scoreAfter: baseScore,
       adjustments: ['short_bypasses_long_structure_filter'],
+    };
+  }
+  // 🚀 v2.0 Wave 10 audit fix — v2 LONG setups also need to bypass the
+  // long-bias structure filter. ORB+ breakouts BY DEFINITION fire near PDH
+  // and overhead pivot resistance, which the v1 filter rejects as
+  // "at PDH w/o breakout" / "stacked resistance overhead" / "R 0.4% overhead".
+  // V2 setups have their own structural anchoring (OR midpoint SL,
+  // VWAP-anchored SL, compression low SL) — they don't need v1 long-bias gates.
+  const _v2LongSetups = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION']);
+  if (CONFIG.V2_SETUPS_MODE && _v2LongSetups.has(candidate.result?.strategy)) {
+    return {
+      rejected: false,
+      reason: null,
+      scoreBefore: baseScore,
+      scoreAfter: baseScore,
+      adjustments: ['v2_long_setup_bypasses_v1_structure_filter'],
     };
   }
   const f = structure.flags;
@@ -15061,7 +15098,10 @@ function scoreDayTrade(candles, sym, ctx) {
     const orFraction = orRange > 0 && _adrPctV2 > 0 ? (orRange / px) / (_adrPctV2 / 100) : 0;
     const orFracOk = orFraction >= orbCfg.OR_MIN_FRACTION_ADR && orFraction <= orbCfg.OR_MAX_FRACTION_ADR;
     const _effectiveVolMult = _trendDayActiveSetup ? CONFIG.TREND_DAY_RELAXED_VOL_MULT : orbCfg.VOL_CONFIRMATION_MULT;
-    const _effectiveAdrCap  = _trendDayActiveSetup ? (CONFIG.TREND_DAY_RELAXED_ADR_CAP * 100) : 80;
+    // 🚀 Wave 10 — use V2-specific ADR caps (60% normal / 75% trend-day) instead
+    // of the looser 80/95 from v1. Late-morning entries with 80%+ ADR consumed
+    // had < 0.3R room and routinely hit time-stop before target.
+    const _effectiveAdrCap  = _trendDayActiveSetup ? CONFIG.V2_ADR_CAP_TREND_DAY : CONFIG.V2_ADR_CAP_NORMAL;
     const volOk = volRatio >= _effectiveVolMult;
     const notExtended = Math.abs(pctVWAP) <= orbCfg.VWAP_DISTANCE_MAX_PCT;
     const adrOk = adrUsedPct < _effectiveAdrCap;
@@ -15108,7 +15148,10 @@ function scoreDayTrade(candles, sym, ctx) {
       if (c.close > lastVWAP * 1.005) recentAboveVwapCount++;
       else if (c.close < lastVWAP * 0.995) recentBelowVwapCount++;
     }
-    const pullbackVolDrying = volRatio < 1.0;
+    // 🚀 Wave 10 — relaxed from `< 1.0` to PULLBACK_VOL_MAX (1.2) so partial
+    // volume drying qualifies. Pre-fix, conjunctive ANDs (volRatio<1.0 +
+    // 6/8 bars + bullPattern) made <2 fires/day even on trending days.
+    const pullbackVolDrying = volRatio < (cfg.PULLBACK_VOL_MAX || 1.2);
     // LONG: price touched VWAP after being extended above
     if (inWindow && adxOk && touchingVwap && recentAboveVwapCount >= 6 && bullPattern && pullbackVolDrying) {
       vwapPullScore = 70;
@@ -15150,27 +15193,40 @@ function scoreDayTrade(candles, sym, ctx) {
         if (c.high > cmpHigh) cmpHigh = c.high;
         if (c.low < cmpLow)   cmpLow  = c.low;
       }
-      const narrowing = ranges.length === numBars && ranges.every((r, i) => i === 0 || r <= ranges[i-1] * 1.05);
+      // 🚀 v2.0 Wave 10 audit fix — `narrowing` previously accepted bars that
+      // were 5% LARGER than the prior (`r <= ranges[i-1] * 1.05`). Logic was
+      // backwards. Now: each subsequent bar must be strictly tighter (≤ 95%
+      // of previous). Final bar should be the tightest.
+      const narrowing = ranges.length === numBars
+                     && ranges.every((r, i) => i === 0 || r < ranges[i-1] * 0.95);
       const totalRange = cmpHigh - cmpLow;
-      const compactEnough = atrVal > 0 && totalRange < atrVal * cfg.MAX_RANGE_FRACTION_ATR;
+      // 🚀 v2.0 Wave 10 — `atrVal` was undefined in this scope; use `atr14`
+      // which is computed earlier in scoreDayTrade.
+      const _compAtr = (typeof atr14 === 'number' && atr14 > 0) ? atr14 : 0;
+      const compactEnough = _compAtr > 0 && totalRange < _compAtr * cfg.MAX_RANGE_FRACTION_ATR;
       const volOk = volRatio >= cfg.VOL_CONFIRMATION_MULT;
-      // Daily trend alignment
-      const dailyBull = stockFundamentals[sym]?.pctAbove200 > 0 || stockFundamentals[sym]?.goldenCross;
-      const dailyBear = stockFundamentals[sym]?.pctAbove200 < 0 || stockFundamentals[sym]?.deathCross;
+      // 🚀 v2.0 Wave 10 — Daily trend alignment with null-safe checks.
+      // Pre-fix, `pctAbove200 > 0 || goldenCross` could make BOTH bull and
+      // bear flags false when value was 0 or null. Now: explicitly require
+      // sign and treat null as no-signal (allowing trade either direction).
+      const _sf = stockFundamentals[sym] || {};
+      const _pctAbove = (typeof _sf.pctAbove200 === 'number') ? _sf.pctAbove200 : null;
+      const dailyBull = (_pctAbove !== null && _pctAbove > 0) || _sf.goldenCross === true;
+      const dailyBear = (_pctAbove !== null && _pctAbove < 0) || _sf.deathCross === true;
       // LONG: break above compression high in bull daily trend
-      if (narrowing && compactEnough && volOk && dailyBull && px > cmpHigh) {
+      if (narrowing && compactEnough && volOk && dailyBull && !dailyBear && px > cmpHigh) {
         compressionScore = 70;
         compressionDetail.push(`Compression: ${numBars} narrowing bars`);
-        compressionDetail.push(`Range ${totalRange.toFixed(2)} < ${(atrVal * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
+        compressionDetail.push(`Range ${totalRange.toFixed(2)} < ${(_compAtr * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
         compressionDetail.push(`Break ${px.toFixed(2)} > ${cmpHigh.toFixed(2)}`);
         if (volRatio >= 2.0) { compressionScore += 10; compressionDetail.push('Strong vol'); }
         if (bullPattern) { compressionScore += 8; compressionDetail.push(bullPattern.name); }
       }
       // SHORT: break below compression low in bear daily trend
-      if (narrowing && compactEnough && volOk && dailyBear && px < cmpLow) {
+      if (narrowing && compactEnough && volOk && dailyBear && !dailyBull && px < cmpLow) {
         compressionShortScore = 70;
         compressionShortDetail.push(`Compression: ${numBars} narrowing bars`);
-        compressionShortDetail.push(`Range ${totalRange.toFixed(2)} < ${(atrVal * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
+        compressionShortDetail.push(`Range ${totalRange.toFixed(2)} < ${(_compAtr * cfg.MAX_RANGE_FRACTION_ATR).toFixed(2)}`);
         compressionShortDetail.push(`Break ${px.toFixed(2)} < ${cmpLow.toFixed(2)}`);
         if (volRatio >= 2.0) { compressionShortScore += 10; compressionShortDetail.push('Strong vol'); }
         if (bearPattern) { compressionShortScore += 8; compressionShortDetail.push(bearPattern.name); }
@@ -15459,8 +15515,19 @@ function scoreDayTrade(candles, sym, ctx) {
   // Ch 19 distills the whole module into a 5-item checklist. We tally which
   // items pass on this specific pick and award a transparent bonus (+2/item,
   // max +10). This is Varsity's explicit "can I trade this?" filter.
+  // 🚀 v2.0 Wave 10 audit fix — `priceAction` was too narrow: it only counted
+  // a textbook candlestick pattern (Marubozu/Engulfing/Hammer etc). A clean
+  // ORB+ breakout candle that happens to NOT match a named pattern (just
+  // green close > orHigh on volume) returned null → ORB+ regularly hit 3/5
+  // and failed the 4/5 binary gate. Now: priceAction also passes when the
+  // current bar is a strong directional bar at a recognized breakout level
+  // with vol confirmation (Pani's "the breakout itself IS the price action").
+  const _strongLongBar = (last.close > last.open) &&
+    ((last.close - last.open) / Math.max(1e-6, last.high - last.low) > 0.6) &&
+    volRatio >= 1.5 &&
+    (px > orHigh || px > pdHigh);
   const ch19 = {
-    priceAction:  !!bullPattern,                                                     // ✅ candlestick signal on latest candle
+    priceAction:  !!bullPattern || _strongLongBar,                                   // ✅ candlestick pattern OR strong breakout bar
     volume:       volRatio >= 1.5,                                                   // ✅ volume confirming the move
     srContext:    !!(nearCpr || nearFib || atRoundNumber ||                          // ✅ at a recognized S/R level (CPR/Fib/round/pivot)
                     Math.abs(px - pdLow) / pdLow < 0.01 ||
@@ -15492,8 +15559,14 @@ function scoreDayTrade(candles, sym, ctx) {
   // "Bearish patterns need prior UPTREND. Look back 25-30 candles minimum."
   const priorN = Math.min(30, n - 1);
   const priorTrendUp = priorN > 5 && (C[n - 1] / C[n - priorN - 1] - 1) > 0.005; // >0.5% gain over ~30 candles
+  // 🚀 v2.0 Wave 10 — same fix mirrored for shorts: clean breakdown bar at S/R
+  // counts as price-action even without a textbook bear pattern.
+  const _strongShortBar = (last.close < last.open) &&
+    ((last.open - last.close) / Math.max(1e-6, last.high - last.low) > 0.6) &&
+    volRatio >= 1.5 &&
+    (px < orLow || px < pdLow);
   const ch19Short = {
-    priceAction: !!bearPattern && priorTrendUp,                                  // ✅ bear pattern + Varsity prior-uptrend prereq
+    priceAction: (!!bearPattern && priorTrendUp) || _strongShortBar,             // ✅ bear pattern + prior uptrend OR strong breakdown bar
     volume:      volRatio >= 1.5,                                                // ✅ same as long — volume direction-agnostic
     srContext:   !!(
       (cpr && (Math.abs(px - cpr.R1) / px < 0.008 || Math.abs(px - cpr.R2) / px < 0.008)) ||
