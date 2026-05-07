@@ -4896,8 +4896,12 @@ async function scanAndTrade() {
 
           buyCandidates.push({
             stock, result: shortResult, candles, last,
-            dayTradeScore:    dts.dayTradeScore,           // composite long score (informational)
-            varsityBestSetup: dts.bestShortSetup,          // bear setup name
+            // 🟡 2026-05-06 audit fix — use direction-honest short composite,
+            // not the LONG-modulated `overall`. Otherwise a strong-uptrend tape
+            // (golden cross + bull breadth + low VIX) would BOOST a short
+            // candidate's reported dayTradeScore — exactly backwards.
+            dayTradeScore:    dts.dayTradeScoreShort,
+            varsityBestSetup: dts.bestShortSetup,
             ch19PassCount:    passCountShort,
             direction:        'SHORT',
           });
@@ -13434,6 +13438,12 @@ function scoreDayTrade(candles, sym, ctx) {
     } else if (pctVWAP <= 0.1 && pctVWAP >= -0.1) {
       vwapBreakdownScore += _gain('VWAP_BD', 20, 'Testing VWAP from above');
       vwapBreakdownDetail.push('Testing VWAP from above');
+    } else if (pctVWAP > 0.1 && pctVWAP < 0.3) {
+      // 🟡 2026-05-06 audit fix — close the (0.1, 0.3) dead-zone. Price is
+      // still slightly above VWAP but pulling back from a higher rally;
+      // pre-breakdown setup, weaker than "testing VWAP" but still a signal.
+      vwapBreakdownScore += _gain('VWAP_BD', 12, 'Pulling back to VWAP from above');
+      vwapBreakdownDetail.push('Pulling back to VWAP from above');
     }
   }
   if (volRatio > 2.0) { vwapBreakdownScore += _gain('VWAP_BD', 15, `Vol ${volRatio.toFixed(1)}x surge`); vwapBreakdownDetail.push(`Vol ${volRatio.toFixed(1)}x surge`); }
@@ -13604,6 +13614,14 @@ function scoreDayTrade(candles, sym, ctx) {
   if (volRatio > 3.0) { overboughtScore += _gain('REJECT', 15, 'Blow-off vol spike'); overboughtDetail.push('Blow-off vol spike'); }
   else if (volRatio > 2.0) { overboughtScore += _gain('REJECT', 10, 'High vol exhaustion'); overboughtDetail.push('High vol exhaustion'); }
   else if (volRatio > 1.5) { overboughtScore += _gain('REJECT', 5, 'Elevated vol'); overboughtDetail.push('Elevated vol'); }
+  // 🟡 2026-05-06 audit fix — low-vol penalty (mirror of BREAKDOWN's nearDayLow+volRatio<1.0).
+  // Per Varsity M2 Ch12: blow-off tops / exhaustion reversals require a vol
+  // SPIKE to be tradeable. RSI>70 with volRatio<1.0 is just drift, not a real
+  // rejection — penalize so it doesn't qualify as a strong setup.
+  if (lastRSI > 70 && volRatio < 1.0) {
+    overboughtScore += _penalty('REJECT', 15, 'Overbought but no rejection vol — drift, not exhaustion');
+    overboughtDetail.push('No rejection vol');
+  }
   // Bearish reversal pattern — Hammer-equivalent at top is Hanging Man / Shooting Star
   if (bearPattern) {
     overboughtScore += _gain('REJECT', bearPattern.weight, bearPattern.name);
@@ -14325,6 +14343,13 @@ function scoreDayTrade(candles, sym, ctx) {
     bestShortDetail: bestShort.detail.join(' · '),
     // SHORT side SL/TGT/RR — exposed for Pass 1.5/UI/audit (was missing pre-2026-05-06)
     shortSL, shortTgt, shortRR,
+    // 🟡 2026-05-06 audit fix — SHORT-side composite score, direction-honest.
+    // `dayTradeScore` above is `overall`, which carries all the LONG-side
+    // modulators (golden cross, bull-tape VIX, breadth bullish, etc). Surfacing
+    // that on a SHORT candidate would inflate it during a strong uptrend (the
+    // exact tape that's hostile to shorts). `dayTradeScoreShort` is just the
+    // best bear setup's intrinsic score — no long-side pollution.
+    dayTradeScoreShort: Math.max(0, Math.min(100, bestShort.score)),
     vwapBreakdownScore, gapAndDropScore, breakdownScore, overboughtScore,
     // All setup scores
     vwapScore, gapScore, breakoutScore, bounceScore,
@@ -20762,6 +20787,13 @@ async function squareOffPaperTrades(reason = 'eod', directionFilter = null) {
           : Number(t.price);
         // 2026-05-06 — direction-aware P&L for EOD squareoff (caught by pre-push
         // audit). Default 'LONG' for any pre-migration rows.
+        // 🟡 2026-05-06 audit fix — NULL direction is ambiguous (could be a
+        // pre-migration short that lost its tag). Warn loudly so operators can
+        // investigate; don't silently sign-flip P&L. Schema default is 'LONG'
+        // for new rows post-migration, so NULL only appears for legacy rows.
+        if (t.direction == null) {
+          console.warn(`[paper-eod:${reason}] ${t.symbol} id=${t.id} has NULL direction — assuming LONG (legacy row). If this was a SHORT, P&L sign will be inverted.`);
+        }
         const _isShortEod = (t.direction || 'LONG') === 'SHORT';
         const realistic = computeRealisticExitPnL(Number(t.price), exitPx, Number(t.quantity), _isShortEod);
         await pool.query(
