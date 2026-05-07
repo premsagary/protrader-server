@@ -5433,25 +5433,20 @@ async function scanAndTrade() {
   _fiveMinCacheHits   = 0;
   _fiveMinCacheMisses = 0;
 
-  // 🚀 v2.0 Wave 5 — narrow universe to daily watchlist + open-position symbols.
-  // Pros narrow to 5-15 names DAILY. Bot used to iterate all 107 every scan.
-  // Watchlist is built once at 9:14 IST; it composes with open positions
-  // (which must always be scanned for exit management).
-  const _activeScanSyms = (CONFIG.V2_SETUPS_MODE && _dailyWatchlistBuiltAt)
-    ? await getActiveScanSymbols()
-    : null; // null = scan whole universe (v1 behavior)
-  const _scanList = _activeScanSyms
-    ? UNIVERSE.filter(s => _activeScanSyms.has(s.sym))
-    : UNIVERSE;
-  if (_activeScanSyms) {
-    console.log(`📋 Scan iterating ${_scanList.length}/${UNIVERSE.length} (watchlist=${_dailyWatchlist.size} + open positions)`);
-  }
-  for (const stock of _scanList) {
+  // 🚀 v2.0 Wave 5 (REVERTED 2026-05-07): for day trading we scan the FULL
+  // 107-stock universe every cycle. Setups can fire on ANY name during the
+  // session — narrowing to a watchlist would miss legitimate intraday moves.
+  // The buildDailyWatchlist() function is kept for admin visibility (top
+  // pre-market candidates surfaced via /api/admin/v2/watchlist) but does
+  // NOT gate the scan loop. Universe MEMBERSHIP is refreshed once a day
+  // (cron at boot / refreshUniverseFromNSE), not every scan — that's the
+  // "once a day" the user asked for.
+  for (const stock of UNIVERSE) {
     // 2026-04-29 — soft-cancel check at top of per-stock loop. If watchdog
     // requested cancellation (scan running >10 min), bail before making
     // the next Kite call. Prevents pile-up of concurrent scans.
     if (_scanCancelRequested) {
-      console.warn(`⚠ Scan canceled by watchdog mid-loop (processed ~${_scanList.indexOf(stock)}/${_scanList.length} stocks)`);
+      console.warn(`⚠ Scan canceled by watchdog mid-loop (processed ~${UNIVERSE.indexOf(stock)}/${UNIVERSE.length} stocks)`);
       break;
     }
     try {
