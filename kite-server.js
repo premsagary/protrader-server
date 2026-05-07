@@ -28110,6 +28110,7 @@ app.get("/paper-trades/stats", async(req,res)=>{
 app.get("/api/stocks/recommendations/swing", async(req,res)=>{
   try {
     // Swing: RSI oversold bounce + BB squeeze + 5-20DMA crossover — 1-4 week holds
+    // 🚀 v2.0 Wave 4 — VCP and Cup-with-Handle (Minervini/O'Neil) heavily weight here
     const recs = Object.values(stockFundamentals)
       .filter(f => f && f.price)
       .map(f => {
@@ -28121,9 +28122,15 @@ app.get("/api/stocks/recommendations/swing", async(req,res)=>{
           (f.bullishDiv ? 15 : 0)                    // RSI divergence = strong reversal
         );
         const composite = computeCompositeScore(f, { signal:'BUY', score: taScore/10 });
-        return { ...f, swingScore: taScore, ...composite, horizon: 'swing' };
+        // Apply playbook overlay
+        const pb = applyPlaybookOverlay(f).playbook;
+        // Iron rule: never recommend Stage 4
+        if (pb.stage.stage === 'STAGE_4') return null;
+        // Boost score if VCP or Cup-with-Handle detected (Minervini/O'Neil swing setups)
+        const playbookBoost = (pb.vcp.detected ? 15 : 0) + (pb.cupHandle.detected ? 15 : 0);
+        return { ...f, swingScore: taScore + playbookBoost, ...composite, horizon: 'swing', playbook: pb };
       })
-      .filter(f => f.swingScore >= 40 && (f.score||0) >= 40) // quality + TA both needed
+      .filter(f => f && f.swingScore >= 40 && (f.score||0) >= 40 && f.playbook.stage.stage !== 'STAGE_4')
       .sort((a,b) => b.composite - a.composite);
     res.json({ recommendations: buildDiversifiedRecs(recs, 10), total: recs.length, horizon: 'swing' });
   } catch(e){ res.status(500).json({error:e.message,recommendations:[]}); }
@@ -28132,6 +28139,7 @@ app.get("/api/stocks/recommendations/swing", async(req,res)=>{
 app.get("/api/stocks/recommendations/positional", async(req,res)=>{
   try {
     // Positional: FA-heavy composite + trend — 1-12 month holds
+    // 🚀 v2.0 Wave 4 — Weinstein Stage 2 + Minervini Trend Template enforced.
     const recs = Object.values(stockFundamentals)
       .filter(f => f && f.price && f.score >= 50) // quality gate
       .map(f => {
@@ -28141,12 +28149,85 @@ app.get("/api/stocks/recommendations/positional", async(req,res)=>{
         const taBuy  = abv200 && f.goldenCross && f.macdBull;
         const taSignal = { signal: taBuy ? 'BUY' : 'NEUTRAL', score: (abv200?3:0)+(abv50?2:0)+(f.goldenCross?3:0)+(f.macdBull?2:0) };
         const composite = computeCompositeScore(f, taSignal);
-        return { ...f, ...composite, horizon: 'positional' };
+        // Apply playbook overlay — positional ESPECIALLY needs Weinstein Stage 2
+        const pb = applyPlaybookOverlay(f).playbook;
+        // Iron rules: never own Stage 4; downgrade Stage 3
+        if (pb.stage.stage === 'STAGE_4') return null;
+        // Trend Template criteria boost (Minervini)
+        const trendBoost = pb.trendTemplate.passed * 1.5; // up to +12 for full pass
+        composite.composite = +(composite.composite + trendBoost).toFixed(1);
+        return { ...f, ...composite, horizon: 'positional', playbook: pb };
       })
-      .filter(f => f.composite >= 55)
+      .filter(f => f && f.composite >= 55 && f.playbook.stage.stage !== 'STAGE_4')
       .sort((a,b) => b.composite - a.composite);
     res.json({ recommendations: buildDiversifiedRecs(recs, 15), total: recs.length, horizon: 'positional' });
   } catch(e){ res.status(500).json({error:e.message,recommendations:[]}); }
+});
+
+// 🚀 v2.0 Wave 6 — Pre-market dashboard (unified pre-market context endpoint)
+// Single endpoint to power a "morning briefing" tab. Combines all the pre-market
+// intelligence in one call: day_bias, watchlist, IB, trend-day status, tier counts.
+app.get("/api/v2/premarket-dashboard", async (req, res) => {
+  try {
+    const dayBias    = (typeof getCurrentDayBias === 'function')   ? getCurrentDayBias()   : null;
+    const trendDay   = (typeof getTrendDayState  === 'function')   ? getTrendDayState()    : null;
+    const initialBal = (typeof getInitialBalance === 'function')   ? getInitialBalance()   : null;
+    const watchlist  = (typeof getWatchlist      === 'function')   ? getWatchlist()        : { built: false, count: 0, watchlist: [] };
+    const tierCounts = (typeof _stockTierCache !== 'undefined' && _stockTierCache && _stockTierCache.values)
+      ? Array.from(_stockTierCache.values()).reduce((acc, v) => { acc[v.tier] = (acc[v.tier]||0)+1; return acc; }, {})
+      : null;
+    // Top A-list stocks with playbook tags for the briefing
+    const topPlaybookCandidates = [];
+    if (_stockTierCache && _stockTierCache.size > 0) {
+      for (const [sym, info] of _stockTierCache.entries()) {
+        if (info.tier !== 'A') continue;
+        const fund = stockFundamentals[sym];
+        if (!fund) continue;
+        try {
+          const pb = applyPlaybookOverlay(fund).playbook;
+          // Only surface STAGE_2 names with healthy Trend Template
+          if (pb.stage.stage === 'STAGE_2' && pb.trendTemplate.passed >= 5) {
+            topPlaybookCandidates.push({
+              sym,
+              name: fund.name,
+              price: fund.price,
+              stage: pb.stage.stage,
+              trendTemplatePassed: pb.trendTemplate.passed,
+              canslimScore: pb.canslim.score,
+              vcp: pb.vcp.detected,
+              cupHandle: pb.cupHandle.detected,
+              verdict: pb.verdict,
+              verdictColor: pb.verdictColor,
+            });
+          }
+        } catch (_) { /* skip on error */ }
+      }
+      topPlaybookCandidates.sort((a, b) => b.canslimScore - a.canslimScore);
+    }
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      premarket: dayBias,
+      trendDay,
+      initialBalance: initialBal,
+      tierCounts,
+      watchlist: {
+        built: watchlist.built,
+        builtAt: watchlist.builtAt,
+        count: watchlist.count,
+        symbols: watchlist.watchlist.slice(0, 20),
+      },
+      topPlaybookCandidates: topPlaybookCandidates.slice(0, 15),
+      summary: {
+        biasDirection: dayBias?.tier || 'UNKNOWN',
+        trendDayActive: !!(trendDay?.active),
+        ibDayType: initialBal?.dayType || 'NOT_COMPUTED',
+        watchlistReady: watchlist.built,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // =============================================================================
