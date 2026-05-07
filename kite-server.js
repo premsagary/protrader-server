@@ -4021,18 +4021,39 @@ function classifyStockTier(sym, fundData, dayBias) {
 async function refreshStockTiers() {
   try {
     const dayBias = getCurrentDayBias();
-    _stockTierCache.clear();
+    // 🚀 Wave 8 audit fix — atomic swap. Build a NEW Map first; only replace
+    // _stockTierCache once fully populated. Pre-fix, _stockTierCache.clear()
+    // left the cache empty for any in-flight scan iteration that hit it before
+    // refresh completed → wrong tier classifications mid-scan.
+    const newCache = new Map();
     let aCount = 0, bCount = 0, skipCount = 0;
     for (const stock of UNIVERSE) {
       const sym = stock.sym;
       const fund = stockFundamentals[sym];
       const cls = classifyStockTier(sym, fund, dayBias);
-      _stockTierCache.set(sym, { ...cls, refreshedAt: Date.now() });
+      newCache.set(sym, { ...cls, refreshedAt: Date.now() });
       if (cls.tier === 'A') aCount++;
       else if (cls.tier === 'B') bCount++;
       else skipCount++;
     }
+    _stockTierCache = newCache;
     _stockTierCacheRefreshedAt = Date.now();
+    // Persist a snapshot to DB so we survive restarts within the trading day
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS v2_module_state (
+          key TEXT PRIMARY KEY,
+          value JSONB,
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+      const snapshot = Array.from(newCache.entries()).map(([sym, info]) => ({ sym, ...info }));
+      await pool.query(
+        `INSERT INTO v2_module_state(key, value, updated_at) VALUES('stock_tier_cache', $1, NOW())
+         ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [JSON.stringify({ refreshedAt: Date.now(), istDate: _istDateStr(), entries: snapshot })]
+      );
+    } catch (e) { /* swallow — DB persist is best-effort */ }
     console.log(`🏷  Tier refresh: A=${aCount} B=${bCount} SKIP=${skipCount} (dayBias=${dayBias.tier})`);
     return { aCount, bCount, skipCount };
   } catch (e) {
@@ -4280,6 +4301,14 @@ async function evaluateTrendDay() {
     };
     if (active) console.log(`🚀 TREND DAY DETECTED: ${direction} (${active === 'BULL' ? bullSignals : bearSignals}/4 signals)`);
     else console.log(`📊 Trend-day check: bull=${bullSignals}/4 bear=${bearSignals}/4 — normal day`);
+    // 🚀 Wave 8 — persist for restart resilience
+    try {
+      await pool.query(
+        `INSERT INTO v2_module_state(key, value, updated_at) VALUES('trend_day_state', $1, NOW())
+         ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [JSON.stringify(_trendDayState)]
+      );
+    } catch (_) {}
     return _trendDayState;
   } catch (e) {
     console.warn('[evaluateTrendDay] failed:', e.message);
@@ -4331,6 +4360,14 @@ async function evaluateInitialBalance() {
     else dayType = 'BALANCED';
     _initialBalance = { date: istDate, computed: true, iH, iL, range: +range.toFixed(2), fraction: +fraction.toFixed(2), dayType };
     console.log(`📊 IB ${istDate}: ${iL.toFixed(0)}-${iH.toFixed(0)} (range=${range.toFixed(0)}, ${(fraction*100).toFixed(0)}% of ADR) → ${dayType}`);
+    // 🚀 Wave 8 — persist
+    try {
+      await pool.query(
+        `INSERT INTO v2_module_state(key, value, updated_at) VALUES('initial_balance', $1, NOW())
+         ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [JSON.stringify(_initialBalance)]
+      );
+    } catch (_) {}
     return _initialBalance;
   } catch (e) {
     console.warn('[evaluateInitialBalance] failed:', e.message);
@@ -5652,14 +5689,18 @@ async function scanAndTrade() {
                   : Math.max(trailSL, beStop); // for longs, higher of trailSL/BE
                 trailSL = newSL;
                 // Insert a CLOSED partial-exit row tagged so daily report sees it
+                // 🚀 Wave 8 audit fix — also propagate tier, day_bias_tier,
+                // trend_day_active, initial_risk_per_share so EOD report's
+                // tierAttribution and setupSqnToday include this row.
                 await pool.query(
                   `INSERT INTO paper_trades
                      (symbol, name, type, price, quantity, capital, entry_time, exit_time,
                       stop_loss, target, signal_score, strategy, regime, indicators,
-                      status, exit_price, exit_reason, gross_pnl, costs, pnl, pnl_pct, direction)
+                      status, exit_price, exit_reason, gross_pnl, costs, pnl, pnl_pct, direction,
+                      tier, day_bias_tier, trend_day_active, initial_risk_per_share)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),
                            $8,$9,$10,$11,$12,$13,
-                           'CLOSED',$14,$15,$16,$17,$18,$19,$20)`,
+                           'CLOSED',$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
                   [
                     openPos.symbol, openPos.name, openPos.type, entryPrice, partialQty,
                     +(partialQty * entryPrice).toFixed(2), openPos.entry_time,
@@ -5669,6 +5710,9 @@ async function scanAndTrade() {
                     partialFill, `Partial Profit (+${CONFIG.PARTIAL_PROFIT_AT_R}R)`,
                     partialReal.grossPnL, partialReal.costs, partialReal.pnl, partialReal.pnlPct,
                     _rawDir,
+                    openPos.tier || null, openPos.day_bias_tier || null,
+                    openPos.trend_day_active != null ? openPos.trend_day_active : null,
+                    openPos.initial_risk_per_share || null,
                   ]
                 );
                 // Update the original row: reduce qty, move SL to BE, flag partial_taken
@@ -6344,6 +6388,14 @@ async function scanAndTrade() {
       continue;
     }
     const price   = last.close;
+    // 🚀 Wave 8 audit fix — defensive: refuse INSERT on degenerate prices.
+    // Pre-fix, a websocket glitch / delisted symbol could write entryPrice=0
+    // to paper_trades, breaking all downstream R-math.
+    if (!Number.isFinite(price) || price <= 0) {
+      console.warn(`[entry] REFUSING ${stock.sym} — invalid price=${price}`);
+      recordPass2(candidate, 'SKIPPED', `bad_price_${price}`);
+      continue;
+    }
     const highs14 = candles.slice(-14).map(c=>c.high);
     const lows14  = candles.slice(-14).map(c=>c.low);
     const atrVal  = highs14.map((h,i)=>h-lows14[i]).reduce((a,b)=>a+b,0)/14;
@@ -15579,10 +15631,30 @@ function scoreDayTrade(candles, sym, ctx) {
     }
     // ATR widening — minSLDist already computed for the long path above (atr14val * betaSLMult)
     if (shortSL - px < minSLDist) shortSL = +(px + minSLDist).toFixed(2);
-    // 2:1 R:R — same formula as long, direction-flipped
-    shortTgt = +(px - (shortSL - px) * 2).toFixed(2);
+    // 🚀 Wave 8 audit fix — setup-specific TGT for SHORT v2 setups.
+    // Pre-fix, all shorts collapsed to 2:1 R:R regardless of setup type.
+    // Now mirror long's setup-specific projections:
+    //   ORB_MINUS:           OR width projected DOWN
+    //   COMPRESSION_SHORT:   compression range × 1.5 DOWN
+    //   VWAP_PULLBACK_SHORT: 2:1 R:R (Holy Grail standard)
+    //   GAP_AND_DROP:        gap-size projected (mirror of GAP_AND_GO)
+    //   BREAKDOWN:           OR range projected (mirror of BREAKOUT)
+    if (bestShort.type === 'ORB_MINUS' || bestShort.type === 'BREAKDOWN') {
+      shortTgt = +(px - Math.max(orRange, (shortSL - px) * 2)).toFixed(2);
+    } else if (bestShort.type === 'COMPRESSION_SHORT') {
+      const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
+      const compRangeLow  = Math.min(...candles.slice(-5, -1).map(c => c.low));
+      const compRange = compRangeHigh - compRangeLow;
+      shortTgt = +(px - Math.max(compRange * 1.5, (shortSL - px) * 2)).toFixed(2);
+    } else if (bestShort.type === 'GAP_AND_DROP') {
+      shortTgt = +(px - Math.abs(gapPct / 100 * px) * 1.2).toFixed(2);
+      if (shortTgt >= px) shortTgt = +(px - (shortSL - px) * 1.5).toFixed(2);
+    } else {
+      // VWAP_PULLBACK_SHORT, OVERBOUGHT_REJECTION, VWAP_BREAKDOWN: 2:1 R:R
+      shortTgt = +(px - (shortSL - px) * 2).toFixed(2);
+    }
     shortRR  = shortSL > px ? +((px - shortTgt) / (shortSL - px)).toFixed(2) : 0;
-    // 1.5R floor — mirror of long's floor at lines 13912-13915
+    // 1.5R floor
     if (shortRR < 1.5 && shortSL > px) {
       shortTgt = +(px - (shortSL - px) * 1.5).toFixed(2);
       shortRR  = 1.5;
@@ -16921,10 +16993,16 @@ function computeTechnicals(candles) {
     }
   }
 
+  // 🚀 v2 Wave 8 — Compute dma150 for Minervini Trend Template + Weinstein 30-week MA
+  const dma150 = n>=150 ? avg(C,n-150,150) : null;
   return {
     price:C[n-1],
-    dma20, dma50, dma100, dma200,
+    dma20, dma50, dma100, dma150, dma200,
+    // 🚀 v2 Wave 8 — Playbook-friendly aliases (high52w, low52w used by
+    // computeMinerviniTrendTemplate, detectVCP, detectCupWithHandle).
+    // Existing wk52Hi/wk52Lo retained for backward compat.
     wk52Hi, wk52Lo, change52w, change6m, change3m, change1m,
+    high52w: wk52Hi, low52w: wk52Lo,
     rsi:+rsi.toFixed(1),
     macd:+macd.toFixed(2), macdSig:+macdSig.toFixed(2), macdBull, macdHist,
     bbUpper, bbLower, bbMid:+bbMid.toFixed(2), bbPct:+bbPct.toFixed(2),
@@ -20332,11 +20410,19 @@ function computeCanslim(f) {
   const grade = (cond, partial) => cond ? 100 : (partial ? 60 : 30);
 
   // C — Current quarterly earnings up ≥ 25% YoY
-  const cQE = f.quarterlyEarningsGrowth || f.qoqEarningsGrowth || f.earGrowth || null;
-  result.letters.C = {
+  // 🚀 Wave 8 audit fix — only consider C "valid" if we have actual quarterly
+  // earnings data (qoqEarningsGrowth or quarterlyEarningsGrowth). Falling back
+  // to earGrowth (annual EPS growth) doubled-counted with letter A.
+  const cQE = f.quarterlyEarningsGrowth || f.qoqEarningsGrowth || null;
+  result.letters.C = cQE != null ? {
     name: 'Current Quarterly Earnings',
-    score: cQE != null ? grade(cQE >= 25, cQE >= 15) : null,
-    detail: cQE != null ? `${cQE.toFixed(1)}% YoY` : 'missing',
+    score: grade(cQE >= 25, cQE >= 15),
+    detail: `${cQE.toFixed(1)}% YoY (quarterly)`,
+  } : {
+    name: 'Current Quarterly Earnings',
+    score: null,
+    detail: 'no_quarterly_eps_data',
+    flag: 'data not available — letter excluded from rubric',
   };
 
   // A — Annual earnings up ≥ 25% in last 3 years; ROE > 17%
@@ -20378,13 +20464,25 @@ function computeCanslim(f) {
     flag: lLagger ? 'LAGGARD — avoid' : null,
   };
 
-  // I — Institutional sponsorship — proxy: promoter > 50% + delivery % healthy
+  // I — Institutional sponsorship — proxy: promoter holding (skin in the game)
+  // + delivery % (high delivery = institutional buying not retail churn)
+  // 🚀 Wave 8 audit fix — fii field is never populated in stockFundamentals.
+  // Use delivery% (deliveryPct/delPct/deliveryPercentage) and dii (if available)
+  // as additional institutional proxies; promoter remains primary signal.
   const iProm = f.promoter || null;
-  const iInst = (iProm != null && iProm >= 50) || (f.fii != null && f.fii > 5);
+  const iDelPct = f.deliveryPct || f.delPct || f.deliveryPercentage || null;
+  const iDii = f.dii || null;
+  const iFii = f.fii || null;
+  const iInstStrong = (iProm != null && iProm >= 50)
+                    || (iDii != null && iDii > 10)
+                    || (iFii != null && iFii > 5)
+                    || (iDelPct != null && iDelPct > 60);
+  const iInstWeak = (iProm != null && iProm >= 35)
+                  || (iDelPct != null && iDelPct > 45);
   result.letters.I = {
     name: 'Institutional sponsorship',
-    score: iProm != null ? grade(iInst, iProm >= 35) : null,
-    detail: `promoter=${iProm != null ? iProm.toFixed(1) + '%' : '?'} fii=${f.fii != null ? f.fii.toFixed(1) + '%' : '?'}`,
+    score: (iProm != null || iDelPct != null) ? grade(iInstStrong, iInstWeak) : null,
+    detail: `promoter=${iProm != null ? iProm.toFixed(1) + '%' : '?'} delivery=${iDelPct != null ? iDelPct.toFixed(1) + '%' : '?'} fii=${iFii != null ? iFii.toFixed(1) + '%' : '?'}`,
   };
 
   // M — Market direction (use marketRegime if present)
@@ -22839,17 +22937,52 @@ setTimeout(async () => {
     const istDate = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
     if (istHHMM >= '08:30' && istHHMM <= '15:30') {
       const { rows } = await pool.query(`SELECT 1 FROM daily_premarket_context WHERE ist_date=$1`, [istDate]).catch(() => ({ rows: [] }));
+      // 🚀 Wave 8 fix — previous `else if` branch only built watchlist, leaving
+      // tier cache + trend-day + IB unhydrated when premarket existed in DB.
+      // Now: ALWAYS run the cascade if any required state is missing in memory.
       if (rows.length === 0) {
-        console.log('🚀 v2 boot: running premarket + tier refresh + watchlist (missed 8:30 cron)');
+        console.log('🚀 v2 boot: running premarket from scratch (no DB cache)');
         await runPremarketRoutine().catch(() => {});
+      } else if (!_premarketContext || _premarketContext.date !== istDate) {
+        // Restore premarket context from DB row
+        try {
+          const { rows: pre } = await pool.query(
+            `SELECT * FROM daily_premarket_context WHERE ist_date=$1`,
+            [istDate]
+          );
+          if (pre.length > 0) {
+            const r = pre[0];
+            _premarketContext = {
+              date: istDate,
+              giftGapPct: parseFloat(r.gift_gap_pct || 0),
+              vixDelta:   parseFloat(r.vix_delta   || 0),
+              fiiNet:     r.fii_net     != null ? parseFloat(r.fii_net) : null,
+              diiNet:     r.dii_net     != null ? parseFloat(r.dii_net) : null,
+              pivot3day:  r.pivot_3day  != null ? parseFloat(r.pivot_3day) : null,
+              dayBiasScore: parseInt(r.day_bias_score || 0, 10),
+              tier: r.tier || 'NEUTRAL',
+              computedAt: r.computed_at,
+            };
+            console.log(`🔄 Restored _premarketContext from DB: ${_premarketContext.tier}`);
+          }
+        } catch (_) {}
+      }
+      // Always rehydrate downstream state if missing in memory
+      if (!_stockTierCacheRefreshedAt && istHHMM >= '09:14') {
+        console.log('🚀 v2 boot: building tier cache (in-memory empty)');
         await refreshStockTiers().catch(() => {});
-        if (istHHMM >= '09:14') await buildDailyWatchlist().catch(() => {});
-        if (istHHMM >= '09:45') await evaluateTrendDay().catch(() => {});
-        if (istHHMM >= '10:15') await evaluateInitialBalance().catch(() => {});
-      } else if (!_dailyWatchlistBuiltAt && istHHMM >= '09:14') {
-        // Premarket already done but watchlist hasn't been built — common on restart
-        console.log('🚀 v2 boot: building daily watchlist (premarket already cached)');
+      }
+      if (!_dailyWatchlistBuiltAt && istHHMM >= '09:14') {
+        console.log('🚀 v2 boot: building daily watchlist');
         await buildDailyWatchlist().catch(() => {});
+      }
+      if ((!_trendDayState || _trendDayState.date !== istDate) && istHHMM >= '09:45') {
+        console.log('🚀 v2 boot: evaluating trend day');
+        await evaluateTrendDay().catch(() => {});
+      }
+      if ((!_initialBalance || _initialBalance.date !== istDate) && istHHMM >= '10:15') {
+        console.log('🚀 v2 boot: computing initial balance');
+        await evaluateInitialBalance().catch(() => {});
       }
     }
   } catch (e) { /* swallow boot warmup errors */ }
@@ -27542,7 +27675,21 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     // 🚀 v2.0 Wave 4 — Deep Analyzer playbook overlay
     // Adds Minervini Trend Template, Weinstein stage, CANSLIM rubric,
     // VCP detection, Cup-with-Handle detection — same as Stock Picks tab.
-    const _playbookFund = { ...(f || {}), sym, price: px };
+    // 🚀 Wave 8 audit fix — `f` is FUND[sym] which is a 6-element array, not an
+    // object. Spreading it gives {0:..., 1:...} = useless. Use stockFundamentals
+    // (full daily metrics) merged with the live tech analysis (t).
+    const _sfRow = stockFundamentals[sym] || {};
+    const _playbookFund = {
+      ..._sfRow,
+      ...(t || {}),
+      sym,
+      name: meta.n,
+      sector,
+      price: px,
+      // Ensure aliases used by playbook overlay are resolved
+      high52w: _sfRow.high52w || t?.high52w || t?.wk52Hi || _sfRow.wk52Hi,
+      low52w:  _sfRow.low52w  || t?.low52w  || t?.wk52Lo || _sfRow.wk52Lo,
+    };
     let _deepPlaybook = null;
     try {
       _deepPlaybook = applyPlaybookOverlay(_playbookFund).playbook;
@@ -28285,7 +28432,11 @@ app.get("/api/stocks/recommendations/positional", async(req,res)=>{
 // 🚀 v2.0 Wave 6 — Pre-market dashboard (unified pre-market context endpoint)
 // Single endpoint to power a "morning briefing" tab. Combines all the pre-market
 // intelligence in one call: day_bias, watchlist, IB, trend-day status, tier counts.
+// 🚀 Wave 8 audit fix — admin-gated. Was anonymous; leaked watchlist composition
+// and pre-market positioning to any authenticated user (or public if behind a
+// permissive proxy).
 app.get("/api/v2/premarket-dashboard", async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   try {
     const dayBias    = (typeof getCurrentDayBias === 'function')   ? getCurrentDayBias()   : null;
     const trendDay   = (typeof getTrendDayState  === 'function')   ? getTrendDayState()    : null;
@@ -28895,6 +29046,39 @@ async function start() {
   // (registered earlier in start()) with the env-default toggles instead of
   // the operator-set values persisted in app_config.
   await restoreTradingModeFromDB();
+
+  // 🚀 Wave 8 — restore v2 module state from DB (tier cache, trend day, IB).
+  // Without this, every restart wipes the in-memory state and only refills at
+  // the next cron tick — meaning a restart at 11:30 IST would have empty state
+  // until 13:30 (next tier refresh). DB-persisted in their respective writers.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS v2_module_state (
+        key TEXT PRIMARY KEY,
+        value JSONB,
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    const istDate = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    const { rows } = await pool.query(`SELECT key, value FROM v2_module_state`);
+    for (const r of rows) {
+      const v = r.value;
+      if (!v) continue;
+      if (r.key === 'stock_tier_cache' && v.istDate === istDate && Array.isArray(v.entries)) {
+        const m = new Map();
+        for (const e of v.entries) m.set(e.sym, { tier: e.tier, reason: e.reason, refreshedAt: e.refreshedAt });
+        _stockTierCache = m;
+        _stockTierCacheRefreshedAt = v.refreshedAt || Date.now();
+        console.log(`🔄 Restored stock_tier_cache: ${m.size} entries from ${istDate}`);
+      } else if (r.key === 'trend_day_state' && v.date === istDate) {
+        _trendDayState = v;
+        console.log(`🔄 Restored trend_day_state: ${v.active ? v.direction : 'normal'}`);
+      } else if (r.key === 'initial_balance' && v.date === istDate) {
+        _initialBalance = v;
+        console.log(`🔄 Restored initial_balance: ${v.dayType || 'unknown'}`);
+      }
+    }
+  } catch (e) { console.warn('[v2 module-state restore] failed:', e.message); }
 
   // Phase 5 · Part 3 — rehydrate trailing-stop HWM map from paper_trades so
   // a restart mid-session doesn't reset every trailing stop back to entry.
@@ -30862,14 +31046,28 @@ app.get('/api/holdings', async (req, res) => {
       const pnlPct = invested > 0 ? +(((current - invested) / invested) * 100).toFixed(2) : 0;
 
       // 🚀 v2.0 Wave 4 — Weinstein stage + iron-rule alerts
-      // Use the same playbook overlay as Stock Picks for consistency.
-      const fundForOverlay = { ...sf, sym: h.symbol, price: cmp };
-      const stage = classifyWeinsteinStage(fundForOverlay);
-      const trendTemplate = computeMinerviniTrendTemplate(fundForOverlay);
+      // 🚀 Wave 8 audit fix — actually use applyPlaybookOverlay() (was calling
+      // the subset directly, missing CANSLIM/VCP/cupHandle/verdict). Now Holdings
+      // and Stock Picks return identical playbook shape for any given symbol.
+      const fundForOverlay = {
+        ...sf,
+        sym: h.symbol,
+        price: cmp,
+        high52w: sf.high52w || sf.wk52Hi,
+        low52w:  sf.low52w  || sf.wk52Lo,
+      };
+      const fullPb = (() => {
+        try { return applyPlaybookOverlay(fundForOverlay).playbook; }
+        catch (e) { return null; }
+      })();
+      const stage = fullPb?.stage || classifyWeinsteinStage(fundForOverlay);
+      const trendTemplate = fullPb?.trendTemplate || computeMinerviniTrendTemplate(fundForOverlay);
       // 30-week MA proxy: use 150 DMA (close enough for daily-data analysis)
       const ma30wk = sf.dma150 != null ? sf.dma150 : sf.dma200;
       const below30wk = ma30wk != null && cmp < ma30wk;
-      const ma30wkFalling = sf.pctAbove200 != null && sf.pctAbove200 < 0;
+      // 🚀 Wave 8 fix — `ma30wkFalling` uses dma50<dma150 (matches Weinstein),
+      // not pctAbove200<0 (which means price below MA, not MA falling).
+      const ma30wkFalling = (sf.dma50 != null && sf.dma150 != null) ? sf.dma50 < sf.dma150 : false;
       // Alert composition
       const alerts = [];
       if (stage.stage === 'STAGE_4') {
@@ -30900,10 +31098,16 @@ app.get('/api/holdings', async (req, res) => {
         created_at: h.created_at,
         updated_at: h.updated_at,
         ai_reviews: reviewMap[h.symbol] || [],
-        // 🚀 v2.0 Wave 4 — playbook overlay
+        // 🚀 v2.0 Wave 4 — playbook overlay (full Stock Picks parity per Wave 8)
         playbook: {
           stage,
           trendTemplate: { passed: trendTemplate.passed, total: trendTemplate.total, qualifies: trendTemplate.qualifies },
+          canslim:  fullPb?.canslim ? { score: fullPb.canslim.score, qualifies: fullPb.canslim.qualifies, passingLetters: fullPb.canslim.passingLetters } : null,
+          vcp:      fullPb?.vcp,
+          cupHandle: fullPb?.cupHandle,
+          playbookScore: fullPb?.playbookScore,
+          verdict:       fullPb?.verdict,
+          verdictColor:  fullPb?.verdictColor,
           ma30wk: ma30wk != null ? +ma30wk.toFixed(2) : null,
           below30wk,
           ma30wkFalling,
