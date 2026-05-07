@@ -2667,7 +2667,21 @@ const CONFIG = {
   },
   // NEW — Varsity M9: time-decay exit so positions can't linger past session
   MAX_HOLD_HOURS:     6,
-  MAX_HOLD_HOURS_BY_SETUP: { BREAKOUT:4, GAP_AND_GO:3, VWAP_RECLAIM:6, OVERSOLD_BOUNCE:6 },
+  // 🚀 v2.0 Wave 7 — added v2 setup names so MAX_HOLD_HOURS_BY_SETUP[type]
+  // resolves correctly when V2_SETUPS_MODE=on (was falling to default 6h).
+  MAX_HOLD_HOURS_BY_SETUP: {
+    BREAKOUT: 4, GAP_AND_GO: 3, VWAP_RECLAIM: 6, OVERSOLD_BOUNCE: 6,
+    // v2 long setups
+    ORB_PLUS: 4,           // morning breakout — quick play
+    VWAP_PULLBACK: 5,      // trend continuation — patience
+    COMPRESSION: 4,        // breakout from compression — measured move
+    // v2 short mirrors
+    ORB_MINUS: 4,
+    VWAP_PULLBACK_SHORT: 5,
+    COMPRESSION_SHORT: 4,
+    // legacy short setups also covered
+    VWAP_BREAKDOWN: 6, GAP_AND_DROP: 3, BREAKDOWN: 4, OVERBOUGHT_REJECTION: 5,
+  },
   // NEW — Varsity M2 full-stack gate. Require dayTradeScore (the 14-point
   // Varsity checklist + CPR + OBV + S/R + candlestick + VPA matrix) before
   // any entry. Cuts marginal-quality setups that pass the 3-strategy vote
@@ -3969,13 +3983,28 @@ function getCurrentDayBias() {
 // ─────────────────────────────────────────────────────────────────────────
 function classifyStockTier(sym, fundData, dayBias) {
   if (!fundData) return { tier: 'SKIP', reason: 'no_fundamentals' };
-  const adrPct = fundData.atrPct || fundData.adr_pct || null;
-  if (adrPct == null) return { tier: 'SKIP', reason: 'no_adr' };
-  if (adrPct < 1.0 || adrPct > 4.0) return { tier: 'SKIP', reason: `adr_${adrPct.toFixed(2)}_out_of_band` };
-  const turnoverCr = fundData.turnoverCr || fundData.daily_turnover_cr || null;
-  if (turnoverCr != null && turnoverCr < 50) return { tier: 'SKIP', reason: `turnover_${turnoverCr.toFixed(0)}cr_low` };
+  // 🚀 v2.0 Wave 7 audit fix — compute ADR from existing annualVol when atrPct
+  // not directly populated. annualVol = daily_std × √252 × 100, so daily volatility
+  // proxy = annualVol / √252. This unblocks tier classification: previously
+  // every stock returned SKIP because atrPct was never written to stockFundamentals.
+  let adrPct = fundData.atrPct || fundData.adr_pct || null;
+  if (adrPct == null && fundData.annualVol != null && Number.isFinite(fundData.annualVol)) {
+    adrPct = +(fundData.annualVol / Math.sqrt(252)).toFixed(2);
+  }
+  // If still null, infer from beta (high-beta = high vol; rough fallback)
+  if (adrPct == null && fundData.beta != null) {
+    adrPct = +(fundData.beta * 1.5).toFixed(2);  // beta=1.0 ≈ 1.5% daily ATR for Nifty
+  }
+  // Last resort: assume average daily ATR for Nifty 50/Next 50 universe
+  if (adrPct == null) adrPct = 1.8;
+  if (adrPct < 0.8 || adrPct > 5.0) return { tier: 'SKIP', reason: `adr_${adrPct.toFixed(2)}_out_of_band` };
 
-  // Sector strength (top 6 of 11)
+  // Turnover check — soft, only skip if explicitly low
+  const turnoverCr = fundData.turnoverCr || fundData.daily_turnover_cr ||
+                     (fundData.mktCap && fundData.volRatio ? fundData.mktCap * fundData.volRatio * 0.001 : null);
+  if (turnoverCr != null && turnoverCr < 20) return { tier: 'SKIP', reason: `turnover_${turnoverCr.toFixed(0)}cr_low` };
+
+  // Sector strength (top 6 of 11) — soft signal; default to neutral if missing
   const sectorStrong = !!fundData.sectorTop6 || !!fundData.sector_top6 ||
                        (fundData.sectorRank != null && fundData.sectorRank <= 6);
   // Daily trend alignment with day_bias
@@ -5841,6 +5870,10 @@ async function scanAndTrade() {
               varsityBestSetup: dts.bestSetup,
               ch19PassCount:    passCount,
               direction:        'LONG',
+              // 🚀 v2.0 Wave 7 — stash long setup-specific SL/TGT so Pass 2 can
+              // override the swing-low-derived defaults from computePositionSize.
+              dayTradeSL:       dts.sl,
+              dayTradeTgt:      dts.tgt,
             });
           }
         }
@@ -5877,6 +5910,10 @@ async function scanAndTrade() {
             varsityBestSetup: dts.bestShortSetup,
             ch19PassCount:    passCountShort,
             direction:        'SHORT',
+            // 🚀 v2.0 Wave 7 — stash short setup-specific SL/TGT so Pass 2 can
+            // override the swing-high-derived defaults.
+            dayTradeSL:       dts.shortSL,
+            dayTradeTgt:      dts.shortTgt,
           });
           console.log(`  📉 SHORT cand ${stock.sym}: ${dts.bestShortSetup} (Ch19 ${passCountShort}/5)`);
         }
@@ -6326,10 +6363,30 @@ async function scanAndTrade() {
     const posSize = isShortCandidate
       ? computeShortPositionSize(price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles)
       : computePositionSize     (price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles);
-    const sl  = posSize.stopLoss;
-    const tgt = posSize.target;
-    const qty = posSize.shares;
-    if (posSize.slSource === 'swing_low' || posSize.slSource === 'swing_high') {
+    // 🚀 v2.0 Wave 7 — prefer setup-specific SL/TGT from scoreDayTrade for v2
+    // setups (ORB+, VWAP_PULLBACK, COMPRESSION). Pre-fix, computePositionSize's
+    // swing-low/high override would replace setup-anchored SL with structural
+    // SL — defeating the v2 setup design (e.g. ORB+ wants OR midpoint SL).
+    const v2SetupNames = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','ORB_MINUS','VWAP_PULLBACK_SHORT','COMPRESSION_SHORT']);
+    const useSetupSpecificSL = CONFIG.V2_SETUPS_MODE
+      && v2SetupNames.has(result.strategy)
+      && Number.isFinite(candidate.dayTradeSL) && Number.isFinite(candidate.dayTradeTgt);
+    const sl  = useSetupSpecificSL ? candidate.dayTradeSL  : posSize.stopLoss;
+    const tgt = useSetupSpecificSL ? candidate.dayTradeTgt : posSize.target;
+    // Recompute qty if we override SL/TGT (so risk per trade stays correct)
+    let qty = posSize.shares;
+    if (useSetupSpecificSL) {
+      const stopDist = Math.abs(price - sl);
+      if (stopDist > 0) {
+        const equity = ddStatus.equity * sizeMult;
+        const riskAmt = equity * v2EffectiveRisk;
+        qty = Math.max(1, Math.floor(riskAmt / stopDist));
+        // 20% per-position cap (same as computePositionSize)
+        const maxCap = equity * 0.20;
+        if (qty * price > maxCap) qty = Math.max(1, Math.floor(maxCap / price));
+      }
+      result.detail = (result.detail||'') + ` [v2-setup-SL:${result.strategy}@${sl}]`;
+    } else if (posSize.slSource === 'swing_low' || posSize.slSource === 'swing_high') {
       result.detail = (result.detail||'') + ` [SL:${posSize.slSource}@${sl}]`;
     }
 
@@ -15296,11 +15353,27 @@ function scoreDayTrade(candles, sym, ctx) {
   // Morning gaps shine at 9:15-10:00, midday chop favors mean-reversion, etc.
   // Bonuses/penalties are small (±2-6) so they fine-tune ranking without
   // dominating the structural signals.
+  // 🚀 v2.0 Wave 7 audit fix — added v2 setup names so phaseAdj resolves to a
+  // real number (was always 0 because phaseAffinity[v2_name] was undefined).
   const phaseAffinity = {
     GAP_AND_GO:      { OPENING:  6, MORNING:  3, MIDDAY: -5, AFTERNOON: -3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     BREAKOUT:        { OPENING:  3, MORNING:  5, MIDDAY: -3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     VWAP_RECLAIM:    { OPENING:  2, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     OVERSOLD_BOUNCE: { OPENING: -3, MORNING:  3, MIDDAY:  5, AFTERNOON:  3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    // v2 long setups — ORB+ shines opening/morning; VWAP_PULLBACK in trend window;
+    // COMPRESSION in mid-morning to early afternoon
+    ORB_PLUS:        { OPENING:  6, MORNING:  4, MIDDAY: -4, AFTERNOON: -2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    VWAP_PULLBACK:   { OPENING:  1, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    COMPRESSION:     { OPENING:  2, MORNING:  5, MIDDAY:  2, AFTERNOON:  1, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    // v2 short mirrors — same time profile, applies to short side
+    ORB_MINUS:           { OPENING:  6, MORNING:  4, MIDDAY: -4, AFTERNOON: -2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    VWAP_PULLBACK_SHORT: { OPENING:  1, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    COMPRESSION_SHORT:   { OPENING:  2, MORNING:  5, MIDDAY:  2, AFTERNOON:  1, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    // legacy short setups
+    VWAP_BREAKDOWN:        { OPENING:  2, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    GAP_AND_DROP:          { OPENING:  6, MORNING:  3, MIDDAY: -5, AFTERNOON: -3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    BREAKDOWN:             { OPENING:  3, MORNING:  5, MIDDAY: -3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    OVERBOUGHT_REJECTION:  { OPENING: -3, MORNING:  3, MIDDAY:  5, AFTERNOON:  3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
   };
   const phaseAdj = (phaseAffinity[best.type] || {})[sessionPhase] || 0;
   if (phaseAdj > 0) overall = Math.min(100, overall + _gain('MULTI', phaseAdj, `${sessionPhase} phase favors ${best.type}`));
@@ -15373,13 +15446,40 @@ function scoreDayTrade(candles, sym, ctx) {
     overall = Math.max(0, overall + _penalty('MULTI', 5, `Delivery ${_delPct}% — speculative`));
   }
 
-  if (overall < 30) return null; // below threshold — not worth showing
+  // 🚀 v2.0 Wave 7 audit fix — short-only candidates were being dropped here.
+  // Pre-fix, `if (overall < 30) return null` killed cases where long score is
+  // weak but short setup scored 70+ (e.g. RANGING tape with COMPRESSION_SHORT).
+  // Now check both directions: only kill the result when BOTH long and short
+  // are below threshold.
+  if (overall < 30 && (typeof bestShort === 'undefined' || bestShort.score < 30)) return null;
 
   // Stop loss + target based on setup type
   // Varsity M9 (Risk Management): "Always define SL BEFORE entering. Never risk more than
   // you expect to gain." Each setup uses structure-based SL, not arbitrary percentages.
   let sl, tgt, rrRatio;
-  if (best.type === 'OVERSOLD_BOUNCE') {
+  // 🚀 v2.0 Wave 7 audit fix — v2 setups ALSO need setup-specific SL/TGT.
+  // Pre-fix, ORB_PLUS/VWAP_PULLBACK/COMPRESSION fell through to VWAP_RECLAIM
+  // branch (wrong math). Each v2 setup now uses its spec-defined anchor.
+  if (best.type === 'ORB_PLUS') {
+    // SL at OR midpoint (Pani ORB + Fisher ACD synthesis); TGT = OR width projected
+    const orMid = (orHigh + orLow) / 2;
+    sl  = +(Math.max(orMid, dayLow * 0.998)).toFixed(2);
+    tgt = +(px + Math.max(orRange, (px - sl) * 2)).toFixed(2);
+  } else if (best.type === 'VWAP_PULLBACK') {
+    // SL = 0.5× ATR beyond VWAP touch (Raschke Holy Grail intraday);
+    // TGT = prior swing high projected (≈ 2:1 R:R)
+    const vwapRefSL = lastVWAP - 0.5 * (atrVal || (px * 0.01));
+    sl  = +(Math.max(vwapRefSL, dayLow * 0.998)).toFixed(2);
+    tgt = +(px + (px - sl) * 2).toFixed(2);
+  } else if (best.type === 'COMPRESSION') {
+    // SL = opposite side of compression (NR4 low); TGT = compression range × 1.5 (measured move)
+    // Use last 4 candles' low as compression low approximation
+    const compRangeLow = Math.min(...candles.slice(-5, -1).map(c => c.low));
+    const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
+    const compRange = compRangeHigh - compRangeLow;
+    sl  = +(compRangeLow * 0.998).toFixed(2);
+    tgt = +(px + Math.max(compRange * 1.5, (px - sl) * 2)).toFixed(2);
+  } else if (best.type === 'OVERSOLD_BOUNCE') {
     // SL below the oversold candle's low or day low (Varsity M9: structural SL)
     sl  = +(Math.min(dayLow, last.low) * 0.997).toFixed(2);
     tgt = +(px + (px - sl) * 2).toFixed(2);  // 2:1 R:R — mean reversion targets are generous
@@ -15395,7 +15495,7 @@ function scoreDayTrade(candles, sym, ctx) {
     tgt = +(px + Math.abs(gapPct / 100 * px) * 1.2).toFixed(2);
     // Fallback if gap is tiny
     if (tgt <= px) tgt = +(px + (px - sl) * 1.5).toFixed(2);
-  } else { // VWAP_RECLAIM
+  } else { // VWAP_RECLAIM (default fallback)
     // SL below VWAP — Varsity M2 Ch13: "if price drops back below VWAP, reclaim failed"
     sl  = +(lastVWAP * 0.995).toFixed(2);
     tgt = +(px + (px - sl) * 2).toFixed(2);
@@ -15446,7 +15546,22 @@ function scoreDayTrade(candles, sym, ctx) {
   let shortSL, shortTgt, shortRR;
   {
     const swingHighStruct = findSwingHigh(candles, px);
-    if (swingHighStruct) {
+    // 🚀 v2.0 Wave 7 audit fix — v2 SHORT setups also need direction-flipped
+    // setup-specific anchors. Pre-fix, ORB_MINUS/VWAP_PULLBACK_SHORT/
+    // COMPRESSION_SHORT all fell through to VWAP_BREAKDOWN math.
+    if (bestShort.type === 'ORB_MINUS') {
+      // SL at OR midpoint (mirror of ORB+); TGT = OR width below
+      const orMid = (orHigh + orLow) / 2;
+      shortSL = +(Math.min(orMid, dayHigh * 1.002)).toFixed(2);
+    } else if (bestShort.type === 'VWAP_PULLBACK_SHORT') {
+      // SL = 0.5× ATR above VWAP touch (mirror of long Holy Grail)
+      const atrLocal = atr14val || (px * 0.01);
+      shortSL = +(Math.max(lastVWAP + 0.5 * atrLocal, dayHigh * 1.001)).toFixed(2);
+    } else if (bestShort.type === 'COMPRESSION_SHORT') {
+      // SL = opposite side of compression (NR4 high)
+      const compRangeHigh = Math.max(...candles.slice(-5, -1).map(c => c.high));
+      shortSL = +(compRangeHigh * 1.002).toFixed(2);
+    } else if (swingHighStruct) {
       shortSL = +(swingHighStruct * 1.001).toFixed(2);          // anchor at resistance + buffer
     } else if (bestShort.type === 'OVERBOUGHT_REJECTION') {
       // SL above the rejection candle's high or day high — Varsity M9 mirror
@@ -15458,7 +15573,7 @@ function scoreDayTrade(candles, sym, ctx) {
     } else if (bestShort.type === 'GAP_AND_DROP') {
       // SL at gap fill level (prev close) — gap-fill = thesis invalidated
       shortSL = +(prevClose * 1.002).toFixed(2);
-    } else { // VWAP_BREAKDOWN
+    } else { // VWAP_BREAKDOWN (default fallback)
       // SL above VWAP — failed breakdown if price reclaims VWAP
       shortSL = +(lastVWAP * 1.005).toFixed(2);
     }
@@ -15734,6 +15849,9 @@ function scoreDayTrade(candles, sym, ctx) {
     price: +px.toFixed(2),
     // Overall
     dayTradeScore: overall,
+    // 🚀 v2.0 Wave 7 — long-side setup-specific SL/TGT exposed for Pass 2 to consume
+    // when V2_SETUPS_MODE=on. Pass 2 prefers these over swing-low/high derived SL.
+    sl, tgt, rrRatio,
     verdict, verdictColor,
     // Varsity M2 Ch 19 binary checklist — exposed for backtest binary-only mode
     // (2026-04-27). 5 yes/no checks: price action, volume, S/R context,
