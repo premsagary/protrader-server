@@ -16199,6 +16199,9 @@ function scoreDayTrade(candles, sym, ctx) {
   const atrQtyPer10L = Math.floor(kellyQtyPer10L * volScale);
 
   // SL reason — WHY this stop loss level
+  // 🚀 Wave 15.2 — v2 setups (ORB+, VWAP_PULLBACK, COMPRESSION, HOLY_GRAIL)
+  // were falling through to the VWAP_RECLAIM default — wrong justification.
+  // Now each v2 setup has its own setup-specific SL reasoning.
   let slReason, slVarsityRef;
   if (best.type === 'OVERSOLD_BOUNCE') {
     slReason = 'Below the oversold candle low / day low — if price makes a new low, the bounce thesis is dead';
@@ -16209,6 +16212,18 @@ function scoreDayTrade(candles, sym, ctx) {
   } else if (best.type === 'GAP_AND_GO') {
     slReason = 'At previous close (gap fill level) — if the gap fills completely, the momentum thesis is invalidated';
     slVarsityRef = 'Varsity M2 Ch7: gap fill = directional conviction lost';
+  } else if (best.type === 'ORB_PLUS') {
+    slReason = 'At Opening Range midpoint — if price drops back into the OR, the breakout has failed (Fisher ACD synthesis)';
+    slVarsityRef = 'Mark Fisher (The Logical Trader, 2002) + Pani ORB: OR midpoint = breakout failure level';
+  } else if (best.type === 'VWAP_PULLBACK') {
+    slReason = 'Below VWAP touch by 0.5× ATR — if price loses VWAP after pullback, the institutional defense level has broken';
+    slVarsityRef = 'Brooks H2 + Raschke VWAP-pullback: VWAP-anchored SL with ATR cushion';
+  } else if (best.type === 'COMPRESSION') {
+    slReason = 'At opposite side of NR4 compression range — failure of the breakout returns price into the coil';
+    slVarsityRef = 'Pani NR4 + Brooks compression: range-anchored SL = thesis invalidation';
+  } else if (best.type === 'HOLY_GRAIL') {
+    slReason = 'Below the 20-EMA pullback low minus 0.7× ATR — if price loses the pullback low, the trend is no longer respecting 20-EMA support';
+    slVarsityRef = 'Linda Raschke Holy Grail (Street Smarts, 1996): tight stop below pullback low is the key to high R:R';
   } else {
     slReason = 'Below VWAP — if price drops back below VWAP after reclaiming, institutions are not defending';
     slVarsityRef = 'Varsity M2 Ch13: failed VWAP reclaim = no institutional support';
@@ -16231,6 +16246,8 @@ function scoreDayTrade(candles, sym, ctx) {
   const tgt3 = +(px + (tgt - px) * 1.5).toFixed(2);   // extended target if momentum continues
 
   // Time-based exit — Varsity M9: don't hold intraday positions into close without a reason
+  // 🚀 Wave 15.2 — added v2 setup-specific exit timing. Pre-fix, all v2 setups
+  // fell through to generic "Exit by 3:15 PM" without setup-aware nuance.
   let timeExit = 'Exit by 3:15 PM IST if target not hit — avoid overnight risk on intraday positions';
   if (best.type === 'OVERSOLD_BOUNCE') {
     timeExit = 'Mean reversion targets should hit within 30-60 min. If RSI recovers above 50 but price stalls, exit. Must exit by 3:15 PM.';
@@ -16238,9 +16255,20 @@ function scoreDayTrade(candles, sym, ctx) {
     timeExit = 'Gap momentum is strongest in the first 60-90 min. If price stalls after OR period, tighten SL to breakeven. Exit by 3:15 PM.';
   } else if (best.type === 'BREAKOUT') {
     timeExit = 'Breakout should show follow-through within 2-3 candles (10-15 min). If no follow-through with declining volume, exit at breakeven. Exit by 3:15 PM.';
+  } else if (best.type === 'ORB_PLUS') {
+    timeExit = 'Opening-range breakouts should show follow-through within 30 min of trigger. Wave 1 time-stop fires if no +0.5R within 60 min — SL → BE. Hard exit by 3:15 PM.';
+  } else if (best.type === 'VWAP_PULLBACK') {
+    timeExit = 'VWAP pullbacks are patient setups — give 60-90 min for the trend continuation to develop. Wave 1 time-stop: no +0.5R in 60 min → SL → BE. Hard exit by 3:15 PM.';
+  } else if (best.type === 'COMPRESSION') {
+    timeExit = 'Compression breakouts are measured-move plays — typically resolve within 60-90 min. If price re-enters the range within 30 min, exit immediately. Hard exit by 3:15 PM.';
+  } else if (best.type === 'HOLY_GRAIL') {
+    timeExit = 'Holy Grail trades work when ADX>30 sustains. If ADX drops below 25 within 30 min of entry, the trend is dying — exit. Wave 1 time-stop: no +0.5R in 60 min → SL → BE. Hard exit by 3:15 PM.';
   }
 
   // Re-entry rules
+  // 🚀 Wave 15.2 — added v2 setup-specific re-entry guidance. Pre-fix, v2
+  // setups fell through to "wait for RSI < 25" (mean-reversion logic — wrong
+  // for trend-continuation setups like ORB+, VWAP_PULLBACK, HOLY_GRAIL).
   let reEntryRule;
   if (best.type === 'VWAP_RECLAIM') {
     reEntryRule = 'If stopped out, re-enter only if price reclaims VWAP again with higher volume than the first attempt.';
@@ -16248,8 +16276,18 @@ function scoreDayTrade(candles, sym, ctx) {
     reEntryRule = 'If stopped out on fake-out, wait for a 2nd breakout attempt with volume > 2x avg before re-entering.';
   } else if (best.type === 'GAP_AND_GO') {
     reEntryRule = 'Do NOT re-enter if gap has filled. A filled gap means the thesis is completely invalidated.';
-  } else {
+  } else if (best.type === 'OVERSOLD_BOUNCE') {
     reEntryRule = 'If stopped out, wait for RSI to make a new low below 25 before attempting a second bounce entry.';
+  } else if (best.type === 'ORB_PLUS') {
+    reEntryRule = 'If ORB+ failed (price re-entered OR), do NOT re-enter the same direction. Wait for ORB- to set up on the opposite side, OR for a fresh setup at a new level.';
+  } else if (best.type === 'VWAP_PULLBACK') {
+    reEntryRule = 'If stopped out below VWAP, the pullback failed. Re-enter only if price retakes VWAP again with bullish reversal candle and ADX still ≥ 25.';
+  } else if (best.type === 'COMPRESSION') {
+    reEntryRule = 'If compression breakout failed (back inside range), it usually fails the opposite way too. Wait for a NEW compression to form — do not chase the original.';
+  } else if (best.type === 'HOLY_GRAIL') {
+    reEntryRule = 'If stopped out below the pullback low, the trend may be exhausting. Re-enter only if ADX still > 30 AND price reclaims the 20-EMA again with a fresh bullish reversal candle. NEVER re-enter against a falling 20-EMA.';
+  } else {
+    reEntryRule = 'If stopped out, wait for a fresh setup to form. Do not revenge-trade — Wave 1 tilt management will pause you after 3 consecutive losses anyway.';
   }
 
   // Build the riskPlan object
@@ -16785,10 +16823,24 @@ async function backfillOpenPositionCandles() {
 }
 
 app.get('/api/stocks/picks/daytrade', async (req, res) => {
-  const setupFilter = req.query.setup; // optional: VWAP_RECLAIM, GAP_AND_GO, BREAKOUT, OVERSOLD_BOUNCE
+  const setupFilter = req.query.setup; // optional setup-name filter
   let picks = _dayTradeCache;
-  if (setupFilter && ['VWAP_RECLAIM', 'GAP_AND_GO', 'BREAKOUT', 'OVERSOLD_BOUNCE'].includes(setupFilter)) {
-    picks = picks.filter(p => p.bestSetup === setupFilter);
+  // 🚀 Wave 15.2 — whitelist now includes v2 setups (ORB_PLUS, VWAP_PULLBACK,
+  // COMPRESSION, HOLY_GRAIL) + short mirrors. Pre-fix, ?setup=HOLY_GRAIL was
+  // silently ignored — fell through to no-filter case. v1 names retained for
+  // backward-compat when V2_SETUPS_MODE is off.
+  const _validSetups = new Set([
+    // v2 long
+    'ORB_PLUS', 'VWAP_PULLBACK', 'COMPRESSION', 'HOLY_GRAIL',
+    // v2 short mirrors
+    'ORB_MINUS', 'VWAP_PULLBACK_SHORT', 'COMPRESSION_SHORT', 'HOLY_GRAIL_SHORT',
+    // v1 fallback
+    'VWAP_RECLAIM', 'GAP_AND_GO', 'BREAKOUT', 'OVERSOLD_BOUNCE',
+    // v1 short fallback
+    'VWAP_BREAKDOWN', 'GAP_AND_DROP', 'BREAKDOWN', 'OVERBOUGHT_REJECTION',
+  ]);
+  if (setupFilter && _validSetups.has(setupFilter)) {
+    picks = picks.filter(p => p.bestSetup === setupFilter || p.bestSetupShort === setupFilter);
   }
   // 🚀 v2.0 Wave 13 — attach systemic v2 context so DayTrade UI can render
   // banners (DD tier, tilt, premarket, trend day, IB) without making N extra
