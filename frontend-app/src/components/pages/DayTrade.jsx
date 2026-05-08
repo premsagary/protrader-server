@@ -4,7 +4,44 @@ import { apiGet, apiPost } from '../../api/client';
 // ══════════════════════════════════════════════════════════════════════
 // Setup type config — mirrors scoreDayTrade() output in kite-server.js
 // ══════════════════════════════════════════════════════════════════════
+// 🚀 v2.0 Wave 15 — added the 4 v2 setups (ORB_PLUS, VWAP_PULLBACK, COMPRESSION,
+// HOLY_GRAIL) so picks display when V2_SETUPS_MODE=on. V1 setups kept for
+// backward-compat when env var is disabled.
 const SETUPS = [
+  // ── v2 setups (active in production since 2026-05-07) ──
+  {
+    type: 'ORB_PLUS',
+    label: 'ORB+ Breakout',
+    icon: '🌅',
+    color: 'var(--amber-text)',
+    bg: 'var(--amber-bg)',
+    desc: 'Opening Range Breakout (Mark Fisher ACD). Price breaks 9:15–9:30 high with vol > 1.5× and ADX > 18.',
+  },
+  {
+    type: 'VWAP_PULLBACK',
+    label: 'VWAP Pullback',
+    icon: '↩️',
+    color: 'var(--brand-text)',
+    bg: 'var(--brand-bg)',
+    desc: 'Trend continuation. Price reclaims VWAP from below after extended above-VWAP move. Bullish pattern + ADX ≥ 25.',
+  },
+  {
+    type: 'COMPRESSION',
+    label: 'Compression Breakout',
+    icon: '🎯',
+    color: 'var(--green-text)',
+    bg: 'var(--green-bg)',
+    desc: 'NR4 + Brooks compression. 4 narrowing 15-min bars, total range < 0.8× ATR, breakout in trend direction.',
+  },
+  {
+    type: 'HOLY_GRAIL',
+    label: 'Holy Grail (Raschke)',
+    icon: '🏆',
+    color: 'var(--purple-text)',
+    bg: 'var(--purple-bg)',
+    desc: 'Linda Raschke Holy Grail (Street Smarts, 1996). ADX > 30 strong trend + pullback to rising 20-EMA + bullish reversal candle. Documented 65–70% win rate.',
+  },
+  // ── v1 setups (used when V2_SETUPS_MODE=off; defensive fallback only) ──
   {
     type: 'VWAP_RECLAIM',
     label: 'VWAP Reclaim',
@@ -41,6 +78,12 @@ const SETUPS = [
 
 const SETUP_FILTER_PILLS = [
   { id: 'ALL',             label: 'All Setups' },
+  // v2 (active in prod)
+  { id: 'ORB_PLUS',        label: 'ORB+' },
+  { id: 'VWAP_PULLBACK',   label: 'VWAP Pullback' },
+  { id: 'COMPRESSION',     label: 'Compression' },
+  { id: 'HOLY_GRAIL',      label: 'Holy Grail' },
+  // v1 fallbacks
   { id: 'VWAP_RECLAIM',    label: 'VWAP' },
   { id: 'GAP_AND_GO',      label: 'Gap' },
   { id: 'BREAKOUT',        label: 'Breakout' },

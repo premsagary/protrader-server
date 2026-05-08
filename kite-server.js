@@ -2678,6 +2678,26 @@ const CONFIG = {
     VOL_CONFIRMATION_MULT:  1.3,
     TARGET_RANGE_MULT:      1.5,       // measured-move target = compression × 1.5
   },
+  // 🚀 v2.0 Wave 15 — Linda Raschke "Holy Grail" (Street Smarts, 1996)
+  // Strong-trend pullback to 20-EMA. Distinct from VWAP_PULLBACK:
+  //   • VWAP_PULLBACK uses session VWAP (resets daily) — institutional anchor
+  //   • HOLY_GRAIL uses 20-EMA on 5-min — momentum anchor, Raschke's exact rule
+  // Both can fire on the same trending day; they're complementary, not redundant.
+  // Documented win rate 65-70% in Raschke's track record (verified by Connors,
+  // Sperandeo, multiple prop firms). One of the highest-conviction intraday
+  // setups in published literature.
+  V2_HOLY_GRAIL: {
+    ENTRY_WINDOW_START:     '09:45',   // Skip first 30min volatility — needs ADX to settle
+    ENTRY_WINDOW_END:       '14:30',
+    MIN_ADX:                30,        // Raschke's exact rule — STRONG trend only
+    EMA_PERIOD:             20,        // 20-EMA is the bounce anchor
+    EMA_TOUCH_LOOKBACK:     3,         // Pullback must touch EMA within last 3 bars (15 min)
+    EMA_TOUCH_TOLERANCE_PCT: 0.4,      // Within 0.4% counts as a touch (intra-bar wick OK)
+    EMA_RISING_LOOKBACK:    3,         // EMA must be rising (or falling for short) over 3 bars
+    VOL_CONFIRMATION_MULT:  1.0,       // Vol on bounce ≥ avg (Raschke's "with confirmation")
+    SL_ATR_MULT:            0.7,       // 0.7× ATR below pullback low (Raschke: tight stop = key)
+    TARGET_R_MULT:          2.0,       // 2:1 R:R — Raschke's documented hold logic
+  },
   // 🚀 Wave 10 — relaxed ADR caps so mid-morning entries still have room.
   // Pre-fix, 80% normal / 95% trend-day had 60%+ of late-morning fires
   // hitting time-stop before target.
@@ -2693,10 +2713,12 @@ const CONFIG = {
     ORB_PLUS: 4,           // morning breakout — quick play
     VWAP_PULLBACK: 5,      // trend continuation — patience
     COMPRESSION: 4,        // breakout from compression — measured move
+    HOLY_GRAIL: 4,         // 🚀 Wave 15 — Raschke 20-EMA bounce, expects 1-2 ATR move
     // v2 short mirrors
     ORB_MINUS: 4,
     VWAP_PULLBACK_SHORT: 5,
     COMPRESSION_SHORT: 4,
+    HOLY_GRAIL_SHORT: 4,
     // legacy short setups also covered
     VWAP_BREAKDOWN: 6, GAP_AND_DROP: 3, BREAKDOWN: 4, OVERBOUGHT_REJECTION: 5,
   },
@@ -4869,7 +4891,7 @@ function adjustCandidateScoreFromStructure(candidate, structure) {
   // "at PDH w/o breakout" / "stacked resistance overhead" / "R 0.4% overhead".
   // V2 setups have their own structural anchoring (OR midpoint SL,
   // VWAP-anchored SL, compression low SL) — they don't need v1 long-bias gates.
-  const _v2LongSetups = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION']);
+  const _v2LongSetups = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','HOLY_GRAIL']);
   if (CONFIG.V2_SETUPS_MODE && _v2LongSetups.has(candidate.result?.strategy)) {
     return {
       rejected: false,
@@ -6480,7 +6502,7 @@ async function scanAndTrade() {
     // setups (ORB+, VWAP_PULLBACK, COMPRESSION). Pre-fix, computePositionSize's
     // swing-low/high override would replace setup-anchored SL with structural
     // SL — defeating the v2 setup design (e.g. ORB+ wants OR midpoint SL).
-    const v2SetupNames = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','ORB_MINUS','VWAP_PULLBACK_SHORT','COMPRESSION_SHORT']);
+    const v2SetupNames = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','HOLY_GRAIL','ORB_MINUS','VWAP_PULLBACK_SHORT','COMPRESSION_SHORT','HOLY_GRAIL_SHORT']);
     const useSetupSpecificSL = CONFIG.V2_SETUPS_MODE
       && v2SetupNames.has(result.strategy)
       && Number.isFinite(candidate.dayTradeSL) && Number.isFinite(candidate.dayTradeTgt);
@@ -15414,6 +15436,82 @@ function scoreDayTrade(candles, sym, ctx) {
     }
   }
 
+  // ── V2 SETUP 4: HOLY GRAIL (Raschke 1996 — 20-EMA pullback in strong trend) ──
+  // The original Holy Grail. ADX > 30 confirms strong trend. Pullback to
+  // 20-EMA on 5-min, then reversal candle = entry. EMA must still be rising
+  // (long) or falling (short). Documented 65-70% win rate. Distinct from
+  // VWAP_PULLBACK because the anchor is 20-EMA (momentum), not VWAP
+  // (volume-weighted institutional level). Both can fire same day.
+  let holyGrailScore = 0, holyGrailDetail = [];
+  let holyGrailShortScore = 0, holyGrailShortDetail = [];
+  {
+    const cfg = CONFIG.V2_HOLY_GRAIL;
+    const inWindow = _inTimeWindow(cfg.ENTRY_WINDOW_START, cfg.ENTRY_WINDOW_END);
+    const adxOk = adxVal >= cfg.MIN_ADX;
+    // EMA rising/falling check: ema20[n-1] vs ema20[n-1-LOOKBACK]
+    const emaLookback = cfg.EMA_RISING_LOOKBACK;
+    const emaIdxNow = ema20.length - 1;
+    const emaIdxPrev = Math.max(0, emaIdxNow - emaLookback);
+    const ema20Now = ema20[emaIdxNow];
+    const ema20Prev = ema20[emaIdxPrev];
+    const emaRising = ema20Now > ema20Prev;
+    const emaFalling = ema20Now < ema20Prev;
+    // Did we touch EMA20 within the last N bars?
+    // For long: bar.low <= ema20 * (1 + tol) means price dipped to or through EMA
+    // For short: bar.high >= ema20 * (1 - tol) means price spiked to or through EMA
+    const tolPct = cfg.EMA_TOUCH_TOLERANCE_PCT / 100;
+    const lookback = cfg.EMA_TOUCH_LOOKBACK;
+    let touchedEmaLong = false, touchedEmaShort = false;
+    let pullbackLow = Infinity, pullbackHigh = -Infinity;
+    for (let i = Math.max(0, n - 1 - lookback); i < n - 1; i++) {
+      const c = candles[i];
+      const emaAtBar = ema20[i];
+      if (c.low <= emaAtBar * (1 + tolPct) && c.low >= emaAtBar * (1 - tolPct * 3)) {
+        touchedEmaLong = true;
+        if (c.low < pullbackLow) pullbackLow = c.low;
+      }
+      if (c.high >= emaAtBar * (1 - tolPct) && c.high <= emaAtBar * (1 + tolPct * 3)) {
+        touchedEmaShort = true;
+        if (c.high > pullbackHigh) pullbackHigh = c.high;
+      }
+    }
+    // Current bar must be ABOVE EMA (long) or BELOW EMA (short) — bounce confirmed
+    const lastClose = candles[n - 1].close;
+    const aboveEma = lastClose > ema20Now;
+    const belowEma = lastClose < ema20Now;
+    // Volume confirmation on the bounce candle
+    const volOk = volRatio >= cfg.VOL_CONFIRMATION_MULT;
+    // LONG: strong uptrend + pullback to rising 20-EMA + bullish reversal candle
+    if (inWindow && adxOk && emaRising && touchedEmaLong && bullPattern && aboveEma && volOk) {
+      holyGrailScore = 70;
+      holyGrailDetail.push(`Holy Grail long: ADX ${adxVal.toFixed(0)} (>30 strong trend)`);
+      holyGrailDetail.push(`Touched 20-EMA ${ema20Now.toFixed(2)} within ${lookback} bars`);
+      holyGrailDetail.push(`EMA rising: ${ema20Prev.toFixed(2)} → ${ema20Now.toFixed(2)}`);
+      holyGrailDetail.push(bullPattern.name);
+      // Bonuses for stronger conviction
+      if (adxVal >= 40) { holyGrailScore += 8; holyGrailDetail.push(`ADX ${adxVal.toFixed(0)} extreme`); }
+      else if (adxVal >= 35) { holyGrailScore += 5; holyGrailDetail.push(`ADX ${adxVal.toFixed(0)} very strong`); }
+      if (volRatio >= 1.5) { holyGrailScore += 8; holyGrailDetail.push('Strong vol on bounce'); }
+      if (rsiCrossedMidlineUp) { holyGrailScore += 5; holyGrailDetail.push('RSI 50 cross up'); }
+      if (macdHistRising) { holyGrailScore += 5; holyGrailDetail.push('MACD accelerating'); }
+      // Stash pullback low for SL — used in SL block below
+      holyGrailDetail._pullbackLow = pullbackLow !== Infinity ? pullbackLow : ema20Now * 0.997;
+    }
+    // SHORT: strong downtrend + pullback up to falling 20-EMA + bearish reversal
+    if (inWindow && adxOk && emaFalling && touchedEmaShort && bearPattern && belowEma && volOk) {
+      holyGrailShortScore = 70;
+      holyGrailShortDetail.push(`Holy Grail short: ADX ${adxVal.toFixed(0)} (>30 strong trend)`);
+      holyGrailShortDetail.push(`Touched 20-EMA ${ema20Now.toFixed(2)} within ${lookback} bars`);
+      holyGrailShortDetail.push(`EMA falling: ${ema20Prev.toFixed(2)} → ${ema20Now.toFixed(2)}`);
+      holyGrailShortDetail.push(bearPattern.name);
+      if (adxVal >= 40) { holyGrailShortScore += 8; holyGrailShortDetail.push(`ADX ${adxVal.toFixed(0)} extreme`); }
+      else if (adxVal >= 35) { holyGrailShortScore += 5; holyGrailShortDetail.push(`ADX ${adxVal.toFixed(0)} very strong`); }
+      if (volRatio >= 1.5) { holyGrailShortScore += 8; holyGrailShortDetail.push('Strong vol on rejection'); }
+      if (!macdBull && macdHist < macdHistPrev) { holyGrailShortScore += 5; holyGrailShortDetail.push('MACD falling'); }
+      holyGrailShortDetail._pullbackHigh = pullbackHigh !== -Infinity ? pullbackHigh : ema20Now * 1.003;
+    }
+  }
+
   // ── PICK BEST SETUP ────────────────────────────────────────────────────
   // Default v1 candidates
   let setups = [
@@ -15422,12 +15520,14 @@ function scoreDayTrade(candles, sym, ctx) {
     { type: 'BREAKOUT',     score: breakoutScore, detail: breakoutDetail, emoji: '📈' },
     { type: 'OVERSOLD_BOUNCE', score: bounceScore, detail: bounceDetail, emoji: '🔄' },
   ];
-  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 with 3 core setups only
+  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 with 4 core setups
+  // (Wave 15 added HOLY_GRAIL as the 4th — Raschke 20-EMA pullback)
   if (CONFIG.V2_SETUPS_MODE) {
     setups = [
-      { type: 'ORB_PLUS',       score: orbPlusScore,    detail: orbPlusDetail,    emoji: '🌅' },
-      { type: 'VWAP_PULLBACK',  score: vwapPullScore,   detail: vwapPullDetail,   emoji: '↩️' },
+      { type: 'ORB_PLUS',       score: orbPlusScore,     detail: orbPlusDetail,     emoji: '🌅' },
+      { type: 'VWAP_PULLBACK',  score: vwapPullScore,    detail: vwapPullDetail,    emoji: '↩️' },
       { type: 'COMPRESSION',    score: compressionScore, detail: compressionDetail, emoji: '🎯' },
+      { type: 'HOLY_GRAIL',     score: holyGrailScore,   detail: holyGrailDetail,   emoji: '🏆' },
     ];
   }
   setups.sort((a, b) => b.score - a.score);
@@ -15440,12 +15540,14 @@ function scoreDayTrade(candles, sym, ctx) {
     { type: 'BREAKDOWN',          score: breakdownScore,     detail: breakdownDetail,     emoji: '📉' },
     { type: 'OVERBOUGHT_REJECTION', score: overboughtScore,  detail: overboughtDetail,    emoji: '🚫' },
   ];
-  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 short with 3 mirror setups
+  // 🚀 v2.0 — when V2_SETUPS_MODE=on, replace v1 short with 4 mirror setups
+  // (Wave 15 added HOLY_GRAIL_SHORT — Raschke 20-EMA rejection in downtrend)
   if (CONFIG.V2_SETUPS_MODE) {
     setupsShort = [
-      { type: 'ORB_MINUS',           score: orbPlusShortScore,    detail: orbPlusShortDetail,    emoji: '🌅' },
-      { type: 'VWAP_PULLBACK_SHORT', score: vwapPullShortScore,   detail: vwapPullShortDetail,   emoji: '↩️' },
+      { type: 'ORB_MINUS',           score: orbPlusShortScore,     detail: orbPlusShortDetail,     emoji: '🌅' },
+      { type: 'VWAP_PULLBACK_SHORT', score: vwapPullShortScore,    detail: vwapPullShortDetail,    emoji: '↩️' },
       { type: 'COMPRESSION_SHORT',   score: compressionShortScore, detail: compressionShortDetail, emoji: '🎯' },
+      { type: 'HOLY_GRAIL_SHORT',    score: holyGrailShortScore,   detail: holyGrailShortDetail,   emoji: '🏆' },
     ];
   }
   setupsShort.sort((a, b) => b.score - a.score);
@@ -15673,14 +15775,17 @@ function scoreDayTrade(candles, sym, ctx) {
     VWAP_RECLAIM:    { OPENING:  2, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     OVERSOLD_BOUNCE: { OPENING: -3, MORNING:  3, MIDDAY:  5, AFTERNOON:  3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     // v2 long setups — ORB+ shines opening/morning; VWAP_PULLBACK in trend window;
-    // COMPRESSION in mid-morning to early afternoon
+    // COMPRESSION in mid-morning to early afternoon; HOLY_GRAIL needs ADX > 30
+    // which usually develops mid-morning to afternoon (Raschke's "patience window")
     ORB_PLUS:        { OPENING:  6, MORNING:  4, MIDDAY: -4, AFTERNOON: -2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     VWAP_PULLBACK:   { OPENING:  1, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     COMPRESSION:     { OPENING:  2, MORNING:  5, MIDDAY:  2, AFTERNOON:  1, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    HOLY_GRAIL:      { OPENING: -2, MORNING:  4, MIDDAY:  5, AFTERNOON:  4, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     // v2 short mirrors — same time profile, applies to short side
     ORB_MINUS:           { OPENING:  6, MORNING:  4, MIDDAY: -4, AFTERNOON: -2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     VWAP_PULLBACK_SHORT: { OPENING:  1, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     COMPRESSION_SHORT:   { OPENING:  2, MORNING:  5, MIDDAY:  2, AFTERNOON:  1, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
+    HOLY_GRAIL_SHORT:    { OPENING: -2, MORNING:  4, MIDDAY:  5, AFTERNOON:  4, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     // legacy short setups
     VWAP_BREAKDOWN:        { OPENING:  2, MORNING:  5, MIDDAY:  3, AFTERNOON:  2, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
     GAP_AND_DROP:          { OPENING:  6, MORNING:  3, MIDDAY: -5, AFTERNOON: -3, LATE: 0, CLOSED: 0, UNKNOWN: 0 },
@@ -15816,6 +15921,24 @@ function scoreDayTrade(candles, sym, ctx) {
     const compRange = compRangeHigh - compRangeLow;
     sl  = +(compRangeLow * 0.998).toFixed(2);
     tgt = +(px + Math.max(compRange * 1.5, (px - sl) * 2)).toFixed(2);
+  } else if (best.type === 'HOLY_GRAIL') {
+    // 🚀 v2.0 Wave 15 — Raschke Holy Grail SL: pullback low minus 0.7× ATR.
+    // Pullback low is the lowest LOW of bars that touched 20-EMA in last N bars
+    // (stashed as detail._pullbackLow during scoring). Falls back to 20-EMA itself
+    // if not stashed. TGT: 2× R from entry (Raschke's documented hold logic).
+    // 🟡 atr14 from line 14709 is inside a try block (block-scoped), so we
+    // recompute ATR inline here. Cheap: ~14 array reductions.
+    const cfg = CONFIG.V2_HOLY_GRAIL;
+    const pullbackLow = (typeof holyGrailDetail._pullbackLow === 'number')
+      ? holyGrailDetail._pullbackLow
+      : ema20[ema20.length - 1] * 0.997;
+    const _hgTr = candles.slice(1).map((c, i) =>
+      Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close))
+    );
+    const _hgAtr = _hgTr.slice(-14).reduce((a, b) => a + b, 0) / Math.min(14, _hgTr.length || 1);
+    const atrLocal = (Number.isFinite(_hgAtr) && _hgAtr > 0) ? _hgAtr : (px * 0.01);
+    sl  = +(Math.max(pullbackLow - cfg.SL_ATR_MULT * atrLocal, dayLow * 0.998)).toFixed(2);
+    tgt = +(px + (px - sl) * cfg.TARGET_R_MULT).toFixed(2);
   } else if (best.type === 'OVERSOLD_BOUNCE') {
     // SL below the oversold candle's low or day low (Varsity M9: structural SL)
     sl  = +(Math.min(dayLow, last.low) * 0.997).toFixed(2);
@@ -15900,6 +16023,20 @@ function scoreDayTrade(candles, sym, ctx) {
       const _ccS = candles.length >= 5 ? candles.slice(-5, -1) : candles.slice(0, -1);
       const compRangeHigh = _ccS.length > 0 ? Math.max(..._ccS.map(c => c.high)) : dayHigh;
       shortSL = +(compRangeHigh * 1.002).toFixed(2);
+    } else if (bestShort.type === 'HOLY_GRAIL_SHORT') {
+      // 🚀 v2.0 Wave 15 — Raschke Holy Grail SHORT SL: pullback high + 0.7× ATR
+      const cfg = CONFIG.V2_HOLY_GRAIL;
+      const pullbackHigh = (typeof holyGrailShortDetail._pullbackHigh === 'number')
+        ? holyGrailShortDetail._pullbackHigh
+        : ema20[ema20.length - 1] * 1.003;
+      // atr14val is computed AFTER this if/else chain (line ~15960), so use
+      // the same inline ATR pattern as the HOLY_GRAIL long block above.
+      const _hgsTr = candles.slice(1).map((c, i) =>
+        Math.max(c.high - c.low, Math.abs(c.high - candles[i].close), Math.abs(c.low - candles[i].close))
+      );
+      const _hgsAtr = _hgsTr.slice(-14).reduce((a, b) => a + b, 0) / Math.min(14, _hgsTr.length || 1);
+      const atrLocalS = (Number.isFinite(_hgsAtr) && _hgsAtr > 0) ? _hgsAtr : (px * 0.01);
+      shortSL = +(Math.min(pullbackHigh + cfg.SL_ATR_MULT * atrLocalS, dayHigh * 1.002)).toFixed(2);
     } else if (swingHighStruct) {
       shortSL = +(swingHighStruct * 1.001).toFixed(2);          // anchor at resistance + buffer
     } else if (bestShort.type === 'OVERBOUGHT_REJECTION') {
