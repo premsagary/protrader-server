@@ -2600,8 +2600,10 @@ const CONFIG = {
   EOD_TIGHTEN_TRAIL_TIME:  '15:00', // IST — tighten trail to 1.0× ATR
   EOD_SQUAREOFF_TIME:      '15:15', // IST — flat all positions before Zerodha 15:20
   // ─────────────────────────────────────────────────────────────────────────
-  // 🚀 v2.0 WAVE 3 — Strategy architecture (3 core setups, tier classification,
+  // 🚀 v2.0 WAVE 3 + 15 — Strategy architecture (4 core setups, tier classification,
   // pre-market routine, trend-day detection, IB day-type)
+  // Setups: ORB_PLUS (Fisher), VWAP_PULLBACK (Brooks), COMPRESSION (Pani NR4),
+  //         HOLY_GRAIL (Raschke 20-EMA, added Wave 15)
   //
   // v2-strategy branch: v2 setups are ALWAYS ON. No env-var toggle.
   // The v1 setup code paths are retained inside scoreDayTrade() for safety,
@@ -2636,7 +2638,7 @@ const CONFIG = {
   IB_WIDE_FRACTION:            1.5,    // IB > 1.5 × ADR = bracketed day
   // Pre-market routine (8:30 IST)
   PREMARKET_CHECK_TIME:        '08:30',
-  // Setup configurations for the 3 v2 core setups
+  // Setup configurations for the 4 v2 core setups (HOLY_GRAIL added Wave 15)
   V2_ORB_PLUS: {
     OR_DURATION_MIN:        15,        // 9:15-9:30 opening range
     ENTRY_WINDOW_START:     '09:30',
@@ -3842,7 +3844,8 @@ async function checkTiltStatus() {
 //
 // Pre-market routine, tier classification, trend-day detection, Initial
 // Balance day-type detection, day_bias_score. These layers feed the v2
-// 3-setup pipeline (gated behind CONFIG.V2_SETUPS_MODE).
+// 4-setup pipeline (Wave 15 added HOLY_GRAIL alongside ORB+/VWAP_PULLBACK/
+// COMPRESSION). v2-strategy branch: V2_SETUPS_MODE defaults true.
 //
 // All state is module-level + DB-persisted. State auto-resets at IST
 // midnight. Cron-driven where wall-clock time matters.
@@ -6499,7 +6502,7 @@ async function scanAndTrade() {
       ? computeShortPositionSize(price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles)
       : computePositionSize     (price, atrVal, result.regime, ddStatus.equity * sizeMult, v2EffectiveRisk, candles);
     // 🚀 v2.0 Wave 7 — prefer setup-specific SL/TGT from scoreDayTrade for v2
-    // setups (ORB+, VWAP_PULLBACK, COMPRESSION). Pre-fix, computePositionSize's
+    // setups (ORB+, VWAP_PULLBACK, COMPRESSION, HOLY_GRAIL). Pre-fix, computePositionSize's
     // swing-low/high override would replace setup-anchored SL with structural
     // SL — defeating the v2 setup design (e.g. ORB+ wants OR midpoint SL).
     const v2SetupNames = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','HOLY_GRAIL','ORB_MINUS','VWAP_PULLBACK_SHORT','COMPRESSION_SHORT','HOLY_GRAIL_SHORT']);
