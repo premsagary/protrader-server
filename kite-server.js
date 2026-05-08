@@ -10507,6 +10507,12 @@ app.get('/api/admin/daily-report', async (req, res) => {
       // too. 2026-05-06 — group by (symbol, direction) so dup-shorts and
       // dup-longs are detected separately. paper_trades shorts open with
       // type='SELL' so the old type='BUY'-only filter missed them.
+      // 🚀 Wave 14 (2026-05-08) — exclude :PARTIAL rows. Wave 1 partial-
+      // profit logic INSERTs a second row with strategy '<setup>:PARTIAL'
+      // for the half that exits at +1.5R, with the SAME entry_time as the
+      // parent. That tripped this check on 2026-05-08 first-day-live
+      // (BAJAJ-AUTO LONG×2, TORNTPHARM LONG×2 — both false positives,
+      // not real duplicate trades).
       safeQuery(
         `SELECT symbol, direction, COUNT(*)::int AS n FROM (
             SELECT symbol, 'LONG'::text AS direction FROM live_trades
@@ -10514,6 +10520,7 @@ app.get('/api/admin/daily-report', async (req, res) => {
             UNION ALL
             SELECT symbol, COALESCE(direction, 'LONG')::text AS direction FROM paper_trades
              WHERE entry_time >= $1 AND entry_time < $2
+               AND COALESCE(strategy, '') NOT LIKE '%:PARTIAL'
           ) t
          GROUP BY symbol, direction
          HAVING COUNT(*) > 1`,
@@ -10781,9 +10788,20 @@ app.get('/api/admin/daily-report', async (req, res) => {
       : 0;
     const _v2WatchlistOk = !!_dailyWatchlistBuiltAt;
     // Strategy diversity
-    const _topStrategy = Object.entries(tradeStrategyCounts).sort((a,b) => b[1] - a[1])[0];
-    const _strategyDominance = _topStrategy && tradesList.length > 0
-      ? _topStrategy[1] / tradesList.length : 0;
+    // 🚀 Wave 14 — both numerator and denominator must exclude :PARTIAL rows.
+    // Pre-fix, tradeStrategyCounts collapses :PARTIAL into parent (line 10668)
+    // so e.g. 6 parents + 2 partials → ORB_PLUS=8, but tradesList.length=8 too
+    // → dominance = 100%. With proper de-dup: 6 parents → ORB_PLUS_parent=6 / 6
+    // = still 100% today, but next time a different setup fires it'll be honest.
+    const _parentTrades = tradesList.filter(t => !(t.strategy || '').endsWith(':PARTIAL'));
+    const _parentStrategyCounts = {};
+    for (const t of _parentTrades) {
+      const s = t.strategy || 'UNKNOWN';
+      _parentStrategyCounts[s] = (_parentStrategyCounts[s] || 0) + 1;
+    }
+    const _topStrategy = Object.entries(_parentStrategyCounts).sort((a,b) => b[1] - a[1])[0];
+    const _strategyDominance = _topStrategy && _parentTrades.length > 0
+      ? _topStrategy[1] / _parentTrades.length : 0;
     // Auto-loss / time-stop pile-up
     const _winRate = closedTrades.length > 0 ? (closedTrades.filter(t => Number(t.pnl) > 0).length / closedTrades.length) : null;
     const _allTimeStop = closedTrades.length >= 5 && timeStopCount >= closedTrades.length * 0.8;
@@ -29080,6 +29098,47 @@ app.get("/auth/callback", async(req,res)=>{
     // a fresh token. Without this the daily report stays RED forever.
     await _resolveKiteTokenAgingIncidents('oauth_callback');
     startTicker(token);
+    // 🚀 v2.0 Wave 14 — backfill premarket data if 8:30 IST cron ran on a
+    // stale token. Symptom from 2026-05-08 first-day-live: premarket cron
+    // fired at 03:00 UTC (8:30 IST), token re-auth happened at 03:25 UTC
+    // (8:55 IST) — every Kite call inside runPremarketRoutine() returned
+    // empty (giftGapPct=0, vixDelta=0, fiiNet=null). That cascaded:
+    //   • dayBias stayed NEUTRAL (no real signal)
+    //   • all 107 stocks classified B-tier (no A-tier all day)
+    //   • trend-day eval got 0/0 signals
+    //   • tier-based risk routing couldn't differentiate
+    //
+    // Fix: after token re-auth, if it's a weekday AND today's premarket
+    // looks empty/stale (giftGapPct=0 AND fiiNet=null AND vixDelta=0),
+    // re-run runPremarketRoutine() in the background. Idempotent enough —
+    // worst case we overwrite an empty record with another empty record.
+    if (CONFIG.V2_SETUPS_MODE) {
+      setImmediate(async () => {
+        try {
+          const ctx = getCurrentDayBias();
+          // Skip weekends
+          const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+          const dow = istNow.getUTCDay(); // 0=Sun, 6=Sat (UTC, but +5.5h offset already applied)
+          if (dow === 0 || dow === 6) return;
+          // Detect "empty" premarket — all the Kite-dependent fields are null/0
+          const isEmpty = ctx && (
+            (ctx.giftGapPct === 0 || ctx.giftGapPct == null) &&
+            (ctx.vixDelta   === 0 || ctx.vixDelta   == null) &&
+            ctx.fiiNet == null &&
+            ctx.diiNet == null
+          );
+          if (!isEmpty) return;
+          console.log('🔄 [oauth_callback] Premarket data appears stale (token was old at 8:30 cron) — backfilling now with fresh token');
+          await runPremarketRoutine().catch(e => console.warn('[premarket-backfill] failed:', e.message));
+          // Cascade: if premarket now has real data, re-run tier classifier so
+          // A-tier becomes possible (was forced B by NEUTRAL bias before).
+          await refreshStockTiers().catch(e => console.warn('[tier-refresh-cascade] failed:', e.message));
+          await buildDailyWatchlist().catch(e => console.warn('[watchlist-cascade] failed:', e.message));
+        } catch (e) {
+          console.warn('[premarket-backfill-cascade] unexpected error:', e.message);
+        }
+      });
+    }
     res.send(`<!DOCTYPE html><html><body style="background:#060b14;color:#e2e8f0;font-family:monospace;padding:40px;text-align:center">
       <h2 style="color:#22c55e">✅ Connected! Token saved to DB - survives restarts.</h2>
       <p>Token: <code style="background:#1e293b;padding:8px 16px;border-radius:6px;display:block;margin:12px auto;max-width:600px;word-break:break-all;color:#38bdf8">${token}</code></p>
