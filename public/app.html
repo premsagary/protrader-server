@@ -191,6 +191,9 @@ body:not(.in-app) #ui-contrast-layer{opacity:0}
 .mode-tab#mode-stockdata.active{background:linear-gradient(135deg,rgba(99,102,241,0.25),rgba(40,80,160,0.18));
   border-color:rgba(99,102,241,0.25);color:#d0e8ff;
   box-shadow:0 2px 12px rgba(99,102,241,0.20),0 0 20px rgba(99,102,241,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}
+.mode-tab#mode-options.active{background:linear-gradient(135deg,rgba(249,115,22,0.22),rgba(180,80,10,0.15));
+  border-color:rgba(249,115,22,0.40);color:#ffd0a3;
+  box-shadow:0 2px 12px rgba(249,115,22,0.18),0 0 20px rgba(249,115,22,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}
 .mode-tab#mode-architecture.active{background:linear-gradient(135deg,rgba(240,171,252,0.20),rgba(180,100,220,0.15));
   border-color:rgba(240,171,252,0.25);color:#f5e0ff;
   box-shadow:0 2px 12px rgba(240,171,252,0.18),0 0 20px rgba(240,171,252,0.08),inset 0 1px 0 rgba(255,255,255,0.08)}
@@ -3532,6 +3535,7 @@ img,video,canvas,svg{max-width:100%;height:auto}
     <button class="mode-tab admin-only" onclick="setMode('mirofish')" id="mode-mirofish" style="display:none" title="Experimental — 56-agent crowd-reaction sim on Long-Term picks">🐟 MiroFish Lab</button>
     <button class="mode-tab" onclick="setMode('stockdata')" id="mode-stockdata">📊 Stock Data</button>
     <button class="mode-tab" onclick="setMode('daytrade')" id="mode-daytrade" style="color:#ef4444">⚡ DayTrade</button>
+    <button class="mode-tab" onclick="setMode('options')" id="mode-options" style="color:#f97316">⚡ Options</button>
     <button class="mode-tab admin-only" onclick="setMode('agent')" id="mode-agent" style="color:#a855f7;display:none" title="Rule-based auto-trading agent (Phase 1 dry-run)">🤖 Agent</button>
     <button class="mode-tab admin-only" onclick="setMode('architecture')" id="mode-architecture" style="display:none">🏛 Architecture</button>
     <button class="mode-tab admin-only" onclick="setMode('admin')" id="mode-admin" style="display:none">⚙</button>
@@ -3649,6 +3653,11 @@ const S = {
   mode: "stocks",
   stocksTab: "overview",
   cryptoTab: "overview",
+  // ⚡ Options Engine state
+  optionsTab: "engine",
+  optionsRegime: null, optionsDecision: null, optionsPositions: [],
+  optionsHistory: [], optionsSettings: null, optionsHealth: null,
+  optionsRisk: null, optionsEvents: [], optionsFilters: null,
   prices:{}, nseTrades:[], nseStats:{}, daily:[], scanLog:[],
   liveTrades:[], liveStats:{}, liveDaily:[], tradingMode:'PAPER',
   health:{}, holdings:[], margin:null,
@@ -3798,6 +3807,285 @@ const CRYPTO_TABS = [
   {id:"news",       label:"◈ News (RSS)"},
 ];
 
+// ⚡ OPTIONS ENGINE — production autonomous trading UI
+const OPTIONS_TABS = [
+  { id: "engine",     label: "🎛 Engine" },
+  { id: "today",      label: "📋 Today" },
+  { id: "positions",  label: "○ Positions" },
+  { id: "history",    label: "⇅ History" },
+  { id: "events",     label: "📜 Events" },
+  { id: "settings",   label: "⚙ Settings" },
+];
+
+function _esc(s){ if (s == null) return ''; return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function _optFetch(path, opts){ const r = await fetch('/api/options' + path, opts); if (!r.ok) throw new Error((await r.json().catch(()=>({})))?.error || 'HTTP '+r.status); return r.json(); }
+
+let _optionsRefreshTimer = null;
+function _stopOptionsRefresh(){ if(_optionsRefreshTimer){ clearInterval(_optionsRefreshTimer); _optionsRefreshTimer=null; } }
+function _startOptionsRefreshIfNeeded(){
+  _stopOptionsRefresh();
+  if (S.mode === 'options' && S.optionsTab === 'positions') {
+    _optionsRefreshTimer = setInterval(() => {
+      const modal = document.getElementById('opt-trade-modal');
+      if (modal && modal.style.display === 'flex') return;
+      try { renderOptionsPositions(); } catch (e) {}
+    }, 5000);
+  }
+}
+
+function setOptionsTab(t){ S.optionsTab = t; _updateHash(); _startOptionsRefreshIfNeeded(); renderOptionsPage(); }
+
+function renderOptionsPage(){
+  const cur = S.optionsTab || 'engine';
+  document.getElementById("subtabs").innerHTML = OPTIONS_TABS.map(t =>
+    `<button class="stab${cur===t.id?' active':''}" onclick="setOptionsTab('${t.id}')" style="${cur===t.id?'color:#f97316':''}">${t.label}</button>`
+  ).join("");
+  if (cur === 'engine')        renderOptionsEngine();
+  else if (cur === 'today')    renderOptionsToday();
+  else if (cur === 'positions')renderOptionsPositions();
+  else if (cur === 'history')  renderOptionsHistory();
+  else if (cur === 'events')   renderOptionsEvents();
+  else if (cur === 'settings') renderOptionsSettings();
+}
+
+async function renderOptionsEngine(){
+  const main = document.getElementById('main-content');
+  main.innerHTML = '<div style="padding:24px;color:var(--text3)">Loading engine status…</div>';
+  try {
+    const [status, risk, events] = await Promise.all([
+      _optFetch('/engine/status'), _optFetch('/risk-status'), _optFetch('/event-log?limit=15'),
+    ]);
+    S.optionsHealth = status.health; S.optionsRisk = risk; S.optionsEvents = events;
+    const stateColor = status.engine_state === 'MONITOR' ? 'var(--green)'
+                     : status.engine_state === 'SAFE_MODE' ? 'var(--amber)'
+                     : status.engine_state === 'KILLED' ? 'var(--red)' : 'var(--text2)';
+    const modeColor = status.mode === 'LIVE' ? 'var(--red)' : 'var(--blue)';
+    const enabledClr = status.engine_enabled ? 'var(--green)' : 'var(--text3)';
+    const dot = ok => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ok?'var(--green)':'var(--red)'};margin-right:6px"></span>`;
+    const h = status.health || {};
+    const wsAge = h.ws?.last_tick_age_ms;
+    const wsDisplay = wsAge != null ? (wsAge < 1000 ? `${wsAge}ms` : `${Math.round(wsAge/1000)}s`) : 'never';
+    main.innerHTML = `
+<div style="padding:18px 24px;max-width:1100px">
+  <h2 style="margin:0 0 16px;font-size:18px;font-weight:700">⚡ Options Engine — Plan A (28.5% OOS validated)</h2>
+  <div class="stat-grid">
+    ${sc("ENGINE", _esc(status.engine_state), stateColor)}
+    ${sc("MODE", _esc(status.mode), modeColor)}
+    ${sc("ENABLED", status.engine_enabled?'YES':'NO', enabledClr)}
+    ${sc("MANUAL APPROVAL", status.manual_approval?'ON':'AUTO', status.manual_approval?'var(--amber)':'var(--green)')}
+    ${sc("OPEN POS", status.open_positions, status.open_positions>0?'var(--blue)':'var(--text3)')}
+    ${sc("LAST CYCLE", status.last_cycle ? new Date(status.last_cycle).toLocaleTimeString('en-IN'):'never', 'var(--text2)')}
+  </div>
+  <div class="sec-title" style="margin-top:18px">Health</div>
+  <div class="pos-card" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:13px">
+    <div>${dot(h.ws?.ok)} WebSocket — last tick: <strong>${wsDisplay}</strong></div>
+    <div>${dot(h.broker?.ok)} Broker (Kite) — fails: ${h.broker?.consec_fails||0}, latency: ${h.broker?.latency_ms||'?'}ms</div>
+    <div>${dot(h.db?.ok)} PostgreSQL</div>
+    <div>${dot(h.chain?.ok)} Chain freshness — age: ${h.chain?.age_ms||'?'}ms</div>
+    <div>${dot(h.vix?.ok)} VIX freshness — age: ${h.vix?.age_sec||'?'}s</div>
+    <div>${dot(h.exchange?.ok)} Exchange (NSE)</div>
+    <div>${dot(h.token?.ok)} Token age: ${h.token?.age_hours?.toFixed(1)||'?'}h</div>
+    <div>${h.healthy ? '<strong style="color:var(--green)">✓ HEALTHY</strong>' : '<strong style="color:var(--red)">✗ '+_esc(h.reason)+'</strong>'}</div>
+  </div>
+  <div class="sec-title" style="margin-top:18px">Risk</div>
+  <div class="pos-card" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:13px">
+    <div>Today P&amp;L: <strong style="color:${(risk.current?.today_pnl||0)>=0?'var(--green)':'var(--red)'}">${INR(risk.current?.today_pnl||0)}</strong> / cap ${INR(risk.settings?.daily_loss_cap||0)}</div>
+    <div>Drawdown: ${INR(risk.current?.drawdown||0)} / ${((risk.settings?.max_drawdown_pct||0)*100).toFixed(0)}% of ${INR(risk.settings?.capital||0)}</div>
+    <div>Open positions: ${risk.current?.open_count||0} / ${risk.settings?.max_open_positions||1}</div>
+    <div>Consec losses: ${risk.current?.consec_loss_days||0} / ${risk.settings?.max_consec_losses||2}</div>
+    <div>SAFE_MODE: ${risk.safe_mode_active?`<strong style="color:var(--amber)">ACTIVE — ${_esc(risk.safe_mode_reason)}</strong>`:'<span style="color:var(--green)">OFF</span>'}</div>
+    <div>KILL: ${risk.killed_until?`<strong style="color:var(--red)">KILLED — ${_esc(risk.killed_reason)}</strong>`:'<span style="color:var(--green)">CLEAR</span>'}</div>
+  </div>
+  <div class="sec-title" style="margin-top:18px">Controls</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    ${status.engine_enabled
+      ? `<button onclick="optEngineCmd('stop')" style="padding:6px 14px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer">⏸ Stop Engine</button>`
+      : `<button onclick="optEngineCmd('start')" style="padding:6px 14px;background:var(--green);color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:600">▶ Start Engine</button>`}
+    ${risk.safe_mode_active
+      ? `<button onclick="optEngineCmd('safe-mode/clear')" style="padding:6px 14px;background:var(--bg3);border:1px solid var(--amber);color:var(--amber);border-radius:4px;cursor:pointer">Exit SAFE_MODE</button>`
+      : `<button onclick="optEngineCmd('safe-mode')" style="padding:6px 14px;background:var(--bg3);border:1px solid var(--amber);color:var(--amber);border-radius:4px;cursor:pointer">☷ Enter SAFE_MODE</button>`}
+    <button onclick="optRunCycle()" style="padding:6px 14px;background:var(--bg3);border:1px solid var(--blue);color:var(--blue);border-radius:4px;cursor:pointer">⟲ Run Today (dry-run)</button>
+  </div>
+  <div style="background:rgba(239,68,68,.08);border:1px solid var(--red);padding:12px;border-radius:8px;margin:12px 0">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-weight:700;color:var(--red);font-size:14px">🚨 EMERGENCY CONTROLS</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">These cancel all pending orders, close all open legs, and halt the engine.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="optFlattenAll()" style="padding:8px 14px;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700">FLATTEN ALL</button>
+        <button onclick="optKillSwitch()" style="padding:8px 14px;background:#000;color:var(--red);border:1px solid var(--red);border-radius:4px;cursor:pointer;font-weight:700">⊗ KILL SWITCH</button>
+      </div>
+    </div>
+  </div>
+  <div class="sec-title" style="margin-top:18px">Recent Engine Events</div>
+  <div class="pos-card" style="font-family:monospace;font-size:11px;max-height:300px;overflow-y:auto">
+    ${events.length===0?'<div style="color:var(--text3)">No events yet.</div>':events.map(e=>{
+      const tsStr = new Date(e.ts).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'short'});
+      const sevColor = e.severity==='CRITICAL'?'var(--red)':e.severity==='ERROR'?'var(--red)':e.severity==='WARN'?'var(--amber)':'var(--text2)';
+      return `<div style="padding:3px 0;border-bottom:1px solid var(--bg3)"><span style="color:var(--text3)">${tsStr}</span> <span style="color:${sevColor};font-weight:600">${_esc(e.severity)}</span> <span style="color:var(--text)">${_esc(e.event_type)}</span> <span style="color:var(--text3)">${_esc(JSON.stringify(e.ctx).slice(0,140))}</span></div>`;
+    }).join('')}
+  </div>
+</div>`;
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function renderOptionsToday(){
+  const main = document.getElementById('main-content');
+  main.innerHTML = '<div style="padding:24px;color:var(--text3)">Running 55-filter check…</div>';
+  try {
+    const [regime, decision] = await Promise.all([_optFetch('/regime'), _optFetch('/today-decision')]);
+    S.optionsRegime = regime; S.optionsDecision = decision;
+    const decColor = decision.decision === 'TRADE_DRY_RUN' || decision.decision === 'TRADE' ? 'var(--green)'
+                   : decision.decision === 'SKIP' ? 'var(--amber)' : 'var(--red)';
+    const results = decision.filterResults || decision.results || [];
+    const filterRows = results.map(f => `<tr style="border-bottom:1px solid var(--bg3)">
+      <td style="padding:4px 8px;color:var(--text3);font-family:monospace">#${+f.id||''}</td>
+      <td>L${+f.layer||''}</td>
+      <td style="font-family:monospace">${_esc(f.name)}</td>
+      <td style="text-align:center">${f.pass?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>'}</td>
+      <td style="color:var(--text2);font-size:11px">${_esc(f.reason||'')}</td></tr>`).join('');
+    main.innerHTML = `<div style="padding:18px 24px;max-width:1100px">
+      <div class="stat-grid">
+        ${sc("NIFTY", regime.spot?.toFixed(2)||'—')}
+        ${sc("VIX", regime.vix?.toFixed(2)||'—', regime.vix>22?'var(--red)':regime.vix<13?'var(--amber)':'var(--green)')}
+        ${sc("Day", regime.day_of_week)}
+        ${sc("VIX Band", regime.vix_band||'—', 'var(--blue)')}
+        ${sc("DTE", regime.dte)}
+        ${sc("Expiry today?", regime.is_expiry_today?'YES':'no')}
+      </div>
+      <div class="sec-title" style="margin-top:18px">Today's Decision</div>
+      <div class="pos-card" style="border:2px solid ${decColor}">
+        <div style="font-size:22px;font-weight:700;color:${decColor}">${_esc(decision.decision)}</div>
+        <div style="margin-top:6px;color:var(--text2)">${_esc(decision.reason||'')}</div>
+        ${decision.tradeCard?`<div style="margin-top:10px;padding:10px;background:var(--bg3);border-radius:6px">
+          <div style="font-weight:600;margin-bottom:6px">${_esc(decision.tradeCard.strategy)} — credit ₹${+decision.tradeCard.credit||0}</div>
+          ${(decision.tradeCard.legs||[]).map(l=>`<div style="font-family:monospace;font-size:11px;color:${l.side==='SELL'?'var(--green)':'var(--red)'}">${_esc(l.side)} ${+l.qty||0} × ${+l.strike||0} ${_esc(l.type)} @ ₹${+l.premium||0}</div>`).join('')}
+        </div>`:''}
+      </div>
+      <div class="sec-title" style="margin-top:18px">Filter Results (${results.length} of 55)</div>
+      <div style="max-height:500px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead style="background:var(--bg3);position:sticky;top:0"><tr><th style="padding:6px 8px;text-align:left">#</th><th>Layer</th><th style="text-align:left">Filter</th><th>Pass</th><th style="text-align:left">Reason</th></tr></thead>
+          <tbody>${filterRows}</tbody></table></div>
+    </div>`;
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function renderOptionsPositions(){
+  const main = document.getElementById('main-content');
+  try {
+    const [positions, monitors] = await Promise.all([_optFetch('/positions'), _optFetch('/live-monitors').catch(()=>[])]);
+    if (!positions.length) { main.innerHTML='<div style="padding:24px;color:var(--text3)">No open positions.</div>'; return; }
+    const monitorByTrade = Object.fromEntries(monitors.map(m=>[m.tradeId,m]));
+    main.innerHTML='<div style="padding:18px 24px;max-width:1100px">'+positions.map(p=>{
+      const mon=monitorByTrade[p.id]; const pnl=mon?.unrealizedPnl??0;
+      const distPct=mon?.distance!=null?(mon.distance*100).toFixed(0):'—';
+      const distColor=mon?.distance<0.1?'var(--red)':mon?.distance<0.3?'var(--amber)':'var(--green)';
+      return `<div class="pos-card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between">
+          <div><strong>${_esc(p.strategy)}</strong> · ${_esc(p.state)} · ${_esc(p.mode)}</div>
+          <div style="text-align:right">
+            <div style="font-size:18px;font-weight:700;color:${pnl>=0?'var(--green)':'var(--red)'}">${INR(pnl)}</div>
+            ${mon?`<div style="font-size:10px;color:${distColor}">SL distance: ${distPct}% · check ${+mon.checkIntervalMs||0}ms</div>`:''}
+          </div></div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px">Entered ${p.entry_time?fmtT(p.entry_time):'—'} · ${_esc(p.day_of_week)} × ${_esc(p.vix_band)} · credit ₹${+p.credit||0} · margin ₹${+p.margin_used||0}</div>
+        <div style="font-family:monospace;font-size:11px;margin-top:6px">
+          ${(p.legs||[]).map(l=>{const cur=mon?.currentPrices?.[`${l.strike}_${l.type}`];const arrow=cur&&l.entry_premium?(cur>l.entry_premium?'↑':'↓'):'';return `${_esc(l.side)} ${+l.strike||0}${_esc(l.type)} @ ₹${+(l.premium||l.entry_premium)||0}${cur?` → ₹${(+cur).toFixed(2)} ${arrow}`:''}`;}).join('  |  ')}
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+          <button onclick="optExitTrade(${+p.id||0})" style="padding:4px 12px;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px">Exit Now</button>
+          <button onclick="optTradeDetail(${+p.id||0})" style="padding:4px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:4px;cursor:pointer;font-size:11px">View Detail</button>
+          <span style="font-size:10px;color:var(--text3);margin-left:auto">force exit ${_esc(p.force_exit_time)}</span>
+        </div></div>`;}).join('')+'</div>'+
+      `<div id="opt-trade-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center" onclick="this.style.display='none'"><div onclick="event.stopPropagation()" style="background:var(--bg2);border:1px solid var(--border);padding:20px;border-radius:8px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;color:var(--text);font-size:13px"><div id="opt-trade-modal-body"></div><button onclick="document.getElementById('opt-trade-modal').style.display='none'" style="margin-top:12px;padding:6px 14px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:4px;cursor:pointer">Close</button></div></div>`;
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function renderOptionsHistory(){
+  const main = document.getElementById('main-content');
+  try {
+    const [trades, equityCurve] = await Promise.all([_optFetch('/trades?days=90'), _optFetch('/equity-curve?days=90')]);
+    const total=trades.reduce((a,t)=>a+(parseFloat(t.realized_pnl)||0),0);
+    const wins=trades.filter(t=>parseFloat(t.realized_pnl)>0).length;
+    const closed=trades.filter(t=>t.state==='CLOSED').length;
+    const wr=closed?(wins/closed*100).toFixed(0):'—';
+    main.innerHTML=`<div style="padding:18px 24px;max-width:1100px">
+      <div class="stat-grid">
+        ${sc("Trades (90d)",trades.length)}
+        ${sc("Closed",closed)}
+        ${sc("Win Rate",wr+'%',wr>=55?'var(--green)':'var(--amber)')}
+        ${sc("Total P&L",INR(total),total>=0?'var(--green)':'var(--red)')}
+      </div>
+      <div class="sec-title" style="margin-top:18px">Equity Curve (cumulative ₹)</div>
+      <div class="pos-card"><canvas id="opt-eq-chart" height="120"></canvas>${equityCurve.length===0?'<div style="color:var(--text3);text-align:center;padding:30px">No trade history yet.</div>':''}</div>
+      <div class="sec-title" style="margin-top:18px">Trades — click row for detail</div>
+      <div style="max-height:600px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead style="background:var(--bg3);position:sticky;top:0"><tr><th style="padding:6px 8px">Date</th><th>Day</th><th>VIX</th><th>Strategy</th><th>State</th><th>Mode</th><th>Credit</th><th>P&L</th></tr></thead>
+          <tbody>${trades.map(t=>`<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="optTradeDetail(${+t.id||0})">
+            <td style="padding:4px 8px">${_esc(t.trade_date)}</td><td>${_esc(t.day_of_week)}</td><td>${_esc(t.vix_band||'')}</td>
+            <td>${_esc(t.strategy)}</td><td>${_esc(t.state)}</td><td>${_esc(t.mode)}</td>
+            <td>${t.credit?'₹'+t.credit:'—'}</td>
+            <td style="color:${parseFloat(t.realized_pnl)>=0?'var(--green)':'var(--red)'}">${t.realized_pnl?INR(t.realized_pnl):'—'}</td></tr>`).join('')}</tbody></table>
+      </div></div>
+      <div id="opt-trade-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center" onclick="this.style.display='none'"><div onclick="event.stopPropagation()" style="background:var(--bg2);border:1px solid var(--border);padding:20px;border-radius:8px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;color:var(--text);font-size:13px"><div id="opt-trade-modal-body"></div><button onclick="document.getElementById('opt-trade-modal').style.display='none'" style="margin-top:12px;padding:6px 14px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:4px;cursor:pointer">Close</button></div></div>`;
+    if (equityCurve.length && window.Chart) {
+      const ctx = document.getElementById('opt-eq-chart')?.getContext('2d');
+      if (ctx) new Chart(ctx, { type:'line', data:{labels:equityCurve.map(p=>p.date),datasets:[{label:'Cumulative ₹',data:equityCurve.map(p=>p.cumulative),borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.1)',fill:true,tension:0.2,pointRadius:0}]}, options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#888',maxTicksLimit:8}},y:{ticks:{color:'#888'}}}}});
+    }
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function renderOptionsEvents(){
+  const main = document.getElementById('main-content');
+  try {
+    const events = await _optFetch('/event-log?limit=200');
+    main.innerHTML = `<div style="padding:18px 24px;max-width:1100px">
+      <div class="sec-title">Engine Event Log (last 200)</div>
+      <div style="font-family:monospace;font-size:11px;max-height:700px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:10px">
+        ${events.map(e=>{const tsStr=new Date(e.ts).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'short'});const sevColor=e.severity==='CRITICAL'?'var(--red)':e.severity==='ERROR'?'var(--red)':e.severity==='WARN'?'var(--amber)':'var(--text2)';return `<div style="padding:3px 0;border-bottom:1px solid var(--bg3)"><span style="color:var(--text3)">${tsStr}</span> <span style="color:${sevColor};font-weight:600">${_esc(e.severity)}</span> <span style="color:var(--text)">${_esc(e.event_type)}</span> <span style="color:var(--text3)">${_esc(JSON.stringify(e.ctx).slice(0,200))}</span></div>`;}).join('')}
+      </div></div>`;
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function renderOptionsSettings(){
+  const main = document.getElementById('main-content');
+  try {
+    const s = await _optFetch('/settings'); S.optionsSettings = s;
+    main.innerHTML = `<div style="padding:18px 24px;max-width:700px">
+      <div class="sec-title">Engine Settings</div>
+      <div class="pos-card">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Mode</label>
+            <select id="opt-mode" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px">
+              <option value="PAPER" ${s.mode==='PAPER'?'selected':''}>PAPER</option>
+              <option value="LIVE" ${s.mode==='LIVE'?'selected':''}>LIVE (real money)</option></select></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Manual Approval</label>
+            <select id="opt-manual" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px">
+              <option value="true" ${s.manual_approval?'selected':''}>YES</option>
+              <option value="false" ${!s.manual_approval?'selected':''}>NO (full auto)</option></select></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Capital (₹)</label><input type="number" id="opt-capital" value="${+s.capital||200000}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Max Lots</label><input type="number" id="opt-lots" value="${+s.max_lots||1}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Daily Loss Cap (₹)</label><input type="number" id="opt-dcap" value="${+s.daily_loss_cap||5000}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Max Drawdown %</label><input type="number" step="0.01" id="opt-dd" value="${+s.max_drawdown_pct||0.15}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Max Open Positions</label><input type="number" id="opt-maxopen" value="${+s.max_open_positions||1}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Max Consec Losses</label><input type="number" id="opt-consec" value="${+s.max_consec_losses||2}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Telegram chat_id</label><input type="text" id="opt-telegram" value="${_esc(s.notify_telegram||'')}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+          <div><label style="display:block;font-size:11px;color:var(--text3)">Email</label><input type="email" id="opt-email" value="${_esc(s.notify_email||'')}" style="width:100%;padding:6px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px"/></div>
+        </div>
+        <button onclick="optSaveSettings()" style="margin-top:14px;padding:8px 18px;background:var(--green);color:#000;border:none;border-radius:4px;font-weight:600;cursor:pointer">💾 Save Settings</button>
+      </div></div>`;
+  } catch (e) { main.innerHTML = `<div style="padding:24px;color:var(--red)">Error: ${_esc(e.message)}</div>`; }
+}
+
+async function optEngineCmd(cmd){ try{const body=cmd==='start'?{confirm:true}:{}; await _optFetch('/engine/'+cmd,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});renderOptionsEngine();}catch(e){alert('Error: '+e.message);} }
+async function optRunCycle(){ try{const r=await _optFetch('/engine/run-cycle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:true})});alert('Cycle: '+r.decision+(r.reason?' — '+r.reason:''));renderOptionsEngine();}catch(e){alert('Error: '+e.message);} }
+async function optFlattenAll(){ if(!confirm('🚨 FLATTEN ALL POSITIONS\\n\\nCancel ALL pending + close ALL open + halt engine. Proceed?'))return; if(!confirm('Are you ABSOLUTELY SURE?'))return; try{const r=await _optFetch('/engine/flatten-all',{method:'POST'});alert(r.ok?`Flattened ${r.count||0} trades.`:'Error: '+r.error);renderOptionsEngine();}catch(e){alert('Error: '+e.message);} }
+async function optKillSwitch(){ const reason=prompt('Kill switch reason:',''); if(!reason||reason.length<4){alert('Reason required (min 4 chars)');return;} if(!confirm(`⛔ KILL SWITCH\\nReason: ${reason}\\nProceed?`))return; const verify=prompt('Re-type the reason exactly:',''); if(verify!==reason){alert('Mismatch — aborted.');return;} try{await _optFetch('/engine/kill',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});renderOptionsEngine();}catch(e){alert('Error: '+e.message);} }
+async function optExitTrade(id){ if(!confirm('Exit this position now?'))return; try{await _optFetch('/exit-trade/'+id,{method:'POST'});renderOptionsPositions();}catch(e){alert('Error: '+e.message);} }
+async function optTradeDetail(id){ try{const r=await _optFetch('/trades/'+id);const t=r.trade,hist=r.history||[],audits=r.audits||[];const body=`<h3 style="margin:0 0 10px">Trade #${t.id} · ${_esc(t.strategy)} · <span style="color:${parseFloat(t.realized_pnl)>=0?'var(--green)':'var(--red)'}">${t.realized_pnl?INR(t.realized_pnl):'OPEN'}</span></h3><div style="margin-bottom:10px;color:var(--text2);font-size:11px">${_esc(t.trade_date)} · ${_esc(t.day_of_week)} × ${_esc(t.vix_band)} · ${_esc(t.mode)} · state ${_esc(t.state)}</div><div style="font-weight:600;margin-top:10px">Legs:</div><div style="font-family:monospace;font-size:11px">${(t.legs||[]).map(l=>`<div style="color:${l.side==='SELL'?'var(--green)':'var(--red)'}">${_esc(l.side)} ${+l.qty||0} × ${+l.strike||0} ${_esc(l.type)} @ entry ₹${+(l.entry_premium||l.premium)||0} ${l.exit_premium?'→ exit ₹'+l.exit_premium:''}</div>`).join('')}</div><div style="font-weight:600;margin-top:14px">State transitions:</div><div style="font-family:monospace;font-size:11px;max-height:150px;overflow-y:auto">${hist.map(h=>`<div>${new Date(h.ts).toLocaleString('en-IN')} · ${_esc(h.from_state||'—')} → <strong>${_esc(h.to_state)}</strong></div>`).join('')}</div><div style="font-weight:600;margin-top:14px">Order audit (${audits.length}):</div><div style="font-family:monospace;font-size:10px;max-height:200px;overflow-y:auto">${audits.map(a=>`<div style="border-bottom:1px solid var(--bg3);padding:3px 0">[${_esc(a.action)}] leg ${+a.leg_index||0} · ${_esc(a.error_message||'OK')}</div>`).join('')}</div>`;document.getElementById('opt-trade-modal-body').innerHTML=body;document.getElementById('opt-trade-modal').style.display='flex';}catch(e){alert('Error: '+e.message);} }
+async function optSaveSettings(){ const numOrNull=(id)=>{const v=parseFloat(document.getElementById(id).value);return isFinite(v)?v:null;};const intOrNull=(id)=>{const v=parseInt(document.getElementById(id).value,10);return isFinite(v)?v:null;};const body={mode:document.getElementById('opt-mode').value,manual_approval:document.getElementById('opt-manual').value==='true',capital:numOrNull('opt-capital'),max_lots:intOrNull('opt-lots'),daily_loss_cap:numOrNull('opt-dcap'),max_drawdown_pct:numOrNull('opt-dd'),max_open_positions:intOrNull('opt-maxopen'),max_consec_losses:intOrNull('opt-consec'),notify_telegram:document.getElementById('opt-telegram').value||null,notify_email:document.getElementById('opt-email').value||null}; for(const k of ['capital','max_lots','daily_loss_cap','max_drawdown_pct','max_open_positions','max_consec_losses']){if(body[k]==null){alert('Invalid value for '+k);return;}} if(body.mode==='LIVE'&&!confirm('⚠️ Switching to LIVE mode — REAL MONEY. Confirm?'))return; if(body.mode==='LIVE')body.confirm=true; try{await _optFetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});alert('Saved.');}catch(e){alert('Error: '+e.message);} }
+
 var _hashUpdating = false;
 function _updateHash(){
   var h = S.mode;
@@ -3845,6 +4133,7 @@ function setMode(mode){
   try{ document.getElementById("mode-daytrade").className ="mode-tab"+(mode==="daytrade"?" active":""); }catch(e){}
   try{ document.getElementById("mode-agent").className    ="mode-tab admin-only"+(mode==="agent"   ?" active":""); }catch(e){}
   try{ document.getElementById("mode-architecture").className="mode-tab admin-only"+(mode==="architecture"?" active":""); }catch(e){}
+  try{ document.getElementById("mode-options").className  ="mode-tab"+(mode==="options"?" active":""); }catch(e){}
   try{ document.getElementById("mode-admin").className    ="mode-tab admin-only"+(mode==="admin"    ?" active":""); }catch(e){}
   // Re-enforce admin-only visibility after className reset
   var _isAdm = _authUser && _authUser.role === 'admin';
@@ -3901,6 +4190,11 @@ function setMode(mode){
     try{ document.getElementById("subtabs").innerHTML=""; }catch(e){}
     try{ renderTopBar(); }catch(e){}
     renderArchitecturePage();
+    return;
+  }
+  if(mode==="options"){
+    try{ renderTopBar(); }catch(e){}
+    renderOptionsPage();
     return;
   }
   if(mode==="admin"){

@@ -30,6 +30,11 @@ const mlLogger  = require("./ml-logger");
 const outcomeEngine = require("./outcome-engine");
 const backtestReplay = require("./backtest/replay");
 
+// ⚡ Options Engine — autonomous trading system (Plan A, 28.5% OOS validated)
+// Modules: state machine, 5 strategies, 55 filters, WS-driven SL, recovery, kill switches.
+// All endpoints under /api/options/*. UI tab "⚡ Options" in app.html.
+const optionsIntegration = require('./options-engine/server_integration');
+
 // ── Risk flags (forward-looking demotions on top of trailing-ratio scorers) ──
 // Seven detectors: earnings-cliff, price/PAT divergence, IPO lock-in expiry,
 // earnings-quality (PAT vs FCF), cyclical-peak, drawdown-immaturity,
@@ -1124,6 +1129,13 @@ async function initDB() {
     `);
 
     console.log("✅ DB ready (screener_fundamentals + portfolio + AI review + auth + holdings + picks_ai_reviews + picks_ai_buy_plan + mf_ai_reviews + mf_ai_rankings + external_signals_cache + features_snapshot + writer_dead_letter + outcome_metrics + candles_1m + candles_5m + news_classification_cache + llm_budget_daily + daytrade_cache tables included)");
+
+    // ⚡ Options Engine — initialize 8 schema tables
+    try {
+      await optionsIntegration.initDB(pool);
+    } catch (e) {
+      console.error("Options DB init error:", e.message);
+    }
   } catch(e) { console.error("DB error:", e.message); }
 }
 
@@ -1536,9 +1548,16 @@ function startTicker(token) {
   // Ensure ws is patched before KiteTicker loads it (idempotent)
   _patchAxiosForKiteProxy();
   _patchWsForKiteProxy();
+  // ⚡ Disconnect any zombie ticker before creating new one (Kite caps at 3 conns)
+  if (global._kiteTicker) {
+    try { global._kiteTicker.disconnect(); } catch (e) {}
+    global._kiteTicker = null;
+  }
   const { KiteTicker } = require("kiteconnect");
   const t = new KiteTicker({ api_key: process.env.KITE_API_KEY, access_token: token });
   _tickerRef = t;
+  global._kiteTicker = t;  // ⚡ expose for Options Engine option-contract subscriptions
+  global._optionTokenMap = global._optionTokenMap || new Map();
   t.connect();
   t.on("connect", () => {
     tickerOn = true;
@@ -1555,8 +1574,18 @@ function startTicker(token) {
     ticks.forEach(tick => {
       // Fast O(1) reverse lookup instead of Object.keys().find() each tick.
       const sym = _tokenToSym[tick.instrument_token];
-      if (!sym) return;
-      livePrices[sym] = { price:tick.last_price, open:tick.ohlc?.open, high:tick.ohlc?.high, low:tick.ohlc?.low, volume:tick.volume_traded, change:tick.change };
+      if (sym) {
+        livePrices[sym] = { price:tick.last_price, open:tick.ohlc?.open, high:tick.ohlc?.high, low:tick.ohlc?.low, volume:tick.volume_traded, change:tick.change };
+      }
+      // ⚡ Forward to Options Engine monitor for tick-driven SL eval
+      try {
+        let inst = sym ? `NSE:${sym}` : null;
+        if (!inst) {
+          const tradingsymbol = global._optionTokenMap.get(tick.instrument_token);
+          inst = tradingsymbol ? `NFO:${tradingsymbol}` : `NFO:TOKEN_${tick.instrument_token}`;
+        }
+        optionsIntegration.onTick(inst, tick.last_price);
+      } catch (e) {}
     });
     broadcast({ type:"tick", prices:livePrices });
   });
@@ -9629,6 +9658,7 @@ app.post("/api/token/update", async(req,res)=>{
     await dbSet('kite_access_token', token); // persist across restarts
     await dbSet('kite_access_token_set_at', String(Date.now())); // track for freshness check
     await _resolveKiteTokenAgingIncidents('manual_token_update');
+    try { optionsIntegration.onTokenIssued(Math.floor(Date.now()/1000)); } catch (e) {}
     console.log('🔑 Kite token updated and saved to DB');
     res.json({ success: true, message: 'Token updated and ticker restarted' });
   } catch(e) {
@@ -30040,11 +30070,68 @@ async function start() {
   // Persisted trading mode now restored at the top of start() (audit fix 2026-05-06).
   // Keeping this comment so future readers don't wonder where it went.
 
+  // ⚡ Options Engine — mount endpoints + boot
+  // Uses a getter so token refresh (which reassigns `kite`) propagates automatically.
+  try {
+    const _requireAuth = typeof authMiddleware === 'function' ? authMiddleware : null;
+    optionsIntegration.mount({ app, pool, kiteClient: kite, requireAuth: _requireAuth });
+    await optionsIntegration.bootEngine({ pool, getKite: () => kite, startScheduler: true });
+    optionsIntegration.setKiteGetter(() => kite);
+    console.log('⚡ Options Engine booted (Plan A, 28.5% OOS validated, 22 endpoints, 71 tests)');
+
+    // Periodic option-contract WS subscription with diff-based unsubscribe (every 30s).
+    let _optInstrumentsCache = null;
+    let _optInstrumentsCachedAt = 0;
+    let _currentlySubscribedOptionTokens = new Set();
+    setInterval(async () => {
+      try {
+        if (!kite || !global._kiteTicker) return;
+        const symbols = optionsIntegration.getInstrumentsForSubscription();
+        if (!_optInstrumentsCache || Date.now() - _optInstrumentsCachedAt > 3600000) {
+          try {
+            _optInstrumentsCache = await kite.getInstruments('NFO');
+            _optInstrumentsCachedAt = Date.now();
+          } catch (e) { return; }
+        }
+        const desired = new Set();
+        for (const s of symbols) {
+          const tradingsymbol = s.replace(/^NFO:/, '');
+          const m = _optInstrumentsCache.find(i => i.tradingsymbol === tradingsymbol);
+          if (m) {
+            desired.add(m.instrument_token);
+            global._optionTokenMap.set(m.instrument_token, tradingsymbol);
+          }
+        }
+        const toAdd = [...desired].filter(x => !_currentlySubscribedOptionTokens.has(x));
+        if (toAdd.length) {
+          try {
+            global._kiteTicker.subscribe(toAdd);
+            global._kiteTicker.setMode(global._kiteTicker.modeFull, toAdd);
+            toAdd.forEach(x => _currentlySubscribedOptionTokens.add(x));
+          } catch (e) {}
+        }
+        const toRemove = [..._currentlySubscribedOptionTokens].filter(x => !desired.has(x));
+        if (toRemove.length) {
+          try {
+            global._kiteTicker.unsubscribe(toRemove);
+            toRemove.forEach(x => {
+              _currentlySubscribedOptionTokens.delete(x);
+              global._optionTokenMap.delete(x);
+            });
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }, 30000);
+  } catch (e) {
+    console.error('⚡ Options Engine boot failed:', e.message);
+  }
+
   const PORT=process.env.PORT||3001;
   server.listen(PORT, ()=>{
     console.log(`\n✅ ProTrader running on port ${PORT}`);
     console.log(`   📊 NSE: ${UNIVERSE.length} stocks (Nifty50 + Next50 + Midcap)`);
     console.log(`   ₿  Crypto: ${CRYPTO_UNIVERSE.length} pairs (Binance, 24/7, free)`);
+    console.log(`   ⚡ Options: 5 strategies, 55 filters, Day×VIX matrix`);
     console.log(`   🔄 NSE: every 3 min | Crypto: every 15 min`);
     console.log(`   📈 Max: ${CONFIG.MAX_POSITIONS} NSE + ${CRYPTO_CONFIG.MAX_POSITIONS} crypto\n`);
   });
