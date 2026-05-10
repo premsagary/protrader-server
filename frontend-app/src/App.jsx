@@ -13,6 +13,7 @@ import DayTrade from './components/pages/DayTrade';
 import MiroFishLab from './components/pages/MiroFishLab';
 import Admin from './components/pages/Admin';
 import Agent from './components/pages/Agent';
+import Options from './components/pages/Options';
 import ComingSoon from './components/pages/ComingSoon';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -90,6 +91,7 @@ export default function App() {
     if (currentTab === 'mirofish') return <MiroFishLab />;
     if (currentTab === 'admin') return <Admin />;
     if (currentTab === 'agent') return <Agent />;
+    if (currentTab === 'options') return <Options />;
     return <ComingSoon tab={currentTab} />;
   };
 
