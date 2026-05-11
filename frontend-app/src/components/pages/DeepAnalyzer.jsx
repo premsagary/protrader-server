@@ -1222,6 +1222,36 @@ function DeepAnalyzerPlaybook({ playbook }) {
     ? +((target - entry) / Math.max(entry - stop, 0.01)).toFixed(1)
     : null;
 
+  // 🛡 v2.1 Sprint 4C (2026-05-11) — Build the plain-English reason from the
+  // VERDICT, not from whatever stage.recommendation happens to exist. Audit
+  // bug: an AVOID-verdict stock that happens to be Stage 1 was showing
+  // "WATCH for Stage 2 breakout" as the reason — directly contradicting the
+  // AVOID label two lines above it. Now: reason is verdict-aware.
+  let plainReason;
+  if (isHardExclude) {
+    plainReason = composite.reason || 'Excluded — bankruptcy risk or downtrend stage';
+  } else if (isAvoid) {
+    const topFails = sortedChecks.filter(c => c.status.state === 'fail').slice(0, 3).map(c => c.label.toLowerCase());
+    plainReason = topFails.length
+      ? `Mostly failing checks. Biggest gaps: ${topFails.join(', ')}.`
+      : 'Too few framework checks pass for a buy thesis.';
+  } else if (isStage3) {
+    plainReason = pb.stage?.warning || 'Distribution phase — take profits on existing positions, no new entries.';
+  } else if (isStrongBuy || isBuy) {
+    plainReason = pb.stage?.recommendation || pb.stage?.reason || 'Multiple frameworks aligned for entry.';
+  } else if (isWatch) {
+    // Watch — explain what's missing
+    const closeMisses = sortedChecks.filter(c => c.status.state === 'partial').slice(0, 2).map(c => c.label.toLowerCase());
+    plainReason = closeMisses.length
+      ? `Not yet a buy. Watching for: ${closeMisses.join(', ')}.`
+      : (pb.stage?.recommendation || 'Wait for setup to develop.');
+  } else {
+    plainReason = pb.stage?.reason || 'Analysis complete.';
+  }
+
+  // Count of checks that had no data (for the honest "0 of 8 · 2 no data" display)
+  const noDataCount = checks.filter(c => c.status.state === 'unknown').length;
+
   return (
     <div className="card" style={{ padding: 20, marginBottom: 16 }}>
       {/* ═══ VERDICT CARD ═══ */}
@@ -1247,12 +1277,17 @@ function DeepAnalyzerPlaybook({ playbook }) {
                 <span className="tabular-nums" style={{ fontSize: 24, fontWeight: 800, color: headerFg }}>{passCount}</span>
                 <span style={{ fontSize: 13, color: 'var(--text3)' }}>of {total} checks pass</span>
               </div>
+              {noDataCount > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>
+                  {noDataCount} {noDataCount === 1 ? 'check' : 'checks'} had no data
+                </div>
+              )}
             </div>
           )}
         </div>
         <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(0,0,0,0.18)', borderRadius: 8 }}>
           <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.55 }}>
-            {pb.stage?.recommendation || pb.stage?.reason || composite.reason || pb.verdict || 'Analysis complete.'}
+            {plainReason}
           </div>
         </div>
         {composite.rsDoubleCountFlag && (

@@ -29130,6 +29130,18 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     const totalChecks=Object.keys(checklist).length;
 
     // VERDICT
+    // 🛡 v2.1 Sprint 4C (2026-05-11) — UNIFY the top header verdict with the
+    // Playbook composite verdict. Audit finding from user: the page was
+    // showing TWO contradicting verdicts on the same stock (header
+    // "Accumulate" + Playbook "AVOID"). The 26-criteria checklist below is a
+    // useful signal but its verdict label must agree with the 10-framework
+    // composite, otherwise the user has no idea which to trust.
+    //
+    // Strategy: compute the 26-checklist verdict as fallback; if Playbook
+    // composite is available, OVERRIDE verdict/action/timeframe/color from
+    // the composite. The 26-criteria pctScore stays in the response as a
+    // separate field for the count display ("14/26 criteria passed"), but
+    // the VERDICT LABEL is single-sourced.
     let verdict,verdictColor,verdictIcon,action,timeframe;
     if(pctScore>=75)     {verdict='Strong Buy';    verdictColor='#22c55e';verdictIcon='🚀';action='BUY NOW';timeframe='Excellent setup - all major criteria met';}
     else if(pctScore>=60){verdict='Buy';           verdictColor='#86efac';verdictIcon='✅';action='BUY';timeframe='Good long-term opportunity, accumulate';}
@@ -29137,6 +29149,32 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     else if(pctScore>=30){verdict='Hold / Watch';  verdictColor='#f97316';verdictIcon='⏳';action='WAIT';timeframe='Wait for better entry or trend reversal';}
     else if(pctScore>=15){verdict='Avoid for Now'; verdictColor='#ef4444';verdictIcon='⚠️';action='AVOID';timeframe='Too many red flags - protect capital';}
     else                 {verdict='Do Not Buy';    verdictColor='#dc2626';verdictIcon='🚫';action='DO NOT BUY';timeframe='Multiple critical failures - stay away';}
+
+    // OVERRIDE: when playbook composite is available, use it as the single
+    // source of truth for the verdict label. The 26-checklist score remains
+    // a useful diagnostic but no longer controls the verdict wording.
+    try {
+      const _pbComp = _deepPlaybook?.composite;
+      if (_pbComp && _pbComp.verdict) {
+        const v = _pbComp.verdict;  // already includes emoji
+        if (v.includes('STRONG BUY')) {
+          verdict = 'Strong Buy';     verdictColor = '#22c55e'; verdictIcon = '🚀'; action = 'BUY NOW';
+          timeframe = `${_pbComp.passCount}/${_pbComp.total} framework checks pass — high-conviction setup`;
+        } else if (v.includes('BUY')) {
+          verdict = 'Buy';            verdictColor = '#86efac'; verdictIcon = '✅'; action = 'BUY';
+          timeframe = `${_pbComp.passCount}/${_pbComp.total} framework checks pass`;
+        } else if (v.includes('WATCH')) {
+          verdict = 'Watch';          verdictColor = '#3b82f6'; verdictIcon = '⏳'; action = 'WAIT';
+          timeframe = `${_pbComp.passCount}/${_pbComp.total} framework checks pass — not yet a buy`;
+        } else if (v.includes('EXCLUDED')) {
+          verdict = 'Avoid';          verdictColor = '#ef4444'; verdictIcon = '🚫'; action = 'AVOID';
+          timeframe = _pbComp.reason || 'Hard exclude — bankruptcy risk or Stage 4';
+        } else if (v.includes('AVOID')) {
+          verdict = 'Avoid';          verdictColor = '#ef4444'; verdictIcon = '⚠️'; action = 'AVOID';
+          timeframe = `${_pbComp.passCount}/${_pbComp.total} framework checks pass — too few for entry`;
+        }
+      }
+    } catch (e) { /* keep 26-checklist verdict as fallback */ }
 
     // STAGGERED BUYING PLAN
     let buyPlan=null;
