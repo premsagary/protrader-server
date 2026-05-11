@@ -20951,23 +20951,25 @@ function computeMinerviniTrendTemplate(f) {
   if (c2) result.passed++;
 
   // 3. 200-day MA trending up
-  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit finding: previous proxy used distance
-  // (pctAbove200 > 5) which is a level check, not slope. A flat 200DMA with
-  // price 6% above passed; a rising 200DMA with price 2% above failed.
-  // Fixed proxy: price above 200dma AND 6-month return positive (the only way
-  // a 200dma can be rising over a 6m horizon is if 6m return > 0). Also
-  // require dma150 > dma200 as confirmation (criterion 2 territory but the
-  // canonical Minervini c3 specifically validates the 200's direction).
-  const c3 = f.pctAbove200 != null && f.pctAbove200 > 0
-          && f.change6m != null && f.change6m > 0
-          && (f.dma150 != null && f.dma200 != null ? f.dma150 > f.dma200 : true);
-  result.criteria.push({
-    name: '200 DMA trending up',
-    pass: !!c3,
-    detail: f.pctAbove200 != null && f.change6m != null
-      ? `pctAbove200=${f.pctAbove200.toFixed(1)}% · 6m=${(f.change6m*100).toFixed(1)}%`
-      : 'missing'
-  });
+  // 🛡 v2.1 Sprint 5 (2026-05-11) — canonical Minervini c3: SMA200(today) >
+  // SMA200(21 days ago). Previously proxied by 6m return. Now uses the real
+  // slope when f.dma200History is present (computed from candles), otherwise
+  // falls back to the multi-factor proxy from Sprint 4.
+  let c3, c3Detail;
+  if (f.dma200_21dAgo != null && f.dma200 != null) {
+    // True slope check — the canonical Minervini rule
+    c3 = f.dma200 > f.dma200_21dAgo;
+    c3Detail = `slope: ${f.dma200.toFixed(1)} vs ${f.dma200_21dAgo.toFixed(1)} (21d ago) → ${c3 ? 'rising' : 'flat/falling'}`;
+  } else {
+    // Fallback proxy when historical SMA unavailable
+    c3 = f.pctAbove200 != null && f.pctAbove200 > 0
+      && f.change6m != null && f.change6m > 0
+      && (f.dma150 != null && f.dma200 != null ? f.dma150 > f.dma200 : true);
+    c3Detail = f.pctAbove200 != null && f.change6m != null
+      ? `pctAbove200=${f.pctAbove200.toFixed(1)}% · 6m=${(f.change6m*100).toFixed(1)}% (proxy — slope data missing)`
+      : 'missing';
+  }
+  result.criteria.push({ name: '200 DMA trending up', pass: !!c3, detail: c3Detail });
   if (c3) result.passed++;
 
   // 4. 50-day MA above both 150-day and 200-day MA
@@ -21171,21 +21173,41 @@ function computeCanslim(f) {
     detail: `EPS3y=${aEPS != null ? aEPS.toFixed(1) + '%' : '?'} ROE=${aROE != null ? aROE.toFixed(1) + '%' : '?'}`,
   };
 
-  // N — New: at 52-week high or near it
-  const nNearHigh = f.high52w && f.price ? (f.price / f.high52w) >= 0.90 : null;
+  // N — NEW (actual new 52-week high)
+  // 🛡 v2.1 Sprint 5 (2026-05-11) — canonical O'Neil: N fires on actual new
+  // 52w high (or within 2-3% of it). Previously "within 90%" was too loose
+  // and caught extended pullbacks. Strong = within 2% of high (textbook
+  // breakout setup). Partial = within 7%. Otherwise weak.
+  const nPctOfHigh = f.high52w && f.price ? (f.price / f.high52w) : null;
+  const nAtHigh   = nPctOfHigh != null && nPctOfHigh >= 0.98;
+  const nNearHigh = nPctOfHigh != null && nPctOfHigh >= 0.93;
   result.letters.N = {
-    name: 'New (high / product / mgmt)',
-    score: nNearHigh != null ? grade(nNearHigh, f.high52w && f.price ? (f.price / f.high52w) >= 0.80 : false) : null,
-    detail: nNearHigh != null && f.high52w ? `${((f.price/f.high52w)*100).toFixed(0)}% of 52w high` : 'missing',
+    name: 'New 52-week high',
+    score: nPctOfHigh != null ? grade(nAtHigh, nNearHigh) : null,
+    detail: nPctOfHigh != null ? `${(nPctOfHigh*100).toFixed(0)}% of 52w high ${nAtHigh ? '(at high)' : nNearHigh ? '(near high)' : ''}` : 'missing',
   };
 
-  // S — Supply/demand: float < 50M (proxy: smaller mktCap = lower float typically), volume > 50% above avg
-  const sFloat = f.mktCap != null && f.mktCap < 50000;  // < ₹50K cr proxies smaller float
+  // S — SUPPLY/DEMAND (canonical: small free float + volume confirmation)
+  // 🛡 v2.1 Sprint 5 (2026-05-11) — canonical O'Neil cares about FREE FLOAT
+  // (shares actually trade-able), not market cap. Indian listings have low
+  // float by default due to high promoter holding — using market cap inverts
+  // the signal (a large-cap with 75% promoter holding has TINY float).
+  // Free float (Cr) = shares × price × (1 − promoter%) approximation.
+  let sFloat = null, sFloatCr = null;
+  if (f.mktCap != null && f.promoter != null) {
+    sFloatCr = f.mktCap * (1 - f.promoter / 100);
+    sFloat = sFloatCr < 15000;  // < ₹15K cr free float = small enough for O'Neil
+  } else if (f.mktCap != null) {
+    // Fallback when promoter unknown: use market cap as weak proxy
+    sFloat = f.mktCap < 50000;
+  }
   const sVol = f.volRatio != null && f.volRatio > 1.5;
   result.letters.S = {
-    name: 'Supply/Demand (float + volume)',
-    score: f.volRatio != null ? grade(sVol && sFloat, sVol || sFloat) : null,
-    detail: `mktCap=${f.mktCap || '?'}cr volRatio=${f.volRatio?.toFixed(2) || '?'}`,
+    name: 'Supply/Demand (free float + volume)',
+    score: (sFloat != null && f.volRatio != null) ? grade(sVol && sFloat, sVol || sFloat) : null,
+    detail: sFloatCr != null
+      ? `freeFloat≈₹${sFloatCr.toFixed(0)}cr · volRatio=${f.volRatio?.toFixed(2) || '?'}`
+      : `mktCap=${f.mktCap || '?'}cr · volRatio=${f.volRatio?.toFixed(2) || '?'} (promoter % missing)`,
   };
 
   // L — Leader (RS > 80) — proxy: outperforming Nifty significantly over 6m
@@ -21413,7 +21435,11 @@ function _detectVCPFromCandles(candles, f) {
       return { detected: false, confidence: 0, reason: `${contractions.length} contractions found — need ≥2 progressive`, method: 'tier-A-candles' };
     }
 
-    // Verify each successive contraction is tighter (≥25% smaller % drop)
+    // Verify each successive contraction is tighter
+    // 🛡 v2.1 Sprint 5 (2026-05-11) — tightened from 25% to 40% per canonical
+    // Minervini methodology. Textbook VCP halves each leg (25%→12%→6%).
+    // 40% threshold keeps the bar realistic for Indian market noise while
+    // rejecting the loose "any-tighter-counts" bases the old rule allowed.
     let progressive = true;
     const tightenings = [];
     for (let i = 1; i < contractions.length; i++) {
@@ -21421,7 +21447,7 @@ function _detectVCPFromCandles(candles, f) {
       const cur   = contractions[i].dropPct;
       const tightenBy = (prior - cur) / prior;  // % shrinkage
       tightenings.push(+(tightenBy * 100).toFixed(1));
-      if (tightenBy < 0.25) { progressive = false; }
+      if (tightenBy < 0.40) { progressive = false; }
     }
 
     // Volume dry-up — average leg-volume must drop leg-over-leg (Minervini's
@@ -21439,10 +21465,12 @@ function _detectVCPFromCandles(candles, f) {
     const highPivots = recent.filter(p => p.type === 'H');
     const pivot = highPivots.length ? Math.max(...highPivots.map(p => p.price)) : f.high52w;
 
-    // Currently in handle? — current price within 8% below pivot
+    // Currently in handle? — Minervini's canonical "in handle" = within
+    // 5% of pivot in a TIGHT recent range (final contraction).
+    // 🛡 v2.1 Sprint 5 (2026-05-11) — tightened from 8% to 5%.
     const px = (c[c.length-1] && c[c.length-1].close) || f.price;
     const distFromPivot = pivot ? (pivot - px) / pivot : 1;
-    const inHandle = distFromPivot >= 0 && distFromPivot <= 0.08;
+    const inHandle = distFromPivot >= 0 && distFromPivot <= 0.05;
 
     // Build verdict
     if (!progressive) {
@@ -21484,9 +21512,16 @@ function _detectVCPFromCandles(candles, f) {
   }
 }
 
-// ── Cup with Handle detection (simplified) — Part 4.7 ──
+// ── Cup-with-Handle "proxy" detection — Part 4.7 ──
+// 🛡 v2.1 Sprint 5 (2026-05-11) — canonical audit found this is NOT actually
+// a cup-with-handle detector. The true O'Neil pattern requires: U-shape
+// (not V), ≥ 7-week duration, 12-33% cup depth, handle in upper half of
+// cup, declining volume on handle, breakout volume ≥ 40% above 50-day avg.
+// We don't have the geometric machinery for that yet. This function is a
+// fundamental proxy — "had a 30%+ run, now in 5-15% pullback, volume
+// drying" — so we label it honestly: PROXY, not the real pattern.
 function detectCupWithHandle(f) {
-  const result = { detected: false, confidence: 0, reason: '' };
+  const result = { detected: false, confidence: 0, reason: '', method: 'fundamental-proxy' };
   if (f.price == null || f.high52w == null || f.low52w == null) {
     result.reason = 'missing data';
     return result;
@@ -21607,32 +21642,37 @@ function computeIndustryRS(symbol, fund) {
   }
 }
 
-// ── 50-Day Accumulation/Distribution Days (institutional buying signal) ──
-// Counts up-on-heavy-volume days (accumulation) vs down-on-heavy-volume (distribution).
-// Net positive = institutions accumulating. Per O'Neil/IBD methodology.
+// ── Accumulation/Distribution Days (institutional buying signal) ──
+// 🛡 v2.1 Sprint 5 (2026-05-11) — recalibrated to canonical IBD parameters:
+//   • 25-day window (was 50 — IBD's rolling distribution-day count looks
+//     back 25 sessions; older days "expire").
+//   • ±0.3% close threshold (was 0.5% — IBD US is 0.2%; bumped to 0.3% for
+//     Indian indices which have higher daily noise).
+//   • Volume vs PRIOR DAY (was 50-day average — IBD's actual definition is
+//     "higher volume than prior session"). 1.0× prior is the spec.
+// Per O'Neil's CANSLIM-M methodology: net positive = institutions accumulating.
 function computeAccumulationDistribution(candles) {
-  if (!candles || candles.length < 50) {
+  if (!candles || candles.length < 26) {
     return { error: 'insufficient_candles', candleCount: candles ? candles.length : 0 };
   }
-  const last50 = candles.slice(-50);
-  const avgVol = last50.reduce((s, c) => s + (c.volume || 0), 0) / 50;
-  if (avgVol <= 0) return { error: 'no_volume_data' };
+  const window = candles.slice(-26);  // 25 sessions of returns + 1 prior
 
   let accDays = 0, distDays = 0;
   const events = [];
-  for (let i = 1; i < last50.length; i++) {
-    const c = last50[i], prev = last50[i - 1];
-    if (!c.close || !prev.close || !c.volume) continue;
+  for (let i = 1; i < window.length; i++) {
+    const c = window[i], prev = window[i - 1];
+    if (!c.close || !prev.close || !c.volume || !prev.volume) continue;
     const pctChange = ((c.close - prev.close) / prev.close) * 100;
-    const heavyVol = c.volume >= avgVol * 1.5;
-    if (heavyVol && pctChange >= 0.5) {
+    const heavyVol = c.volume > prev.volume;  // canonical: higher than prior day
+    if (heavyVol && pctChange >= 0.3) {
       accDays++;
-      events.push({ date: c.date || c.timestamp || i, type: 'ACC', change: +pctChange.toFixed(2), volX: +(c.volume / avgVol).toFixed(2) });
-    } else if (heavyVol && pctChange <= -0.5) {
+      events.push({ date: c.date || c.timestamp || i, type: 'ACC', change: +pctChange.toFixed(2), volX: +(c.volume / prev.volume).toFixed(2) });
+    } else if (heavyVol && pctChange <= -0.3) {
       distDays++;
-      events.push({ date: c.date || c.timestamp || i, type: 'DIST', change: +pctChange.toFixed(2), volX: +(c.volume / avgVol).toFixed(2) });
+      events.push({ date: c.date || c.timestamp || i, type: 'DIST', change: +pctChange.toFixed(2), volX: +(c.volume / prev.volume).toFixed(2) });
     }
   }
+  const avgVol = window.reduce((s, c) => s + (c.volume || 0), 0) / window.length;
 
   const net = accDays - distDays;
   let verdict, qualifies;
@@ -21670,6 +21710,16 @@ function computeCompositeVerdict(analysis) {
   if (!analysis) return { verdict: 'ERROR', reason: 'no analysis provided' };
 
   // Hard excludes first
+  // 🛡 v2.1 Sprint 5 — pledging + surveillance + Beneish added to hard-excludes
+  if (analysis.pledgeRisk?.hardExclude) {
+    return { verdict: '🚨 EXCLUDED', reason: 'Promoter pledging > 40%', detail: analysis.pledgeRisk.reason, hardExclude: true, passCount: 0, total: 0 };
+  }
+  if (analysis.surveillance?.hardExclude) {
+    return { verdict: '🚨 EXCLUDED', reason: 'Surveillance / illiquid', detail: analysis.surveillance.reason, hardExclude: true, passCount: 0, total: 0 };
+  }
+  if (analysis.beneish?.hardExclude) {
+    return { verdict: '🚨 EXCLUDED', reason: 'Beneish M-Score flags manipulation', detail: analysis.beneish.reason, hardExclude: true, passCount: 0, total: 0 };
+  }
   if (analysis.altman && analysis.altman.zone === 'DISTRESS') {
     return {
       verdict: '🚨 EXCLUDED',
@@ -21708,12 +21758,21 @@ function computeCompositeVerdict(analysis) {
     weinsteinStage2: analysis.weinstein && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL'),
     canslim: analysis.canslim && analysis.canslim.qualifies,
     piotroski: analysis.piotroski && analysis.piotroski.qualifies,
-    altmanSafe: analysis.altman && analysis.altman.zone === 'SAFE',
+    // 🛡 v2.1 Sprint 5 — Altman NOT_APPLICABLE (financials) doesn't count as
+    // pass OR fail; pass only when explicitly SAFE for non-financials.
+    altmanSafe: analysis.altman && analysis.altman.zone === 'SAFE' ? true :
+                analysis.altman && analysis.altman.zone === 'NOT_APPLICABLE' ? null :
+                analysis.altman && analysis.altman.zone ? false : undefined,
     industryRS: industryRSEvaluable && analysis.industryRS.qualifies,
     accumulation: analysis.accumulation && analysis.accumulation.qualifies,
     magicFormula: analysis.magicFormula && analysis.magicFormula.qualifies,
     vcp: analysis.vcp && analysis.vcp.detected,
     cupHandle: analysis.cupHandle && analysis.cupHandle.detected,
+    // 🛡 v2.1 Sprint 5 — new alpha signals as positive ticks
+    sloanQuality: analysis.sloanAccruals && analysis.sloanAccruals.qualifies != null ? analysis.sloanAccruals.qualifies : undefined,
+    cleanBeneish: analysis.beneish && analysis.beneish.qualifies != null ? analysis.beneish.qualifies : undefined,
+    pledgeClean:  analysis.pledgeRisk && analysis.pledgeRisk.qualifies != null ? analysis.pledgeRisk.qualifies : undefined,
+    peadSetup:    analysis.earningsCtx && analysis.earningsCtx.qualifies != null ? analysis.earningsCtx.qualifies : undefined,
   };
 
   // Evaluable = explicitly true OR false (not null/undefined/missing-data)
@@ -21911,19 +21970,37 @@ function computePiotroskiFScore(f) {
 }
 
 // ── Altman Z-Score (bankruptcy prediction — Edward Altman 1968) ──
-// 🛡 v2.1 Sprint 4 (2026-05-11) — audit MEDIUM #12: branch on sector.
-//   Original Z (manufacturers): Z = 1.2A + 1.4B + 3.3C + 0.6D + 1.0E
+// 🛡 v2.1 Sprint 5 (2026-05-11) — CRITICAL fix from canonical audit.
+// Altman explicitly excluded banks/NBFCs/insurance from Z-Score validity
+// (high leverage is normal for them; their book equity is regulatory-set).
+// Sprint 4 routed them to Z'' anyway → silently DISTRESS → hard-excluded
+// HDFC Bank, Bajaj Finance, every NBFC. Now: financials get a clean
+// NOT_APPLICABLE result with hardExclude:false so the composite cascade
+// doesn't blacklist them.
+//
+//   Original Z (manufacturers):     1.2A + 1.4B + 3.3C + 0.6D + 1.0E
 //     SAFE ≥ 2.99 · GREY 1.81-2.99 · DISTRESS < 1.81
-//   Z'' (non-manufacturers — IT, services, financials):
-//     Z'' = 6.56A + 3.26B + 6.72C + 1.05D  (no E term — efficiency irrelevant)
+//   Z'' (non-fin services):         6.56A + 3.26B + 6.72C + 1.05D
 //     SAFE ≥ 2.60 · GREY 1.10-2.60 · DISTRESS < 1.10
-// Iron rule: never own a stock in DISTRESS zone regardless of other metrics.
+//   Financials (banks/NBFC/insur):  N/A — model does not apply
 function computeAltmanZScore(f) {
   if (!f) return { z: null, zone: 'UNKNOWN', error: 'no_fundamentals' };
 
-  // Determine model — non-manufacturers use Z'' (no sales/total-assets term)
   const sector = (f.sector || '').toLowerCase();
-  const isNonManuf = /it|software|service|financ|bank|insur|nbfc|technology/.test(sector);
+  // Financials: Altman explicitly excluded — skip cleanly, don't hard-exclude
+  const isFinancial = /\bbank\b|insur|nbfc|financ|life ins|gen ins|asset manag|stockbrok|broker|amc\b/.test(sector);
+  if (isFinancial) {
+    return {
+      z: null,
+      zone: 'NOT_APPLICABLE',
+      interpretation: 'Altman Z does not apply to banks / NBFCs / insurers (high leverage is normal). Use sector-specific risk metrics instead.',
+      model: 'skipped_financial',
+      hardExclude: false,
+    };
+  }
+
+  // Non-financial services use Z'' (IT, software, services — capital-light)
+  const isNonManuf = /it|software|service|technology|retail|telecom|media|hotel|tourism/.test(sector);
   const model = isNonManuf ? 'Z_prime_prime' : 'Z_original';
 
   const required = isNonManuf
@@ -21995,11 +22072,36 @@ function computeAltmanZScore(f) {
 // Top 30% by combined rank = qualifies.
 function computeMagicFormulaRank(symbol, fund) {
   if (!fund) return { error: 'no_fundamentals' };
+
+  // 🛡 v2.1 Sprint 5 (2026-05-11) — canonical Greenblatt:
+  //   • EXCLUDE financials (banks/NBFCs/insurance) and utilities — the formula
+  //     doesn't make sense for them (working capital undefined for banks).
+  //   • EV uses EXCESS cash, not all cash (operating cash is needed for
+  //     business). Proxy: subtract only cash beyond 5% of revenue.
+  //   • Invested capital EXCLUDES goodwill/intangibles — Greenblatt wants
+  //     tangible capital efficiency, not paid-up acquisition premium.
+  const sector = (fund.sector || '').toLowerCase();
+  const isFinancial = /\bbank\b|insur|nbfc|financ|life ins|gen ins|asset manag|stockbrok|broker|amc\b/.test(sector);
+  const isUtility   = /utilit|power gen|electric|gas distrib/.test(sector);
+  if (isFinancial) {
+    return { error: 'not_applicable_financial', detail: 'Magic Formula excludes financials (Greenblatt rule)' };
+  }
+  if (isUtility) {
+    return { error: 'not_applicable_utility', detail: 'Magic Formula excludes utilities (Greenblatt rule)' };
+  }
+
   const ebit = fund.ebit;
-  const ev = (fund.marketCap || 0) + (fund.totalDebt || 0) - (fund.cash || 0);
+  // Excess-cash proxy: only subtract cash beyond 5% of sales (operating buffer)
+  const operatingCashBuffer = (fund.sales || 0) * 0.05;
+  const excessCash = Math.max(0, (fund.cash || 0) - operatingCashBuffer);
+  const ev = (fund.marketCap || 0) + (fund.totalDebt || 0) - excessCash;
+
+  // Invested capital — strip goodwill/intangibles if available
   const wc = fund.workingCapital || 0;
-  const nfa = fund.netFixedAssets || 0;
-  const invCap = wc + nfa;
+  const nfaGross = fund.netFixedAssets || 0;
+  const goodwill = fund.goodwill || fund.intangibleAssets || 0;
+  const nfaTangible = Math.max(0, nfaGross - goodwill);
+  const invCap = wc + nfaTangible;
 
   if (ebit == null || ev <= 0 || invCap <= 0) {
     return { error: 'insufficient_financials', detail: { ebit, ev, invCap } };
@@ -22075,6 +22177,186 @@ function computeMagicFormulaRank(symbol, fund) {
       percentile >= 50 ? '➖ Average' :
       '❌ Bottom half',
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 5 (2026-05-11) — TOP-TRADER ALPHA SIGNALS
+// These are the signals top Indian PMS desks (Marcellus, Unifi, Helios,
+// Nalanda) and IBD-school US traders actually use that the canonical
+// 10-framework list above misses. All defensive — return graceful
+// "data_missing" rather than crashing when inputs aren't available.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── 1. Promoter Pledging filter (Indian-market critical) ──
+// Single biggest tail-risk in Indian small/mid caps. Coincident with 80%+
+// of small/mid-cap blow-ups (Zee, Vakrangee, Anil Ambani group, DHFL, Cox &
+// Kings). Marcellus and Unifi hard-filter at >20% pledge.
+//   • Pledge > 40% → HARD EXCLUDE (game over)
+//   • Pledge > 20% → WARNING (proceed only with eyes open)
+//   • Pledge > 10% AND rising QoQ → WATCH (deterioration signal)
+function computePromoterPledgeRisk(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const pledge = f.pledged != null ? Number(f.pledged) : null;
+  if (pledge == null) {
+    return { tier: 'UNKNOWN', error: 'no_pledge_data', hardExclude: false };
+  }
+  let tier, reason, hardExclude = false;
+  if (pledge > 40) {
+    tier = 'CRITICAL';
+    reason = `Promoter pledge ${pledge.toFixed(1)}% — IRON RULE EXCLUDE (game-over zone)`;
+    hardExclude = true;
+  } else if (pledge > 20) {
+    tier = 'HIGH_RISK';
+    reason = `Promoter pledge ${pledge.toFixed(1)}% — high tail-risk (Marcellus/Unifi exclude zone)`;
+  } else if (pledge > 10) {
+    tier = 'WATCH';
+    reason = `Promoter pledge ${pledge.toFixed(1)}% — moderate, monitor for increases`;
+  } else if (pledge > 0) {
+    tier = 'OK';
+    reason = `Promoter pledge ${pledge.toFixed(1)}% — within tolerable range`;
+  } else {
+    tier = 'CLEAN';
+    reason = 'No promoter pledging';
+  }
+  return { tier, reason, pledgePct: pledge, hardExclude, qualifies: tier === 'CLEAN' || tier === 'OK' };
+}
+
+// ── 2. Surveillance / illiquidity hard filter (Indian-market critical) ──
+// Stocks in ASM Stage 2+, GSM, T2T (T group), or Z group have severely
+// restricted trading: no intraday for many, 5-10% circuit limits, settlement
+// constraints. Operationally non-actionable for swing trading regardless of
+// how good the fundamentals look. Every prop desk excludes these.
+function computeSurveillanceRisk(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const grp = (f.group || f.grp || '').toUpperCase();
+  const surv = (f.surveillance || '').toUpperCase();
+  const isT2T   = grp === 'T' || surv === 'T2T' || surv === 'TRADE_TO_TRADE';
+  const isZ     = grp === 'Z' || surv === 'Z';
+  const isASM2  = /ASM[_ ]?(STAGE[_ ]?)?[2-4]/.test(surv);
+  const isGSM   = /GSM/.test(surv);
+
+  if (isZ) return { tier: 'EXCLUDED', reason: 'Z group — high-risk regulatory category', hardExclude: true, qualifies: false };
+  if (isT2T) return { tier: 'EXCLUDED', reason: 'T2T (Trade-to-Trade) — no intraday liquidity', hardExclude: true, qualifies: false };
+  if (isASM2) return { tier: 'EXCLUDED', reason: `Additional Surveillance ${surv} — restricted trading`, hardExclude: true, qualifies: false };
+  if (isGSM) return { tier: 'EXCLUDED', reason: 'GSM (Graded Surveillance Measure) — restricted', hardExclude: true, qualifies: false };
+  return { tier: 'CLEAN', reason: 'No surveillance restrictions', qualifies: true, hardExclude: false };
+}
+
+// ── 3. Beneish M-Score (earnings-manipulation probability) ──
+// 8-variable score. Beneish 1999 — would have flagged ~75% of accounting
+// frauds (Enron, WorldCom, Satyam). Howard Marks cites it. M > -1.78 =
+// likely manipulator. The genuine alpha is when M-Score deteriorates
+// QoQ — that's the leading indicator.
+//
+// Formula: M = -4.84 + 0.92 DSRI + 0.528 GMI + 0.404 AQI + 0.892 SGI
+//             + 0.115 DEPI - 0.172 SGAI + 4.679 TATA - 0.327 LVGI
+function computeBeneishMScore(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+
+  const needed = ['receivables', 'receivablesPrev', 'sales', 'salesPrev', 'grossMargin', 'grossMarginPrev',
+                  'totalAssets', 'totalAssetsPrev', 'netFixedAssets', 'netFixedAssetsPrev',
+                  'depreciation', 'depreciationPrev', 'sga', 'sgaPrev',
+                  'netIncome', 'operatingCashFlow', 'longTermDebt', 'longTermDebtPrev'];
+  const have = needed.filter(k => f[k] != null);
+  if (have.length < 10) {
+    return { tier: 'UNKNOWN', error: 'insufficient_financials', dataCompleteness: +(have.length / needed.length).toFixed(2) };
+  }
+  try {
+    const DSRI = (f.receivables / f.sales) / Math.max(1e-9, (f.receivablesPrev / f.salesPrev));
+    const GMI  = (f.grossMarginPrev / Math.max(1e-9, f.grossMargin));
+    const AQI_curr = 1 - (f.currentAssets || 0 + f.netFixedAssets || 0) / Math.max(1e-9, f.totalAssets);
+    const AQI_prev = 1 - (f.currentAssetsPrev || 0 + f.netFixedAssetsPrev || 0) / Math.max(1e-9, f.totalAssetsPrev);
+    const AQI = AQI_curr / Math.max(1e-9, AQI_prev);
+    const SGI  = f.sales / Math.max(1e-9, f.salesPrev);
+    const DEPI = (f.depreciationPrev / Math.max(1e-9, f.depreciationPrev + f.netFixedAssetsPrev))
+               / Math.max(1e-9, f.depreciation / (f.depreciation + f.netFixedAssets));
+    const SGAI = (f.sga / Math.max(1e-9, f.sales)) / Math.max(1e-9, f.sgaPrev / f.salesPrev);
+    const TATA = (f.netIncome - f.operatingCashFlow) / Math.max(1e-9, f.totalAssets);
+    const LVGI = ((f.longTermDebt + (f.currentLiabilities || 0)) / Math.max(1e-9, f.totalAssets))
+               / Math.max(1e-9, (f.longTermDebtPrev + (f.currentLiabilitiesPrev || 0)) / f.totalAssetsPrev);
+
+    const M = -4.84 + 0.92*DSRI + 0.528*GMI + 0.404*AQI + 0.892*SGI + 0.115*DEPI
+            - 0.172*SGAI + 4.679*TATA - 0.327*LVGI;
+
+    let tier, reason;
+    if (M > -1.78) { tier = 'LIKELY_MANIPULATOR'; reason = `M=${M.toFixed(2)} — suggests earnings manipulation (Beneish flag)`; }
+    else if (M > -2.22) { tier = 'CAUTION'; reason = `M=${M.toFixed(2)} — grey zone, monitor`; }
+    else { tier = 'CLEAN'; reason = `M=${M.toFixed(2)} — earnings appear clean`; }
+
+    return {
+      tier, reason, mScore: +M.toFixed(2),
+      hardExclude: tier === 'LIKELY_MANIPULATOR',
+      qualifies: tier === 'CLEAN',
+      components: { DSRI: +DSRI.toFixed(2), GMI: +GMI.toFixed(2), AQI: +AQI.toFixed(2), SGI: +SGI.toFixed(2), DEPI: +DEPI.toFixed(2), SGAI: +SGAI.toFixed(2), TATA: +TATA.toFixed(3), LVGI: +LVGI.toFixed(2) },
+    };
+  } catch (e) { return { tier: 'UNKNOWN', error: 'compute_failed', detail: e.message }; }
+}
+
+// ── 4. Sloan Accruals (earnings-quality, Sloan 1996) ──
+// (Net Income − Cash from Operations) / Total Assets. High positive accruals
+// = earnings driven by accounting, not cash. Sloan showed high-accruals
+// stocks underperform low-accruals by ~10%/yr. Standard quality screen.
+//   • Bottom decile (most negative) = HIGH-QUALITY earnings
+//   • Top decile (most positive) = LOW-QUALITY / WARNING
+function computeSloanAccruals(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const ni = f.netIncome != null ? f.netIncome : f.netProfit;
+  const cfo = f.operatingCashFlow != null ? f.operatingCashFlow : f.cfo;
+  const ta = f.totalAssets;
+  if (ni == null || cfo == null || ta == null || ta <= 0) {
+    return { tier: 'UNKNOWN', error: 'insufficient_financials' };
+  }
+  const accruals = (ni - cfo) / ta;
+  let tier, reason;
+  if (accruals <= -0.05) { tier = 'HIGH_QUALITY'; reason = `Accruals ${(accruals*100).toFixed(1)}% — cash > earnings (high quality)`; }
+  else if (accruals <= 0.05) { tier = 'OK'; reason = `Accruals ${(accruals*100).toFixed(1)}% — typical range`; }
+  else if (accruals <= 0.10) { tier = 'CAUTION'; reason = `Accruals ${(accruals*100).toFixed(1)}% — earnings outpacing cash`; }
+  else { tier = 'LOW_QUALITY'; reason = `Accruals ${(accruals*100).toFixed(1)}% — earnings far ahead of cash (warning)`; }
+  return { tier, reason, accruals: +accruals.toFixed(3), qualifies: tier === 'HIGH_QUALITY' || tier === 'OK', hardExclude: false };
+}
+
+// ── 5. Post-Earnings Announcement Drift (PEAD) + Earnings Proximity ──
+// Most-replicated anomaly in academic finance — stocks that gap up on
+// earnings on heavy volume continue trending 3-9 months. IBD's literal
+// buy trigger. Also detects "earnings imminent" so user can adjust risk.
+//   • Recent gap-up >3% on 2× volume in last 5 sessions → PEAD setup active
+//   • Earnings within 5 trading days → WAIT (don't enter pre-earnings)
+function computeEarningsContext(f, candles) {
+  if (!f || !Array.isArray(candles) || candles.length < 10) {
+    return { tier: 'UNKNOWN', error: 'insufficient_data' };
+  }
+  const last5 = candles.slice(-6);  // 5 sessions of gaps + 1 prior
+  let bestGap = { gapPct: 0, volX: 0, daysAgo: null };
+  for (let i = 1; i < last5.length; i++) {
+    const today = last5[i], prev = last5[i-1];
+    if (!today.open || !prev.close || !today.volume || !prev.volume) continue;
+    const gapPct = ((today.open - prev.close) / prev.close) * 100;
+    const volX = today.volume / Math.max(1, prev.volume);
+    if (gapPct > bestGap.gapPct) {
+      bestGap = { gapPct: +gapPct.toFixed(2), volX: +volX.toFixed(2), daysAgo: last5.length - 1 - i };
+    }
+  }
+
+  // Earnings-imminent check (if calendar field available)
+  let earningsImminent = false, daysToEarnings = null;
+  if (f.nextEarningsDate) {
+    try {
+      const days = Math.round((new Date(f.nextEarningsDate) - Date.now()) / 86400000);
+      daysToEarnings = days;
+      earningsImminent = days >= 0 && days <= 5;
+    } catch (_) {}
+  }
+
+  if (earningsImminent) {
+    return { tier: 'WAIT_EARNINGS', reason: `Earnings in ${daysToEarnings} trading days — avoid pre-earnings entries`, daysToEarnings, qualifies: false, hardExclude: false };
+  }
+  if (bestGap.gapPct >= 3 && bestGap.volX >= 2) {
+    return { tier: 'PEAD_ACTIVE', reason: `Recent gap +${bestGap.gapPct}% on ${bestGap.volX}× volume (${bestGap.daysAgo}d ago) — PEAD drift setup`, qualifies: true, hardExclude: false, gap: bestGap };
+  }
+  if (bestGap.gapPct >= 1.5 && bestGap.volX >= 1.5) {
+    return { tier: 'MILD_STRENGTH', reason: `Recent gap +${bestGap.gapPct}% on ${bestGap.volX}× volume — mild strength signal`, qualifies: false, hardExclude: false, gap: bestGap };
+  }
+  return { tier: 'NEUTRAL', reason: 'No recent gap-up + volume signal', qualifies: false, hardExclude: false };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -22166,6 +22448,16 @@ function computeHorizonVerdicts(analysis) {
     record(lt, 'Institutional sponsorship', a.canslim.letters.I.score >= 70,
       a.canslim.letters.I.detail);
   }
+  // 🛡 v2.1 Sprint 5 — long-term quality signals
+  if (a.sloanAccruals && a.sloanAccruals.qualifies != null && !a.sloanAccruals.error) {
+    record(lt, 'Earnings backed by cash (Sloan)', a.sloanAccruals.qualifies, a.sloanAccruals.reason);
+  }
+  if (a.beneish && a.beneish.qualifies != null && !a.beneish.error) {
+    record(lt, 'Clean Beneish M-Score', a.beneish.qualifies, a.beneish.reason);
+  }
+  if (a.pledgeRisk && a.pledgeRisk.qualifies != null && !a.pledgeRisk.error) {
+    record(lt, 'No promoter pledging risk', a.pledgeRisk.qualifies, a.pledgeRisk.reason);
+  }
 
   // ─── MOMENTUM ─────────────────────────────────────────────────────────
   const mo = horizons.momentum;
@@ -22229,6 +22521,13 @@ function computeHorizonVerdicts(analysis) {
     record(st, 'Best-entry sub-stage', isEarly,
       `Stage 2 ${a.weinstein.subStage}`);
   }
+  // 🛡 v2.1 Sprint 5 — short-term signals
+  if (a.earningsCtx && a.earningsCtx.qualifies != null && !a.earningsCtx.error) {
+    record(st, 'Post-earnings drift setup', a.earningsCtx.qualifies, a.earningsCtx.reason);
+  }
+  if (a.surveillance && a.surveillance.qualifies != null && !a.surveillance.error) {
+    record(st, 'Tradeable (no surveillance)', a.surveillance.qualifies, a.surveillance.reason);
+  }
 
   // Compute tier per horizon. Need at least 3 evaluable checks for a real tier.
   const tierOf = (h) => {
@@ -22287,10 +22586,20 @@ function applyPlaybookOverlay(f, candles) {
   const altman = computeAltmanZScore(f);
   const industryRS = (f && f.sym) ? computeIndustryRS(f.sym, f) : { error: 'no_symbol' };
   const magicFormula = (f && f.sym) ? computeMagicFormulaRank(f.sym, f) : { error: 'no_symbol' };
-  // A/D days now runs in Tier-A when candles are passed in (Sprint 3 wiring)
-  const accumulation = (Array.isArray(candles) && candles.length >= 50)
+  // 🛡 v2.1 Sprint 5 — A/D recalibrated to 25-day window (was 50)
+  const accumulation = (Array.isArray(candles) && candles.length >= 26)
     ? computeAccumulationDistribution(candles)
     : { skipped: 'needs_candles_passed_in_analyze_endpoint' };
+
+  // 🛡 v2.1 Sprint 5 (2026-05-11) — TOP-TRADER ALPHA SIGNALS
+  // Highest-impact signals that top Indian PMS desks + IBD-school traders
+  // actually use. Some hard-exclude (pledging > 40%, T2T) — these can flip
+  // the verdict to AVOID regardless of how good the trader frameworks look.
+  const pledgeRisk     = computePromoterPledgeRisk(f);
+  const surveillance   = computeSurveillanceRisk(f);
+  const beneish        = computeBeneishMScore(f);
+  const sloanAccruals  = computeSloanAccruals(f);
+  const earningsCtx    = computeEarningsContext(f, candles);
 
   // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
   let playbookScore = 0;
@@ -22313,7 +22622,7 @@ function applyPlaybookOverlay(f, candles) {
   const _raw = (_ttScore * 0.4 + _csScore * 0.4 + _vcpBoost * 0.1 + _cupBoost * 0.1) * stageMultiplier;
   playbookScore = Number.isFinite(_raw) ? +_raw.toFixed(1) : 0;
 
-  // Composite verdict using ALL frameworks (Sprint 1 Step 1.5)
+  // Composite verdict using ALL frameworks + Sprint 5 hard-exclude signals
   const composite = computeCompositeVerdict({
     minervini: trendTemplate,
     weinstein: stage,
@@ -22324,6 +22633,12 @@ function applyPlaybookOverlay(f, candles) {
     magicFormula,
     vcp,
     cupHandle,
+    // 🛡 v2.1 Sprint 5 — new hard-exclude signals
+    pledgeRisk,
+    surveillance,
+    beneish,
+    sloanAccruals,
+    earningsCtx,
   });
 
   // 🛡 v2.1 Sprint 4F (2026-05-11) — Per-horizon tallies (Long term / Momentum
@@ -22340,6 +22655,12 @@ function applyPlaybookOverlay(f, candles) {
     vcp,
     cupHandle,
     accumulation,
+    // 🛡 v2.1 Sprint 5 — feed new alpha signals into horizon tallies
+    pledgeRisk,
+    surveillance,
+    beneish,
+    sloanAccruals,
+    earningsCtx,
   });
 
   // Final verdict — composite is authoritative.
@@ -22384,6 +22705,8 @@ function applyPlaybookOverlay(f, candles) {
       piotroski, altman, industryRS, magicFormula, accumulation, composite,
       // 🛡 v2.1 Sprint 4F addition:
       horizons,
+      // 🛡 v2.1 Sprint 5 additions (top-trader alpha signals):
+      pledgeRisk, surveillance, beneish, sloanAccruals, earningsCtx,
       playbookScore, stageMultiplier,
       verdict, verdictColor,
       hardExclude: composite.hardExclude || false,
