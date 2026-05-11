@@ -337,721 +337,350 @@ function AnalysisResult({ data }) {
   })();
   const [chartTf, setChartTf] = useState(initialTf);
 
+  // 🛡 v2.1 Sprint 4D (2026-05-11) — Tab navigation state for the redesigned
+  // page. "Decision" is the default landing view (verdict + trade plan +
+  // scoreboard + 4 key indicators + collapsed drawers). Chart / Technicals /
+  // AI Review move to dedicated tabs so they don't crowd the decision.
+  const [activeTab, setActiveTab] = useState('decision');
+
   return (
     <div className="animate-fadeIn">
-      {/* ═══ HERO SCORECARD ═══ */}
-      <div
-        style={{
-          background: score >= 60
-            ? 'linear-gradient(135deg, rgba(52,211,153,0.12) 0%, rgba(99,102,241,0.12) 100%)'
-            : score >= 45
-              ? 'linear-gradient(135deg, rgba(251,191,36,0.12) 0%, rgba(99,102,241,0.12) 100%)'
-              : 'linear-gradient(135deg, rgba(248,113,113,0.12) 0%, rgba(99,102,241,0.12) 100%)',
-          border: '1px solid var(--border)',
-          borderRadius: 18,
-          padding: '32px 36px',
-          marginBottom: 18,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-          gap: 24,
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 240 }}>
-          {/* Sector + Group chips */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            {a.sector && (
-              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
-                {a.sector}
-              </span>
-            )}
-            {a.grp && (
-              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
-                {a.grp}
-              </span>
-            )}
-            {a.industry && (
-              <span className="chip" style={{ height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600 }}>
-                {a.industry}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-            <h2 style={{ fontSize: 32, fontWeight: 800, letterSpacing: '-0.8px', color: 'var(--text)', lineHeight: 1.1, margin: 0 }}>
-              {a.sym || '—'}
-            </h2>
-            {a.name && (
-              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 500 }}>{a.name}</span>
-            )}
-          </div>
-          {a.price != null && (
-            <div className="tabular-nums" style={{ fontSize: 30, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.6px', marginBottom: 6 }}>
-              ₹{Number(a.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-              {a.priceChange != null && (
-                <span style={{
-                  fontSize: 14, fontWeight: 700, marginLeft: 10,
-                  color: a.priceChange > 0 ? 'var(--green-text)' : a.priceChange < 0 ? 'var(--red-text)' : 'var(--text3)',
-                }}>
-                  {a.priceChange > 0 ? '+' : ''}{Number(a.priceChange).toFixed(2)}
-                  {a.priceChangePct != null && ` (${a.priceChangePct > 0 ? '+' : ''}${Number(a.priceChangePct).toFixed(2)}%)`}
-                </span>
-              )}
-            </div>
-          )}
-          {/* Compact market-cap / volume line */}
-          {(a.marketCap || a.volume || fund?.marketCap) && (
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
-              {(a.marketCap || fund?.marketCap) && (
-                <span>Mkt Cap: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>
-                  {typeof (a.marketCap || fund?.marketCap) === 'string'
-                    ? (a.marketCap || fund?.marketCap)
-                    : `₹${Number(a.marketCap || fund?.marketCap).toLocaleString('en-IN')} Cr`}
-                </span></span>
-              )}
-              {a.volume && (
-                <span>Volume: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>{Number(a.volume).toLocaleString('en-IN')}</span></span>
-              )}
-              {tech.wk52Hi && tech.wk52Lo && (
-                <span>52W: <span className="tabular-nums" style={{ color: 'var(--text2)', fontWeight: 600 }}>₹{tech.wk52Lo} – ₹{tech.wk52Hi}</span></span>
-              )}
-            </div>
-          )}
-        </div>
-        {score != null && (
-          <div style={{
-            textAlign: 'center',
-            padding: '18px 22px',
-            background: 'rgba(10,14,24,0.6)',
-            border: `1px solid ${tierColor}44`,
-            borderRadius: 14,
-            minWidth: 220,
-            boxShadow: `0 0 28px ${tierColor}22`,
-          }}>
-            {verdictIcon && <div style={{ fontSize: 28, marginBottom: 6 }}>{verdictIcon}</div>}
-            {verdict && (
-              <div style={{ fontSize: 16, fontWeight: 700, color: tierColor, letterSpacing: '0.3px', marginBottom: 4 }}>
-                {verdict}
-              </div>
-            )}
-            {verdictTimeframe && (
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 10, fontWeight: 500 }}>
-                {verdictTimeframe}
-              </div>
-            )}
-            <div className="tabular-nums" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 4 }}>
-              Varsity Score
-            </div>
-            <div className="tabular-nums" style={{ fontSize: 48, fontWeight: 800, lineHeight: 1, letterSpacing: '-1.5px', color: tierColor }}>
-              {countupScore}
-              <span style={{ fontSize: 14, color: 'var(--text3)', fontWeight: 500, marginLeft: 2 }}>/ 100</span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, fontWeight: 500 }}>
-              {a.passCount || 0}/{a.totalChecks || 0} criteria passed
-            </div>
-            {/* Progress bar under the score */}
-            <div style={{ height: 5, width: '100%', marginTop: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${countupScore}%`, background: tierColor, borderRadius: 3, transition: 'width 200ms ease' }} />
-            </div>
-            {action && (
-              <div style={{
-                marginTop: 12, padding: '7px 14px', borderRadius: 9,
-                background: 'rgba(255,255,255,0.04)', color: tierColor,
-                border: `1px solid ${tierColor}44`,
-                fontWeight: 700, fontSize: 12, letterSpacing: '0.3px',
-              }}>
-                {action}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ═══ DATA AVAILABILITY CHIPS — what candles/feeds drove this analysis ═══ */}
-      {Object.keys(dataAvail).length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
-          {[
-            ['1Y', !!dataAvail.kite1y],
-            ['3Y', !!dataAvail.kite3y],
-            ['Hourly', !!dataAvail.kite1h],
-            ['News', !!dataAvail.news],
-            ['Fundamentals', !!dataAvail.fundamentals],
-            ['Candles: ' + (dataAvail.candlesUsed || 0), (dataAvail.candlesUsed || 0) > 100],
-          ].map(([label, ok], i) => (
-            <span key={i} className={ok ? 'chip chip-green' : 'chip'} style={{
-              height: 22, fontSize: 10, padding: '0 10px', fontWeight: 600,
-              opacity: ok ? 1 : 0.5,
-            }}>
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* ═══ AI SECOND OPINION — top of analyzer (matches 7e1e050 layout) ═══ */}
-      <AIReviewSection sym={a.sym} />
-
-      {/* ═══ PRICE CHART (canvas — S/R + DMA + Buy Zone + Fibs) ═══ */}
-      <PriceChart
-        charts={charts}
-        tf={chartTf}
-        setTf={setChartTf}
-        supports={supports}
-        resistances={resistances}
-        buyZone={a.buyZone}
-        tech={tech}
-        fibs={fibs}
-        currentPrice={currentPrice}
-        dataAvail={dataAvail}
-      />
-
-      {/* ═══ AT-A-GLANCE METRICS — matches old `az-fade-up` summary bar ═══ */}
+      {/* ═══ STICKY IDENTITY STRIP (Sprint 4D) ═══
+          Replaces the prior duplicate verdict header. The verdict itself now
+          lives ONLY in the Playbook card on the Decision tab — single source
+          of truth across the page. */}
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-        gap: 8,
-        marginBottom: 18,
+        position: 'sticky', top: 0, zIndex: 10,
+        background: 'var(--bg)',
+        borderBottom: '1px solid var(--border)',
+        padding: '10px 14px', marginBottom: 12,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 14, flexWrap: 'wrap',
       }}>
-        {tech.dma200Trend && (
-          <MetricPill label="Trend"
-            value={tech.dma200Trend === 'rising' ? '▲ Rising' : '▼ Falling'}
-            color={tech.dma200Trend === 'rising' ? 'var(--green-text)' : 'var(--red-text)'} />
-        )}
-        <MetricPill label="RSI-14" value={tech.rsi14} fmt={(v) => Math.round(v)}
-          color={(v) => v == null ? 'var(--text4)' : v < 40 ? 'var(--green-text)' : v > 65 ? 'var(--red-text)' : 'var(--amber-text)'} />
-        <MetricPill label="ADX" value={tech.adx} fmt={(v) => Math.round(v)} sub={tech.trendStrength} />
-        <MetricPill label="R:R" value={a.riskReward || tech.riskReward} fmt={(v) => v ? `${Number(v).toFixed(2)}x` : '—'}
-          color={(v) => v >= 2 ? 'var(--green-text)' : v >= 1.5 ? 'var(--amber-text)' : 'var(--red-text)'} />
-        <MetricPill label="Upside" value={a.upsidePct || tech.upsidePct} fmt={(v) => v != null ? `${Number(v).toFixed(1)}%` : '—'}
-          color={(v) => v > 0 ? 'var(--green-text)' : 'var(--red-text)'} />
-        {fund?.roe != null && <MetricPill label="ROE" value={fund.roe} fmt={(v) => `${Number(v).toFixed(1)}%`}
-          color={(v) => v >= 20 ? 'var(--green-text)' : v >= 12 ? 'var(--amber-text)' : 'var(--red-text)'} />}
-        {fund?.de != null && <MetricPill label="D/E" value={fund.de} fmt={(v) => `${Number(v).toFixed(2)}x`}
-          color={(v) => v <= 0.5 ? 'var(--green-text)' : v <= 1.5 ? 'var(--amber-text)' : 'var(--red-text)'} />}
-        {fund?.pe != null && <MetricPill label="P/E" value={fund.pe} fmt={(v) => Number(v).toFixed(1)}
-          color={(v) => v < 20 ? 'var(--green-text)' : v < 40 ? 'var(--amber-text)' : 'var(--red-text)'} />}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 18, fontWeight: 700 }}>{a.sym || ''}</span>
+          {a.name && <span style={{ fontSize: 13, color: 'var(--text3)' }}>{a.name}</span>}
+          {a.sector && <span className="chip" style={{ height: 18, fontSize: 10, padding: '0 7px' }}>{a.sector}</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, fontSize: 13 }}>
+          {currentPrice != null && (
+            <span className="tabular-nums" style={{ fontSize: 17, fontWeight: 700 }}>₹{currentPrice.toFixed(2)}</span>
+          )}
+          {a.priceChangePct != null && (
+            <span style={{ color: a.priceChangePct > 0 ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 600 }}>
+              {a.priceChangePct > 0 ? '+' : ''}{Number(a.priceChangePct).toFixed(2)}%
+            </span>
+          )}
+          {tech.wk52Hi && tech.wk52Lo && (
+            <span className="tabular-nums" style={{ color: 'var(--text4)', fontSize: 11 }}>
+              52w ₹{Math.round(tech.wk52Lo)}–₹{Math.round(tech.wk52Hi)}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* 🚀 v2.0 Wave 12 — Top-Trader Playbook Section
-           (Minervini Trend Template + Weinstein Stage + CANSLIM + VCP + Cup-Handle) */}
-      {a.playbook && !a.playbook.error && <DeepAnalyzerPlaybook playbook={a.playbook} />}
+      {/* ═══ TAB NAVIGATION (Sprint 4D) ═══ */}
+      <div style={{
+        display: 'flex', gap: 4, borderBottom: '1px solid var(--border)',
+        marginBottom: 16, overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+      }}>
+        {[
+          { id: 'decision',   label: 'Decision' },
+          { id: 'chart',      label: 'Chart' },
+          { id: 'technicals', label: 'Technicals' },
+          { id: 'aireview',   label: 'AI Review' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+            padding: '10px 16px',
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === t.id ? '2px solid var(--brand)' : '2px solid transparent',
+            color: activeTab === t.id ? 'var(--text)' : 'var(--text3)',
+            fontWeight: activeTab === t.id ? 700 : 500,
+            fontSize: 13,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}>{t.label}</button>
+        ))}
+      </div>
 
-      {/* ═══ VARSITY 14-POINT CHECKLIST ═══ */}
-      {Object.keys(checklist).length > 0 && (
-        <Section title="Varsity 14-Point Checklist" subtitle={`${a.passCount || 0}/${a.totalChecks || 0} criteria pass · ${a.totalPts || 0}/${a.maxPts || 0} points · Varsity Modules 1-17`}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 10 }}>
-            {Object.entries(checklist).map(([key, c]) => (
-              <div key={key} style={{
-                padding: 14,
-                background: c.pass ? 'rgba(52,211,153,0.08)' : 'rgba(255,255,255,0.03)',
-                border: `1px solid ${c.pass ? 'rgba(52,211,153,0.25)' : 'var(--border)'}`,
-                borderRadius: 10,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: c.pass ? 'var(--green-text)' : 'var(--text)', letterSpacing: '-0.1px' }}>
-                    {c.pass ? '✓' : '○'} {c.label}
-                  </div>
-                  <span className="chip tabular-nums" style={{
-                    height: 20, fontSize: 10, fontWeight: 700, padding: '0 7px',
-                    background: c.pass ? 'var(--green-bg)' : 'rgba(255,255,255,0.04)',
-                    color: c.pass ? 'var(--green-text)' : 'var(--text3)',
-                  }}>{c.pts}/{c.max}</span>
-                </div>
-                {c.detail && (
-                  <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.5 }}>{c.detail}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* ═══ STAGGERED BUYING PLAN ═══ */}
-      {buyPlan && (
-        <Section title="Staggered Buying Plan" subtitle="Three-tranche entry + stop-loss + two targets">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            {['tranche1', 'tranche2', 'tranche3'].map((k, i) => {
-              const t = buyPlan[k];
-              if (!t) return null;
-              const colors = ['var(--green-text)', 'var(--amber-text)', 'var(--brand-text)'];
-              const defaultPcts = [30, 30, 40];
-              const pct = t.pct != null ? t.pct : defaultPcts[i];
-              const labelPrefix = ['1st Buy', '2nd Buy', '3rd Buy'][i];
-              return (
-                <div key={k} style={{ padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                  <div style={{ fontSize: 10, color: 'var(--green-text)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{labelPrefix} ({pct}%)</div>
-                  <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: colors[i], marginTop: 4 }}>₹{t.price}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>{t.when}</div>
-                </div>
-              );
-            })}
-            {buyPlan.stopLoss && (
-              <div style={{ padding: 14, background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 10 }}>
-                <div style={{ fontSize: 11, color: 'var(--red-text)', fontWeight: 700, letterSpacing: '0.5px' }}>STOP LOSS</div>
-                <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: 'var(--red-text)', marginTop: 4 }}>₹{buyPlan.stopLoss}</div>
-              </div>
-            )}
-            {buyPlan.target1 && buyPlan.target1 !== 'N/A' && (
-              <div style={{ padding: 14, background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: 10 }}>
-                <div style={{ fontSize: 11, color: 'var(--green-text)', fontWeight: 700, letterSpacing: '0.5px' }}>TARGET 1</div>
-                <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green-text)', marginTop: 4 }}>₹{buyPlan.target1}</div>
-              </div>
-            )}
-            {buyPlan.target2 && buyPlan.target2 !== 'N/A' && (
-              <div style={{ padding: 14, background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: 10 }}>
-                <div style={{ fontSize: 11, color: 'var(--green-text)', fontWeight: 700, letterSpacing: '0.5px' }}>TARGET 2</div>
-                <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, color: 'var(--green-text)', marginTop: 4 }}>₹{buyPlan.target2}</div>
-              </div>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* ═══ SUPPORT / RESISTANCE / WHEN-TO-BUY ═══ */}
-      {(supports.length > 0 || resistances.length > 0 || whenToBuy.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 18 }}>
-          {supports.length > 0 && (
-            <div className="card" style={{ padding: 18 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--green-text)', marginBottom: 10, letterSpacing: '-0.1px' }}>
-                🛡 Support Zones
-              </h3>
-              {supports.slice(0, 5).map((s, i) => {
-                const p = Number(s.price);
-                const dist = currentPrice && p ? ((currentPrice - p) / currentPrice * 100) : null;
-                const strong = (s.strength || 0) >= 4;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12, gap: 8 }}>
-                    <span style={{ color: 'var(--text3)', minWidth: 28 }}>S{i + 1}</span>
-                    <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--green-text)' }}>₹{p.toFixed(1)}</span>
-                    <span className="tabular-nums" style={{ color: 'var(--text3)', fontSize: 10, flex: 1, textAlign: 'right' }}>
-                      {dist != null && `${dist.toFixed(1)}% below`}
-                    </span>
-                    {s.strength != null && (
-                      <span style={{
-                        color: strong ? 'var(--green-text)' : 'var(--text3)', fontSize: 10,
-                        fontWeight: strong ? 700 : 500, letterSpacing: '0.4px',
-                      }}>
-                        {'×'.repeat(Math.min(5, Math.max(1, Math.round(s.strength))))}{strong && ' ◆'}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+      {/* ═══ DECISION TAB — the default landing view ═══ */}
+      {activeTab === 'decision' && (
+        <>
+          {a.playbook && !a.playbook.error && (
+            <DeepAnalyzerPlaybook playbook={a.playbook} priceData={a} />
           )}
-          {resistances.length > 0 && (
-            <div className="card" style={{ padding: 18 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-text)', marginBottom: 10, letterSpacing: '-0.1px' }}>
-                🚧 Resistance Zones
-              </h3>
-              {resistances.slice(0, 5).map((r, i) => {
-                const p = Number(r.price);
-                const dist = currentPrice && p ? ((p - currentPrice) / currentPrice * 100) : null;
-                const strong = (r.strength || 0) >= 4;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < 4 ? '1px solid var(--border)' : 'none', fontSize: 12, gap: 8 }}>
-                    <span style={{ color: 'var(--text3)', minWidth: 28 }}>R{i + 1}</span>
-                    <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--red-text)' }}>₹{p.toFixed(1)}</span>
-                    <span className="tabular-nums" style={{ color: 'var(--text3)', fontSize: 10, flex: 1, textAlign: 'right' }}>
-                      {dist != null && `+${dist.toFixed(1)}% above`}
-                    </span>
-                    {r.strength != null && (
-                      <span style={{
-                        color: strong ? 'var(--red-text)' : 'var(--text3)', fontSize: 10,
-                        fontWeight: strong ? 700 : 500, letterSpacing: '0.4px',
-                      }}>
-                        {'×'.repeat(Math.min(5, Math.max(1, Math.round(r.strength))))}{strong && ' ◆'}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {whenToBuy.length > 0 && (
-            <div className="card" style={{ padding: 18 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-text)', marginBottom: 10, letterSpacing: '-0.1px' }}>
-                🎯 When to Buy
-              </h3>
-              {whenToBuy.slice(0, 6).map((w, i) => (
-                <div key={i} style={{ padding: '7px 0', borderBottom: i < whenToBuy.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{w.type}</span>
-                    <span style={{
-                      fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
-                      background: w.priority === 'HIGH' ? 'var(--green-bg)' : 'var(--amber-bg)',
-                      color: w.priority === 'HIGH' ? 'var(--green-text)' : 'var(--amber-text)',
-                    }}>{w.priority}</span>
-                  </div>
-                  <div className="tabular-nums" style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>₹{w.price}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.3 }}>{w.why}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* ═══ PRICE TARGETS ═══ */}
-      {targets.length > 0 && (
-        <Section title="Price Targets" subtitle="Upside to each resistance zone + 52W high">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {targets.map((t, i) => {
-              const u = t.upside != null ? Number(t.upside) : null;
-              // Highlight the single highest upside target
-              const maxUpside = Math.max(...targets.map((x) => x.upside != null ? Number(x.upside) : -Infinity));
-              const isBest = u != null && u === maxUpside && u > 0;
-              return (
-                <div key={i} style={{
-                  padding: 14,
-                  background: isBest ? 'rgba(52,211,153,0.14)' : 'rgba(52,211,153,0.06)',
-                  border: `1px solid ${isBest ? 'rgba(52,211,153,0.45)' : 'rgba(52,211,153,0.18)'}`,
-                  borderRadius: 10,
-                  boxShadow: isBest ? '0 0 0 3px rgba(52,211,153,0.08)' : 'none',
-                  position: 'relative',
-                }}>
-                  {isBest && (
-                    <span className="chip chip-green" style={{
-                      position: 'absolute', top: -8, right: 8, height: 18, fontSize: 9, padding: '0 7px', fontWeight: 800,
-                    }}>★ BEST</span>
-                  )}
-                  <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{t.label}</div>
-                  <div className="tabular-nums" style={{ fontSize: 17, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(t.price).toFixed(1)}</div>
-                  {u != null && <div className="tabular-nums" style={{ fontSize: 12, color: u > 0 ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 700, marginTop: 2 }}>{u > 0 ? '+' : ''}{u}%</div>}
-                </div>
-              );
-            })}
+          {/* 4 Key Indicators — promoted from the at-a-glance bar */}
+          <KeyIndicators tech={tech} fund={fund} a={a} />
+
+          {/* Collapsed drawers: Fundamentals · News · Patterns · Plain-English signals · Varsity 14-pt · Buy Plan */}
+          <CollapsibleDrawer title="Fundamentals" subtitle={
+            fund ? [
+              fund.pe != null && `PE ${Number(fund.pe).toFixed(1)}`,
+              fund.roe != null && `ROE ${Number(fund.roe).toFixed(0)}%`,
+              fund.de != null && `D/E ${Number(fund.de).toFixed(2)}x`,
+            ].filter(Boolean).join(' · ') : 'Quality + valuation metrics'
+          }>
+            {fund && <FundamentalsContent fund={fund} />}
+          </CollapsibleDrawer>
+
+          <CollapsibleDrawer title="News & sentiment" subtitle={
+            news.length > 0
+              ? `${news.length} articles · ${sentiment.bull || 0} bullish · ${sentiment.neutral || 0} neutral · ${sentiment.bear || 0} bearish`
+              : 'No recent news'
+          }>
+            {news.length > 0 && <NewsContent news={news} sentiment={sentiment} />}
+          </CollapsibleDrawer>
+
+          <CollapsibleDrawer title="Plain-English signals" subtitle={`${analysis.length} signals across trend, momentum, valuation`}>
+            <PlainEnglishContent analysis={analysis} />
+          </CollapsibleDrawer>
+
+          <CollapsibleDrawer title="Varsity 14-point checklist" subtitle={`${a.passCount || 0}/${a.totalChecks || 0} criteria pass · diagnostic — verdict comes from frameworks above`}>
+            <VarsityChecklistContent checklist={checklist} />
+          </CollapsibleDrawer>
+
+          {/* Disclaimer */}
+          <div style={{ marginTop: 28, padding: 12, background: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: 8, fontSize: 11, color: 'var(--text3)', lineHeight: 1.55 }}>
+            ⚠ <b>Disclaimer:</b> Not SEBI-registered. For research only. You are responsible for your own decisions.
           </div>
-        </Section>
+        </>
       )}
 
-      {/* ═══ PLAIN-ENGLISH ANALYSIS ═══ */}
-      {analysis.length > 0 && (
-        <Section title="Plain-English Analysis" subtitle={`${analysis.length} signals across trend, momentum, valuation, volume, fundamentals`}>
-          {/* Verdict header strip — matches old buildUI "Our Verdict: ..." line */}
-          {verdict && (
-            <div style={{
-              marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)',
-            }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', letterSpacing: '0.2px' }}>
-                {verdictIcon} Our Verdict: <span style={{ color: tierColor }}>{verdict}</span>
-              </div>
-              {verdictTimeframe && (
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, fontWeight: 500 }}>
-                  {verdictTimeframe}
-                </div>
-              )}
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {analysis.map((sig, i) => {
-              const color = sig.signal === 'positive' ? 'var(--green-text)'
-                          : sig.signal === 'negative' ? 'var(--red-text)'
-                          : sig.signal === 'bullish' ? 'var(--green-text)'
-                          : sig.signal === 'bearish' ? 'var(--red-text)'
-                          : 'var(--amber-text)';
-              const bg = sig.signal === 'positive' || sig.signal === 'bullish' ? 'rgba(52,211,153,0.05)'
-                       : sig.signal === 'negative' || sig.signal === 'bearish' ? 'rgba(248,113,113,0.05)'
-                       : 'rgba(251,191,36,0.05)';
-              return (
-                <div key={i} style={{
-                  padding: 14, background: bg, border: `1px solid ${color}33`, borderRadius: 10,
-                  display: 'flex', gap: 10, alignItems: 'flex-start',
-                }}>
-                  <div style={{ fontSize: 20, flexShrink: 0 }}>{sig.icon}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color }}>{sig.title}</span>
-                      <span className="chip" style={{ height: 16, fontSize: 9, padding: '0 5px', fontWeight: 700, background: 'rgba(255,255,255,0.04)', color: 'var(--text3)' }}>{sig.cat}</span>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>{sig.text}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Section>
+      {/* ═══ CHART TAB ═══ */}
+      {activeTab === 'chart' && (
+        <PriceChart
+          charts={charts}
+          tf={chartTf}
+          setTf={setChartTf}
+          supports={supports}
+          resistances={resistances}
+          buyZone={a.buyZone}
+          tech={tech}
+          fibs={fibs}
+          currentPrice={currentPrice}
+          dataAvail={dataAvail}
+        />
       )}
 
-      {/* ═══ FUNDAMENTALS ═══
-          Uses SigBox signal-cells with peer comparison notes (roePeer, dePeer,
-          pePeer, growthPeer) — matches old buildUI Fundamental Analysis block. */}
-      {fund && (
-        <Section title="Fundamental Analysis" subtitle="Varsity Module 3 — Quality + Growth + Valuation · peer-relative where available">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
-            {fund.roe != null && (
-              <SigBox label="ROE" value={`${fund.roe}%`}
-                signal={fund.roe>=20?'bullish':fund.roe>=12?'neutral':'bearish'}
-                detail={fund.roePeer || (fund.roe>=20?'High quality':fund.roe>=12?'Decent':'Weak return')} />
-            )}
-            {fund.roa != null && (
-              <SigBox label="ROA" value={`${fund.roa}%`}
-                signal={fund.roa>=10?'bullish':fund.roa>=5?'neutral':'bearish'}
-                detail="Return on assets" />
-            )}
-            {fund.roce != null && (
-              <SigBox label="ROCE" value={`${fund.roce}%`}
-                signal={fund.roce>=20?'bullish':fund.roce>=12?'neutral':'bearish'}
-                detail="Return on capital" />
-            )}
-            {fund.de != null && (
-              <SigBox label="Debt/Equity" value={`${fund.de}x`}
-                signal={fund.de<=0.5?'bullish':fund.de<=1.5?'neutral':'bearish'}
-                detail={fund.dePeer || (fund.de<=0.5?'Low leverage':fund.de<=1.5?'Moderate':'High leverage')} />
-            )}
-            {fund.pe != null && (
-              <SigBox label="P/E Ratio" value={`${fund.pe}x`}
-                signal={fund.pe<20?'bullish':fund.pe<40?'neutral':'bearish'}
-                detail={fund.pePeer || (fund.pe<20?'Cheap':fund.pe<40?'Fair':'Expensive')} />
-            )}
-            {fund.pb != null && (
-              <SigBox label="P/B Ratio" value={`${fund.pb}x`}
-                signal={fund.pb<2?'bullish':fund.pb<4?'neutral':'bearish'}
-                detail="Price to book" />
-            )}
-            {fund.peg != null && (
-              <SigBox label="PEG Ratio" value={String(fund.peg)}
-                signal={fund.peg<1?'bullish':fund.peg<2?'neutral':'bearish'}
-                detail={fund.peg<1?'Undervalued':fund.peg<2?'Fair':'Expensive'} />
-            )}
-            {fund.evEbitda != null && (
-              <SigBox label="EV/EBITDA" value={`${fund.evEbitda}x`}
-                signal={fund.evEbitda<12?'bullish':fund.evEbitda<20?'neutral':'bearish'}
-                detail="Enterprise value" />
-            )}
-            {fund.revGr != null && (
-              <SigBox label="Revenue Growth" value={`${fund.revGr}%`}
-                signal={fund.revGr>=15?'bullish':fund.revGr>=5?'neutral':'bearish'}
-                detail={fund.growthPeer || (fund.revGr>=15?'Fast-growing':fund.revGr>=5?'Growing':'Slow')} />
-            )}
-            {fund.epsGr != null && (
-              <SigBox label="EPS Growth" value={`${fund.epsGr}%`}
-                signal={fund.epsGr>=15?'bullish':fund.epsGr>=5?'neutral':'bearish'}
-                detail={fund.epsGr>=25?'Hypergrowth':fund.epsGr>=0?'Growing':'Declining'} />
-            )}
-            {fund.opMgn != null && (
-              <SigBox label="Op Margin" value={`${fund.opMgn}%`}
-                signal={fund.opMgn>=20?'bullish':fund.opMgn>=10?'neutral':'bearish'}
-                detail={fund.opMgn>=20?'High margin':'Moderate'} />
-            )}
-            {fund.netMgn != null && (
-              <SigBox label="Net Margin" value={`${fund.netMgn}%`}
-                signal={fund.netMgn>=15?'bullish':fund.netMgn>=5?'neutral':'bearish'}
-                detail="Bottom line" />
-            )}
-            {fund.divYld != null && (
-              <SigBox label="Div Yield" value={`${fund.divYld}%`}
-                signal={fund.divYld>=3?'bullish':fund.divYld>=1?'neutral':'bearish'}
-                detail="Dividend yield" />
-            )}
-            {fund.interestCoverage != null && (
-              <SigBox label="Int. Coverage" value={`${fund.interestCoverage}x`}
-                signal={fund.interestCoverage>=5?'bullish':fund.interestCoverage>=2?'neutral':'bearish'}
-                detail={fund.interestCoverage>=5?'Very safe':fund.interestCoverage>=2?'Safe':'At risk'} />
-            )}
-            {fund.currentRatio != null && (
-              <SigBox label="Current Ratio" value={`${fund.currentRatio}x`}
-                signal={fund.currentRatio>=1.5?'bullish':fund.currentRatio>=1?'neutral':'bearish'}
-                detail="Liquidity" />
-            )}
-            {fund.cfoQuality != null && (
-              <SigBox label="CFO Quality" value={String(fund.cfoQuality)}
-                signal={String(fund.cfoQuality).toLowerCase().includes('high')||String(fund.cfoQuality).toLowerCase().includes('good')?'bullish':'neutral'}
-                detail="Cash flow quality" />
-            )}
-            {fund.marketCap != null && (
-              <SigBox label="Market Cap" value={typeof fund.marketCap === 'string' ? fund.marketCap : `₹${Number(fund.marketCap).toLocaleString('en-IN')} Cr`}
-                signal="neutral" detail={fund.marketCapTier || 'Size'} />
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* ═══ PRICE PERFORMANCE · 52W HI/LO · RETURNS ═══ */}
-      {(tech.ret1m != null || tech.ret3m != null || tech.ret6m != null || tech.ret1y != null
-        || tech.ret3y != null || tech.wk52Hi != null || tech.wk52Lo != null || tech.weeklyTrend) && (
-        <Section title="Price Performance" subtitle="Rolling returns + 52-week high/low + weekly trend">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-            {[
-              { l: '1M Return', v: tech.ret1m, s: '%', signed: true },
-              { l: '3M Return', v: tech.ret3m, s: '%', signed: true },
-              { l: '6M Return', v: tech.ret6m, s: '%', signed: true },
-              { l: '1Y Return', v: tech.ret1y, s: '%', signed: true },
-              { l: '3Y Return', v: tech.ret3y, s: '%', signed: true },
-              { l: '52W High', v: tech.wk52Hi, s: '₹', rupee: true,
-                sub: tech.pctFromHigh != null ? `${tech.pctFromHigh}% away` : null },
-              { l: '52W Low',  v: tech.wk52Lo, s: '₹', rupee: true,
-                sub: tech.pctFromLow != null ? `+${tech.pctFromLow}% above` : null },
-            ].filter((x) => x.v != null).map((x, i) => {
-              const n = Number(x.v);
-              const col = x.signed
-                ? (n > 0 ? 'var(--green-text)' : n < 0 ? 'var(--red-text)' : 'var(--text)')
-                : 'var(--text)';
-              const display = x.rupee
-                ? `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 1 })}`
-                : `${n > 0 && x.signed ? '+' : ''}${n.toFixed(1)}${x.s}`;
-              return (
-                <div key={i} style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>{x.l}</div>
-                  <div className="tabular-nums" style={{ fontSize: 16, fontWeight: 800, color: col, marginTop: 4 }}>
-                    {display}
-                  </div>
-                  {x.sub && <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 3 }}>{x.sub}</div>}
-                </div>
-              );
-            })}
-            {tech.weeklyTrend && (
-              <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>Weekly Trend</div>
-                <div style={{
-                  fontSize: 14, fontWeight: 800, marginTop: 4,
-                  color: tech.weeklyTrend === 'uptrend' ? 'var(--green-text)'
-                       : tech.weeklyTrend === 'downtrend' ? 'var(--red-text)'
-                       : 'var(--amber-text)',
-                  textTransform: 'capitalize',
-                }}>
-                  {tech.weeklyTrend === 'uptrend' ? '▲ Uptrend'
-                    : tech.weeklyTrend === 'downtrend' ? '▼ Downtrend'
-                    : '◇ Sideways'}
-                </div>
-                <div style={{ fontSize: 9, color: 'var(--text3)', marginTop: 3 }}>Higher highs/lows check</div>
-              </div>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* ═══ COMPLETE TECHNICAL ANALYSIS ═══
-          One card, grouped subsections: MA · Oscillators · Trend & Vol ·
-          Volume & Accum · Ichimoku · Performance · Candle Patterns
-          (mirrors old buildUI `Complete Technical Analysis` block) */}
-      {Object.keys(tech).length > 0 && (
-        <Section title="Complete Technical Analysis" subtitle="30+ indicators across moving averages, oscillators, trend & volatility, volume, Ichimoku and price performance">
+      {/* ═══ TECHNICALS TAB ═══ */}
+      {activeTab === 'technicals' && (
+        <>
           <TechnicalsGrid t={tech} px={currentPrice} ichimoku={ichimoku} patterns={patterns} />
-        </Section>
+          <div style={{ height: 16 }} />
+          <Section title="Support & resistance zones" subtitle={`${supports.length} supports · ${resistances.length} resistances`}>
+            <SupportResistanceContent supports={supports} resistances={resistances} currentPrice={currentPrice} />
+          </Section>
+        </>
       )}
 
-      {/* ═══ FIBONACCI ═══ */}
-      {fibs && (
-        <Section title="Fibonacci Retracement (52W)" subtitle="Key pullback levels — 23.6 / 38.2 / 50 / 61.8 / 78.6">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10 }}>
-            {[
-              { l: '0%',    v: fibs.r0 },
-              { l: '23.6%', v: fibs.r236 },
-              { l: '38.2%', v: fibs.r382 },
-              { l: '50%',   v: fibs.r50 ?? fibs.r500 },
-              { l: '61.8%', v: fibs.r618, golden: true },
-              { l: '78.6%', v: fibs.r786 },
-              { l: '100%',  v: fibs.r100 ?? fibs.r1000 },
-            ].filter((x) => x.v != null).map((x, i) => {
-              const near = currentPrice && Math.abs(currentPrice - Number(x.v)) / currentPrice < 0.03;
-              return (
-                <div key={i} style={{
-                  padding: 12,
-                  background: near ? 'rgba(99,102,241,0.12)' : x.golden ? 'rgba(251,191,36,0.08)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${near ? 'var(--brand)' : x.golden ? 'rgba(251,191,36,0.3)' : 'var(--border)'}`,
-                  borderRadius: 10,
-                  position: 'relative',
-                }}>
-                  <div style={{ fontSize: 10, color: near ? 'var(--brand-text)' : x.golden ? 'var(--amber-text)' : 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px' }}>
-                    {x.l}{x.golden && ' ★'}
-                  </div>
-                  <div className="tabular-nums" style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', marginTop: 4 }}>₹{Number(x.v).toFixed(1)}</div>
-                  {near && <div style={{ fontSize: 9, color: 'var(--brand-text)', fontWeight: 700, marginTop: 2 }}>◆ NEAR PRICE</div>}
-                </div>
-              );
-            })}
-          </div>
-        </Section>
+      {/* ═══ AI REVIEW TAB ═══ */}
+      {activeTab === 'aireview' && (
+        <AIReviewSection sym={a.sym} />
       )}
+    </div>
+  );
+}
 
-      {/* Ichimoku and candlestick patterns are rendered as subsections inside
-          Complete Technical Analysis (above), matching the old layout.      */}
+// 🛡 v2.1 Sprint 4D (2026-05-11) — Sub-components for the new tabbed layout.
+// All small and focused; tab views compose these instead of inlining JSX.
 
-      {/* ═══ NEWS & SENTIMENT ═══
-          Always rendered so the user sees sentiment bar; when no news matched
-          we show ET Markets / Moneycontrol fallback links (matches old). */}
-      <Section title="News & Sentiment" subtitle={news.length
-        ? `${sentiment.bull || 0} bullish · ${sentiment.bear || 0} bearish · ${sentiment.neutral || 0} neutral · last 24-72h`
-        : 'No recent news matched — check the sources below'}>
-        {/* Sentiment header strip with tally glyphs */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 14, fontSize: 11, fontWeight: 600 }}>
-            <span style={{ color: 'var(--green-text)' }}>▲ {sentiment.bull || 0}</span>
-            <span style={{ color: 'var(--red-text)' }}>▼ {sentiment.bear || 0}</span>
-            <span style={{ color: 'var(--text3)' }}>● {sentiment.neutral || 0}</span>
-          </div>
+function CollapsibleDrawer({ title, subtitle, children }) {
+  return (
+    <details style={{
+      background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)',
+      borderRadius: 10, marginBottom: 10,
+    }}>
+      <summary style={{
+        padding: '14px 16px', cursor: 'pointer', listStyle: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{title}</div>
+          {subtitle && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{subtitle}</div>}
         </div>
-        {/* Sentiment bar */}
-        {(sentiment.bull || sentiment.bear || sentiment.neutral) ? (
-          <div style={{ display: 'flex', height: 6, borderRadius: 4, overflow: 'hidden', marginBottom: 14, background: 'rgba(255,255,255,0.04)' }}>
-            {sentiment.bull ? <div style={{ flex: sentiment.bull, background: 'var(--green)' }} /> : null}
-            {sentiment.neutral ? <div style={{ flex: sentiment.neutral, background: 'rgba(255,255,255,0.12)' }} /> : null}
-            {sentiment.bear ? <div style={{ flex: sentiment.bear, background: 'var(--red)' }} /> : null}
-          </div>
-        ) : null}
-        {news.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.6, padding: '6px 0' }}>
-            No recent news matched this ticker. Check external sources:{' '}
-            <a href={`https://economictimes.indiatimes.com/topic/${encodeURIComponent(a.sym || '')}`} target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>ET Markets</a>
-            {' · '}
-            <a href={`https://www.moneycontrol.com/stocks/cptmarket/compsearchnew.php?search_data=${encodeURIComponent(a.sym || '')}`} target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Moneycontrol</a>
-            {' · '}
-            <a href={`https://www.google.com/finance/quote/${encodeURIComponent((a.sym || '') + ':NSE')}`} target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--brand-text)', fontWeight: 600 }}>Google Finance</a>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {news.slice(0, 12).map((n, i) => {
-              const color = n.sentiment === 'bullish' ? 'var(--green-text)'
-                          : n.sentiment === 'bearish' ? 'var(--red-text)'
-                          : 'var(--text3)';
-              const glyph = n.sentiment === 'bullish' ? '▲' : n.sentiment === 'bearish' ? '▼' : '●';
-              return (
-                <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer" style={{
-                  display: 'flex', padding: '10px 14px', background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid var(--border)', borderRadius: 10, textDecoration: 'none',
-                  transition: 'background 150ms ease', gap: 10, alignItems: 'flex-start',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.06)')}
-                onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
-                >
-                  <span style={{ color, fontSize: 12, flexShrink: 0, marginTop: 1 }}>{glyph}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0 }}>{n.title}</span>
-                      {n.sentiment && <span style={{ fontSize: 9, color, fontWeight: 700, textTransform: 'uppercase' }}>{n.sentiment}</span>}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--text3)' }}>{n.src}{n.timeAgo ? ` · ${n.timeAgo}` : ''}</div>
-                    {n.desc && (
-                      <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3, lineHeight: 1.5 }}>
-                        {String(n.desc).slice(0, 180)}{String(n.desc).length > 180 ? '…' : ''}
-                      </div>
-                    )}
-                  </div>
-                </a>
-              );
-            })}
-          </div>
-        )}
-      </Section>
+        <span style={{ fontSize: 14, color: 'var(--text4)' }}>▾</span>
+      </summary>
+      <div style={{ padding: '0 16px 16px' }}>{children}</div>
+    </details>
+  );
+}
 
-      {/* Disclaimer */}
-      <div style={{ marginTop: 28, padding: 16, background: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 10, fontSize: 11, color: 'var(--text3)', lineHeight: 1.55 }}>
-        ⚠ <b>Disclaimer:</b> ProTrader is not SEBI-registered and does not provide financial advice. All data, scores, and AI outputs are for educational purposes only. Data may be delayed. You are responsible for your own investment decisions.
+function KeyIndicators({ tech, fund, a }) {
+  const cells = [
+    { label: 'RSI (14)', value: tech.rsi14, fmt: v => Math.round(v),
+      state: v => v == null ? 'neutral' : v < 35 ? 'bullish' : v > 70 ? 'bearish' : 'neutral',
+      note: v => v == null ? '—' : v < 35 ? 'Oversold' : v > 70 ? 'Overbought' : 'Neutral' },
+    { label: 'Trend', value: tech.dma200Trend, fmt: v => v === 'rising' ? '▲ Rising' : '▼ Falling',
+      state: v => v === 'rising' ? 'bullish' : 'bearish',
+      note: () => 'vs 200-day MA' },
+    { label: 'R:R', value: a.riskReward || tech.riskReward, fmt: v => v ? `${Number(v).toFixed(2)}x` : '—',
+      state: v => v == null ? 'neutral' : v >= 2 ? 'bullish' : v >= 1.5 ? 'neutral' : 'bearish',
+      note: v => v == null ? '—' : v >= 2 ? 'Favorable' : 'Below 2× preferred' },
+    { label: 'Volume', value: tech.volRatio || tech.relVol, fmt: v => v ? `${Number(v).toFixed(2)}×` : '—',
+      state: v => v == null ? 'neutral' : v >= 1.5 ? 'bullish' : v >= 0.8 ? 'neutral' : 'bearish',
+      note: () => 'vs 20-day avg' },
+  ];
+  const colorOf = s => s === 'bullish' ? 'var(--green-text)' : s === 'bearish' ? 'var(--red-text)' : 'var(--amber-text)';
+  return (
+    <div className="card" style={{ padding: 16, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Key indicators</div>
+        <span style={{ fontSize: 10, color: 'var(--text4)' }}>See Technicals tab for 26 more</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
+        {cells.map((c, i) => {
+          const v = c.value;
+          const s = c.state(v);
+          return (
+            <div key={i} style={{ padding: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8 }}>
+              <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>{c.label}</div>
+              <div className="tabular-nums" style={{ fontSize: 18, fontWeight: 700, color: colorOf(s) }}>
+                {v != null ? c.fmt(v) : '—'}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>{c.note(v)}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// 🚀 v2.0 Wave 12 — Top-Trader Playbook Section
-// Detailed display of Minervini Trend Template, Weinstein Stage,
-// CANSLIM rubric, VCP, and Cup-with-Handle — full deep-dive depth
-// (compact PlaybookBadge lives in StockPicks.jsx; this is the expanded view)
-// ══════════════════════════════════════════════════════════════════════
+function FundamentalsContent({ fund }) {
+  const rows = [
+    fund.pe != null && { label: 'P/E', value: `${Number(fund.pe).toFixed(1)}x`, hint: fund.pe < 20 ? 'Cheap' : fund.pe < 40 ? 'Fair' : 'Expensive' },
+    fund.pb != null && { label: 'P/B', value: `${Number(fund.pb).toFixed(2)}x` },
+    fund.roe != null && { label: 'ROE', value: `${Number(fund.roe).toFixed(1)}%`, hint: fund.roe >= 20 ? 'High quality' : fund.roe >= 12 ? 'Decent' : 'Weak' },
+    fund.de != null && { label: 'D/E', value: `${Number(fund.de).toFixed(2)}x`, hint: fund.de <= 0.5 ? 'Low' : fund.de <= 1.5 ? 'Moderate' : 'High' },
+    fund.roce != null && { label: 'ROCE', value: `${Number(fund.roce).toFixed(1)}%` },
+    fund.earGrowth != null && { label: 'EPS growth', value: `${Number(fund.earGrowth).toFixed(1)}%/yr` },
+    fund.salesGrowth != null && { label: 'Sales growth', value: `${Number(fund.salesGrowth).toFixed(1)}%/yr` },
+    fund.promoter != null && { label: 'Promoter holding', value: `${Number(fund.promoter).toFixed(1)}%` },
+  ].filter(Boolean);
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ padding: 10, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{r.label}</div>
+          <div className="tabular-nums" style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginTop: 4 }}>{r.value}</div>
+          {r.hint && <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>{r.hint}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NewsContent({ news, sentiment }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {news.slice(0, 10).map((n, i) => {
+        const tone = n.sentiment === 'bullish' || n.sentiment === 'positive' ? 'var(--green-text)'
+                   : n.sentiment === 'bearish' || n.sentiment === 'negative' ? 'var(--red-text)'
+                   : 'var(--text3)';
+        return (
+          <a key={i} href={n.url} target="_blank" rel="noopener" style={{
+            padding: 10, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 8,
+            display: 'block', textDecoration: 'none',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.4, flex: 1 }}>{n.title}</div>
+              <span style={{ fontSize: 10, color: tone, fontWeight: 600, flexShrink: 0 }}>
+                {n.sentiment || '—'}
+              </span>
+            </div>
+            {n.source && <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 4 }}>{n.source} · {n.date || ''}</div>}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlainEnglishContent({ analysis }) {
+  if (!Array.isArray(analysis) || analysis.length === 0) {
+    return <div style={{ fontSize: 11, color: 'var(--text4)' }}>No signals.</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {analysis.map((sig, i) => {
+        const color = sig.signal === 'positive' || sig.signal === 'bullish' ? 'var(--green-text)'
+                    : sig.signal === 'negative' || sig.signal === 'bearish' ? 'var(--red-text)'
+                    : 'var(--amber-text)';
+        return (
+          <div key={i} style={{
+            padding: 10, background: 'rgba(255,255,255,0.02)', border: `1px solid ${color}33`, borderRadius: 8,
+            display: 'flex', gap: 10,
+          }}>
+            <div style={{ fontSize: 16, flexShrink: 0 }}>{sig.icon}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color }}>{sig.title}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, lineHeight: 1.5 }}>{sig.text}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VarsityChecklistContent({ checklist }) {
+  if (!checklist || Object.keys(checklist).length === 0) {
+    return <div style={{ fontSize: 11, color: 'var(--text4)' }}>No checklist data.</div>;
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 6 }}>
+      {Object.entries(checklist).map(([key, c]) => (
+        <div key={key} style={{
+          padding: 8, background: c.pass ? 'rgba(52,211,153,0.06)' : 'rgba(148,163,184,0.04)',
+          border: `1px solid ${c.pass ? 'rgba(52,211,153,0.2)' : 'var(--border)'}`, borderRadius: 6,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: c.pass ? 'var(--green-text)' : 'var(--text)' }}>
+            {c.pass ? '✓' : '○'} {c.label} <span style={{ color: 'var(--text4)', fontSize: 10 }}>· {c.pts}/{c.max}</span>
+          </div>
+          {c.detail && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>{c.detail}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SupportResistanceContent({ supports, resistances, currentPrice }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div>
+        <div style={{ fontSize: 11, color: 'var(--green-text)', fontWeight: 700, marginBottom: 6 }}>Support zones</div>
+        {(supports || []).slice(0, 5).map((s, i) => {
+          const p = Number(s.price);
+          const dist = currentPrice && p ? ((currentPrice - p) / currentPrice * 100) : null;
+          return (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 6, borderBottom: '1px solid var(--border)', fontSize: 11 }}>
+              <span style={{ color: 'var(--text3)' }}>S{i + 1}</span>
+              <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--green-text)' }}>₹{p.toFixed(1)}</span>
+              <span className="tabular-nums" style={{ color: 'var(--text4)', fontSize: 10 }}>{dist != null && `${dist.toFixed(1)}% below`}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div>
+        <div style={{ fontSize: 11, color: 'var(--red-text)', fontWeight: 700, marginBottom: 6 }}>Resistance zones</div>
+        {(resistances || []).slice(0, 5).map((r, i) => {
+          const p = Number(r.price);
+          const dist = currentPrice && p ? ((p - currentPrice) / currentPrice * 100) : null;
+          return (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 6, borderBottom: '1px solid var(--border)', fontSize: 11 }}>
+              <span style={{ color: 'var(--text3)' }}>R{i + 1}</span>
+              <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--red-text)' }}>₹{p.toFixed(1)}</span>
+              <span className="tabular-nums" style={{ color: 'var(--text4)', fontSize: 10 }}>{dist != null && `+${dist.toFixed(1)}% above`}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 🛡 v2.1 Sprint 4B (2026-05-11) — Deep Analyzer redesign.
 //
@@ -1252,6 +881,20 @@ function DeepAnalyzerPlaybook({ playbook }) {
   // Count of checks that had no data (for the honest "0 of 8 · 2 no data" display)
   const noDataCount = checks.filter(c => c.status.state === 'unknown').length;
 
+  // 🛡 v2.1 Sprint 4D (2026-05-11) — "What would need to change" hint
+  // For AVOID / WATCH verdicts, list the failing checks that — if they flipped
+  // to pass — would push the verdict up a tier. Helps the user understand what
+  // they're watching for instead of just being told "no".
+  let whatWouldChange = null;
+  if (isAvoid || isWatch) {
+    const fails = checks.filter(c => c.status.state === 'fail');
+    const partials = checks.filter(c => c.status.state === 'partial');
+    const watchTargets = [...partials, ...fails].slice(0, 3).map(c => c.label);
+    if (watchTargets.length) {
+      whatWouldChange = `Watch for: ${watchTargets.join(' · ')}.`;
+    }
+  }
+
   return (
     <div className="card" style={{ padding: 20, marginBottom: 16 }}>
       {/* ═══ VERDICT CARD ═══ */}
@@ -1289,6 +932,11 @@ function DeepAnalyzerPlaybook({ playbook }) {
           <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.55 }}>
             {plainReason}
           </div>
+          {whatWouldChange && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--amber-text)' }}>→</b> {whatWouldChange}
+            </div>
+          )}
         </div>
         {composite.rsDoubleCountFlag && (
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--amber-text)' }}>
