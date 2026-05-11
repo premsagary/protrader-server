@@ -4917,20 +4917,34 @@ function adjustCandidateScoreFromStructure(candidate, structure) {
       adjustments: ['short_bypasses_long_structure_filter'],
     };
   }
-  // 🚀 v2.0 Wave 10 audit fix — v2 LONG setups also need to bypass the
-  // long-bias structure filter. ORB+ breakouts BY DEFINITION fire near PDH
-  // and overhead pivot resistance, which the v1 filter rejects as
-  // "at PDH w/o breakout" / "stacked resistance overhead" / "R 0.4% overhead".
+  // 🚀 v2.0 Wave 10 audit fix — v2 LONG setups bypass the long-bias structure
+  // filter. ORB+ breakouts BY DEFINITION fire near PDH and overhead pivot
+  // resistance, which the v1 filter rejects as "at PDH w/o breakout" /
+  // "stacked resistance overhead" / "R 0.4% overhead".
   // V2 setups have their own structural anchoring (OR midpoint SL,
   // VWAP-anchored SL, compression low SL) — they don't need v1 long-bias gates.
+  //
+  // 🛡 v2.1 fix (2026-05-11) — REQUIRE priceAboveVWAP even when bypassing.
+  // Today (2026-05-11) all 4 losing ORB_PLUS longs were below VWAP on a
+  // -1.51% NIFTY day. Bypass should not give a free pass to obviously
+  // bearish structural context. VWAP-below in a long is fighting the tape.
   const _v2LongSetups = new Set(['ORB_PLUS','VWAP_PULLBACK','COMPRESSION','HOLY_GRAIL']);
   if (CONFIG.V2_SETUPS_MODE && _v2LongSetups.has(candidate.result?.strategy)) {
+    if (structure.flags && structure.flags.priceAboveVWAP === false) {
+      return {
+        rejected: true,
+        reason: 'v2_long_below_vwap_blocked (2026-05-11 fix)',
+        scoreBefore: baseScore,
+        scoreAfter: baseScore,
+        adjustments: [],
+      };
+    }
     return {
       rejected: false,
       reason: null,
       scoreBefore: baseScore,
       scoreAfter: baseScore,
-      adjustments: ['v2_long_setup_bypasses_v1_structure_filter'],
+      adjustments: ['v2_long_setup_bypasses_v1_structure_filter_vwap_ok'],
     };
   }
   const f = structure.flags;
@@ -5982,7 +5996,15 @@ async function scanAndTrade() {
         if (!dts) continue;
         const passCount      = dts.ch19PassCount      || 0;
         const passCountShort = dts.ch19PassCountShort || 0;
-        const longOk  = passCount      >= CONFIG.CH19_MIN_PASS;
+        // 🛡 v2.1 fix (2026-05-11) — Tighten long Ch19: require 5/5 OR
+        // (4/5 AND volume component passing). On 2026-05-11 all 4 losing
+        // longs had 4/5 with VOLUME failing — they were Ch19-overridden into
+        // BUYs against router-NEUTRAL/SELL signals, then promptly hit SL.
+        // Requiring volume to pass on 4/5 trades filters out unaccompanied
+        // bullish setups (the most common false-positive pattern).
+        const _ch19Items = dts.ch19Items || {};
+        const longOk  = (passCount === 5) ||
+                        (passCount >= CONFIG.CH19_MIN_PASS && _ch19Items.volume === true);
         // Short master kill-switch: if SHORTS_RUNTIME_ENABLED=false, treat all
         // shorts as ineligible regardless of Ch19 pass count. Runtime var is
         // hot-flippable via /api/admin/shorts-mode (no redeploy needed).
