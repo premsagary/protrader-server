@@ -21040,16 +21040,48 @@ function classifyWeinsteinStage(f) {
   // confirmation. Missing data should not give 90% confidence. Split into:
   //   - Full Stage 2 (all 4 conditions met, ma30wkRising === true) → 90% confidence
   //   - Provisional Stage 2 (3/4 with 30wk MA data missing) → 70% confidence + warning
+  // 🛡 v2.1 Sprint 3 — Stage 2 sub-classification (EARLY/MID/LATE)
+  // EARLY: just broke base, 6m return 10-30%, near 200dma (price < 20% above 200)
+  //   → best entry zone, lowest risk
+  // MID:   extended uptrend, 6m return 30-60%, well above 200dma
+  //   → moderate risk, wait for pullback to 50dma preferred
+  // LATE:  parabolic, 6m return > 60% OR > 50% above 200dma
+  //   → high distribution risk, no new entries
+  function _classifyStage2Maturity() {
+    const pa200 = f.pctAbove200 || 0;
+    const ret6m = (change6m || 0) * 100;
+    if (ret6m < 30 && pa200 < 20) {
+      return { sub: 'EARLY', risk: 'LOW', note: 'Just broke base — best entry zone (low risk)' };
+    }
+    if (ret6m < 60 && pa200 < 50) {
+      return { sub: 'MID', risk: 'MEDIUM', note: 'Extended uptrend — wait for pullback to 50dma for entry' };
+    }
+    return { sub: 'LATE', risk: 'HIGH', note: 'Parabolic — distribution risk increasing, no new entries' };
+  }
+
   if (above200 && dma200Rising && ma30wkRising === true && change6m > 0.10) {
-    return { stage: 'STAGE_2', confidence: 90, reason: 'price > 200 DMA + DMA rising + 30wk MA rising + 6m return > 10%', recommendation: 'BUY zone per Weinstein' };
+    const m = _classifyStage2Maturity();
+    return {
+      stage: 'STAGE_2',
+      subStage: m.sub,
+      confidence: 90,
+      reason: 'price > 200 DMA + DMA rising + 30wk MA rising + 6m return > 10%',
+      recommendation: m.sub === 'EARLY' ? 'BUY zone per Weinstein (EARLY — full size OK)'
+                    : m.sub === 'MID'   ? 'BUY on pullback to 50dma (MID — reduced size)'
+                                        : 'NO NEW ENTRIES — Stage 2 LATE, distribution risk',
+      maturity: m,
+    };
   }
   if (above200 && dma200Rising && ma30wkRising === null && change6m > 0.10) {
+    const m = _classifyStage2Maturity();
     return {
       stage: 'STAGE_2_PROVISIONAL',
+      subStage: m.sub,
       confidence: 70,
       reason: 'price > 200 DMA + DMA rising + 6m > 10% (30-week MA data unavailable)',
       warning: 'Verify 30-week MA before high-conviction sizing',
-      recommendation: 'BUY with reduced size — data partially missing'
+      recommendation: 'BUY with reduced size — data partially missing',
+      maturity: m,
     };
   }
   // Stage 1: base (sideways, low momentum)
@@ -21142,15 +21174,64 @@ function computeCanslim(f) {
     detail: `promoter=${iProm != null ? iProm.toFixed(1) + '%' : '?'} delivery=${iDelPct != null ? iDelPct.toFixed(1) + '%' : '?'} fii=${iFii != null ? iFii.toFixed(1) + '%' : '?'}`,
   };
 
-  // M — Market direction (use marketRegime if present)
-  const mBull = (typeof marketRegime !== 'undefined' && (marketRegime === 'BULL' || marketRegime === 'BULLISH'));
-  const mBear = (typeof marketRegime !== 'undefined' && (marketRegime === 'BEAR' || marketRegime === 'BEARISH'));
-  result.letters.M = {
-    name: 'Market direction',
-    score: mBull ? 100 : mBear ? 30 : 60,
-    detail: typeof marketRegime !== 'undefined' ? marketRegime : 'unknown',
-    flag: mBear ? 'BEAR market — sit in cash per O\'Neil' : null,
-  };
+  // M — Market direction (William O'Neil: 3 of 4 stocks follow the market)
+  // 🛡 v2.1 Sprint 3 (2026-05-11) — Multi-factor: regime + Nifty trend + breadth + VIX
+  // Pre-Sprint-3 this was a simple binary on `marketRegime`. Real CANSLIM M
+  // requires multiple confirmations because the labels lag turning points.
+  // Score weighted across (1) regime label, (2) Nifty 1m/3m momentum,
+  // (3) intraday breadth, (4) VIX panic level. Each contributes when known.
+  (() => {
+    const factors = [];
+    let mScore = 50;  // neutral default
+
+    // Factor 1: Regime label
+    const mBull = (typeof marketRegime !== 'undefined' && (marketRegime === 'BULL' || marketRegime === 'BULLISH'));
+    const mBear = (typeof marketRegime !== 'undefined' && (marketRegime === 'BEAR' || marketRegime === 'BEARISH'));
+    if (mBull) { mScore += 20; factors.push('regime=BULL(+20)'); }
+    else if (mBear) { mScore -= 25; factors.push('regime=BEAR(-25)'); }
+    else if (typeof marketRegime !== 'undefined') { factors.push(`regime=${marketRegime}`); }
+
+    // Factor 2: Nifty momentum (1m + 3m). Both up = follow-through confirmation
+    if (typeof niftyBenchmark !== 'undefined' && niftyBenchmark) {
+      const n1m = niftyBenchmark['1m'], n3m = niftyBenchmark['3m'];
+      if (n1m != null && n3m != null) {
+        if (n1m > 0.02 && n3m > 0.05) { mScore += 15; factors.push(`Nifty 1m+${(n1m*100).toFixed(1)}%/3m+${(n3m*100).toFixed(1)}% (+15)`); }
+        else if (n1m > 0 && n3m > 0)  { mScore += 5;  factors.push(`Nifty mildly up (+5)`); }
+        else if (n1m < -0.03 && n3m < -0.05) { mScore -= 20; factors.push(`Nifty down hard 1m${(n1m*100).toFixed(1)}%/3m${(n3m*100).toFixed(1)}% (-20)`); }
+        else if (n1m < 0 || n3m < 0) { mScore -= 8; factors.push(`Nifty negative (-8)`); }
+      }
+    }
+
+    // Factor 3: Intraday breadth (% above VWAP) — only when fresh (n>=5)
+    if (typeof _dayTradeBreadth !== 'undefined' && _dayTradeBreadth && _dayTradeBreadth.n >= 5) {
+      const bPct = _dayTradeBreadth.aboveVWAPPct;
+      if (bPct >= 65) { mScore += 10; factors.push(`Breadth strong ${bPct}%>VWAP (+10)`); }
+      else if (bPct >= 50) { mScore += 3; factors.push(`Breadth okay ${bPct}% (+3)`); }
+      else if (bPct < 35) { mScore -= 10; factors.push(`Breadth weak ${bPct}% (-10)`); }
+      else { factors.push(`Breadth ${bPct}%`); }
+    }
+
+    // Factor 4: VIX — panic = sit in cash per O'Neil even if regime says BULL
+    const vix = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix)
+      ? +_marketDataCache.vix.value : null;
+    if (vix != null) {
+      if (vix < 14) { mScore += 5; factors.push(`VIX calm ${vix.toFixed(1)} (+5)`); }
+      else if (vix > 25) { mScore -= 15; factors.push(`VIX panic ${vix.toFixed(1)} (-15) — O'Neil: sit in cash`); }
+      else if (vix > 20) { mScore -= 5; factors.push(`VIX elevated ${vix.toFixed(1)} (-5)`); }
+    }
+
+    // Clamp + flag
+    mScore = Math.max(0, Math.min(100, mScore));
+    const flag = (vix != null && vix > 25) ? 'VIX panic — O\'Neil rule: sit in cash'
+               : mBear ? 'BEAR regime — sit in cash per O\'Neil'
+               : null;
+    result.letters.M = {
+      name: 'Market direction',
+      score: mScore,
+      detail: factors.length ? factors.join(' · ') : (typeof marketRegime !== 'undefined' ? marketRegime : 'unknown'),
+      flag,
+    };
+  })();
 
   // Tally
   const validLetters = Object.values(result.letters).filter(l => l.score != null);
@@ -21162,13 +21243,26 @@ function computeCanslim(f) {
   return result;
 }
 
-// ── Volatility Contraction Pattern detection (simplified) — Part 4.6 ──
-// Detects progressive contractions in recent price action.
-// Requires recent OHLC array; works with what's in fundamentals.
-function detectVCP(f) {
-  // Simplified: check if stock has been consolidating (low volatility over 2-4 weeks)
-  // Real VCP needs intraday volatility decline; this is a daily proxy.
-  const result = { detected: false, confidence: 0, reason: '' };
+// ── Volatility Contraction Pattern detection — Part 4.6 ──
+// 🛡 v2.1 Sprint 3 (2026-05-11) — Two-tier detection:
+//   TIER A (preferred): real progressive contraction analysis using OHLC candles.
+//                       Finds swing highs/lows in last ~60 days, validates each
+//                       successive contraction is ≥30% tighter than prior, and
+//                       confirms volume dries up. This is the canonical
+//                       Minervini VCP — "T price contractions with volume drop".
+//   TIER B (fallback):  fundamental proxy used when candles are not passed in
+//                       (e.g. Stock Picks tab caller). Keeps existing behavior.
+//
+// Caller can pass candles as second arg (Deep Analyzer endpoint has them);
+// applyPlaybookOverlay caller currently does not, so it falls through to Tier B.
+function detectVCP(f, candles) {
+  // Try Tier A first when caller passed candles
+  if (Array.isArray(candles) && candles.length >= 30) {
+    const tierA = _detectVCPFromCandles(candles, f);
+    if (tierA) return tierA;  // could be detected:false with a definite reason
+  }
+  // Tier B fallback — fundamental proxy only
+  const result = { detected: false, confidence: 0, reason: '', method: 'tier-B-proxy' };
   if (f.annualVol == null || f.high52w == null || f.low52w == null || f.price == null) {
     result.reason = 'missing data';
     return result;
@@ -21196,11 +21290,127 @@ function detectVCP(f) {
   }
 
   result.detected = true;
-  result.confidence = 70;  // simplified detector — can't be 100% confident without intraday data
+  result.confidence = 70;  // proxy detector — can't be 100% confident without OHLC
   result.reason = `Near 52w high (${f.pctFromHigh.toFixed(1)}%), low vol (${f.annualVol.toFixed(0)}%), tight 1m`;
   result.pivot = f.high52w;  // breakout level
   result.stop = +(f.price * 0.93).toFixed(2);  // -7% stop per Minervini
   return result;
+}
+
+// ── Tier-A VCP: progressive contractions from real OHLC candles ──
+// Algorithm (Minervini "Trade Like a Stock Market Wizard" Ch 7):
+//   1. Look back ~60 trading days, find swing pivots (local highs/lows on a
+//      5-bar window — high greater than 2 bars on either side).
+//   2. From the last anchor high, measure each successive pullback %:
+//        contraction[i] = (swingHigh_i - swingLow_i) / swingHigh_i
+//   3. Valid VCP requires ≥2 contractions and each successive one tighter
+//      by ≥25% than its predecessor (e.g. 25%→15%→8%).
+//   4. Volume confirmation: avg volume in each successive contraction must
+//      drop (institutions stop selling — supply exhausts).
+//   5. Currently in handle (latest pullback ≤ 10% and price within 8% of pivot).
+function _detectVCPFromCandles(candles, f) {
+  try {
+    const c = candles.slice(-65);  // last ~3 months
+    if (c.length < 30) return null;  // not enough data → caller falls back to Tier B
+
+    // Find pivots — bar i is a swing HIGH if high[i] > high[i-2..i-1] AND high[i+1..i+2]
+    const pivots = [];
+    for (let i = 2; i < c.length - 2; i++) {
+      const h = c[i].high, l = c[i].low;
+      if (h == null || l == null) continue;
+      const lh1 = c[i-1].high, lh2 = c[i-2].high, rh1 = c[i+1].high, rh2 = c[i+2].high;
+      const ll1 = c[i-1].low,  ll2 = c[i-2].low,  rl1 = c[i+1].low,  rl2 = c[i+2].low;
+      if (h > lh1 && h > lh2 && h > rh1 && h > rh2) pivots.push({ i, type: 'H', price: h, vol: c[i].volume || 0 });
+      else if (l < ll1 && l < ll2 && l < rl1 && l < rl2) pivots.push({ i, type: 'L', price: l, vol: c[i].volume || 0 });
+    }
+
+    if (pivots.length < 4) {
+      return { detected: false, confidence: 0, reason: `only ${pivots.length} pivots — need ≥4`, method: 'tier-A-candles' };
+    }
+
+    // Pair High→Low contractions in time order. We want HIGH, LOW, HIGH, LOW...
+    // Sequence: take the latest 5-6 pivots and identify H-L-H-L-H pattern.
+    const recent = pivots.slice(-7);  // last few pivots
+    const contractions = [];
+    for (let i = 0; i < recent.length - 1; i++) {
+      const a = recent[i], b = recent[i+1];
+      if (a.type === 'H' && b.type === 'L') {
+        const drop = (a.price - b.price) / a.price;
+        if (drop > 0 && drop < 0.40) {  // sanity — discard >40% drops (those are Stage 4)
+          contractions.push({
+            from: a.price, to: b.price,
+            dropPct: +(drop * 100).toFixed(2),
+            avgVolBefore: a.vol,
+            avgVolAfter:  b.vol,
+          });
+        }
+      }
+    }
+
+    if (contractions.length < 2) {
+      return { detected: false, confidence: 0, reason: `${contractions.length} contractions found — need ≥2 progressive`, method: 'tier-A-candles' };
+    }
+
+    // Verify each successive contraction is tighter (≥25% smaller % drop)
+    let progressive = true;
+    const tightenings = [];
+    for (let i = 1; i < contractions.length; i++) {
+      const prior = contractions[i-1].dropPct;
+      const cur   = contractions[i].dropPct;
+      const tightenBy = (prior - cur) / prior;  // % shrinkage
+      tightenings.push(+(tightenBy * 100).toFixed(1));
+      if (tightenBy < 0.25) { progressive = false; }
+    }
+
+    // Volume dry-up check — most recent contraction low volume vs first
+    const volDryUp = contractions[0].avgVolBefore > 0 && contractions[contractions.length-1].avgVolAfter > 0
+      ? contractions[contractions.length-1].avgVolAfter < contractions[0].avgVolBefore
+      : true;  // missing volume data → don't penalize
+
+    // Anchor pivot for breakout — highest recent High pivot
+    const highPivots = recent.filter(p => p.type === 'H');
+    const pivot = highPivots.length ? Math.max(...highPivots.map(p => p.price)) : f.high52w;
+
+    // Currently in handle? — current price within 8% below pivot
+    const px = (c[c.length-1] && c[c.length-1].close) || f.price;
+    const distFromPivot = pivot ? (pivot - px) / pivot : 1;
+    const inHandle = distFromPivot >= 0 && distFromPivot <= 0.08;
+
+    // Build verdict
+    if (!progressive) {
+      return {
+        detected: false, confidence: 0,
+        reason: `contractions not progressive (${contractions.map(x=>x.dropPct+'%').join('→')})`,
+        contractions, method: 'tier-A-candles',
+      };
+    }
+    if (!inHandle) {
+      return {
+        detected: false, confidence: 0,
+        reason: `${(distFromPivot*100).toFixed(1)}% below pivot — not yet in handle (need ≤8%)`,
+        contractions, pivot, method: 'tier-A-candles',
+      };
+    }
+
+    // PASS — proper VCP detected
+    const conf = 70
+      + (contractions.length >= 3 ? 15 : 5)   // 3+ contractions = textbook
+      + (volDryUp ? 10 : 0)                    // volume confirmation
+      + (contractions[contractions.length-1].dropPct <= 8 ? 5 : 0);  // last contraction tight
+    return {
+      detected: true,
+      confidence: Math.min(100, conf),
+      reason: `${contractions.length} progressive contractions (${contractions.map(x=>x.dropPct+'%').join('→')}) in handle ${(distFromPivot*100).toFixed(1)}% below pivot${volDryUp ? ', volume dry-up confirmed' : ''}`,
+      contractions,
+      tightenings,
+      volDryUp,
+      pivot: +pivot.toFixed(2),
+      stop: +(px * 0.93).toFixed(2),  // -7% Minervini stop
+      method: 'tier-A-candles',
+    };
+  } catch (e) {
+    return null;  // fall back to Tier B silently
+  }
 }
 
 // ── Cup with Handle detection (simplified) — Part 4.7 ──
@@ -21689,11 +21899,16 @@ function computeMagicFormulaRank(symbol, fund) {
 }
 
 // ── Combined playbook overlay — applied to every Stock Pick ──
-function applyPlaybookOverlay(f) {
+// 🛡 v2.1 Sprint 3 (2026-05-11) — Accept optional `candles` arg so callers
+// that have OHLC (Deep Analyzer endpoint, _analyzeDeep) get Tier-A VCP and
+// real Accumulation/Distribution. Callers without candles (Stock Picks tab
+// scan) keep working — VCP falls back to fundamental proxy, A/D reports
+// "needs_candles" rather than failing.
+function applyPlaybookOverlay(f, candles) {
   const trendTemplate = computeMinerviniTrendTemplate(f);
   const stage = classifyWeinsteinStage(f);
   const canslim = computeCanslim(f);
-  const vcp = detectVCP(f);
+  const vcp = detectVCP(f, candles);  // Sprint 3 — Tier-A when candles present
   const cupHandle = detectCupWithHandle(f);
 
   // 🛡 v2.1 Wave (2026-05-11) — Sprint 1+2 frameworks
@@ -21702,8 +21917,10 @@ function applyPlaybookOverlay(f) {
   const altman = computeAltmanZScore(f);
   const industryRS = (f && f.sym) ? computeIndustryRS(f.sym, f) : { error: 'no_symbol' };
   const magicFormula = (f && f.sym) ? computeMagicFormulaRank(f.sym, f) : { error: 'no_symbol' };
-  // A/D days needs daily candles — not available here, computed in analyze endpoint
-  const accumulation = { skipped: 'needs_candles_passed_in_analyze_endpoint' };
+  // A/D days now runs in Tier-A when candles are passed in (Sprint 3 wiring)
+  const accumulation = (Array.isArray(candles) && candles.length >= 50)
+    ? computeAccumulationDistribution(candles)
+    : { skipped: 'needs_candles_passed_in_analyze_endpoint' };
 
   // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
   let playbookScore = 0;
@@ -28856,7 +29073,10 @@ app.get('/api/stocks/analyze/:sym', async(req,res)=>{
     };
     let _deepPlaybook = null;
     try {
-      _deepPlaybook = applyPlaybookOverlay(_playbookFund).playbook;
+      // 🛡 v2.1 Sprint 3 (2026-05-11) — pass daily candles for Tier-A VCP
+      // and Accumulation/Distribution. cDay is the daily OHLC array already
+      // fetched above for technical analysis; reuse it here.
+      _deepPlaybook = applyPlaybookOverlay(_playbookFund, cDay).playbook;
     } catch (e) {
       _deepPlaybook = { error: e.message };
     }
