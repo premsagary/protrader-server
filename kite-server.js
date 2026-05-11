@@ -22077,6 +22077,197 @@ function computeMagicFormulaRank(symbol, fund) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 4F (2026-05-11) — Multi-horizon verdicts.
+// Splits the composite into THREE horizon-specific tallies so a stock can
+// show "Strong long-term · Strong momentum · Wait short-term" instead of
+// being mashed into one number. Each horizon has its own pass count, tier
+// (STRONG / OK / WEAK), and list of driving checks. The big composite
+// verdict from computeCompositeVerdict stays as the "overall" answer; this
+// adds the WHY-by-timeframe.
+//
+// Framework groupings (by the canonical horizon each one signals):
+//
+//   LONG TERM (own it for 1-3 years — fundamentals + business quality):
+//     • Piotroski F-Score (9 financial-quality checks)
+//     • Altman Z (bankruptcy risk)
+//     • Magic Formula (cheap-by-quality)
+//     • CANSLIM letter C (current quarterly earnings)
+//     • CANSLIM letter A (annual earnings + ROE)
+//     • CANSLIM letter I (institutional sponsorship)
+//
+//   MOMENTUM (medium-term price action — is the stock leading?):
+//     • Minervini Trend Template (8 trend criteria — qualifies = all 8)
+//     • Industry RS (sector + within-sector leadership)
+//     • Accumulation/Distribution days (institutional buying signal)
+//     • CANSLIM letter L (leader / RS ≥ 70)
+//     • CANSLIM letter N (new high / near 52w high)
+//     • Weinstein Stage 2 (full or provisional — clean uptrend phase)
+//
+//   SHORT TERM (entry timing — buyable RIGHT NOW?):
+//     • VCP detected AND currently in handle
+//     • Cup-with-Handle detected (handle zone)
+//     • CANSLIM letter M (market direction — VIX not panic, breadth ok)
+//     • CANSLIM letter S (supply/demand — volume + float)
+//     • Stage 2 sub-stage (EARLY = best entry now; LATE = no new entries)
+//
+// Tier thresholds (per horizon):
+//   ≥ 60% of evaluable checks pass → STRONG
+//   ≥ 40%                          → OK
+//   <  40%                         → WEAK
+//   (when only 0-2 checks evaluable: tier is UNKNOWN for honesty)
+// ══════════════════════════════════════════════════════════════════════════
+function computeHorizonVerdicts(analysis) {
+  const a = analysis || {};
+  const horizons = {
+    longTerm:  { passCount: 0, total: 0, drivingChecks: [], tier: 'UNKNOWN' },
+    momentum:  { passCount: 0, total: 0, drivingChecks: [], tier: 'UNKNOWN' },
+    shortTerm: { passCount: 0, total: 0, drivingChecks: [], tier: 'UNKNOWN' },
+  };
+
+  // Helper — record one check per horizon. `pass` may be true/false/null
+  // (null = not evaluable, skip). `detail` is short plain-English label.
+  const record = (h, label, pass, detail) => {
+    if (pass == null) return;  // skip non-evaluable
+    h.total++;
+    if (pass) h.passCount++;
+    h.drivingChecks.push({ label, state: pass ? 'pass' : 'fail', detail: detail || '' });
+  };
+
+  // ─── LONG TERM ─────────────────────────────────────────────────────────
+  const lt = horizons.longTerm;
+  // Piotroski
+  if (a.piotroski && !a.piotroski.error && a.piotroski.passed != null) {
+    record(lt, 'Quality of fundamentals', a.piotroski.qualifies,
+      `Piotroski ${a.piotroski.passed}/9`);
+  }
+  // Altman Z safe-zone
+  if (a.altman && !a.altman.error && a.altman.zone) {
+    record(lt, 'Safe from bankruptcy', a.altman.zone === 'SAFE',
+      `Altman Z=${a.altman.z} (${a.altman.zone})`);
+  }
+  // Magic Formula
+  if (a.magicFormula && !a.magicFormula.error && a.magicFormula.percentile != null) {
+    record(lt, 'Cheap by quality', a.magicFormula.qualifies,
+      `Magic Formula ${a.magicFormula.percentile}th %ile`);
+  }
+  // CANSLIM C (current quarterly earnings ≥ 25% YoY)
+  if (a.canslim?.letters?.C && a.canslim.letters.C.score != null) {
+    const cScore = a.canslim.letters.C.score;
+    record(lt, 'Quarterly earnings growing', cScore >= 70, a.canslim.letters.C.detail);
+  }
+  // CANSLIM A (annual EPS + ROE)
+  if (a.canslim?.letters?.A && a.canslim.letters.A.score != null) {
+    const aScore = a.canslim.letters.A.score;
+    record(lt, 'Multi-year EPS + ROE', aScore >= 70, a.canslim.letters.A.detail);
+  }
+  // CANSLIM I (institutional sponsorship)
+  if (a.canslim?.letters?.I && a.canslim.letters.I.score != null) {
+    record(lt, 'Institutional sponsorship', a.canslim.letters.I.score >= 70,
+      a.canslim.letters.I.detail);
+  }
+
+  // ─── MOMENTUM ─────────────────────────────────────────────────────────
+  const mo = horizons.momentum;
+  // Minervini Trend Template
+  if (a.minervini && a.minervini.passed != null) {
+    record(mo, 'Trend Template (8 criteria)', a.minervini.qualifies,
+      `${a.minervini.passed}/${a.minervini.total} criteria`);
+  }
+  // Industry RS — leader in leading sector
+  if (a.industryRS && !a.industryRS.error && a.industryRS.stockPercentileInSector != null) {
+    record(mo, 'Leader in its sector', a.industryRS.qualifies,
+      `Sector ${a.industryRS.sectorPercentile}th · in-sector ${a.industryRS.stockPercentileInSector}th`);
+  }
+  // Accumulation / Distribution days
+  if (a.accumulation && !a.accumulation.skipped && !a.accumulation.error && a.accumulation.net != null) {
+    record(mo, 'Institutions accumulating', a.accumulation.qualifies,
+      `${a.accumulation.accDays}A − ${a.accumulation.distDays}D = ${a.accumulation.net >= 0 ? '+' : ''}${a.accumulation.net}`);
+  }
+  // CANSLIM L — leader / RS rating
+  if (a.canslim?.letters?.L && a.canslim.letters.L.score != null) {
+    record(mo, 'Outperforming market', a.canslim.letters.L.score >= 70,
+      a.canslim.letters.L.detail);
+  }
+  // CANSLIM N — new high
+  if (a.canslim?.letters?.N && a.canslim.letters.N.score != null) {
+    record(mo, 'Near 52-week high', a.canslim.letters.N.score >= 70,
+      a.canslim.letters.N.detail);
+  }
+  // Weinstein clean Stage 2
+  if (a.weinstein && a.weinstein.stage) {
+    const inStage2 = a.weinstein.stage === 'STAGE_2' || a.weinstein.stage === 'STAGE_2_PROVISIONAL';
+    record(mo, 'In a clean uptrend stage', inStage2,
+      a.weinstein.stage.replace(/_/g, ' ').toLowerCase());
+  }
+
+  // ─── SHORT TERM ───────────────────────────────────────────────────────
+  const st = horizons.shortTerm;
+  // VCP detected AND in handle (the new Tier-A check already enforces in-handle)
+  if (a.vcp && (a.vcp.detected != null || a.vcp.reason)) {
+    record(st, 'Tightening pattern + in handle', !!a.vcp.detected,
+      a.vcp.detected ? `VCP confidence ${a.vcp.confidence}%` : a.vcp.reason);
+  }
+  // Cup-with-Handle in handle zone
+  if (a.cupHandle && (a.cupHandle.detected != null || a.cupHandle.reason)) {
+    record(st, 'Cup-with-handle pattern', !!a.cupHandle.detected,
+      a.cupHandle.detected ? `Cup confidence ${a.cupHandle.confidence}%` : a.cupHandle.reason);
+  }
+  // CANSLIM M — market direction not in panic
+  if (a.canslim?.letters?.M && a.canslim.letters.M.score != null) {
+    record(st, 'Market is healthy', a.canslim.letters.M.score >= 60,
+      a.canslim.letters.M.flag || a.canslim.letters.M.detail);
+  }
+  // CANSLIM S — supply/demand (volume confirmation)
+  if (a.canslim?.letters?.S && a.canslim.letters.S.score != null) {
+    record(st, 'Volume supports the move', a.canslim.letters.S.score >= 70,
+      a.canslim.letters.S.detail);
+  }
+  // Stage 2 sub-stage — EARLY is the only short-term BUY signal
+  if (a.weinstein && a.weinstein.subStage) {
+    const isEarly = a.weinstein.subStage === 'EARLY';
+    record(st, 'Best-entry sub-stage', isEarly,
+      `Stage 2 ${a.weinstein.subStage}`);
+  }
+
+  // Compute tier per horizon. Need at least 3 evaluable checks for a real tier.
+  const tierOf = (h) => {
+    if (h.total < 3) return 'UNKNOWN';
+    const pct = h.passCount / h.total;
+    if (pct >= 0.6) return 'STRONG';
+    if (pct >= 0.4) return 'OK';
+    return 'WEAK';
+  };
+  horizons.longTerm.tier = tierOf(horizons.longTerm);
+  horizons.momentum.tier = tierOf(horizons.momentum);
+  horizons.shortTerm.tier = tierOf(horizons.shortTerm);
+
+  // Hard exclude override: if Altman DISTRESS or Stage 4, long-term is WEAK
+  // regardless of other checks (the iron rule applies).
+  if (a.altman?.zone === 'DISTRESS') {
+    horizons.longTerm.tier = 'WEAK';
+    horizons.longTerm.hardFail = 'Altman Z DISTRESS — bankruptcy risk';
+  }
+  if (a.weinstein?.stage === 'STAGE_4') {
+    horizons.momentum.tier = 'WEAK';
+    horizons.momentum.hardFail = 'Stage 4 downtrend — Weinstein iron rule';
+    horizons.shortTerm.tier = 'WEAK';
+    horizons.shortTerm.hardFail = 'Stage 4 — no entries regardless of setup';
+  }
+
+  // Plain-English summary per horizon (shown directly on the pill)
+  const summarize = (h) => {
+    if (h.hardFail) return h.hardFail;
+    if (h.tier === 'UNKNOWN') return `Only ${h.total} of needed 3+ checks evaluable`;
+    return `${h.passCount} of ${h.total} checks pass`;
+  };
+  horizons.longTerm.summary  = summarize(horizons.longTerm);
+  horizons.momentum.summary  = summarize(horizons.momentum);
+  horizons.shortTerm.summary = summarize(horizons.shortTerm);
+
+  return horizons;
+}
+
 // ── Combined playbook overlay — applied to every Stock Pick ──
 // 🛡 v2.1 Sprint 3 (2026-05-11) — Accept optional `candles` arg so callers
 // that have OHLC (Deep Analyzer endpoint, _analyzeDeep) get Tier-A VCP and
@@ -22135,6 +22326,22 @@ function applyPlaybookOverlay(f, candles) {
     cupHandle,
   });
 
+  // 🛡 v2.1 Sprint 4F (2026-05-11) — Per-horizon tallies (Long term / Momentum
+  // / Short term). Stocks can be strong on one horizon and weak on another;
+  // the overall composite is the roll-up answer, but the user sees the WHY.
+  const horizons = computeHorizonVerdicts({
+    minervini: trendTemplate,
+    weinstein: stage,
+    canslim,
+    piotroski,
+    altman,
+    industryRS,
+    magicFormula,
+    vcp,
+    cupHandle,
+    accumulation,
+  });
+
   // Final verdict — composite is authoritative.
   // 🛡 v2.1 Sprint 4 (2026-05-11) — audit CRITICAL #1: legacy fallback cases
   // previously could output STRONG BUY for a stock that the composite had
@@ -22175,6 +22382,8 @@ function applyPlaybookOverlay(f, candles) {
       trendTemplate, stage, canslim, vcp, cupHandle,
       // v2.1 additions:
       piotroski, altman, industryRS, magicFormula, accumulation, composite,
+      // 🛡 v2.1 Sprint 4F addition:
+      horizons,
       playbookScore, stageMultiplier,
       verdict, verdictColor,
       hardExclude: composite.hardExclude || false,

@@ -945,6 +945,15 @@ function DeepAnalyzerPlaybook({ playbook }) {
         )}
       </div>
 
+      {/* ═══ HORIZON PILLS (Sprint 4F) ═══
+          Three timeframe-specific tallies so the user can tell a "Strong
+          long-term, weak short-term" stock apart from a "Great trade today,
+          terrible business" one. Each pill is collapsible to show driving
+          checks. */}
+      {pb.horizons && (
+        <HorizonPills horizons={pb.horizons} />
+      )}
+
       {/* ═══ TRADE PLAN — only when not AVOID ═══ */}
       {showTradePlan && (entry || stop || target) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 12 }}>
@@ -1036,6 +1045,93 @@ function DeepAnalyzerPlaybook({ playbook }) {
           )}
         </div>
       </details>
+    </div>
+  );
+}
+
+// 🛡 v2.1 Sprint 4F (2026-05-11) — HorizonPills component
+// Three timeframe pills (Long term · Momentum · Short term) under the main
+// verdict. Each pill shows tier label + pass count + 1-line summary, and
+// expands to show the driving checks for that horizon.
+function HorizonPills({ horizons }) {
+  const horizonsList = [
+    { key: 'longTerm',  label: 'Long term',  hint: 'Own it for 1-3 years' },
+    { key: 'momentum',  label: 'Momentum',   hint: 'In an uptrend, leading' },
+    { key: 'shortTerm', label: 'Short term', hint: 'Buyable right now' },
+  ];
+  const tierStyle = {
+    STRONG:  { bg: 'rgba(29,158,117,0.12)',  fg: '#10b981', dot: '#10b981', label: 'Strong' },
+    OK:      { bg: 'rgba(245,158,11,0.10)',  fg: '#f59e0b', dot: '#f59e0b', label: 'OK' },
+    WEAK:    { bg: 'rgba(239,68,68,0.10)',   fg: '#ef4444', dot: '#ef4444', label: 'Weak' },
+    UNKNOWN: { bg: 'rgba(148,163,184,0.08)', fg: 'var(--text4)', dot: 'var(--text4)', label: 'No data' },
+  };
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
+      {horizonsList.map(h => {
+        const data = horizons[h.key] || {};
+        const s = tierStyle[data.tier] || tierStyle.UNKNOWN;
+        const drivers = Array.isArray(data.drivingChecks) ? data.drivingChecks : [];
+        const passing = drivers.filter(d => d.state === 'pass');
+        const failing = drivers.filter(d => d.state === 'fail');
+        return (
+          <details key={h.key} style={{
+            background: s.bg, border: `1px solid ${s.fg}30`, borderRadius: 10, padding: 0,
+          }}>
+            <summary style={{
+              padding: '10px 12px', cursor: 'pointer', listStyle: 'none',
+              display: 'flex', flexDirection: 'column', gap: 6,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {h.label}
+                </div>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 11, fontWeight: 700, color: s.fg,
+                  padding: '2px 8px', borderRadius: 999,
+                  background: `${s.fg}15`,
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 99, background: s.dot, display: 'inline-block' }} />
+                  {s.label}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.35 }}>
+                {data.hardFail ? data.hardFail : (data.summary || h.hint)}
+              </div>
+            </summary>
+            {drivers.length > 0 && (
+              <div style={{ padding: '0 12px 12px', borderTop: `1px solid ${s.fg}20`, marginTop: 4 }}>
+                {failing.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 9, color: 'var(--text4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>
+                      Failing
+                    </div>
+                    {failing.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, padding: '3px 0' }}>
+                        <span style={{ color: 'var(--text3)' }}>✕ {c.label}</span>
+                        <span className="tabular-nums" style={{ color: 'var(--text4)', fontSize: 10 }}>{c.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {passing.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 9, color: 'var(--text4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>
+                      Passing
+                    </div>
+                    {passing.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, padding: '3px 0' }}>
+                        <span style={{ color: 'var(--green-text)' }}>✓ {c.label}</span>
+                        <span className="tabular-nums" style={{ color: 'var(--text4)', fontSize: 10 }}>{c.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </details>
+        );
+      })}
     </div>
   );
 }
