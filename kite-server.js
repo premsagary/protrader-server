@@ -21117,23 +21117,25 @@ function classifyWeinsteinStage(f) {
   if (Math.abs(change6m) < 0.10 && Math.abs(change3m) < 0.05) {
     return { stage: 'STAGE_1', confidence: 70, reason: 'sideways consolidation, low momentum', recommendation: 'WATCH for Stage 2 breakout' };
   }
-  // 🛡 v2.1 Sprint 4 (2026-05-11) — tighten fall-through.
-  // Audit CRITICAL #1: a "mixed signals" STAGE_2_TRANSITIONAL was previously
-  // counted as Stage 2 for composite tally, letting genuinely-broken stocks
-  // (distributing into Stage 4) reach BUY. Now: if momentum is negative
-  // anywhere meaningful, classify as STAGE_3 (caution) instead of pretending
-  // it's a baby Stage 2. Pure mixed-but-positive still flows to provisional.
-  if (change3m < 0 || change1m < -0.03 || change6m < 0) {
+  // 🛡 v2.1 Sprint 4E (2026-05-11) — RELAX Sprint 4 over-correction.
+  // Sprint 4 caught ANY negative short-term momentum and pushed to Stage 3,
+  // which redirected most stocks (normal pullback in a healthy uptrend) into
+  // AVOID. That was too aggressive. Now: only redirect to Stage 3 when the
+  // deterioration is multi-timeframe and material (clear rollover), not a
+  // normal weekly wobble. The original audit concern (Stage 4 stocks slipping
+  // through TRANSITIONAL) is now handled by the cascade in computeCompositeVerdict
+  // which down-weights non-clean-Stage-2 stocks rather than blocking them.
+  if (above200 && change3m < -0.08 && change1m < -0.04 && change6m < 0.05) {
     return {
       stage: 'STAGE_3',
-      confidence: 55,
-      reason: 'mixed signals with negative shorter-term momentum — likely Stage 2→3 rollover',
-      warning: 'Treat as Stage 3 until momentum turns positive again',
-      recommendation: 'NO NEW ENTRIES — wait for fresh breakout',
+      confidence: 60,
+      reason: 'price still above 200 DMA but multi-timeframe rollover (3m + 1m clearly down, 6m flat)',
+      warning: 'Distribution phase — take profits, no new entries',
+      recommendation: 'NO NEW ENTRIES — wait for momentum to recover',
     };
   }
-  // Genuinely mixed but all-positive → keep as transitional (low confidence)
-  return { stage: 'STAGE_2_TRANSITIONAL', confidence: 50, reason: 'mixed signals — likely transitioning', recommendation: 'wait for clarity' };
+  // Mixed signals — keep as transitional (medium-confidence Stage 2 cousin)
+  return { stage: 'STAGE_2_TRANSITIONAL', confidence: 50, reason: 'mixed signals — likely transitioning', recommendation: 'wait for clarity, but not a rollover yet' };
 }
 
 // ── William O'Neil's CANSLIM rubric (Part 3.2) ──
@@ -21719,25 +21721,38 @@ function computeCompositeVerdict(analysis) {
   const passCount = evaluable.filter(v => v).length;
   const total = evaluable.length;
 
-  // 🛡 v2.1 Sprint 4 — Tighten cascade. Audit CRITICAL #1: a STAGE_2_TRANSITIONAL
-  // (mixed-signals fall-through) was previously letting passCount drive verdict.
-  // Now: a stock that is NOT a clean Stage 2 must clear a higher bar (8+ passes)
-  // to qualify as STRONG BUY, and 6+ for BUY.
+  // 🛡 v2.1 Sprint 4E (2026-05-11) — Cascade with stage-aware DOWNGRADE.
+  // Sprint 4A required 8+ passes for non-clean-Stage-2 stocks → almost
+  // everything fell into AVOID. Now we use the same thresholds (7/5/3) for
+  // all stages but DOWNGRADE the resulting tier by one step when the stock
+  // isn't in a clean uptrend. This preserves the safety intuition (don't
+  // chase a transitional / Stage 1 stock as hard as a clean Stage 2) without
+  // making non-clean stocks unbuyable.
   const cleanStage2 = analysis.weinstein
     && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL');
 
-  let verdict;
-  if (cleanStage2) {
-    if (passCount >= 7) verdict = '⭐ STRONG BUY';
-    else if (passCount >= 5) verdict = '✅ BUY';
-    else if (passCount >= 3) verdict = '⏳ WATCH';
-    else verdict = '❌ AVOID';
-  } else {
-    // Not a clean Stage 2 → require materially higher evidence
-    if (passCount >= 8) verdict = '⭐ STRONG BUY';
-    else if (passCount >= 6) verdict = '⏳ WATCH (not in clean uptrend)';
-    else verdict = '❌ AVOID';
+  // Base tier from pass count (used universally)
+  let baseTier;
+  if (passCount >= 7) baseTier = 'STRONG_BUY';
+  else if (passCount >= 5) baseTier = 'BUY';
+  else if (passCount >= 3) baseTier = 'WATCH';
+  else baseTier = 'AVOID';
+
+  // Non-clean Stage 2 → step down one tier (Strong Buy → Buy, Buy → Watch,
+  // Watch → Avoid). Same data, less conviction.
+  let finalTier = baseTier;
+  if (!cleanStage2) {
+    const step = { STRONG_BUY: 'BUY', BUY: 'WATCH', WATCH: 'AVOID', AVOID: 'AVOID' };
+    finalTier = step[baseTier];
   }
+
+  const tierToVerdict = {
+    STRONG_BUY: '⭐ STRONG BUY',
+    BUY:        '✅ BUY',
+    WATCH:      '⏳ WATCH',
+    AVOID:      '❌ AVOID',
+  };
+  let verdict = tierToVerdict[finalTier];
 
   return {
     verdict,
