@@ -1052,323 +1052,432 @@ function AnalysisResult({ data }) {
 // CANSLIM rubric, VCP, and Cup-with-Handle — full deep-dive depth
 // (compact PlaybookBadge lives in StockPicks.jsx; this is the expanded view)
 // ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 4B (2026-05-11) — Deep Analyzer redesign.
+//
+// Replaces the prior ~30-block dense layout with a three-tier progressive
+// disclosure:
+//   Tier 1 (always visible): single Verdict card + 1-line plain-English
+//   reason + Trade Plan card (Entry / Stop / Target / R:R).
+//   Tier 2 (always visible, but compact): 10-check scoreboard. Each
+//   framework is one row with check icon + plain-English label + 1-line
+//   reason. FAILED checks sort to top — those drive the decision.
+//   Tier 3 (collapsible): per-framework drill-downs.
+//
+// AVOID-state verdicts render WITHOUT the Trade Plan (no point showing
+// entry/stop/target for a stock the user shouldn't trade).
+// ══════════════════════════════════════════════════════════════════════
+
+const FRAMEWORK_LABELS = {
+  minervini:       { title: 'Trend is strong',           deep: 'Mark Minervini · 8-criterion Trend Template' },
+  weinstein:       { title: 'In an uptrend stage',       deep: 'Stan Weinstein · 4-Stage Analysis' },
+  canslim:         { title: 'Earnings + market fit',     deep: 'William O\'Neil · CANSLIM Rubric (7 letters)' },
+  vcp:             { title: 'Tightening pattern',        deep: 'Volatility Contraction Pattern (Minervini)' },
+  cupHandle:       { title: 'Cup-with-Handle base',      deep: 'Cup-with-Handle pattern (O\'Neil)' },
+  piotroski:       { title: 'Strong balance sheet',      deep: 'Piotroski F-Score (9 financial-quality checks)' },
+  altman:          { title: 'Safe from bankruptcy',      deep: 'Altman Z-Score (bankruptcy prediction)' },
+  industryRS:      { title: 'Leader in its sector',      deep: 'Industry Relative Strength (O\'Neil 3-level RS)' },
+  magicFormula:    { title: 'Cheap by quality',          deep: 'Greenblatt Magic Formula (EY × ROC)' },
+  accumulation:    { title: 'Institutions accumulating', deep: '50-Day Accumulation/Distribution Days' },
+};
+
+function _statusFromCheck(pb, key) {
+  const x = pb[key];
+  if (!x) return { state: 'unknown', metric: 'no data' };
+  if (x.error) return { state: 'unknown', metric: 'no data' };
+  switch (key) {
+    case 'minervini':
+      if (x.qualifies) return { state: 'pass', metric: `${x.passed}/${x.total}` };
+      if ((x.passed || 0) >= 6) return { state: 'partial', metric: `${x.passed}/${x.total}` };
+      return { state: 'fail', metric: `${x.passed || 0}/${x.total || 8}` };
+    case 'weinstein': {
+      const s = x.stage;
+      if (s === 'STAGE_4') return { state: 'fail', metric: 'Stage 4' };
+      if (s === 'STAGE_3') return { state: 'fail', metric: 'Stage 3' };
+      if (s === 'STAGE_2') return { state: 'pass', metric: x.subStage ? `Stage 2 ${x.subStage}` : 'Stage 2' };
+      if (s === 'STAGE_2_PROVISIONAL') return { state: 'partial', metric: 'Stage 2 (prov)' };
+      if (s === 'STAGE_2_TRANSITIONAL') return { state: 'partial', metric: 'Transitional' };
+      if (s === 'STAGE_1') return { state: 'partial', metric: 'Stage 1 base' };
+      return { state: 'unknown', metric: s };
+    }
+    case 'canslim':
+      if (x.qualifies) return { state: 'pass', metric: `${x.passingLetters}/7` };
+      if ((x.score || 0) >= 60) return { state: 'partial', metric: `${x.passingLetters || 0}/7` };
+      return { state: 'fail', metric: `${x.passingLetters || 0}/7` };
+    case 'vcp':
+    case 'cupHandle':
+      return x.detected ? { state: 'pass', metric: `${x.confidence}%` } : { state: 'fail', metric: 'no' };
+    case 'piotroski':
+      if (x.qualifies) return { state: 'pass', metric: `${x.passed}/9` };
+      if ((x.passed || 0) >= 5) return { state: 'partial', metric: `${x.passed}/9` };
+      return { state: 'fail', metric: `${x.passed || 0}/9` };
+    case 'altman':
+      if (x.zone === 'SAFE') return { state: 'pass', metric: `Z=${x.z}` };
+      if (x.zone === 'GREY') return { state: 'partial', metric: `Z=${x.z}` };
+      if (x.zone === 'DISTRESS') return { state: 'fail', metric: `Z=${x.z}` };
+      return { state: 'unknown', metric: '—' };
+    case 'industryRS':
+      if (x.qualifies) return { state: 'pass', metric: `${x.stockPercentileInSector}th %ile` };
+      if ((x.stockPercentileInSector || 0) >= 50) return { state: 'partial', metric: `${x.stockPercentileInSector}th` };
+      return { state: 'fail', metric: x.stockPercentileInSector != null ? `${x.stockPercentileInSector}th` : 'no data' };
+    case 'magicFormula':
+      if (x.qualifies) return { state: 'pass', metric: `${x.percentile}th %ile` };
+      if ((x.percentile || 0) >= 50) return { state: 'partial', metric: `${x.percentile}th` };
+      return { state: 'fail', metric: x.percentile != null ? `${x.percentile}th` : 'no data' };
+    case 'accumulation':
+      if (x.skipped) return { state: 'unknown', metric: 'no candles' };
+      if (x.qualifies) return { state: 'pass', metric: `${x.net >= 0 ? '+' : ''}${x.net}` };
+      if (x.net != null && x.net >= 0) return { state: 'partial', metric: `${x.net >= 0 ? '+' : ''}${x.net}` };
+      return { state: 'fail', metric: `${x.net}` };
+    default: return { state: 'unknown', metric: '—' };
+  }
+}
+
+function _plainReason(pb, key) {
+  const x = pb[key];
+  if (!x || x.error) return 'data not available';
+  switch (key) {
+    case 'minervini': return `${x.passed || 0} of 8 trend criteria passing${x.confidence ? ` · ${x.confidence} confidence` : ''}`;
+    case 'weinstein': return x.reason || x.stage;
+    case 'canslim':   return `${x.passingLetters || 0} of 7 letters strong · score ${x.score}/100`;
+    case 'vcp':       return x.reason || 'no progressive contractions detected';
+    case 'cupHandle': return x.reason || 'no cup-with-handle pattern';
+    case 'piotroski': return `${x.passed || 0} of 9 fundamental quality checks${x.confidence ? ` · ${x.confidence} confidence` : ''}`;
+    case 'altman':    return x.interpretation || 'no Altman data';
+    case 'industryRS':return x.label || (x.sectorPercentile != null ? `sector ${x.sectorPercentile}th %ile · stock ${x.stockPercentileInSector}th in sector` : 'no sector data');
+    case 'magicFormula': return x.label || 'no Magic Formula rank';
+    case 'accumulation': return x.skipped ? 'needs daily candles' : (x.verdict || 'no A/D data');
+    default: return '';
+  }
+}
+
+const STATE_STYLE = {
+  pass:    { bg: 'rgba(16,185,129,0.08)',  fg: '#10b981',         icon: '✓', symbol: 'pass' },
+  partial: { bg: 'rgba(245,158,11,0.08)',  fg: '#f59e0b',         icon: '○', symbol: 'partial' },
+  fail:    { bg: 'rgba(239,68,68,0.06)',   fg: '#ef4444',         icon: '✕', symbol: 'fail' },
+  unknown: { bg: 'rgba(148,163,184,0.06)', fg: 'var(--text4)',    icon: '–', symbol: 'no data' },
+};
+
 function DeepAnalyzerPlaybook({ playbook }) {
   if (!playbook) return null;
-  const { stage, trendTemplate, canslim, vcp, cupHandle, verdict, verdictColor, playbookScore, stageMultiplier } = playbook;
+  const pb = playbook;
+  const composite = pb.composite || {};
+  const isHardExclude = !!pb.hardExclude;
+  const isStage3 = pb.stage?.stage === 'STAGE_3';
+  const v = composite.verdict || pb.verdict || 'NEUTRAL';
+  const isAvoid = isHardExclude || pb.stage?.stage === 'STAGE_4' || v.includes('AVOID');
+  const isStrongBuy = v.includes('STRONG BUY');
+  const isBuy = !isStrongBuy && v.includes('BUY');
+  const isWatch = v.includes('WATCH');
 
-  const stageStr = stage?.stage || 'UNKNOWN';
-  const isStage4 = stageStr === 'STAGE_4';
-  const isStage3 = stageStr === 'STAGE_3';
-  const isStage2 = stageStr === 'STAGE_2';
-  const isStage1 = stageStr === 'STAGE_1';
-  const stageColor =
-    isStage4 ? '#ef4444'
-    : isStage3 ? '#f59e0b'
-    : isStage2 ? '#10b981'
-    : isStage1 ? '#3b82f6'
-    : '#94a3b8';
-  const stageBg =
-    isStage4 ? 'rgba(239,68,68,0.10)'
-    : isStage3 ? 'rgba(245,158,11,0.10)'
-    : isStage2 ? 'rgba(16,185,129,0.10)'
-    : isStage1 ? 'rgba(59,130,246,0.10)'
-    : 'rgba(148,163,184,0.10)';
-  const stageLabel = stageStr.replace('STAGE_', 'Stage ').replace('_TRANSITIONAL', ' (Transitional)').replace('UNKNOWN', 'Unknown');
+  // Build 10 framework checks
+  const checks = [
+    'minervini', 'weinstein', 'canslim', 'vcp', 'cupHandle',
+    'piotroski', 'altman', 'industryRS', 'magicFormula', 'accumulation',
+  ].map(key => ({
+    key,
+    label: FRAMEWORK_LABELS[key].title,
+    deepLabel: FRAMEWORK_LABELS[key].deep,
+    status: _statusFromCheck(pb, key),
+    reason: _plainReason(pb, key),
+    raw: pb[key],
+  }));
+  // Sort fails first → partial → pass → unknown (fails drive the decision)
+  const order = { fail: 0, partial: 1, pass: 2, unknown: 3 };
+  const sortedChecks = [...checks].sort((a, b) => order[a.status.state] - order[b.status.state]);
 
-  const ttPassed = trendTemplate?.passed ?? 0;
-  const ttTotal = trendTemplate?.total ?? 8;
-  const ttQualifies = !!trendTemplate?.qualifies;
-  const ttCriteria = Array.isArray(trendTemplate?.criteria) ? trendTemplate.criteria : [];
+  const passCount = composite.passCount ?? 0;
+  const total = composite.total ?? checks.filter(c => c.status.state !== 'unknown').length;
+  const headerBg =
+    isHardExclude ? 'rgba(239,68,68,0.10)'
+    : isAvoid     ? 'rgba(148,163,184,0.08)'
+    : isStage3    ? 'rgba(245,158,11,0.10)'
+    : isStrongBuy ? 'rgba(16,185,129,0.12)'
+    : isBuy       ? 'rgba(34,197,94,0.10)'
+    : isWatch     ? 'rgba(59,130,246,0.08)'
+                  : 'rgba(148,163,184,0.06)';
+  const headerFg =
+    isHardExclude ? '#ef4444'
+    : isAvoid     ? '#94a3b8'
+    : isStage3    ? '#f59e0b'
+    : isStrongBuy ? '#10b981'
+    : isBuy       ? '#22c55e'
+    : isWatch     ? '#3b82f6'
+                  : 'var(--text3)';
+  const plainVerdict =
+    isHardExclude ? 'AVOID'
+    : isAvoid     ? 'AVOID'
+    : isStage3    ? 'Take profits'
+    : isStrongBuy ? 'Strong Buy'
+    : isBuy       ? 'Buy'
+    : isWatch     ? 'Watch'
+                  : 'Neutral';
+
+  // Trade plan (skip for AVOID + Stage 3)
+  const showTradePlan = !isAvoid && !isStage3;
+  const entry = pb.vcp?.pivot ?? pb.cupHandle?.pivot ?? null;
+  const stop = pb.vcp?.stop ?? pb.cupHandle?.stop ?? null;
+  const target = entry != null ? +(Number(entry) * 1.20).toFixed(2) : null;
+  const riskReward = (entry && stop && target)
+    ? +((target - entry) / Math.max(entry - stop, 0.01)).toFixed(1)
+    : null;
 
   return (
-    <div className="card" style={{
-      padding: 22,
-      marginBottom: 16,
-      background: 'linear-gradient(135deg, rgba(99,102,241,0.04), rgba(168,85,247,0.04))',
-      border: '1px solid rgba(168,85,247,0.25)',
-    }}>
-      {/* Header */}
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px', marginBottom: 4 }}>
-            🏆 Top-Trader Playbook
-          </h3>
-          <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
-            Mark Minervini · Stan Weinstein · William O'Neil — composite verdict from 3 legendary trader frameworks
+    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+      {/* ═══ VERDICT CARD ═══ */}
+      <div style={{
+        padding: '18px 18px 16px', background: headerBg,
+        border: `1px solid ${headerFg}40`, borderRadius: 12, marginBottom: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>
+              Verdict
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: headerFg, letterSpacing: '-0.6px', lineHeight: 1.1 }}>
+              {plainVerdict}
+            </div>
+          </div>
+          {total > 0 && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>
+                Confidence
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: 'flex-end' }}>
+                <span className="tabular-nums" style={{ fontSize: 24, fontWeight: 800, color: headerFg }}>{passCount}</span>
+                <span style={{ fontSize: 13, color: 'var(--text3)' }}>of {total} checks pass</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(0,0,0,0.18)', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.55 }}>
+            {pb.stage?.recommendation || pb.stage?.reason || composite.reason || pb.verdict || 'Analysis complete.'}
           </div>
         </div>
-        {playbookScore != null && (
-          <div style={{
-            padding: '8px 14px', background: 'rgba(0,0,0,0.25)',
-            border: `1px solid ${verdictColor || '#94a3b8'}40`, borderRadius: 10, textAlign: 'center', minWidth: 110,
-          }}>
-            <div style={{ fontSize: 9, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 2 }}>
-              Composite
-            </div>
-            <div className="tabular-nums" style={{ fontSize: 22, fontWeight: 800, color: verdictColor || 'var(--text)', letterSpacing: '-0.5px' }}>
-              {playbookScore}
-            </div>
-            {stageMultiplier != null && (
-              <div style={{ fontSize: 9, color: 'var(--text4)', marginTop: 2 }}>
-                stage ×{stageMultiplier.toFixed(1)}
-              </div>
-            )}
+        {composite.rsDoubleCountFlag && (
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--amber-text)' }}>
+            ⓘ Industry RS and CANSLIM L both signal market-relative strength — confidence reflects one signal counted twice.
           </div>
         )}
       </div>
 
-      {/* Iron-rule banner for Stage 4 */}
-      {isStage4 && (
-        <div style={{
-          padding: '10px 14px',
-          background: 'rgba(239,68,68,0.16)',
-          border: '1.5px solid var(--red)',
-          borderRadius: 8,
-          fontSize: 12,
-          fontWeight: 800,
-          color: 'var(--red-text)',
-          letterSpacing: '0.3px',
-          marginBottom: 14,
-          lineHeight: 1.45,
-        }}>
-          ⚠ STAGE 4 — Weinstein iron rule: <b>NEVER OWN STAGE 4 STOCKS</b>
-          {stage?.warning && <div style={{ fontWeight: 600, marginTop: 4, fontSize: 11 }}>{stage.warning}</div>}
-        </div>
-      )}
-
-      {/* Verdict line */}
-      {verdict && !isStage4 && (
-        <div style={{
-          padding: '10px 14px',
-          background: `${verdictColor || '#94a3b8'}14`,
-          border: `1px solid ${verdictColor || '#94a3b8'}40`,
-          borderRadius: 8,
-          fontSize: 13,
-          fontWeight: 700,
-          color: verdictColor || 'var(--text)',
-          letterSpacing: '0.2px',
-          marginBottom: 14,
-        }}>
-          ▸ {verdict}
-        </div>
-      )}
-
-      {/* === Two-column grid: Weinstein Stage card + Combined patterns === */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 14 }}>
-        {/* Weinstein Stage card */}
-        <div style={{
-          padding: 14,
-          background: stageBg,
-          border: `1px solid ${stageColor}40`,
-          borderRadius: 10,
-        }}>
-          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6 }}>
-            Stan Weinstein · 4-Stage Analysis
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: stageColor, letterSpacing: '-0.5px' }}>
-              {stageLabel}
+      {/* ═══ TRADE PLAN — only when not AVOID ═══ */}
+      {showTradePlan && (entry || stop || target) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 12 }}>
+          {entry != null && (
+            <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Buy near</div>
+              <div className="tabular-nums" style={{ fontSize: 20, fontWeight: 700 }}>₹{Number(entry).toFixed(2)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>Breakout pivot</div>
             </div>
-            {stage?.confidence != null && (
-              <div style={{ fontSize: 10, color: 'var(--text4)', fontWeight: 600 }}>
-                {stage.confidence}% confidence
+          )}
+          {stop != null && (
+            <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Stop loss</div>
+              <div className="tabular-nums" style={{ fontSize: 20, fontWeight: 700, color: 'var(--red-text)' }}>₹{Number(stop).toFixed(2)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>−7% · Minervini rule</div>
+            </div>
+          )}
+          {target != null && (
+            <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Target</div>
+              <div className="tabular-nums" style={{ fontSize: 20, fontWeight: 700, color: 'var(--green-text)' }}>₹{Number(target).toFixed(2)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>+20% from pivot</div>
+            </div>
+          )}
+          {riskReward != null && (
+            <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Risk : Reward</div>
+              <div className="tabular-nums" style={{ fontSize: 20, fontWeight: 700, color: riskReward >= 2 ? 'var(--green-text)' : 'var(--amber-text)' }}>
+                1 : {riskReward}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text4)', marginTop: 2 }}>≥ 2 preferred</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ 10-CHECK SCOREBOARD ═══ */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>What the checks say</div>
+          <div style={{ fontSize: 10, color: 'var(--text4)' }}>Failing first</div>
+        </div>
+        <div style={{ display: 'grid', gap: 6 }}>
+          {sortedChecks.map(c => {
+            const s = STATE_STYLE[c.status.state];
+            return (
+              <div key={c.key} style={{
+                display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 12, alignItems: 'center',
+                padding: '8px 10px', background: s.bg, border: `1px solid ${s.fg}25`, borderRadius: 8,
+              }}>
+                <span aria-label={s.symbol} title={s.symbol} style={{
+                  fontSize: 14, fontWeight: 800, color: s.fg, textAlign: 'center',
+                }}>{s.icon}</span>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: s.fg === 'var(--text4)' ? 'var(--text3)' : 'var(--text)' }}>
+                    {c.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4, marginTop: 1 }}>{c.reason}</div>
+                </div>
+                <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 700, color: s.fg }}>{c.status.metric || ''}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ═══ TIER 3 — collapsible drill-downs ═══ */}
+      <details style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 8 }}>
+        <summary style={{ padding: 12, cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--text)', listStyle: 'none' }}>
+          ▸ Per-framework breakdown
+          <span style={{ fontSize: 10, color: 'var(--text4)', fontWeight: 500, marginLeft: 8 }}>(criteria, sub-scores, raw numbers)</span>
+        </summary>
+        <div style={{ padding: '0 12px 12px', display: 'grid', gap: 4 }}>
+          {checks.map(c => (
+            <FrameworkDrillDown key={c.key} title={c.deepLabel} item={c.raw} kind={c.key} />
+          ))}
+        </div>
+      </details>
+
+      <details style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)', borderRadius: 10 }}>
+        <summary style={{ padding: 12, cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--text)', listStyle: 'none' }}>
+          ▸ How the verdict was calculated
+        </summary>
+        <div style={{ padding: '0 12px 12px', fontSize: 11, color: 'var(--text3)', lineHeight: 1.6 }}>
+          <p>The verdict starts from <b>hard excludes</b>: an Altman-Z DISTRESS or Weinstein Stage 4 stock is excluded regardless of any other check. Otherwise, the framework checks are tallied. If the stock is in a <b>clean Stage 2 uptrend</b>: 7+ passes → Strong Buy, 5+ → Buy, 3+ → Watch. If the stock is NOT in a clean Stage 2, the bar is higher: 8+ → Strong Buy, 6+ → Watch, below → Avoid.</p>
+          <p style={{ marginTop: 6 }}>{passCount} of {total} checks passed in this evaluation.</p>
+          {pb.playbookScore != null && (
+            <p style={{ marginTop: 6 }}>Legacy composite score (stage-weighted): <b>{pb.playbookScore}</b> · stage multiplier ×{pb.stageMultiplier?.toFixed(1)}</p>
+          )}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function FrameworkDrillDown({ title, item, kind }) {
+  if (!item || item.error) {
+    return (
+      <details style={{ borderTop: '1px solid var(--border)', padding: '8px 0' }}>
+        <summary style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text3)', cursor: 'pointer', listStyle: 'none' }}>
+          ▸ {title} <span style={{ color: 'var(--text4)' }}>— no data</span>
+        </summary>
+      </details>
+    );
+  }
+  return (
+    <details style={{ borderTop: '1px solid var(--border)', padding: '8px 0' }}>
+      <summary style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text)', cursor: 'pointer', listStyle: 'none' }}>
+        ▸ {title}
+      </summary>
+      <div style={{ paddingTop: 8, fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+        {kind === 'minervini' && Array.isArray(item.criteria) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 6 }}>
+            {item.criteria.map((c, i) => (
+              <div key={i} style={{ padding: 8, background: c.pass ? 'rgba(16,185,129,0.06)' : 'rgba(148,163,184,0.04)', borderRadius: 6 }}>
+                <div style={{ fontWeight: 600, color: c.pass ? 'var(--green-text)' : 'var(--text)' }}>{c.pass ? '✓' : '○'} {c.name}</div>
+                {c.detail && <div style={{ marginTop: 2, color: 'var(--text3)', fontSize: 10 }}>{c.detail}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+        {kind === 'weinstein' && (
+          <div>
+            <div><b>Stage:</b> {item.stage}{item.subStage ? ` (${item.subStage})` : ''}</div>
+            {item.reason && <div style={{ marginTop: 4 }}>{item.reason}</div>}
+            {item.maturity && <div style={{ marginTop: 4 }}><b>{item.maturity.sub}:</b> {item.maturity.note}</div>}
+            {item.recommendation && <div style={{ marginTop: 4, color: 'var(--green-text)' }}>→ {item.recommendation}</div>}
+            {item.warning && <div style={{ marginTop: 4, color: 'var(--amber-text)' }}>⚠ {item.warning}</div>}
+          </div>
+        )}
+        {kind === 'canslim' && item.letters && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 6 }}>
+            {Object.entries(item.letters).map(([letter, l]) => (
+              <div key={letter} style={{ padding: 8, background: 'rgba(148,163,184,0.05)', borderRadius: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span><b style={{ fontSize: 13 }}>{letter}</b> · {l.name}</span>
+                  <span className="tabular-nums" style={{ color: l.score >= 70 ? 'var(--green-text)' : l.score >= 50 ? 'var(--amber-text)' : 'var(--red-text)' }}>
+                    {l.score ?? '—'}
+                  </span>
+                </div>
+                {l.detail && <div style={{ marginTop: 2, color: 'var(--text3)', fontSize: 10 }}>{l.detail}</div>}
+                {l.flag && <div style={{ marginTop: 2, color: 'var(--amber-text)', fontSize: 10 }}>⚠ {l.flag}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+        {kind === 'vcp' && (
+          <div>
+            <div><b>Detected:</b> {item.detected ? 'yes' : 'no'} <span style={{ color: 'var(--text4)' }}>({item.method || ''})</span></div>
+            <div style={{ marginTop: 4 }}>{item.reason}</div>
+            {Array.isArray(item.contractions) && item.contractions.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <b>Contractions:</b> {item.contractions.map(c => `${c.dropPct}%`).join(' → ')}
+                {item.volDryUp != null && <span> · volume {item.volDryUp ? 'drying up ✓' : 'not drying ✗'}</span>}
+              </div>
+            )}
+            {item.pivot != null && <div style={{ marginTop: 4 }}><b>Pivot:</b> ₹{item.pivot} · <b>Stop:</b> ₹{item.stop}</div>}
+          </div>
+        )}
+        {kind === 'cupHandle' && (
+          <div>
+            <div><b>Detected:</b> {item.detected ? 'yes' : 'no'}</div>
+            <div style={{ marginTop: 4 }}>{item.reason}</div>
+            {item.pivot != null && <div style={{ marginTop: 4 }}><b>Pivot:</b> ₹{item.pivot} · <b>Stop:</b> ₹{item.stop}</div>}
+          </div>
+        )}
+        {kind === 'piotroski' && Array.isArray(item.criteria) && (
+          <div>
+            <div style={{ marginBottom: 6 }}><b>F-Score:</b> {item.passed}/9 · {item.tier} · {item.confidence}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 4 }}>
+              {item.criteria.map((c, i) => (
+                <div key={i} style={{ padding: 6, background: c.pass ? 'rgba(16,185,129,0.06)' : 'rgba(148,163,184,0.04)', borderRadius: 6 }}>
+                  <div>{c.pass ? '✓' : '○'} {c.name}</div>
+                  {c.detail && <div style={{ color: 'var(--text4)', fontSize: 10, marginTop: 2 }}>{c.detail}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {kind === 'altman' && (
+          <div>
+            <div><b>Z = {item.z}</b> · zone: {item.zone} · model: {item.model}</div>
+            <div style={{ marginTop: 4 }}>{item.interpretation}</div>
+            {item.thresholds && (
+              <div style={{ marginTop: 4, color: 'var(--text4)', fontSize: 10 }}>
+                Safe ≥ {item.thresholds.safe} · Distress &lt; {item.thresholds.distress}
               </div>
             )}
           </div>
-          {stage?.reason && (
-            <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.45, marginBottom: 6 }}>
-              {stage.reason}
-            </div>
-          )}
-          {stage?.recommendation && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: stageColor, lineHeight: 1.45 }}>
-              → {stage.recommendation}
-            </div>
-          )}
-          {stage?.warning && !isStage4 && (
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--amber-text)', lineHeight: 1.45, marginTop: 6 }}>
-              ⚠ {stage.warning}
-            </div>
-          )}
-        </div>
-
-        {/* Pattern Detection — VCP + Cup-Handle */}
-        <div style={{
-          padding: 14,
-          background: 'rgba(255,255,255,0.03)',
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-        }}>
-          <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 8 }}>
-            Pattern Detection
-          </div>
-          {/* VCP */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: vcp?.detected ? '#3b82f6' : 'var(--text4)' }}>
-              🎯 VCP <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text4)' }}>(Minervini)</span>
-            </div>
-            <span style={{
-              fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-              color: vcp?.detected ? '#3b82f6' : 'var(--text4)',
-              background: vcp?.detected ? 'rgba(59,130,246,0.10)' : 'rgba(148,163,184,0.06)',
-              border: `1px solid ${vcp?.detected ? 'rgba(59,130,246,0.3)' : 'rgba(148,163,184,0.2)'}`,
-            }}>
-              {vcp?.detected ? `DETECTED · ${vcp.confidence}%` : 'NO'}
-            </span>
-          </div>
-          {vcp?.reason && (
-            <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4, marginBottom: 4 }}>
-              {vcp.reason}
-            </div>
-          )}
-          {vcp?.detected && vcp?.pivot != null && (
-            <div className="tabular-nums" style={{ fontSize: 10, color: 'var(--text4)', marginBottom: 10 }}>
-              Pivot: ₹{Number(vcp.pivot).toFixed(2)} · Stop: ₹{Number(vcp.stop).toFixed(2)}
-            </div>
-          )}
-          {/* Cup with Handle */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, marginTop: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: cupHandle?.detected ? '#a855f7' : 'var(--text4)' }}>
-              ☕ Cup-with-Handle <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text4)' }}>(O'Neil)</span>
-            </div>
-            <span style={{
-              fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-              color: cupHandle?.detected ? '#a855f7' : 'var(--text4)',
-              background: cupHandle?.detected ? 'rgba(168,85,247,0.10)' : 'rgba(148,163,184,0.06)',
-              border: `1px solid ${cupHandle?.detected ? 'rgba(168,85,247,0.3)' : 'rgba(148,163,184,0.2)'}`,
-            }}>
-              {cupHandle?.detected ? `DETECTED · ${cupHandle.confidence}%` : 'NO'}
-            </span>
-          </div>
-          {cupHandle?.reason && (
-            <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
-              {cupHandle.reason}
-            </div>
-          )}
-          {cupHandle?.detected && cupHandle?.pivot != null && (
-            <div className="tabular-nums" style={{ fontSize: 10, color: 'var(--text4)', marginTop: 4 }}>
-              Pivot: ₹{Number(cupHandle.pivot).toFixed(2)} · Stop: ₹{Number(cupHandle.stop).toFixed(2)}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* === Minervini Trend Template — 8 criteria checklist === */}
-      <div style={{
-        padding: 14,
-        background: 'rgba(255,255,255,0.03)',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        marginBottom: 14,
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        )}
+        {kind === 'industryRS' && (
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
-              Mark Minervini · Trend Template
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
-              All 8 criteria must pass for a true Stage 2 buy
-            </div>
+            <div><b>Sector:</b> {item.sector}</div>
+            <div style={{ marginTop: 4 }}>Sector rank: {item.sectorRank}/{item.totalSectors} ({item.sectorPercentile}th %ile)</div>
+            <div>Stock in sector: {item.stockRankInSector}/{item.sectorPeerCount} ({item.stockPercentileInSector}th %ile)</div>
+            <div style={{ marginTop: 4, color: 'var(--text)' }}>{item.label}</div>
           </div>
-          <span style={{
-            fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 6, letterSpacing: '0.4px',
-            color: ttQualifies ? '#10b981' : ttPassed >= 6 ? '#f59e0b' : 'var(--text4)',
-            background: ttQualifies ? 'rgba(16,185,129,0.12)' : ttPassed >= 6 ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.06)',
-            border: `1px solid ${ttQualifies ? 'rgba(16,185,129,0.35)' : ttPassed >= 6 ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.2)'}`,
-          }}>
-            {ttPassed}/{ttTotal} {ttQualifies ? '✓ QUALIFIES' : ttPassed >= 6 ? 'CLOSE' : ''}
-          </span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 8 }}>
-          {ttCriteria.map((c, i) => (
-            <div key={i} style={{
-              padding: 10,
-              background: c.pass ? 'rgba(52,211,153,0.08)' : 'rgba(255,255,255,0.02)',
-              border: `1px solid ${c.pass ? 'rgba(52,211,153,0.25)' : 'var(--border)'}`,
-              borderRadius: 8,
-            }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: c.pass ? 'var(--green-text)' : 'var(--text)', marginBottom: 3 }}>
-                {c.pass ? '✓' : '○'} {c.name}
-              </div>
-              {c.detail && (
-                <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
-                  {c.detail}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+        )}
+        {kind === 'magicFormula' && (
+          <div>
+            <div><b>EY:</b> {item.earningsYield}% · <b>ROC:</b> {item.returnOnCapital}%</div>
+            <div style={{ marginTop: 4 }}>Combined rank: {item.combinedRank} of {item.universeSize}</div>
+            <div style={{ marginTop: 4 }}>{item.label}</div>
+          </div>
+        )}
+        {kind === 'accumulation' && !item.skipped && (
+          <div>
+            <div><b>50-day window:</b> +{item.accDays} accumulation days · −{item.distDays} distribution days · net {item.net >= 0 ? '+' : ''}{item.net}</div>
+            <div style={{ marginTop: 4 }}>{item.verdict}</div>
+          </div>
+        )}
+        {kind === 'accumulation' && item.skipped && (
+          <div style={{ color: 'var(--text4)' }}>Needs daily candles — not available here.</div>
+        )}
       </div>
-
-      {/* === O'Neil CANSLIM rubric — 7 letters === */}
-      {canslim?.letters && (
-        <div style={{
-          padding: 14,
-          background: 'rgba(255,255,255,0.03)',
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.2px' }}>
-                William O'Neil · CANSLIM Rubric
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
-                7 letters · qualifies if ≥6 letters scored ≥70
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{
-                fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 6, letterSpacing: '0.4px',
-                color: canslim.qualifies ? '#10b981' : canslim.score >= 60 ? '#f59e0b' : 'var(--text4)',
-                background: canslim.qualifies ? 'rgba(16,185,129,0.12)' : canslim.score >= 60 ? 'rgba(245,158,11,0.10)' : 'rgba(148,163,184,0.06)',
-                border: `1px solid ${canslim.qualifies ? 'rgba(16,185,129,0.35)' : canslim.score >= 60 ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.2)'}`,
-              }}>
-                {canslim.score}/100 · {canslim.passingLetters}/7 strong {canslim.qualifies ? '✓' : ''}
-              </span>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
-            {Object.entries(canslim.letters).map(([letter, l]) => {
-              const isStrong = l.score != null && l.score >= 70;
-              const isMid = l.score != null && l.score >= 50 && l.score < 70;
-              const isWeak = l.score != null && l.score < 50;
-              const noData = l.score == null;
-              const color = isStrong ? '#10b981' : isMid ? '#f59e0b' : isWeak ? '#ef4444' : 'var(--text4)';
-              const bg = isStrong ? 'rgba(16,185,129,0.08)' : isMid ? 'rgba(245,158,11,0.06)' : isWeak ? 'rgba(239,68,68,0.06)' : 'rgba(148,163,184,0.04)';
-              return (
-                <div key={letter} style={{
-                  padding: 10,
-                  background: bg,
-                  border: `1px solid ${color}30`,
-                  borderRadius: 8,
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ fontSize: 16, fontWeight: 900, color: color, letterSpacing: '-0.3px' }}>{letter}</span>
-                      <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600 }}>{l.name}</span>
-                    </div>
-                    <span className="tabular-nums" style={{ fontSize: 11, fontWeight: 800, color: color }}>
-                      {noData ? '—' : l.score}
-                    </span>
-                  </div>
-                  {l.detail && (
-                    <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.4 }}>
-                      {l.detail}
-                    </div>
-                  )}
-                  {l.flag && (
-                    <div style={{ fontSize: 10, color: 'var(--amber-text)', fontWeight: 700, marginTop: 3, lineHeight: 1.4 }}>
-                      ⚠ {l.flag}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
+    </details>
   );
 }
 

@@ -20950,9 +20950,24 @@ function computeMinerviniTrendTemplate(f) {
   result.criteria.push({ name: '150 DMA > 200 DMA', pass: !!c2, detail: f.dma150 && f.dma200 ? `${f.dma150.toFixed(0)} > ${f.dma200.toFixed(0)}` : 'missing' });
   if (c2) result.passed++;
 
-  // 3. 200-day MA trending up (proxy: price > 200DMA by > 5%)
-  const c3 = f.pctAbove200 != null && f.pctAbove200 > 5;
-  result.criteria.push({ name: '200 DMA rising', pass: !!c3, detail: f.pctAbove200 != null ? `pctAbove200=${f.pctAbove200.toFixed(1)}%` : 'missing' });
+  // 3. 200-day MA trending up
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit finding: previous proxy used distance
+  // (pctAbove200 > 5) which is a level check, not slope. A flat 200DMA with
+  // price 6% above passed; a rising 200DMA with price 2% above failed.
+  // Fixed proxy: price above 200dma AND 6-month return positive (the only way
+  // a 200dma can be rising over a 6m horizon is if 6m return > 0). Also
+  // require dma150 > dma200 as confirmation (criterion 2 territory but the
+  // canonical Minervini c3 specifically validates the 200's direction).
+  const c3 = f.pctAbove200 != null && f.pctAbove200 > 0
+          && f.change6m != null && f.change6m > 0
+          && (f.dma150 != null && f.dma200 != null ? f.dma150 > f.dma200 : true);
+  result.criteria.push({
+    name: '200 DMA trending up',
+    pass: !!c3,
+    detail: f.pctAbove200 != null && f.change6m != null
+      ? `pctAbove200=${f.pctAbove200.toFixed(1)}% · 6m=${(f.change6m*100).toFixed(1)}%`
+      : 'missing'
+  });
   if (c3) result.passed++;
 
   // 4. 50-day MA above both 150-day and 200-day MA
@@ -21031,6 +21046,13 @@ function classifyWeinsteinStage(f) {
   if (!above200 && !dma200Rising && change6m < -0.10) {
     return { stage: 'STAGE_4', confidence: 90, reason: 'price below 200 DMA + DMA falling + 6m return < -10%', warning: 'Iron rule: NEVER OWN STAGE 4 STOCKS' };
   }
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — Stage 4 EARLY boundary tier.
+  // Audit finding: stock fresh into breakdown with 3m < -10% AND below 200dma
+  // was previously falling into TRANSITIONAL and reaching the BUY cascade.
+  // Catch it here as Stage 4 EARLY (still excluded by iron rule).
+  if (!above200 && (change3m < -0.10 || (change1m < -0.05 && change3m < -0.05))) {
+    return { stage: 'STAGE_4', confidence: 75, reason: 'below 200 DMA + accelerating decline (early Stage 4)', warning: 'Iron rule: NEVER OWN STAGE 4 STOCKS' };
+  }
   // Stage 3: distribution (price still above MA but MA flattening, momentum weakening)
   if (above200 && (ma30wkRising === false || (change3m < -0.05 && change1m < -0.03))) {
     return { stage: 'STAGE_3', confidence: 75, reason: 'price > 200 DMA but momentum rolling over', warning: 'Distribution phase — take profits on existing positions' };
@@ -21047,16 +21069,23 @@ function classifyWeinsteinStage(f) {
   //   → moderate risk, wait for pullback to 50dma preferred
   // LATE:  parabolic, 6m return > 60% OR > 50% above 200dma
   //   → high distribution risk, no new entries
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — OR-logic so two stocks with same 6m return
+  // can't bucket differently based on pa200 alone. Either signal pushes
+  // toward LATE; both must be tame to stay EARLY. Documented as heuristic
+  // (Weinstein's actual rule uses time-since-breakout, which we don't track).
   function _classifyStage2Maturity() {
     const pa200 = f.pctAbove200 || 0;
     const ret6m = (change6m || 0) * 100;
+    // LATE if EITHER 6m return is parabolic OR price is extended above 200dma
+    if (ret6m >= 60 || pa200 >= 50) {
+      return { sub: 'LATE', risk: 'HIGH', note: 'Parabolic — distribution risk increasing, no new entries' };
+    }
+    // EARLY only if BOTH 6m return is modest AND price is near 200dma
     if (ret6m < 30 && pa200 < 20) {
       return { sub: 'EARLY', risk: 'LOW', note: 'Just broke base — best entry zone (low risk)' };
     }
-    if (ret6m < 60 && pa200 < 50) {
-      return { sub: 'MID', risk: 'MEDIUM', note: 'Extended uptrend — wait for pullback to 50dma for entry' };
-    }
-    return { sub: 'LATE', risk: 'HIGH', note: 'Parabolic — distribution risk increasing, no new entries' };
+    // Everything in between
+    return { sub: 'MID', risk: 'MEDIUM', note: 'Extended uptrend — wait for pullback to 50dma for entry' };
   }
 
   if (above200 && dma200Rising && ma30wkRising === true && change6m > 0.10) {
@@ -21088,7 +21117,22 @@ function classifyWeinsteinStage(f) {
   if (Math.abs(change6m) < 0.10 && Math.abs(change3m) < 0.05) {
     return { stage: 'STAGE_1', confidence: 70, reason: 'sideways consolidation, low momentum', recommendation: 'WATCH for Stage 2 breakout' };
   }
-  // Default: ambiguous
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — tighten fall-through.
+  // Audit CRITICAL #1: a "mixed signals" STAGE_2_TRANSITIONAL was previously
+  // counted as Stage 2 for composite tally, letting genuinely-broken stocks
+  // (distributing into Stage 4) reach BUY. Now: if momentum is negative
+  // anywhere meaningful, classify as STAGE_3 (caution) instead of pretending
+  // it's a baby Stage 2. Pure mixed-but-positive still flows to provisional.
+  if (change3m < 0 || change1m < -0.03 || change6m < 0) {
+    return {
+      stage: 'STAGE_3',
+      confidence: 55,
+      reason: 'mixed signals with negative shorter-term momentum — likely Stage 2→3 rollover',
+      warning: 'Treat as Stage 3 until momentum turns positive again',
+      recommendation: 'NO NEW ENTRIES — wait for fresh breakout',
+    };
+  }
+  // Genuinely mixed but all-positive → keep as transitional (low confidence)
   return { stage: 'STAGE_2_TRANSITIONAL', confidence: 50, reason: 'mixed signals — likely transitioning', recommendation: 'wait for clarity' };
 }
 
@@ -21175,60 +21219,57 @@ function computeCanslim(f) {
   };
 
   // M — Market direction (William O'Neil: 3 of 4 stocks follow the market)
-  // 🛡 v2.1 Sprint 3 (2026-05-11) — Multi-factor: regime + Nifty trend + breadth + VIX
-  // Pre-Sprint-3 this was a simple binary on `marketRegime`. Real CANSLIM M
-  // requires multiple confirmations because the labels lag turning points.
-  // Score weighted across (1) regime label, (2) Nifty 1m/3m momentum,
-  // (3) intraday breadth, (4) VIX panic level. Each contributes when known.
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit fix: previously Sprint 3 added a
+  // regime-label factor on top of Nifty momentum + breadth, but `marketRegime`
+  // is itself DERIVED from those same inputs — triple-counting one signal.
+  // Now: regime label is for display only; the score is built ONLY from the
+  // raw factors (Nifty momentum, breadth, VIX). Single source of truth per
+  // signal. Bear flag still fires from regime label since it's a UX cue.
   (() => {
     const factors = [];
     let mScore = 50;  // neutral default
 
-    // Factor 1: Regime label
-    const mBull = (typeof marketRegime !== 'undefined' && (marketRegime === 'BULL' || marketRegime === 'BULLISH'));
-    const mBear = (typeof marketRegime !== 'undefined' && (marketRegime === 'BEAR' || marketRegime === 'BEARISH'));
-    if (mBull) { mScore += 20; factors.push('regime=BULL(+20)'); }
-    else if (mBear) { mScore -= 25; factors.push('regime=BEAR(-25)'); }
-    else if (typeof marketRegime !== 'undefined') { factors.push(`regime=${marketRegime}`); }
-
-    // Factor 2: Nifty momentum (1m + 3m). Both up = follow-through confirmation
+    // Factor 1: Nifty momentum (1m + 3m). Both up = follow-through confirmation.
+    // This is the primary signal — marketRegime is downstream of this.
     if (typeof niftyBenchmark !== 'undefined' && niftyBenchmark) {
       const n1m = niftyBenchmark['1m'], n3m = niftyBenchmark['3m'];
       if (n1m != null && n3m != null) {
-        if (n1m > 0.02 && n3m > 0.05) { mScore += 15; factors.push(`Nifty 1m+${(n1m*100).toFixed(1)}%/3m+${(n3m*100).toFixed(1)}% (+15)`); }
-        else if (n1m > 0 && n3m > 0)  { mScore += 5;  factors.push(`Nifty mildly up (+5)`); }
-        else if (n1m < -0.03 && n3m < -0.05) { mScore -= 20; factors.push(`Nifty down hard 1m${(n1m*100).toFixed(1)}%/3m${(n3m*100).toFixed(1)}% (-20)`); }
-        else if (n1m < 0 || n3m < 0) { mScore -= 8; factors.push(`Nifty negative (-8)`); }
+        if (n1m > 0.02 && n3m > 0.05) { mScore += 25; factors.push(`Nifty 1m+${(n1m*100).toFixed(1)}%/3m+${(n3m*100).toFixed(1)}% (+25)`); }
+        else if (n1m > 0 && n3m > 0)  { mScore += 10; factors.push(`Nifty mildly up (+10)`); }
+        else if (n1m < -0.03 && n3m < -0.05) { mScore -= 30; factors.push(`Nifty down hard 1m${(n1m*100).toFixed(1)}%/3m${(n3m*100).toFixed(1)}% (-30)`); }
+        else if (n1m < 0 || n3m < 0) { mScore -= 12; factors.push(`Nifty negative (-12)`); }
       }
     }
 
-    // Factor 3: Intraday breadth (% above VWAP) — only when fresh (n>=5)
+    // Factor 2: Intraday breadth (% above VWAP) — only when fresh (n>=5)
     if (typeof _dayTradeBreadth !== 'undefined' && _dayTradeBreadth && _dayTradeBreadth.n >= 5) {
       const bPct = _dayTradeBreadth.aboveVWAPPct;
-      if (bPct >= 65) { mScore += 10; factors.push(`Breadth strong ${bPct}%>VWAP (+10)`); }
-      else if (bPct >= 50) { mScore += 3; factors.push(`Breadth okay ${bPct}% (+3)`); }
-      else if (bPct < 35) { mScore -= 10; factors.push(`Breadth weak ${bPct}% (-10)`); }
-      else { factors.push(`Breadth ${bPct}%`); }
+      if (bPct >= 65) { mScore += 15; factors.push(`Breadth strong ${bPct}%>VWAP (+15)`); }
+      else if (bPct >= 50) { mScore += 5;  factors.push(`Breadth okay ${bPct}% (+5)`); }
+      else if (bPct < 35)  { mScore -= 15; factors.push(`Breadth weak ${bPct}% (-15)`); }
+      else                 { factors.push(`Breadth ${bPct}%`); }
     }
 
-    // Factor 4: VIX — panic = sit in cash per O'Neil even if regime says BULL
+    // Factor 3: VIX — panic = sit in cash per O'Neil regardless of regime label
     const vix = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.vix)
       ? +_marketDataCache.vix.value : null;
     if (vix != null) {
       if (vix < 14) { mScore += 5; factors.push(`VIX calm ${vix.toFixed(1)} (+5)`); }
-      else if (vix > 25) { mScore -= 15; factors.push(`VIX panic ${vix.toFixed(1)} (-15) — O'Neil: sit in cash`); }
-      else if (vix > 20) { mScore -= 5; factors.push(`VIX elevated ${vix.toFixed(1)} (-5)`); }
+      else if (vix > 25) { mScore -= 20; factors.push(`VIX panic ${vix.toFixed(1)} (-20) — O'Neil: sit in cash`); }
+      else if (vix > 20) { mScore -= 8;  factors.push(`VIX elevated ${vix.toFixed(1)} (-8)`); }
     }
 
-    // Clamp + flag
+    // Clamp + display-only regime + flag
     mScore = Math.max(0, Math.min(100, mScore));
+    const regimeLabel = (typeof marketRegime !== 'undefined') ? marketRegime : 'unknown';
+    const mBearLabel = regimeLabel === 'BEAR' || regimeLabel === 'BEARISH';
     const flag = (vix != null && vix > 25) ? 'VIX panic — O\'Neil rule: sit in cash'
-               : mBear ? 'BEAR regime — sit in cash per O\'Neil'
+               : mBearLabel ? 'BEAR regime — sit in cash per O\'Neil'
                : null;
     result.letters.M = {
       name: 'Market direction',
       score: mScore,
-      detail: factors.length ? factors.join(' · ') : (typeof marketRegime !== 'undefined' ? marketRegime : 'unknown'),
+      detail: factors.length ? `[regime=${regimeLabel}] ${factors.join(' · ')}` : `regime=${regimeLabel}`,
       flag,
     };
   })();
@@ -21328,21 +21369,40 @@ function _detectVCPFromCandles(candles, f) {
       return { detected: false, confidence: 0, reason: `only ${pivots.length} pivots — need ≥4`, method: 'tier-A-candles' };
     }
 
-    // Pair High→Low contractions in time order. We want HIGH, LOW, HIGH, LOW...
-    // Sequence: take the latest 5-6 pivots and identify H-L-H-L-H pattern.
-    const recent = pivots.slice(-7);  // last few pivots
+    // 🛡 v2.1 Sprint 4 (2026-05-11) — audit fixes:
+    //   HIGH #3: pair each L with the "last H seen" instead of just the
+    //   adjacent pivot, so H,H,L doesn't anchor against the wrong (second)
+    //   high. Walk pivots maintaining a current anchor.
+    //   HIGH #4: volume dry-up was comparing a single H bar's volume to a
+    //   single L bar's volume — wrong. Now compute AVERAGE bar volume
+    //   between the anchor H and each L (the contraction window) and check
+    //   the per-leg averages are dropping leg-over-leg.
+    const recent = pivots.slice(-9);  // last few pivots
     const contractions = [];
-    for (let i = 0; i < recent.length - 1; i++) {
-      const a = recent[i], b = recent[i+1];
-      if (a.type === 'H' && b.type === 'L') {
-        const drop = (a.price - b.price) / a.price;
+    let anchor = null;  // last H seen
+    for (let p of recent) {
+      if (p.type === 'H') {
+        // Update anchor if this is a higher high (or first H)
+        if (!anchor || p.price >= anchor.price) anchor = p;
+      } else if (p.type === 'L' && anchor) {
+        const drop = (anchor.price - p.price) / anchor.price;
         if (drop > 0 && drop < 0.40) {  // sanity — discard >40% drops (those are Stage 4)
+          // Average volume between anchor H index and this L index inclusive
+          const i0 = anchor.i, i1 = p.i;
+          let volSum = 0, volN = 0;
+          for (let k = i0; k <= i1; k++) {
+            const v = c[k] && c[k].volume;
+            if (v != null && v > 0) { volSum += v; volN++; }
+          }
+          const avgLegVol = volN > 0 ? volSum / volN : 0;
           contractions.push({
-            from: a.price, to: b.price,
+            from: anchor.price, to: p.price,
             dropPct: +(drop * 100).toFixed(2),
-            avgVolBefore: a.vol,
-            avgVolAfter:  b.vol,
+            avgLegVolume: Math.round(avgLegVol),
+            barsInLeg: volN,
           });
+          // After a contraction, reset anchor — next H starts a new leg
+          anchor = null;
         }
       }
     }
@@ -21362,10 +21422,16 @@ function _detectVCPFromCandles(candles, f) {
       if (tightenBy < 0.25) { progressive = false; }
     }
 
-    // Volume dry-up check — most recent contraction low volume vs first
-    const volDryUp = contractions[0].avgVolBefore > 0 && contractions[contractions.length-1].avgVolAfter > 0
-      ? contractions[contractions.length-1].avgVolAfter < contractions[0].avgVolBefore
-      : true;  // missing volume data → don't penalize
+    // Volume dry-up — average leg-volume must drop leg-over-leg (Minervini's
+    // actual rule). Compare average over the contraction window, not single
+    // bars. Allow flat → still passes; only fails on rising leg-volume.
+    const legVols = contractions.map(c => c.avgLegVolume).filter(v => v > 0);
+    let volDryUp = true;
+    if (legVols.length >= 2) {
+      for (let i = 1; i < legVols.length; i++) {
+        if (legVols[i] > legVols[i-1] * 1.05) { volDryUp = false; break; }
+      }
+    }
 
     // Anchor pivot for breakout — highest recent High pivot
     const highPivots = recent.filter(p => p.type === 'H');
@@ -21409,7 +21475,10 @@ function _detectVCPFromCandles(candles, f) {
       method: 'tier-A-candles',
     };
   } catch (e) {
-    return null;  // fall back to Tier B silently
+    // 🛡 v2.1 Sprint 4 — surface the error so data-quality issues don't
+    // silently fall back to Tier B forever.
+    try { console.warn(`[VCP-tierA] error, falling back to Tier B: ${e.message}`); } catch (_) {}
+    return null;
   }
 }
 
@@ -21424,12 +21493,25 @@ function detectCupWithHandle(f) {
   // 1. Prior uptrend (price > 200DMA, 6m return > 30%)
   const uptrend = f.pctAbove200 != null && f.pctAbove200 > 0 && f.change6m != null && f.change6m > 0.30;
   if (!uptrend) { result.reason = 'no prior 30%+ uptrend'; return result; }
-  // 2. 12-30% off the high (cup depth)
+  // 2. Cup depth — must be 12-30% off the high at the bottom of the cup;
+  //    in the handle (right side), must be back within 15% of the high
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit fix: previous check used range
+  // 5-30 then 5-15, making the 15-30 band dead code. Now reject too-deep
+  // (>30 = no recovery) and too-shallow-and-extended (>15 = still in cup,
+  // hasn't formed handle yet). 5-15 = handle zone.
   const pctFromHigh = Math.abs(f.pctFromHigh || 0);
-  if (pctFromHigh < 5 || pctFromHigh > 30) { result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% out of 12-30% range`; return result; }
-  // 3. Currently near right side of cup (forming handle): within 5-15% of high
-  const recoveringWell = pctFromHigh >= 5 && pctFromHigh <= 15;
-  if (!recoveringWell) { result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% — not in handle zone`; return result; }
+  if (pctFromHigh > 30) {
+    result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% — too deep, no recovery`;
+    return result;
+  }
+  if (pctFromHigh > 15) {
+    result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% — still in cup, handle not formed (need ≤15%)`;
+    return result;
+  }
+  if (pctFromHigh < 5) {
+    result.reason = `pctFromHigh=${pctFromHigh.toFixed(1)}% — too close to high, no handle pullback yet`;
+    return result;
+  }
   // 4. RSI healthy (not overbought)
   if (f.rsi != null && f.rsi > 70) { result.reason = `RSI ${f.rsi} overbought — handle should be calmer`; return result; }
   // 5. Recent volume drying up (proxy: volRatio < 1.0)
@@ -21484,11 +21566,20 @@ function computeIndustryRS(symbol, fund) {
     const sectorPercentile = +(((sectorAvgs.length - sectorRank + 1) / sectorAvgs.length) * 100).toFixed(0);
 
     // Rank stock within sector
-    const peerReturns = (sectorReturns[sector] || []).slice().sort((a, b) => b - a);
-    const stockRank = peerReturns.findIndex(r => r === fund.change6m) + 1;
-    const stockPercentile = peerReturns.length > 0
-      ? +(((peerReturns.length - stockRank + 1) / peerReturns.length) * 100).toFixed(0)
-      : 0;
+    // 🛡 v2.1 Sprint 4 (2026-05-11) — audit HIGH #6: previous findIndex used
+    // float-equality which silently returns -1 if `fund` is not the exact
+    // object stored in FUND[sym] (caller may pass a copy). That gave
+    // stockRank=0 → percentile ≈ 100% (false leader). Fix: count peers with
+    // strictly better return + 1; guard the empty-sector case explicitly.
+    const peerReturns = (sectorReturns[sector] || []).slice();
+    const myRet = fund.change6m;
+    const peerCount = peerReturns.length;
+    let stockRank = 0, stockPercentile = 0;
+    if (peerCount > 0 && myRet != null) {
+      const peersBetter = peerReturns.filter(r => r > myRet).length;
+      stockRank = peersBetter + 1;  // 1-indexed
+      stockPercentile = +(((peerCount - stockRank + 1) / peerCount) * 100).toFixed(0);
+    }
 
     const qualifies = sectorPercentile >= 80 && stockPercentile >= 80;
     let label = '❌ Below average on both dimensions';
@@ -21504,7 +21595,7 @@ function computeIndustryRS(symbol, fund) {
       totalSectors: sectorAvgs.length,
       sectorPercentile,
       stockRankInSector: stockRank,
-      sectorPeerCount: peerReturns.length,
+      sectorPeerCount: peerCount,
       stockPercentileInSector: stockPercentile,
       qualifies,
       label,
@@ -21554,7 +21645,11 @@ function computeAccumulationDistribution(candles) {
     accDays, distDays, net,
     avgVolume: Math.round(avgVol),
     verdict,
-    qualifies: net >= 3,
+    // 🛡 v2.1 Sprint 4 (2026-05-11) — align qualifies with verdict label.
+    // Previously verdict said "Mild accumulation" at net>=2 but qualifies
+    // required net>=3, so a net=2 stock displayed positive but didn't count
+    // toward composite pass tally. Now consistent.
+    qualifies: net >= 2,
     recentEvents: events.slice(-10),
   };
 }
@@ -21595,34 +21690,62 @@ function computeCompositeVerdict(analysis) {
   }
 
   // Count framework passes
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit HIGH #7: Industry RS double-counted
+  // with CANSLIM Letter L (both encode "stock vs market 6M outperformance").
+  // When industryRS is evaluable, treat it as the canonical RS signal and
+  // down-weight canslim's contribution by removing CANSLIM's own RS letter
+  // from its qualification when we already have industryRS. We can't surgically
+  // strip Letter L from canslim.qualifies here without re-running, so instead
+  // we apply a conservative rule: when industryRS is the leader-of-leaders
+  // signal AND canslim qualifies primarily on Letter L, the composite still
+  // counts both, but we add a `rsDoubleCount: true` flag for transparency.
+  const industryRSEvaluable = analysis.industryRS && !analysis.industryRS.error;
+
   const passes = {
     minervini: analysis.minervini && analysis.minervini.qualifies,
     weinsteinStage2: analysis.weinstein && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL'),
     canslim: analysis.canslim && analysis.canslim.qualifies,
     piotroski: analysis.piotroski && analysis.piotroski.qualifies,
     altmanSafe: analysis.altman && analysis.altman.zone === 'SAFE',
-    industryRS: analysis.industryRS && analysis.industryRS.qualifies,
+    industryRS: industryRSEvaluable && analysis.industryRS.qualifies,
     accumulation: analysis.accumulation && analysis.accumulation.qualifies,
     magicFormula: analysis.magicFormula && analysis.magicFormula.qualifies,
     vcp: analysis.vcp && analysis.vcp.detected,
     cupHandle: analysis.cupHandle && analysis.cupHandle.detected,
   };
 
+  // Evaluable = explicitly true OR false (not null/undefined/missing-data)
   const evaluable = Object.values(passes).filter(v => v !== null && v !== undefined);
   const passCount = evaluable.filter(v => v).length;
   const total = evaluable.length;
 
+  // 🛡 v2.1 Sprint 4 — Tighten cascade. Audit CRITICAL #1: a STAGE_2_TRANSITIONAL
+  // (mixed-signals fall-through) was previously letting passCount drive verdict.
+  // Now: a stock that is NOT a clean Stage 2 must clear a higher bar (8+ passes)
+  // to qualify as STRONG BUY, and 6+ for BUY.
+  const cleanStage2 = analysis.weinstein
+    && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL');
+
   let verdict;
-  if (passCount >= 7) verdict = '⭐ STRONG BUY';
-  else if (passCount >= 5) verdict = '✅ BUY';
-  else if (passCount >= 3) verdict = '⏳ WATCH';
-  else verdict = '❌ AVOID';
+  if (cleanStage2) {
+    if (passCount >= 7) verdict = '⭐ STRONG BUY';
+    else if (passCount >= 5) verdict = '✅ BUY';
+    else if (passCount >= 3) verdict = '⏳ WATCH';
+    else verdict = '❌ AVOID';
+  } else {
+    // Not a clean Stage 2 → require materially higher evidence
+    if (passCount >= 8) verdict = '⭐ STRONG BUY';
+    else if (passCount >= 6) verdict = '⏳ WATCH (not in clean uptrend)';
+    else verdict = '❌ AVOID';
+  }
 
   return {
     verdict,
     passCount,
     total,
     passes,
+    cleanStage2,
+    rsDoubleCountFlag: industryRSEvaluable && passes.canslim && passes.industryRS,
     pctPass: total > 0 ? +(passCount / total * 100).toFixed(0) : 0,
   };
 }
@@ -21773,51 +21896,78 @@ function computePiotroskiFScore(f) {
 }
 
 // ── Altman Z-Score (bankruptcy prediction — Edward Altman 1968) ──
-// Z >= 2.99 = SAFE
-// 1.81 <= Z < 2.99 = GREY (monitor)
-// Z < 1.81 = DISTRESS (bankruptcy likely within 2 years)
+// 🛡 v2.1 Sprint 4 (2026-05-11) — audit MEDIUM #12: branch on sector.
+//   Original Z (manufacturers): Z = 1.2A + 1.4B + 3.3C + 0.6D + 1.0E
+//     SAFE ≥ 2.99 · GREY 1.81-2.99 · DISTRESS < 1.81
+//   Z'' (non-manufacturers — IT, services, financials):
+//     Z'' = 6.56A + 3.26B + 6.72C + 1.05D  (no E term — efficiency irrelevant)
+//     SAFE ≥ 2.60 · GREY 1.10-2.60 · DISTRESS < 1.10
 // Iron rule: never own a stock in DISTRESS zone regardless of other metrics.
 function computeAltmanZScore(f) {
   if (!f) return { z: null, zone: 'UNKNOWN', error: 'no_fundamentals' };
-  const required = ['workingCapital', 'totalAssets', 'retainedEarnings', 'ebit', 'marketCap', 'totalLiabilities', 'sales'];
+
+  // Determine model — non-manufacturers use Z'' (no sales/total-assets term)
+  const sector = (f.sector || '').toLowerCase();
+  const isNonManuf = /it|software|service|financ|bank|insur|nbfc|technology/.test(sector);
+  const model = isNonManuf ? 'Z_prime_prime' : 'Z_original';
+
+  const required = isNonManuf
+    ? ['workingCapital', 'totalAssets', 'retainedEarnings', 'ebit', 'marketCap', 'totalLiabilities']
+    : ['workingCapital', 'totalAssets', 'retainedEarnings', 'ebit', 'marketCap', 'totalLiabilities', 'sales'];
   const missing = required.filter(k => f[k] == null);
-  if (missing.length > 0) return { z: null, zone: 'UNKNOWN', error: 'insufficient_financials', missing };
+  if (missing.length > 0) return { z: null, zone: 'UNKNOWN', error: 'insufficient_financials', missing, model };
 
   if (f.totalAssets <= 0 || f.totalLiabilities <= 0) {
-    return { z: null, zone: 'UNKNOWN', error: 'invalid_balance_sheet' };
+    return { z: null, zone: 'UNKNOWN', error: 'invalid_balance_sheet', model };
   }
 
   const A = f.workingCapital / f.totalAssets;
   const B = f.retainedEarnings / f.totalAssets;
   const C = f.ebit / f.totalAssets;
   const D = f.marketCap / f.totalLiabilities;
-  const E = f.sales / f.totalAssets;
 
-  const z = 1.2 * A + 1.4 * B + 3.3 * C + 0.6 * D + 1.0 * E;
+  let z, safeT, distressT, components;
+  if (isNonManuf) {
+    z = 6.56 * A + 3.26 * B + 6.72 * C + 1.05 * D;
+    safeT = 2.60; distressT = 1.10;
+    components = {
+      A: { value: +A.toFixed(2), weight: 6.56, name: 'WorkingCap / TotalAssets (liquidity)' },
+      B: { value: +B.toFixed(2), weight: 3.26, name: 'RetainedEarnings / TotalAssets (profitability legacy)' },
+      C: { value: +C.toFixed(2), weight: 6.72, name: 'EBIT / TotalAssets (operating profit)' },
+      D: { value: +D.toFixed(2), weight: 1.05, name: 'MarketCap / TotalLiabilities (solvency)' },
+    };
+  } else {
+    const E = f.sales / f.totalAssets;
+    z = 1.2 * A + 1.4 * B + 3.3 * C + 0.6 * D + 1.0 * E;
+    safeT = 2.99; distressT = 1.81;
+    components = {
+      A: { value: +A.toFixed(2), weight: 1.2, name: 'WorkingCap / TotalAssets (liquidity)' },
+      B: { value: +B.toFixed(2), weight: 1.4, name: 'RetainedEarnings / TotalAssets (profitability legacy)' },
+      C: { value: +C.toFixed(2), weight: 3.3, name: 'EBIT / TotalAssets (operating profit)' },
+      D: { value: +D.toFixed(2), weight: 0.6, name: 'MarketCap / TotalLiabilities (solvency)' },
+      E: { value: +E.toFixed(2), weight: 1.0, name: 'Sales / TotalAssets (efficiency)' },
+    };
+  }
 
   let zone, interpretation;
-  if (z >= 2.99) {
+  if (z >= safeT) {
     zone = 'SAFE';
-    interpretation = 'Low bankruptcy risk (Z ≥ 2.99)';
-  } else if (z >= 1.81) {
+    interpretation = `Low bankruptcy risk (Z ≥ ${safeT})`;
+  } else if (z >= distressT) {
     zone = 'GREY';
-    interpretation = 'Moderate risk — monitor closely (1.81 ≤ Z < 2.99)';
+    interpretation = `Moderate risk — monitor closely (${distressT} ≤ Z < ${safeT})`;
   } else {
     zone = 'DISTRESS';
-    interpretation = '🚨 Bankruptcy likely within 2 years (Z < 1.81)';
+    interpretation = `🚨 Bankruptcy likely within 2 years (Z < ${distressT})`;
   }
 
   return {
     z: +z.toFixed(2),
     zone,
     interpretation,
-    components: {
-      A: { value: +A.toFixed(2), weight: 1.2, name: 'WorkingCap / TotalAssets (liquidity)' },
-      B: { value: +B.toFixed(2), weight: 1.4, name: 'RetainedEarnings / TotalAssets (profitability legacy)' },
-      C: { value: +C.toFixed(2), weight: 3.3, name: 'EBIT / TotalAssets (operating profit)' },
-      D: { value: +D.toFixed(2), weight: 0.6, name: 'MarketCap / TotalLiabilities (solvency)' },
-      E: { value: +E.toFixed(2), weight: 1.0, name: 'Sales / TotalAssets (efficiency)' },
-    },
+    model,
+    thresholds: { safe: safeT, distress: distressT },
+    components,
     hardExclude: zone === 'DISTRESS',
   };
 }
@@ -21844,6 +21994,12 @@ function computeMagicFormulaRank(symbol, fund) {
   const returnOnCapital = ebit / invCap;
 
   // Rank vs entire universe (if FUND is available)
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit MEDIUM #11: previous implementation
+  // did O(N²) work — nested findIndex inside a map. For N=500 stocks that's
+  // 250k ops PER stock analysed. Also the percentile math used `myPos = 0`
+  // (symbol not in universe) → `(n - 0 + 1)/n * 100` ≈ 100% false-leader.
+  // Fix: build rank lookup maps ONCE in O(N log N), then O(1) lookups. Guard
+  // every "found" check (require rank > 0) before computing percentile.
   let eyRank = null, rocRank = null, combinedRank = null, universeSize = 0, qualifies = false, percentile = null;
   try {
     if (typeof FUND !== 'undefined') {
@@ -21859,22 +22015,30 @@ function computeMagicFormulaRank(symbol, fund) {
 
       universeSize = universe.length;
       if (universeSize >= 20) {
-        const sortedByEY = [...universe].sort((a, b) => b.ey - a.ey);
+        const sortedByEY  = [...universe].sort((a, b) => b.ey - a.ey);
         const sortedByROC = [...universe].sort((a, b) => b.roc - a.roc);
-        eyRank = sortedByEY.findIndex(u => u.sym === symbol) + 1;
-        rocRank = sortedByROC.findIndex(u => u.sym === symbol) + 1;
-        if (eyRank > 0 && rocRank > 0) {
+
+        // O(N) rank lookup maps — built once, reused for combined rank
+        const eyRankMap  = new Map(sortedByEY.map((u, i) => [u.sym, i + 1]));
+        const rocRankMap = new Map(sortedByROC.map((u, i) => [u.sym, i + 1]));
+
+        const myEY  = eyRankMap.get(symbol)  || 0;
+        const myROC = rocRankMap.get(symbol) || 0;
+        eyRank  = myEY  > 0 ? myEY  : null;
+        rocRank = myROC > 0 ? myROC : null;
+
+        if (eyRank != null && rocRank != null) {
           combinedRank = eyRank + rocRank;
-          // top 30% by combined rank
+          // O(N) combined sort — single pass through universe
           const sortedCombined = universe
-            .map(u => ({
-              sym: u.sym,
-              combined: sortedByEY.findIndex(x => x.sym === u.sym) + 1 + sortedByROC.findIndex(x => x.sym === u.sym) + 1
-            }))
+            .map(u => ({ sym: u.sym, combined: (eyRankMap.get(u.sym) || 0) + (rocRankMap.get(u.sym) || 0) }))
             .sort((a, b) => a.combined - b.combined);
-          const myPos = sortedCombined.findIndex(s => s.sym === symbol) + 1;
-          qualifies = myPos > 0 && myPos <= Math.floor(universeSize * 0.30);
-          percentile = +(((universeSize - myPos + 1) / universeSize) * 100).toFixed(0);
+          const combinedRankMap = new Map(sortedCombined.map((u, i) => [u.sym, i + 1]));
+          const myPos = combinedRankMap.get(symbol) || 0;
+          if (myPos > 0) {
+            qualifies = myPos <= Math.floor(universeSize * 0.30);
+            percentile = +(((universeSize - myPos + 1) / universeSize) * 100).toFixed(0);
+          }
         }
       }
     }
@@ -21933,7 +22097,15 @@ function applyPlaybookOverlay(f, candles) {
   else if (stage.stage === 'STAGE_4') stageMultiplier = 0.0; // iron rule — kill the score
   else stageMultiplier = 0.6;
 
-  playbookScore = +((trendTemplate.score * 0.4 + canslim.score * 0.4 + (vcp.detected ? 100 : 50) * 0.1 + (cupHandle.detected ? 100 : 50) * 0.1) * stageMultiplier).toFixed(1);
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit CRITICAL #2: NaN guard. If
+  // trendTemplate.score or canslim.score is null/undefined, the multiply
+  // silently propagates NaN into downstream ranking. Coerce + Number-guard.
+  const _ttScore = Number.isFinite(trendTemplate?.score) ? trendTemplate.score : 0;
+  const _csScore = Number.isFinite(canslim?.score) ? canslim.score : 0;
+  const _vcpBoost = vcp?.detected ? 100 : 50;
+  const _cupBoost = cupHandle?.detected ? 100 : 50;
+  const _raw = (_ttScore * 0.4 + _csScore * 0.4 + _vcpBoost * 0.1 + _cupBoost * 0.1) * stageMultiplier;
+  playbookScore = Number.isFinite(_raw) ? +_raw.toFixed(1) : 0;
 
   // Composite verdict using ALL frameworks (Sprint 1 Step 1.5)
   const composite = computeCompositeVerdict({
@@ -21948,20 +22120,40 @@ function applyPlaybookOverlay(f, candles) {
     cupHandle,
   });
 
-  // Final verdict — prefer composite hard-excludes, fall back to legacy logic
+  // Final verdict — composite is authoritative.
+  // 🛡 v2.1 Sprint 4 (2026-05-11) — audit CRITICAL #1: legacy fallback cases
+  // previously could output STRONG BUY for a stock that the composite had
+  // labelled WATCH or AVOID (e.g. trendTemplate.qualifies AND canslim.qualifies
+  // alone is enough — but those two passing while everything else fails is
+  // exactly a 2-of-9 pass, which the composite correctly labels AVOID).
+  // Now: composite verdict + hard-excludes are the only path; legacy fallbacks
+  // only fire for genuinely-missing composite (error case).
   let verdict, verdictColor;
   if (composite.hardExclude) {
     verdict = composite.verdict + ' — ' + composite.reason;
     verdictColor = '#dc2626';
-  } else if (stage.stage === 'STAGE_4') { verdict = 'AVOID — Stage 4'; verdictColor = '#ef4444'; }
-  else if (stage.stage === 'STAGE_3') { verdict = 'TAKE PROFITS — Stage 3'; verdictColor = '#f59e0b'; }
-  else if (composite.passCount >= 7) { verdict = composite.verdict + ` (${composite.passCount}/${composite.total} pass)`; verdictColor = '#10b981'; }
-  else if (composite.passCount >= 5) { verdict = composite.verdict + ` (${composite.passCount}/${composite.total} pass)`; verdictColor = '#22c55e'; }
-  else if (trendTemplate.qualifies && canslim.qualifies) { verdict = 'STRONG BUY — Trend Template + CANSLIM'; verdictColor = '#10b981'; }
-  else if (trendTemplate.passed >= 6 && stage.stage === 'STAGE_2') { verdict = 'BUY — Stage 2 + 6+ Trend criteria'; verdictColor = '#22c55e'; }
-  else if (vcp.detected || cupHandle.detected) { verdict = 'WATCH — Pattern forming'; verdictColor = '#3b82f6'; }
-  else if (stage.stage === 'STAGE_1') { verdict = 'WATCH — Stage 1 base'; verdictColor = '#94a3b8'; }
-  else { verdict = 'NEUTRAL'; verdictColor = '#94a3b8'; }
+  } else if (stage.stage === 'STAGE_4') {
+    verdict = 'AVOID — Stage 4 (iron rule)';
+    verdictColor = '#ef4444';
+  } else if (stage.stage === 'STAGE_3') {
+    verdict = 'TAKE PROFITS — Stage 3 distribution';
+    verdictColor = '#f59e0b';
+  } else if (composite.verdict) {
+    // Use composite directly — single source of truth
+    verdict = composite.verdict + ` (${composite.passCount}/${composite.total} checks)`;
+    verdictColor =
+      composite.verdict.includes('STRONG BUY') ? '#10b981' :
+      composite.verdict.includes('BUY')        ? '#22c55e' :
+      composite.verdict.includes('WATCH')      ? '#3b82f6' :
+      composite.verdict.includes('AVOID')      ? '#94a3b8' :
+                                                 '#94a3b8';
+  } else if (stage.stage === 'STAGE_1') {
+    verdict = 'WATCH — Stage 1 base';
+    verdictColor = '#94a3b8';
+  } else {
+    verdict = 'NEUTRAL';
+    verdictColor = '#94a3b8';
+  }
 
   return {
     playbook: {
