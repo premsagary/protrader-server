@@ -14,6 +14,9 @@ export default function DeepAnalyzer() {
   const [error, setError] = useState(null);
   const [universe, setUniverse] = useState(null);
   const [highlightIdx, setHighlightIdx] = useState(-1); // keyboard-nav highlight
+  // 🛡 v2.1 Sprint 5C (2026-05-11) — Universe view toggle. When on, shows
+  // sortable verdict table for all 500+ stocks instead of single-stock analysis.
+  const [showUniverse, setShowUniverse] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -208,6 +211,15 @@ export default function DeepAnalyzer() {
             )}
           </button>
 
+          {/* 🛡 v2.1 Sprint 5C — Universe view toggle */}
+          <button
+            onClick={() => { setShowUniverse(v => !v); setAnalysis(null); setError(null); }}
+            className="btn btn-secondary"
+            style={{ height: 50, padding: '0 22px', fontSize: 15 }}
+          >
+            {showUniverse ? '← Back' : 'Browse all stocks →'}
+          </button>
+
           <div className="chip" style={{ marginLeft: 'auto' }}>
             <span className="tabular-nums" style={{ fontWeight: 700, color: 'var(--brand-text)' }}>
               {universe ? universe.length : 567}
@@ -227,11 +239,14 @@ export default function DeepAnalyzer() {
         </div>
       )}
 
+      {/* 🛡 v2.1 Sprint 5C — Universe table (sortable, all 500+ stocks) */}
+      {showUniverse && <UniverseTable onPickStock={(sym) => { setShowUniverse(false); setQuery(sym); setSelected({ sym }); runAnalyze(sym); }} />}
+
       {/* Analysis result */}
-      {analysis && <AnalysisResult data={analysis} />}
+      {!showUniverse && analysis && <AnalysisResult data={analysis} />}
 
       {/* ═══ EMPTY STATE — dramatic, inviting ═══ */}
-      {!analysis && !error && !loading && (
+      {!showUniverse && !analysis && !error && !loading && (
         <div style={{ padding: '80px 24px', textAlign: 'center' }}>
           <div style={{
             width: 80, height: 80, borderRadius: 22,
@@ -479,6 +494,7 @@ function AnalysisResult({ data }) {
       {activeTab === 'aireview' && (
         <AIReviewSection sym={a.sym} />
       )}
+
     </div>
   );
 }
@@ -2201,5 +2217,288 @@ function AIReviewSection({ sym }) {
         </div>
       )}
     </Section>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 5C (2026-05-11) — UNIVERSE TABLE
+// Sortable table of all 500+ stocks with verdict + per-horizon tiers.
+// Click any row → analyze that stock in detail. Filters: search, verdict
+// (Strong Buy / Buy / Watch / Avoid / Excluded), sector. Sortable on every
+// column. Lazy-loaded — only fetches when the Universe view is opened.
+// ══════════════════════════════════════════════════════════════════════════
+function UniverseTable({ onPickStock }) {
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [computedAt, setComputedAt] = useState(null);
+  const [sortKey, setSortKey] = useState('passCount');
+  const [sortDir, setSortDir] = useState('desc');
+  const [verdictFilter, setVerdictFilter] = useState('ALL');
+  const [sectorFilter, setSectorFilter] = useState('ALL');
+  const [searchQ, setSearchQ] = useState('');
+
+  const load = (force) => {
+    setLoading(true); setErr(null);
+    apiGet('/api/stocks/universe-verdict' + (force ? '?force=1' : ''))
+      .then(d => { setRows(Array.isArray(d.results) ? d.results : []); setComputedAt(d.computedAt); })
+      .catch(e => setErr(e.message || 'Failed to load'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(false); }, []);
+
+  if (loading) return (
+    <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>
+      Loading universe ({rows ? `${rows.length} stocks` : 'all 500+ stocks'})…
+    </div>
+  );
+  if (err) return (
+    <div className="card" style={{ padding: 24 }}>
+      <div style={{ color: 'var(--red-text)', marginBottom: 12 }}>Failed: {err}</div>
+      <button onClick={() => load(true)} className="btn btn-secondary">Retry</button>
+    </div>
+  );
+  if (!rows || rows.length === 0) return (
+    <div className="card" style={{ padding: 24, color: 'var(--text3)' }}>No data yet.</div>
+  );
+
+  // Unique sector list for filter dropdown
+  const sectors = Array.from(new Set(rows.map(r => r.sector).filter(Boolean))).sort();
+
+  // Filter
+  const q = searchQ.trim().toUpperCase();
+  const filtered = rows.filter(r => {
+    if (verdictFilter !== 'ALL' && !(r.verdict || '').includes(verdictFilter)) return false;
+    if (sectorFilter !== 'ALL' && r.sector !== sectorFilter) return false;
+    if (q && !(r.sym || '').toUpperCase().includes(q) && !(r.name || '').toUpperCase().includes(q)) return false;
+    return true;
+  });
+
+  // Sort
+  const valOf = (row, key) => {
+    switch (key) {
+      case 'sym': return (row.sym || '').toUpperCase();
+      case 'sector': return (row.sector || '').toUpperCase();
+      case 'price': return row.price || 0;
+      case 'verdict': {
+        // Rank Strong Buy → Buy → Watch → Avoid → Excluded
+        const v = row.verdict || '';
+        if (v.includes('STRONG BUY')) return 5;
+        if (v.includes('BUY')) return 4;
+        if (v.includes('WATCH')) return 3;
+        if (v.includes('AVOID')) return 2;
+        if (v.includes('EXCLUDED')) return 1;
+        return 0;
+      }
+      case 'passCount': return row.passCount || 0;
+      case 'longTerm':  return tierToNum(row.longTerm?.tier);
+      case 'momentum':  return tierToNum(row.momentum?.tier);
+      case 'shortTerm': return tierToNum(row.shortTerm?.tier);
+      case 'playbookScore': return row.playbookScore || 0;
+      case 'pledgePct': return row.pledgePct ?? -1;
+      case 'deliveryPct': return row.deliveryPct ?? -1;
+      default: return 0;
+    }
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const va = valOf(a, sortKey), vb = valOf(b, sortKey);
+    if (typeof va === 'string') return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+    return sortDir === 'asc' ? va - vb : vb - va;
+  });
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  // Verdict count chips (for header summary)
+  const counts = rows.reduce((acc, r) => {
+    const v = r.verdict || 'NEUTRAL';
+    if (v.includes('STRONG BUY')) acc.strongBuy++;
+    else if (v.includes('BUY')) acc.buy++;
+    else if (v.includes('WATCH')) acc.watch++;
+    else if (v.includes('AVOID')) acc.avoid++;
+    else if (v.includes('EXCLUDED')) acc.excluded++;
+    else acc.neutral++;
+    return acc;
+  }, { strongBuy: 0, buy: 0, watch: 0, avoid: 0, excluded: 0, neutral: 0 });
+
+  return (
+    <div>
+      {/* Summary + filters */}
+      <div className="card" style={{ padding: 16, marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <VerdictChip label="Strong Buy" count={counts.strongBuy} color="#10b981" onClick={() => setVerdictFilter('STRONG BUY')} active={verdictFilter === 'STRONG BUY'} />
+            <VerdictChip label="Buy"        count={counts.buy}       color="#22c55e" onClick={() => setVerdictFilter('BUY')}        active={verdictFilter === 'BUY'} />
+            <VerdictChip label="Watch"      count={counts.watch}     color="#3b82f6" onClick={() => setVerdictFilter('WATCH')}      active={verdictFilter === 'WATCH'} />
+            <VerdictChip label="Avoid"      count={counts.avoid}     color="#94a3b8" onClick={() => setVerdictFilter('AVOID')}      active={verdictFilter === 'AVOID'} />
+            <VerdictChip label="Excluded"   count={counts.excluded}  color="#ef4444" onClick={() => setVerdictFilter('EXCLUDED')}   active={verdictFilter === 'EXCLUDED'} />
+            <VerdictChip label="All"        count={rows.length}      color="var(--text3)" onClick={() => setVerdictFilter('ALL')}   active={verdictFilter === 'ALL'} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={() => load(true)} className="btn btn-secondary" style={{ height: 32, padding: '0 12px', fontSize: 12 }}>Refresh</button>
+            {computedAt && (
+              <span style={{ fontSize: 10, color: 'var(--text4)' }}>{new Date(computedAt).toLocaleTimeString()}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input
+            type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)}
+            placeholder="Filter by symbol or name…"
+            style={{ flex: 1, minWidth: 200, height: 32, padding: '0 12px', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 12, outline: 'none' }}
+          />
+          <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)}
+            style={{ height: 32, padding: '0 8px', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 12 }}>
+            <option value="ALL">All sectors</option>
+            {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--text3)' }}>{sorted.length} of {rows.length} stocks</span>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 980 }}>
+          <thead>
+            <tr style={{ background: 'rgba(255,255,255,0.03)', position: 'sticky', top: 0, zIndex: 5 }}>
+              <SortableHdr label="Symbol"      keyName="sym"        sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
+              <SortableHdr label="Sector"      keyName="sector"     sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
+              <SortableHdr label="Price"       keyName="price"      sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+              <SortableHdr label="Verdict"     keyName="verdict"    sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+              <SortableHdr label="Checks"      keyName="passCount"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+              <SortableHdr label="Long term"   keyName="longTerm"   sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+              <SortableHdr label="Momentum"    keyName="momentum"   sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+              <SortableHdr label="Short term"  keyName="shortTerm"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
+              <SortableHdr label="Score"       keyName="playbookScore" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+              <SortableHdr label="Pledge"      keyName="pledgePct"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+              <SortableHdr label="Delivery"    keyName="deliveryPct" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => (
+              <tr
+                key={r.sym}
+                onClick={() => onPickStock && onPickStock(r.sym)}
+                style={{
+                  cursor: 'pointer',
+                  borderBottom: '1px solid var(--border)',
+                  background: i % 2 ? 'rgba(255,255,255,0.015)' : 'transparent',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.06)'}
+                onMouseLeave={e => e.currentTarget.style.background = i % 2 ? 'rgba(255,255,255,0.015)' : 'transparent'}
+              >
+                <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--text)' }}>{r.sym}</td>
+                <td style={{ padding: '8px 10px', color: 'var(--text3)', fontSize: 11 }}>{r.sector}</td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{r.price ? `₹${Number(r.price).toFixed(1)}` : '—'}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'center' }}><VerdictPill verdict={r.verdict} /></td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'center', color: 'var(--text2)' }}>{r.passCount}/{r.total}</td>
+                <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.longTerm?.tier} count={r.longTerm} /></td>
+                <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.momentum?.tier} count={r.momentum} /></td>
+                <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.shortTerm?.tier} count={r.shortTerm} /></td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text3)' }}>{r.playbookScore != null ? r.playbookScore.toFixed(0) : '—'}</td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: r.pledgePct > 20 ? 'var(--red-text)' : r.pledgePct > 10 ? 'var(--amber-text)' : 'var(--text3)' }}>
+                  {r.pledgePct != null ? `${r.pledgePct.toFixed(1)}%` : '—'}
+                </td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: r.deliveryPct > 60 ? 'var(--green-text)' : r.deliveryPct < 25 ? 'var(--red-text)' : 'var(--text3)' }}>
+                  {r.deliveryPct != null ? `${r.deliveryPct}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 12, fontSize: 10, color: 'var(--text4)', textAlign: 'center' }}>
+        Universe verdicts computed from cached fundamentals · refreshes every 5 minutes ·
+        Click any row to deep-analyze that stock.
+      </div>
+    </div>
+  );
+}
+
+function tierToNum(t) {
+  if (t === 'STRONG' || t === 'INSTITUTIONAL') return 4;
+  if (t === 'OK' || t === 'STRONG_HANDS') return 3;
+  if (t === 'WEAK' || t === 'MIXED') return 2;
+  if (t === 'BEARISH' || t === 'SPECULATIVE') return 1;
+  return 0;
+}
+
+function SortableHdr({ label, keyName, sortKey, sortDir, onClick, align = 'left' }) {
+  const active = sortKey === keyName;
+  return (
+    <th
+      onClick={() => onClick(keyName)}
+      style={{
+        padding: '10px 10px', textAlign: align, fontSize: 11, fontWeight: 700,
+        color: active ? 'var(--text)' : 'var(--text3)', cursor: 'pointer',
+        textTransform: 'uppercase', letterSpacing: '0.4px',
+        borderBottom: '1px solid var(--border)',
+        userSelect: 'none', whiteSpace: 'nowrap',
+      }}
+    >
+      {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </th>
+  );
+}
+
+function VerdictChip({ label, count, color, onClick, active }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '6px 12px', borderRadius: 999, border: `1px solid ${color}40`,
+        background: active ? `${color}25` : `${color}10`,
+        color, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+      }}
+    >
+      <span>{label}</span>
+      <span className="tabular-nums" style={{ fontSize: 10, opacity: 0.85 }}>{count}</span>
+    </button>
+  );
+}
+
+function VerdictPill({ verdict }) {
+  const v = verdict || 'NEUTRAL';
+  let label, color;
+  if (v.includes('STRONG BUY')) { label = 'Strong Buy'; color = '#10b981'; }
+  else if (v.includes('EXCLUDED')) { label = 'Excluded'; color = '#ef4444'; }
+  else if (v.includes('BUY')) { label = 'Buy'; color = '#22c55e'; }
+  else if (v.includes('WATCH')) { label = 'Watch'; color = '#3b82f6'; }
+  else if (v.includes('AVOID')) { label = 'Avoid'; color = '#94a3b8'; }
+  else { label = 'Neutral'; color = 'var(--text3)'; }
+  return (
+    <span style={{
+      display: 'inline-block', padding: '3px 9px', borderRadius: 999,
+      fontSize: 10.5, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}35`,
+      whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+}
+
+function TierPill({ tier, count }) {
+  if (!tier || tier === 'UNKNOWN') return <span style={{ color: 'var(--text4)', fontSize: 10 }}>—</span>;
+  let color;
+  if (tier === 'STRONG' || tier === 'INSTITUTIONAL') color = '#10b981';
+  else if (tier === 'OK' || tier === 'STRONG_HANDS') color = '#f59e0b';
+  else if (tier === 'WEAK' || tier === 'MIXED') color = '#ef4444';
+  else if (tier === 'BEARISH' || tier === 'SPECULATIVE') color = '#dc2626';
+  else color = 'var(--text3)';
+  const labelMap = { STRONG: 'Strong', OK: 'OK', WEAK: 'Weak', BEARISH: 'Bearish', INSTITUTIONAL: 'Inst.', STRONG_HANDS: 'Strong', MIXED: 'Mixed', SPECULATIVE: 'Spec.' };
+  const label = labelMap[tier] || tier;
+  return (
+    <span title={count && count.passCount != null ? `${count.passCount}/${count.total} checks` : ''} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 7px', borderRadius: 999,
+      fontSize: 10, fontWeight: 700, color, background: `${color}15`, border: `1px solid ${color}30`,
+    }}>
+      <span style={{ width: 5, height: 5, borderRadius: 99, background: color }} />
+      {label}
+      {count && count.passCount != null && (
+        <span className="tabular-nums" style={{ fontSize: 9, opacity: 0.75 }}>{count.passCount}/{count.total}</span>
+      )}
+    </span>
   );
 }

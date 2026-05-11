@@ -29225,6 +29225,99 @@ app.get('/api/screener/status', async (req, res) => {
   } catch(e) { res.json({ error: e.message }); }
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 5C (2026-05-11) — UNIVERSE VERDICT endpoint
+// Runs applyPlaybookOverlay across the entire universe and returns a flat
+// trimmed list for the Universe table view. No per-stock Kite candle fetch
+// (would be 500+ HTTP calls); uses only cached stockFundamentals so the
+// response is sub-second after warmup. Tier-A VCP and A/D days are skipped
+// here — they require candles per stock. Composite verdict and per-horizon
+// tiers still compute from fundamentals alone.
+// ══════════════════════════════════════════════════════════════════════════
+let _universeVerdictCache = { computedAt: 0, results: null };
+const _UNIVERSE_CACHE_MS = 5 * 60 * 1000;  // 5 minutes
+
+app.get('/api/stocks/universe-verdict', async (req, res) => {
+  try {
+    const now = Date.now();
+    const force = req.query.force === '1' || req.query.force === 'true';
+
+    // Serve from cache if fresh
+    if (!force && _universeVerdictCache.results && (now - _universeVerdictCache.computedAt) < _UNIVERSE_CACHE_MS) {
+      return res.json({
+        results: _universeVerdictCache.results,
+        computedAt: new Date(_universeVerdictCache.computedAt).toISOString(),
+        cached: true,
+        count: _universeVerdictCache.results.length,
+      });
+    }
+
+    const t0 = Date.now();
+    const universe = Array.isArray(UNIVERSE) ? UNIVERSE : [];
+    const results = [];
+
+    for (const u of universe) {
+      const sym = u.sym;
+      const fund = stockFundamentals[sym] || {};
+      const ext  = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
+      const sector = SECTOR_MAP[sym] || 'Other';
+      const px = livePrices[sym]?.price || fund.price || ext.price || ext.currentPrice || null;
+
+      // Compose the merged fundamentals object the overlay wants
+      const f = { ...fund, ...ext, sym, name: u.n, sector, price: px, grp: u.grp, group: u.grp };
+
+      let pb = null;
+      try {
+        pb = applyPlaybookOverlay(f, null).playbook;  // null candles → Tier-B VCP, A/D skipped
+      } catch (e) {
+        // Skip stocks that throw; record the failure but don't crash the universe scan
+        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message });
+        continue;
+      }
+
+      const composite = pb?.composite || {};
+      const h = pb?.horizons || {};
+
+      results.push({
+        sym, name: u.n, sector, price: px, grp: u.grp,
+        verdict: composite.verdict || 'NEUTRAL',
+        passCount: composite.passCount ?? 0,
+        total: composite.total ?? 0,
+        hardExclude: !!composite.hardExclude,
+        hardExcludeReason: composite.hardExclude ? composite.reason : null,
+        stage: pb?.stage?.stage || null,
+        subStage: pb?.stage?.subStage || null,
+        longTerm:   h.longTerm  ? { tier: h.longTerm.tier,  passCount: h.longTerm.passCount,  total: h.longTerm.total }  : null,
+        momentum:   h.momentum  ? { tier: h.momentum.tier,  passCount: h.momentum.passCount,  total: h.momentum.total }  : null,
+        shortTerm:  h.shortTerm ? { tier: h.shortTerm.tier, passCount: h.shortTerm.passCount, total: h.shortTerm.total } : null,
+        playbookScore: pb?.playbookScore ?? null,
+        // Risk flags surfaced as separate columns for table sort
+        pledgeTier:      pb?.pledgeRisk?.tier      || null,
+        pledgePct:       pb?.pledgeRisk?.pledgePct ?? null,
+        beneishTier:     pb?.beneish?.tier         || null,
+        deliveryTier:    pb?.deliveryQuality?.tier || null,
+        deliveryPct:     pb?.deliveryQuality?.deliveryPct ?? null,
+        fnoPositioning:  pb?.fnoPositioning?.tier  || null,
+        sectorBreadth:   pb?.sectorBreadth?.tier   || null,
+      });
+    }
+
+    const dtMs = Date.now() - t0;
+    _universeVerdictCache = { computedAt: now, results };
+    console.log(`📊 universe-verdict: ${results.length} stocks in ${dtMs}ms`);
+
+    res.json({
+      results,
+      computedAt: new Date(now).toISOString(),
+      cached: false,
+      durationMs: dtMs,
+      count: results.length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // -- Deep Single-Stock Analysis endpoint ---------------------------------------
 // Gathers: candles, technicals, fundamentals, news sentiment, and AI recommendation
 app.get('/api/stocks/analyze/:sym', async(req,res)=>{
