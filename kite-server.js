@@ -20975,11 +20975,36 @@ function computeMinerviniTrendTemplate(f) {
   result.criteria.push({ name: 'Within 25% of 52-wk high', pass: !!c7, detail: f.high52w ? `px=${px.toFixed(0)} high52=${f.high52w.toFixed(0)}` : 'missing' });
   if (c7) result.passed++;
 
-  // 8. Relative Strength rating ≥ 70 (proxy: change6m vs Nifty in top 30%)
+  // 8. Relative Strength rating ≥ 70 — TRUE Minervini rule = top 30% of universe
+  // 🛡 v2.1 fix (2026-05-11) — Previously used `rs6m > 0` which passed ANY positive
+  // outperformance vs Nifty. Real Minervini RS ≥ 70 means top 30% of universe.
+  // We compute the top-30% cutoff dynamically from all FUND entries.
   const rs6m = f.change6m != null ? (f.change6m - (typeof niftyBenchmark !== 'undefined' ? (niftyBenchmark['6m'] || 0) : 0)) : null;
-  const c8 = rs6m != null && rs6m > 0;  // simplified: outperforming Nifty over 6m
-  result.criteria.push({ name: 'RS rating ≥ 70 (vs Nifty 6M)', pass: !!c8, detail: rs6m != null ? `RS6M=${(rs6m*100).toFixed(1)}%` : 'missing' });
+  let top30Cutoff = 0.10;  // fallback: 10% outperformance if insufficient peer data
+  try {
+    if (typeof FUND !== 'undefined' && typeof niftyBenchmark !== 'undefined' && niftyBenchmark['6m'] != null) {
+      const allRS = Object.values(FUND)
+        .map(ff => ff && ff.change6m != null ? (ff.change6m - niftyBenchmark['6m']) : null)
+        .filter(r => r != null)
+        .sort((a, b) => b - a);
+      if (allRS.length >= 50) {
+        top30Cutoff = allRS[Math.floor(allRS.length * 0.30)];
+      }
+    }
+  } catch (e) { /* keep fallback */ }
+  const c8 = rs6m != null && rs6m >= top30Cutoff;
+  result.criteria.push({
+    name: 'RS rating ≥ 70 (top 30% vs Nifty 6M)',
+    pass: !!c8,
+    detail: rs6m != null ? `RS6M=${(rs6m*100).toFixed(1)}% (cutoff=${(top30Cutoff*100).toFixed(1)}%)` : 'missing'
+  });
   if (c8) result.passed++;
+
+  // 🛡 v2.1 fix — track data completeness so consumers can flag low-confidence verdicts
+  const _withData = result.criteria.filter(c => !c.detail || !/missing/i.test(c.detail)).length;
+  result.dataCompleteness = +(_withData / result.total).toFixed(2);
+  result.confidence = result.dataCompleteness >= 0.9 ? 'HIGH' :
+                      result.dataCompleteness >= 0.7 ? 'MEDIUM' : 'LOW';
 
   result.qualifies = result.passed === 8; // Minervini's rule: ALL 8 must pass
   result.score = Math.round((result.passed / result.total) * 100);
@@ -21011,8 +21036,21 @@ function classifyWeinsteinStage(f) {
     return { stage: 'STAGE_3', confidence: 75, reason: 'price > 200 DMA but momentum rolling over', warning: 'Distribution phase — take profits on existing positions' };
   }
   // Stage 2: advancing (price above MA, MA rising, momentum positive)
-  if (above200 && dma200Rising && (ma30wkRising === true || ma30wkRising === null) && change6m > 0.10) {
-    return { stage: 'STAGE_2', confidence: 90, reason: 'price > 200 DMA + DMA rising + 6m return > 10%', recommendation: 'BUY zone per Weinstein' };
+  // 🛡 v2.1 fix (2026-05-11) — Previously `ma30wkRising === null` was treated as
+  // confirmation. Missing data should not give 90% confidence. Split into:
+  //   - Full Stage 2 (all 4 conditions met, ma30wkRising === true) → 90% confidence
+  //   - Provisional Stage 2 (3/4 with 30wk MA data missing) → 70% confidence + warning
+  if (above200 && dma200Rising && ma30wkRising === true && change6m > 0.10) {
+    return { stage: 'STAGE_2', confidence: 90, reason: 'price > 200 DMA + DMA rising + 30wk MA rising + 6m return > 10%', recommendation: 'BUY zone per Weinstein' };
+  }
+  if (above200 && dma200Rising && ma30wkRising === null && change6m > 0.10) {
+    return {
+      stage: 'STAGE_2_PROVISIONAL',
+      confidence: 70,
+      reason: 'price > 200 DMA + DMA rising + 6m > 10% (30-week MA data unavailable)',
+      warning: 'Verify 30-week MA before high-conviction sizing',
+      recommendation: 'BUY with reduced size — data partially missing'
+    };
   }
   // Stage 1: base (sideways, low momentum)
   if (Math.abs(change6m) < 0.10 && Math.abs(change3m) < 0.05) {
@@ -21195,6 +21233,461 @@ function detectCupWithHandle(f) {
   return result;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Wave (2026-05-11) — DEEP ANALYZER IMPROVEMENT PHASE 1
+// New frameworks: Industry RS, Accumulation/Distribution, Piotroski F-Score,
+//                 Altman Z-Score, Magic Formula, Composite Verdict.
+// All defensively coded — return UNKNOWN/error when data is missing rather
+// than failing. Each is independent so can be enabled/disabled separately.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Industry Relative Strength (O'Neil-style 3-level RS) ──
+// Compares stock vs Nifty (existing), industry vs Nifty (NEW), stock vs industry (NEW).
+// Per O'Neil's research, "leader of leaders" (top stock in top industry) outperforms.
+function computeIndustryRS(symbol, fund) {
+  const result = { qualifies: false, label: 'UNKNOWN' };
+  try {
+    const sector = (typeof SECTOR_MAP !== 'undefined' && SECTOR_MAP[symbol]) || 'Other';
+    if (!fund || fund.change6m == null || typeof FUND === 'undefined' || typeof SECTOR_MAP === 'undefined') {
+      return { ...result, error: 'insufficient_data' };
+    }
+
+    // Aggregate sector returns
+    const sectorReturns = {};
+    for (const [sym, sec] of Object.entries(SECTOR_MAP)) {
+      const r = FUND[sym] && FUND[sym].change6m;
+      if (r == null) continue;
+      if (!sectorReturns[sec]) sectorReturns[sec] = [];
+      sectorReturns[sec].push(r);
+    }
+
+    // Rank sectors by average 6m return
+    const sectorAvgs = Object.entries(sectorReturns)
+      .filter(([s, rs]) => rs.length >= 3)
+      .map(([s, rs]) => ({ sector: s, avg: rs.reduce((a, b) => a + b, 0) / rs.length, n: rs.length }))
+      .sort((a, b) => b.avg - a.avg);
+
+    if (sectorAvgs.length < 3) return { ...result, error: 'insufficient_sectors' };
+
+    const sectorRank = sectorAvgs.findIndex(s => s.sector === sector) + 1;
+    if (sectorRank === 0) return { ...result, sector, error: 'sector_not_found' };
+    const sectorPercentile = +(((sectorAvgs.length - sectorRank + 1) / sectorAvgs.length) * 100).toFixed(0);
+
+    // Rank stock within sector
+    const peerReturns = (sectorReturns[sector] || []).slice().sort((a, b) => b - a);
+    const stockRank = peerReturns.findIndex(r => r === fund.change6m) + 1;
+    const stockPercentile = peerReturns.length > 0
+      ? +(((peerReturns.length - stockRank + 1) / peerReturns.length) * 100).toFixed(0)
+      : 0;
+
+    const qualifies = sectorPercentile >= 80 && stockPercentile >= 80;
+    let label = '❌ Below average on both dimensions';
+    if (sectorPercentile >= 90 && stockPercentile >= 90) label = '⭐ LEADER OF LEADERS';
+    else if (sectorPercentile >= 80 && stockPercentile >= 80) label = '✅ Strong stock in strong sector';
+    else if (sectorPercentile < 50 && stockPercentile >= 70) label = '⚠ Strong stock in weak sector (drag risk)';
+    else if (sectorPercentile >= 70 && stockPercentile < 50) label = '⚠ Weak stock in strong sector (laggard)';
+    else if (sectorPercentile >= 50 && stockPercentile >= 50) label = '➖ Average';
+
+    return {
+      sector,
+      sectorRank,
+      totalSectors: sectorAvgs.length,
+      sectorPercentile,
+      stockRankInSector: stockRank,
+      sectorPeerCount: peerReturns.length,
+      stockPercentileInSector: stockPercentile,
+      qualifies,
+      label,
+    };
+  } catch (e) {
+    return { ...result, error: e.message };
+  }
+}
+
+// ── 50-Day Accumulation/Distribution Days (institutional buying signal) ──
+// Counts up-on-heavy-volume days (accumulation) vs down-on-heavy-volume (distribution).
+// Net positive = institutions accumulating. Per O'Neil/IBD methodology.
+function computeAccumulationDistribution(candles) {
+  if (!candles || candles.length < 50) {
+    return { error: 'insufficient_candles', candleCount: candles ? candles.length : 0 };
+  }
+  const last50 = candles.slice(-50);
+  const avgVol = last50.reduce((s, c) => s + (c.volume || 0), 0) / 50;
+  if (avgVol <= 0) return { error: 'no_volume_data' };
+
+  let accDays = 0, distDays = 0;
+  const events = [];
+  for (let i = 1; i < last50.length; i++) {
+    const c = last50[i], prev = last50[i - 1];
+    if (!c.close || !prev.close || !c.volume) continue;
+    const pctChange = ((c.close - prev.close) / prev.close) * 100;
+    const heavyVol = c.volume >= avgVol * 1.5;
+    if (heavyVol && pctChange >= 0.5) {
+      accDays++;
+      events.push({ date: c.date || c.timestamp || i, type: 'ACC', change: +pctChange.toFixed(2), volX: +(c.volume / avgVol).toFixed(2) });
+    } else if (heavyVol && pctChange <= -0.5) {
+      distDays++;
+      events.push({ date: c.date || c.timestamp || i, type: 'DIST', change: +pctChange.toFixed(2), volX: +(c.volume / avgVol).toFixed(2) });
+    }
+  }
+
+  const net = accDays - distDays;
+  let verdict, qualifies;
+  if (net >= 5) { verdict = '⭐ STRONG ACCUMULATION (institutional buying)'; qualifies = true; }
+  else if (net >= 2) { verdict = '✅ Mild accumulation'; qualifies = true; }
+  else if (net >= -1) { verdict = '➖ Neutral'; qualifies = false; }
+  else if (net >= -4) { verdict = '⚠ Mild distribution'; qualifies = false; }
+  else { verdict = '🚨 HEAVY DISTRIBUTION (institutional selling)'; qualifies = false; }
+
+  return {
+    window: 50,
+    accDays, distDays, net,
+    avgVolume: Math.round(avgVol),
+    verdict,
+    qualifies: net >= 3,
+    recentEvents: events.slice(-10),
+  };
+}
+
+// ── Composite Verdict — single decision summary across all frameworks ──
+// Hard excludes:
+//   • Altman Z DISTRESS  → exclude entirely
+//   • Weinstein Stage 4  → exclude entirely (iron rule)
+//   • Minervini Trend Template FAILED + Weinstein not Stage 2 + CANSLIM weak → exclude
+// Composite tiers:
+//   7+ frameworks pass → STRONG BUY
+//   5-6 pass           → BUY
+//   3-4 pass           → WATCH
+//   0-2 pass           → AVOID
+function computeCompositeVerdict(analysis) {
+  if (!analysis) return { verdict: 'ERROR', reason: 'no analysis provided' };
+
+  // Hard excludes first
+  if (analysis.altman && analysis.altman.zone === 'DISTRESS') {
+    return {
+      verdict: '🚨 EXCLUDED',
+      reason: 'Altman Z bankruptcy risk',
+      detail: `Z=${analysis.altman.z} (< 1.81)`,
+      hardExclude: true,
+      passCount: 0,
+      total: 0,
+    };
+  }
+  if (analysis.weinstein && (analysis.weinstein.stage === 'STAGE_4' || analysis.weinstein.stage === 'STAGE_4_CONFIRMED' || analysis.weinstein.stage === 'STAGE_4_PROBABLE')) {
+    return {
+      verdict: '🚨 EXCLUDED',
+      reason: 'Weinstein Stage 4 — iron rule: NEVER OWN',
+      detail: analysis.weinstein.reason,
+      hardExclude: true,
+      passCount: 0,
+      total: 0,
+    };
+  }
+
+  // Count framework passes
+  const passes = {
+    minervini: analysis.minervini && analysis.minervini.qualifies,
+    weinsteinStage2: analysis.weinstein && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL'),
+    canslim: analysis.canslim && analysis.canslim.qualifies,
+    piotroski: analysis.piotroski && analysis.piotroski.qualifies,
+    altmanSafe: analysis.altman && analysis.altman.zone === 'SAFE',
+    industryRS: analysis.industryRS && analysis.industryRS.qualifies,
+    accumulation: analysis.accumulation && analysis.accumulation.qualifies,
+    magicFormula: analysis.magicFormula && analysis.magicFormula.qualifies,
+    vcp: analysis.vcp && analysis.vcp.detected,
+    cupHandle: analysis.cupHandle && analysis.cupHandle.detected,
+  };
+
+  const evaluable = Object.values(passes).filter(v => v !== null && v !== undefined);
+  const passCount = evaluable.filter(v => v).length;
+  const total = evaluable.length;
+
+  let verdict;
+  if (passCount >= 7) verdict = '⭐ STRONG BUY';
+  else if (passCount >= 5) verdict = '✅ BUY';
+  else if (passCount >= 3) verdict = '⏳ WATCH';
+  else verdict = '❌ AVOID';
+
+  return {
+    verdict,
+    passCount,
+    total,
+    passes,
+    pctPass: total > 0 ? +(passCount / total * 100).toFixed(0) : 0,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Wave SPRINT 2 (2026-05-11) — Piotroski F-Score + Altman Z + Magic Formula
+// Quality & risk filters. All defensive (return UNKNOWN when data missing).
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Piotroski F-Score (9 binary financial-quality checks) ──
+// Stanford 2000 paper: F-Score 8-9 stocks outperformed S&P by +13.4%/yr over 20y.
+// Each check is binary. Score = # passing. Threshold: 8+ = STRONG quality.
+function computePiotroskiFScore(f) {
+  const result = { passed: 0, total: 9, criteria: [], qualifies: false, dataCompleteness: 0 };
+  if (!f) return { ...result, error: 'no_fundamentals' };
+
+  let dataHits = 0;
+
+  // === PROFITABILITY (4 checks) ===
+
+  // 1. Positive Net Income (current year)
+  const _ni = f.netIncome != null ? f.netIncome : (f.netProfit != null ? f.netProfit : null);
+  const c1Have = _ni != null;
+  const c1 = c1Have && _ni > 0;
+  result.criteria.push({
+    name: 'Positive Net Income',
+    pass: !!c1,
+    detail: c1Have ? `₹${(_ni / 1e7).toFixed(0)} Cr` : 'missing'
+  });
+  if (c1) result.passed++;
+  if (c1Have) dataHits++;
+
+  // 2. Positive ROA — fall back to ROE × (assets/equity ratio proxy if needed)
+  const _roa = f.roa != null ? f.roa : null;
+  const c2Have = _roa != null;
+  const c2 = c2Have && _roa > 0;
+  result.criteria.push({
+    name: 'Positive ROA',
+    pass: !!c2,
+    detail: c2Have ? `${_roa.toFixed(1)}%` : 'missing (use ROE as proxy if needed)'
+  });
+  if (c2) result.passed++;
+  if (c2Have) dataHits++;
+
+  // 3. Positive Operating Cash Flow
+  const _ocf = f.operatingCashFlow != null ? f.operatingCashFlow : (f.cfo != null ? f.cfo : null);
+  const c3Have = _ocf != null;
+  const c3 = c3Have && _ocf > 0;
+  result.criteria.push({
+    name: 'Positive Operating CF',
+    pass: !!c3,
+    detail: c3Have ? `₹${(_ocf / 1e7).toFixed(0)} Cr` : 'missing'
+  });
+  if (c3) result.passed++;
+  if (c3Have) dataHits++;
+
+  // 4. Cash Flow > Net Income (earnings quality — guards against accrual manipulation)
+  const c4Have = _ocf != null && _ni != null;
+  const c4 = c4Have && _ocf > _ni;
+  result.criteria.push({
+    name: 'Operating CF > Net Income (quality)',
+    pass: !!c4,
+    detail: c4Have ? `CF=${(_ocf/1e7).toFixed(0)} > NI=${(_ni/1e7).toFixed(0)}` : 'missing'
+  });
+  if (c4) result.passed++;
+  if (c4Have) dataHits++;
+
+  // === LEVERAGE / LIQUIDITY (3 checks) ===
+
+  // 5. Long-term Debt decreasing YoY
+  const _ltDebt = f.ltDebt != null ? f.ltDebt : f.longTermDebt;
+  const _ltDebtPrev = f.ltDebtPrev != null ? f.ltDebtPrev : f.longTermDebtPrev;
+  const c5Have = _ltDebt != null && _ltDebtPrev != null;
+  const c5 = c5Have && _ltDebt <= _ltDebtPrev;  // decreasing or flat
+  result.criteria.push({
+    name: 'LT Debt Not Increasing YoY',
+    pass: !!c5,
+    detail: c5Have ? `${(_ltDebt/1e7).toFixed(0)}Cr vs ${(_ltDebtPrev/1e7).toFixed(0)}Cr prev` : 'missing'
+  });
+  if (c5) result.passed++;
+  if (c5Have) dataHits++;
+
+  // 6. Current Ratio improving YoY
+  const _cr = f.currentRatio;
+  const _crPrev = f.currentRatioPrev;
+  const c6Have = _cr != null && _crPrev != null;
+  const c6 = c6Have && _cr > _crPrev;
+  result.criteria.push({
+    name: 'Current Ratio Improving',
+    pass: !!c6,
+    detail: c6Have ? `${_cr.toFixed(2)} vs ${_crPrev.toFixed(2)} prev` : 'missing'
+  });
+  if (c6) result.passed++;
+  if (c6Have) dataHits++;
+
+  // 7. No significant share dilution (issued shares ≤ 1% growth YoY)
+  const _shares = f.sharesOutstanding;
+  const _sharesPrev = f.sharesOutstandingPrev;
+  const c7Have = _shares != null && _sharesPrev != null && _sharesPrev > 0;
+  const c7 = c7Have && (_shares / _sharesPrev - 1) <= 0.01;
+  result.criteria.push({
+    name: 'No Significant Dilution (<1%)',
+    pass: !!c7,
+    detail: c7Have ? `${((_shares/_sharesPrev - 1)*100).toFixed(2)}% YoY` : 'missing'
+  });
+  if (c7) result.passed++;
+  if (c7Have) dataHits++;
+
+  // === OPERATING EFFICIENCY (2 checks) ===
+
+  // 8. Gross Margin improving YoY
+  const _gm = f.grossMargin;
+  const _gmPrev = f.grossMarginPrev;
+  const c8Have = _gm != null && _gmPrev != null;
+  const c8 = c8Have && _gm > _gmPrev;
+  result.criteria.push({
+    name: 'Gross Margin Improving',
+    pass: !!c8,
+    detail: c8Have ? `${_gm.toFixed(1)}% vs ${_gmPrev.toFixed(1)}% prev` : 'missing'
+  });
+  if (c8) result.passed++;
+  if (c8Have) dataHits++;
+
+  // 9. Asset Turnover improving YoY (sales / total assets)
+  const _at = f.assetTurnover;
+  const _atPrev = f.assetTurnoverPrev;
+  const c9Have = _at != null && _atPrev != null;
+  const c9 = c9Have && _at > _atPrev;
+  result.criteria.push({
+    name: 'Asset Turnover Improving',
+    pass: !!c9,
+    detail: c9Have ? `${_at.toFixed(2)} vs ${_atPrev.toFixed(2)} prev` : 'missing'
+  });
+  if (c9) result.passed++;
+  if (c9Have) dataHits++;
+
+  // Compute completeness + tier
+  result.dataCompleteness = +(dataHits / result.total).toFixed(2);
+  result.confidence = result.dataCompleteness >= 0.8 ? 'HIGH' :
+                      result.dataCompleteness >= 0.5 ? 'MEDIUM' : 'LOW';
+  result.qualifies = result.passed >= 8 && result.dataCompleteness >= 0.7;
+  result.tier =
+    result.passed >= 8 ? 'STRONG' :
+    result.passed >= 5 ? 'NEUTRAL' :
+    'WEAK';
+  result.score = Math.round((result.passed / result.total) * 100);
+  return result;
+}
+
+// ── Altman Z-Score (bankruptcy prediction — Edward Altman 1968) ──
+// Z >= 2.99 = SAFE
+// 1.81 <= Z < 2.99 = GREY (monitor)
+// Z < 1.81 = DISTRESS (bankruptcy likely within 2 years)
+// Iron rule: never own a stock in DISTRESS zone regardless of other metrics.
+function computeAltmanZScore(f) {
+  if (!f) return { z: null, zone: 'UNKNOWN', error: 'no_fundamentals' };
+  const required = ['workingCapital', 'totalAssets', 'retainedEarnings', 'ebit', 'marketCap', 'totalLiabilities', 'sales'];
+  const missing = required.filter(k => f[k] == null);
+  if (missing.length > 0) return { z: null, zone: 'UNKNOWN', error: 'insufficient_financials', missing };
+
+  if (f.totalAssets <= 0 || f.totalLiabilities <= 0) {
+    return { z: null, zone: 'UNKNOWN', error: 'invalid_balance_sheet' };
+  }
+
+  const A = f.workingCapital / f.totalAssets;
+  const B = f.retainedEarnings / f.totalAssets;
+  const C = f.ebit / f.totalAssets;
+  const D = f.marketCap / f.totalLiabilities;
+  const E = f.sales / f.totalAssets;
+
+  const z = 1.2 * A + 1.4 * B + 3.3 * C + 0.6 * D + 1.0 * E;
+
+  let zone, interpretation;
+  if (z >= 2.99) {
+    zone = 'SAFE';
+    interpretation = 'Low bankruptcy risk (Z ≥ 2.99)';
+  } else if (z >= 1.81) {
+    zone = 'GREY';
+    interpretation = 'Moderate risk — monitor closely (1.81 ≤ Z < 2.99)';
+  } else {
+    zone = 'DISTRESS';
+    interpretation = '🚨 Bankruptcy likely within 2 years (Z < 1.81)';
+  }
+
+  return {
+    z: +z.toFixed(2),
+    zone,
+    interpretation,
+    components: {
+      A: { value: +A.toFixed(2), weight: 1.2, name: 'WorkingCap / TotalAssets (liquidity)' },
+      B: { value: +B.toFixed(2), weight: 1.4, name: 'RetainedEarnings / TotalAssets (profitability legacy)' },
+      C: { value: +C.toFixed(2), weight: 3.3, name: 'EBIT / TotalAssets (operating profit)' },
+      D: { value: +D.toFixed(2), weight: 0.6, name: 'MarketCap / TotalLiabilities (solvency)' },
+      E: { value: +E.toFixed(2), weight: 1.0, name: 'Sales / TotalAssets (efficiency)' },
+    },
+    hardExclude: zone === 'DISTRESS',
+  };
+}
+
+// ── Magic Formula (Joel Greenblatt) — combines value + quality ──
+// Backtest 1988-2004: 30.8%/yr for top-30 ranked stocks (S&P 500 = 12%/yr).
+// Earnings Yield = EBIT / Enterprise Value (cheaper = better)
+// Return on Capital = EBIT / (Working Capital + Net Fixed Assets) (more profitable = better)
+// Combined rank = EY rank + ROC rank. Lower combined = better.
+// Top 30% by combined rank = qualifies.
+function computeMagicFormulaRank(symbol, fund) {
+  if (!fund) return { error: 'no_fundamentals' };
+  const ebit = fund.ebit;
+  const ev = (fund.marketCap || 0) + (fund.totalDebt || 0) - (fund.cash || 0);
+  const wc = fund.workingCapital || 0;
+  const nfa = fund.netFixedAssets || 0;
+  const invCap = wc + nfa;
+
+  if (ebit == null || ev <= 0 || invCap <= 0) {
+    return { error: 'insufficient_financials', detail: { ebit, ev, invCap } };
+  }
+
+  const earningsYield = ebit / ev;
+  const returnOnCapital = ebit / invCap;
+
+  // Rank vs entire universe (if FUND is available)
+  let eyRank = null, rocRank = null, combinedRank = null, universeSize = 0, qualifies = false, percentile = null;
+  try {
+    if (typeof FUND !== 'undefined') {
+      const universe = Object.entries(FUND)
+        .map(([sym, f]) => {
+          if (!f || f.ebit == null) return null;
+          const _ev = (f.marketCap || 0) + (f.totalDebt || 0) - (f.cash || 0);
+          const _ic = (f.workingCapital || 0) + (f.netFixedAssets || 0);
+          if (_ev <= 0 || _ic <= 0) return null;
+          return { sym, ey: f.ebit / _ev, roc: f.ebit / _ic };
+        })
+        .filter(x => x != null);
+
+      universeSize = universe.length;
+      if (universeSize >= 20) {
+        const sortedByEY = [...universe].sort((a, b) => b.ey - a.ey);
+        const sortedByROC = [...universe].sort((a, b) => b.roc - a.roc);
+        eyRank = sortedByEY.findIndex(u => u.sym === symbol) + 1;
+        rocRank = sortedByROC.findIndex(u => u.sym === symbol) + 1;
+        if (eyRank > 0 && rocRank > 0) {
+          combinedRank = eyRank + rocRank;
+          // top 30% by combined rank
+          const sortedCombined = universe
+            .map(u => ({
+              sym: u.sym,
+              combined: sortedByEY.findIndex(x => x.sym === u.sym) + 1 + sortedByROC.findIndex(x => x.sym === u.sym) + 1
+            }))
+            .sort((a, b) => a.combined - b.combined);
+          const myPos = sortedCombined.findIndex(s => s.sym === symbol) + 1;
+          qualifies = myPos > 0 && myPos <= Math.floor(universeSize * 0.30);
+          percentile = +(((universeSize - myPos + 1) / universeSize) * 100).toFixed(0);
+        }
+      }
+    }
+  } catch (e) { /* keep nulls */ }
+
+  return {
+    earningsYield: +(earningsYield * 100).toFixed(2),
+    returnOnCapital: +(returnOnCapital * 100).toFixed(2),
+    eyRank,
+    rocRank,
+    combinedRank,
+    universeSize,
+    qualifies,
+    percentile,
+    label:
+      percentile == null ? '? (insufficient peer data)' :
+      percentile >= 90 ? '⭐ TOP 10% (Magic Formula leader)' :
+      percentile >= 70 ? '✅ Top 30% — qualifies' :
+      percentile >= 50 ? '➖ Average' :
+      '❌ Bottom half',
+  };
+}
+
 // ── Combined playbook overlay — applied to every Stock Pick ──
 function applyPlaybookOverlay(f) {
   const trendTemplate = computeMinerviniTrendTemplate(f);
@@ -21203,10 +21696,20 @@ function applyPlaybookOverlay(f) {
   const vcp = detectVCP(f);
   const cupHandle = detectCupWithHandle(f);
 
+  // 🛡 v2.1 Wave (2026-05-11) — Sprint 1+2 frameworks
+  // All defensive — return UNKNOWN/error when data missing rather than failing.
+  const piotroski = computePiotroskiFScore(f);
+  const altman = computeAltmanZScore(f);
+  const industryRS = (f && f.sym) ? computeIndustryRS(f.sym, f) : { error: 'no_symbol' };
+  const magicFormula = (f && f.sym) ? computeMagicFormulaRank(f.sym, f) : { error: 'no_symbol' };
+  // A/D days needs daily candles — not available here, computed in analyze endpoint
+  const accumulation = { skipped: 'needs_candles_passed_in_analyze_endpoint' };
+
   // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
   let playbookScore = 0;
   let stageMultiplier = 1.0;
   if (stage.stage === 'STAGE_2') stageMultiplier = 1.0;
+  else if (stage.stage === 'STAGE_2_PROVISIONAL') stageMultiplier = 0.85;  // Sprint 1 fix
   else if (stage.stage === 'STAGE_2_TRANSITIONAL') stageMultiplier = 0.7;
   else if (stage.stage === 'STAGE_1') stageMultiplier = 0.5;
   else if (stage.stage === 'STAGE_3') stageMultiplier = 0.3;
@@ -21215,10 +21718,28 @@ function applyPlaybookOverlay(f) {
 
   playbookScore = +((trendTemplate.score * 0.4 + canslim.score * 0.4 + (vcp.detected ? 100 : 50) * 0.1 + (cupHandle.detected ? 100 : 50) * 0.1) * stageMultiplier).toFixed(1);
 
-  // Final verdict
+  // Composite verdict using ALL frameworks (Sprint 1 Step 1.5)
+  const composite = computeCompositeVerdict({
+    minervini: trendTemplate,
+    weinstein: stage,
+    canslim,
+    piotroski,
+    altman,
+    industryRS,
+    magicFormula,
+    vcp,
+    cupHandle,
+  });
+
+  // Final verdict — prefer composite hard-excludes, fall back to legacy logic
   let verdict, verdictColor;
-  if (stage.stage === 'STAGE_4') { verdict = 'AVOID — Stage 4'; verdictColor = '#ef4444'; }
+  if (composite.hardExclude) {
+    verdict = composite.verdict + ' — ' + composite.reason;
+    verdictColor = '#dc2626';
+  } else if (stage.stage === 'STAGE_4') { verdict = 'AVOID — Stage 4'; verdictColor = '#ef4444'; }
   else if (stage.stage === 'STAGE_3') { verdict = 'TAKE PROFITS — Stage 3'; verdictColor = '#f59e0b'; }
+  else if (composite.passCount >= 7) { verdict = composite.verdict + ` (${composite.passCount}/${composite.total} pass)`; verdictColor = '#10b981'; }
+  else if (composite.passCount >= 5) { verdict = composite.verdict + ` (${composite.passCount}/${composite.total} pass)`; verdictColor = '#22c55e'; }
   else if (trendTemplate.qualifies && canslim.qualifies) { verdict = 'STRONG BUY — Trend Template + CANSLIM'; verdictColor = '#10b981'; }
   else if (trendTemplate.passed >= 6 && stage.stage === 'STAGE_2') { verdict = 'BUY — Stage 2 + 6+ Trend criteria'; verdictColor = '#22c55e'; }
   else if (vcp.detected || cupHandle.detected) { verdict = 'WATCH — Pattern forming'; verdictColor = '#3b82f6'; }
@@ -21228,8 +21749,11 @@ function applyPlaybookOverlay(f) {
   return {
     playbook: {
       trendTemplate, stage, canslim, vcp, cupHandle,
+      // v2.1 additions:
+      piotroski, altman, industryRS, magicFormula, accumulation, composite,
       playbookScore, stageMultiplier,
       verdict, verdictColor,
+      hardExclude: composite.hardExclude || false,
     },
   };
 }
