@@ -6481,15 +6481,52 @@ async function scanAndTrade() {
 
     // Re-check slot availability (exits in pass 1 may have freed slots)
     const currentOpen = openTrades.filter(t=>t.status==="OPEN").length;
-    if (currentOpen >= CONFIG.MAX_POSITIONS) {
-      console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — all ${CONFIG.MAX_POSITIONS} slots full`);
+
+    // 🛡 v2.1 fix (2026-05-11) — Dynamic position cap based on quality signal.
+    //
+    // Today's session (2026-05-11, -₹4,268 / 20% win rate) traded 5 positions
+    // under conditions that should have throttled exposure:
+    //   - Premarket bias was NEUTRAL (dayBiasScore=0)
+    //   - Tier-A count was 0 (only Tier-B candidates)
+    //   - System still allowed 5 trades, 4 of which lost
+    //
+    // Dynamic cap:
+    //   BULL/BEAR bias (high conviction)   → MAX_POSITIONS (5)
+    //   NEUTRAL bias                       → 2 max
+    //   No Tier-A AND NEUTRAL (today's case) → 1 max (effectively halt)
+    //   No premarket data at all           → 1 max (defensive default)
+    const _bias = _premarketContext && _premarketContext.tier ? _premarketContext.tier : null;
+    const _tierAToday = (candidate.tier === 'A' ? 1 : 0) +
+                       openTrades.filter(t=>t.tier === 'A' && t.status==='OPEN').length;
+    let _dynMaxPositions = CONFIG.MAX_POSITIONS;
+    let _capReason = null;
+    if (_bias === 'NEUTRAL' && _tierAToday === 0) {
+      _dynMaxPositions = 1;
+      _capReason = 'tierA_famine_and_NEUTRAL_bias';
+    } else if (_bias === 'NEUTRAL') {
+      _dynMaxPositions = 2;
+      _capReason = 'NEUTRAL_bias_cap';
+    } else if (!_bias) {
+      _dynMaxPositions = 1;
+      _capReason = 'no_premarket_data_defensive';
+    } else if (_tierAToday === 0 && currentOpen >= 2) {
+      // High-conviction bias but no Tier-A — limit to 2 Tier-B trades
+      _dynMaxPositions = 2;
+      _capReason = 'tierA_famine_TierB_cap';
+    }
+
+    if (currentOpen >= _dynMaxPositions) {
+      const _reason = _capReason
+        ? `dynamic_cap_${_capReason} (${currentOpen}/${_dynMaxPositions})`
+        : 'max_positions';
+      console.log(`  ⊘ SKIP ${stock.sym} (score:${(candidate.adjustedScore ?? result.score).toFixed(1)}) — ${_reason} [bias=${_bias||'NULL'} tierA=${_tierAToday}]`);
       _latestPass2Debug.skippedSlots += 1;
-      recordPass2(candidate, 'SKIPPED', 'max_positions');
+      recordPass2(candidate, 'SKIPPED', _reason);
       // Record the rest as slot-capped without the break, so the UI can see
       // the whole ranked list with reasons:
       for (const rest of buyCandidates.slice(buyCandidates.indexOf(candidate) + 1)) {
         if (rest.rejected) continue;
-        recordPass2(rest, 'SKIPPED', 'max_positions');
+        recordPass2(rest, 'SKIPPED', _reason);
         _latestPass2Debug.skippedSlots += 1;
       }
       break;
