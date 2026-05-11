@@ -21769,10 +21769,14 @@ function computeCompositeVerdict(analysis) {
     vcp: analysis.vcp && analysis.vcp.detected,
     cupHandle: analysis.cupHandle && analysis.cupHandle.detected,
     // 🛡 v2.1 Sprint 5 — new alpha signals as positive ticks
-    sloanQuality: analysis.sloanAccruals && analysis.sloanAccruals.qualifies != null ? analysis.sloanAccruals.qualifies : undefined,
-    cleanBeneish: analysis.beneish && analysis.beneish.qualifies != null ? analysis.beneish.qualifies : undefined,
-    pledgeClean:  analysis.pledgeRisk && analysis.pledgeRisk.qualifies != null ? analysis.pledgeRisk.qualifies : undefined,
-    peadSetup:    analysis.earningsCtx && analysis.earningsCtx.qualifies != null ? analysis.earningsCtx.qualifies : undefined,
+    sloanQuality:      analysis.sloanAccruals    && analysis.sloanAccruals.qualifies    != null ? analysis.sloanAccruals.qualifies    : undefined,
+    cleanBeneish:      analysis.beneish          && analysis.beneish.qualifies          != null ? analysis.beneish.qualifies          : undefined,
+    pledgeClean:       analysis.pledgeRisk       && analysis.pledgeRisk.qualifies       != null ? analysis.pledgeRisk.qualifies       : undefined,
+    peadSetup:         analysis.earningsCtx      && analysis.earningsCtx.qualifies      != null ? analysis.earningsCtx.qualifies      : undefined,
+    // 🛡 v2.1 Sprint 5B — three more signals
+    fnoBullish:        analysis.fnoPositioning   && analysis.fnoPositioning.qualifies   != null ? analysis.fnoPositioning.qualifies   : undefined,
+    sectorBreadthOk:   analysis.sectorBreadth    && analysis.sectorBreadth.qualifies    != null ? analysis.sectorBreadth.qualifies    : undefined,
+    deliveryStrong:    analysis.deliveryQuality  && analysis.deliveryQuality.qualifies  != null ? analysis.deliveryQuality.qualifies  : undefined,
   };
 
   // Evaluable = explicitly true OR false (not null/undefined/missing-data)
@@ -22359,6 +22363,130 @@ function computeEarningsContext(f, candles) {
   return { tier: 'NEUTRAL', reason: 'No recent gap-up + volume signal', qualifies: false, hardExclude: false };
 }
 
+// ── 6. F&O Open Interest positioning (smart-money tracker) ──
+// 🛡 v2.1 Sprint 5B (2026-05-11) — Uses cached _marketDataCache.optionData
+// which already has totalCEOI, totalPEOI, PCR, max-pain, ATM IV. Standard
+// derivatives-desk vocabulary at every Indian prop shop.
+//   • PCR (Put/Call OI ratio): >1.3 = bearish positioning → contrarian
+//     BULLISH (puts overwritten); <0.7 = bullish positioning → contrarian
+//     BEARISH (calls overwritten / FOMO).
+//   • Max-pain distance: spot < maxPain by >2% → magnet pulls UP toward
+//     expiry; spot > maxPain by >2% → magnet pulls DOWN toward expiry.
+//   • ATM IV elevated (>30 for normal stocks): event priced in / pre-results
+function computeFnoPositioning(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const sym = f.sym;
+  const od = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.optionData)
+    ? _marketDataCache.optionData[sym] : null;
+  if (!od) return { tier: 'UNKNOWN', error: 'no_fno_data', note: 'Stock not in F&O or option chain not cached' };
+
+  const factors = [];
+  let bullishVotes = 0, bearishVotes = 0;
+
+  // PCR positioning
+  if (od.pcr != null) {
+    if (od.pcr > 1.3) { bullishVotes++; factors.push(`PCR ${od.pcr} >1.3 (puts overwritten → contrarian bullish)`); }
+    else if (od.pcr < 0.7) { bearishVotes++; factors.push(`PCR ${od.pcr} <0.7 (calls overwritten / FOMO → contrarian bearish)`); }
+    else factors.push(`PCR ${od.pcr} (neutral)`);
+  }
+
+  // Max-pain magnet
+  if (od.spot && od.maxPain) {
+    const distPct = ((od.spot - od.maxPain) / od.spot) * 100;
+    if (distPct < -2) { bullishVotes++; factors.push(`Max pain ₹${od.maxPain} is ${Math.abs(distPct).toFixed(1)}% above spot (magnet pulls UP)`); }
+    else if (distPct > 2) { bearishVotes++; factors.push(`Max pain ₹${od.maxPain} is ${distPct.toFixed(1)}% below spot (magnet pulls DOWN)`); }
+    else factors.push(`Max pain ₹${od.maxPain} near spot (no strong magnet)`);
+  }
+
+  // IV regime
+  if (od.atmIV != null) {
+    if (od.atmIV > 40) factors.push(`ATM IV ${od.atmIV}% — elevated (event priced in)`);
+    else if (od.atmIV < 18) factors.push(`ATM IV ${od.atmIV}% — calm`);
+  }
+
+  let tier;
+  if (bullishVotes > bearishVotes) tier = 'BULLISH';
+  else if (bearishVotes > bullishVotes) tier = 'BEARISH';
+  else tier = 'NEUTRAL';
+
+  return {
+    tier, factors, pcr: od.pcr, maxPain: od.maxPain, atmIV: od.atmIV,
+    reason: factors.join(' · '),
+    qualifies: tier === 'BULLISH',
+    hardExclude: false,
+  };
+}
+
+// ── 7. Sector breadth (% of sector above 200-DMA) ──
+// 🛡 v2.1 Sprint 5B (2026-05-11) — Validates Industry RS by checking actual
+// participation, not just average return. A sector with high average return
+// but low breadth = 1-2 stocks pumping the index; weak signal. A sector with
+// 60%+ breadth above 200 DMA = confirmed broad-based uptrend.
+function computeSectorBreadth(f) {
+  if (!f || !f.sym) return { tier: 'UNKNOWN', error: 'no_symbol' };
+  try {
+    const sector = (typeof SECTOR_MAP !== 'undefined' && SECTOR_MAP[f.sym]) || f.sector || 'Other';
+    if (typeof FUND === 'undefined') return { tier: 'UNKNOWN', error: 'no_universe' };
+
+    const peers = Object.entries(FUND)
+      .filter(([sym, ff]) => ff && SECTOR_MAP && SECTOR_MAP[sym] === sector)
+      .map(([sym, ff]) => ff);
+
+    if (peers.length < 3) return { tier: 'UNKNOWN', sector, error: 'too_few_peers', n: peers.length };
+
+    const peersAbove200 = peers.filter(p => p.pctAbove200 != null && p.pctAbove200 > 0).length;
+    const breadthPct = +((peersAbove200 / peers.length) * 100).toFixed(0);
+
+    let tier, reason;
+    if (breadthPct >= 70) { tier = 'STRONG'; reason = `${breadthPct}% of ${peers.length} ${sector} peers above 200 DMA — broad uptrend`; }
+    else if (breadthPct >= 50) { tier = 'OK'; reason = `${breadthPct}% of ${peers.length} ${sector} peers above 200 DMA — mixed`; }
+    else if (breadthPct >= 30) { tier = 'WEAK'; reason = `${breadthPct}% of ${peers.length} ${sector} peers above 200 DMA — narrow leadership`; }
+    else { tier = 'BEARISH'; reason = `${breadthPct}% of ${peers.length} ${sector} peers above 200 DMA — broad downtrend`; }
+
+    return {
+      tier, sector, breadthPct, sectorPeerCount: peers.length, peersAbove200,
+      reason,
+      qualifies: tier === 'STRONG' || tier === 'OK',
+      hardExclude: false,
+    };
+  } catch (e) { return { tier: 'UNKNOWN', error: e.message }; }
+}
+
+// ── 8. Delivery quality (institutional accumulation proxy) ──
+// 🛡 v2.1 Sprint 5B (2026-05-11) — Indian-market specific. Delivery % is
+// the share of trades that result in actual delivery vs intraday flips.
+// High delivery (>60%) = institutional / long-term buyers dominant. Low
+// (<25%) = speculative / day-trader churn. This is the canonical Indian
+// proxy for institutional ownership change because we don't have the
+// real-time fund ownership feed.
+//   Per Marcellus's "informed-buyer" framework: > 60% sustained delivery
+//   over 5 days = high-conviction accumulation.
+function computeDeliveryQuality(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const sym = f.sym;
+  const delRec = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.deliveryData)
+    ? _marketDataCache.deliveryData[sym] : null;
+  // Fall back to the f.deliveryPct field if cache missing
+  const delPct = delRec && delRec.deliveryPct != null ? +delRec.deliveryPct
+               : f.deliveryPct || f.delPct || f.deliveryPercentage || null;
+
+  if (delPct == null) return { tier: 'UNKNOWN', error: 'no_delivery_data' };
+
+  let tier, reason;
+  if (delPct >= 60) { tier = 'INSTITUTIONAL'; reason = `${delPct}% delivery — institutional accumulation`; }
+  else if (delPct >= 45) { tier = 'STRONG_HANDS'; reason = `${delPct}% delivery — long-only buyers dominant`; }
+  else if (delPct >= 30) { tier = 'MIXED'; reason = `${delPct}% delivery — balanced participation`; }
+  else if (delPct >= 20) { tier = 'SPECULATIVE'; reason = `${delPct}% delivery — short-term flippers dominant`; }
+  else { tier = 'CHURN'; reason = `${delPct}% delivery — pure speculation, no institutional buyers`; }
+
+  return {
+    tier, deliveryPct: delPct,
+    reason,
+    qualifies: tier === 'INSTITUTIONAL' || tier === 'STRONG_HANDS',
+    hardExclude: false,
+  };
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // 🛡 v2.1 Sprint 4F (2026-05-11) — Multi-horizon verdicts.
 // Splits the composite into THREE horizon-specific tallies so a stock can
@@ -22458,6 +22586,10 @@ function computeHorizonVerdicts(analysis) {
   if (a.pledgeRisk && a.pledgeRisk.qualifies != null && !a.pledgeRisk.error) {
     record(lt, 'No promoter pledging risk', a.pledgeRisk.qualifies, a.pledgeRisk.reason);
   }
+  // 🛡 v2.1 Sprint 5B — institutional accumulation proxy
+  if (a.deliveryQuality && a.deliveryQuality.qualifies != null && !a.deliveryQuality.error) {
+    record(lt, 'Institutional buyers dominant (delivery %)', a.deliveryQuality.qualifies, a.deliveryQuality.reason);
+  }
 
   // ─── MOMENTUM ─────────────────────────────────────────────────────────
   const mo = horizons.momentum;
@@ -22491,6 +22623,10 @@ function computeHorizonVerdicts(analysis) {
     const inStage2 = a.weinstein.stage === 'STAGE_2' || a.weinstein.stage === 'STAGE_2_PROVISIONAL';
     record(mo, 'In a clean uptrend stage', inStage2,
       a.weinstein.stage.replace(/_/g, ' ').toLowerCase());
+  }
+  // 🛡 v2.1 Sprint 5B — sector breadth confirms (or denies) momentum
+  if (a.sectorBreadth && a.sectorBreadth.qualifies != null && !a.sectorBreadth.error) {
+    record(mo, 'Sector breadth confirms', a.sectorBreadth.qualifies, a.sectorBreadth.reason);
   }
 
   // ─── SHORT TERM ───────────────────────────────────────────────────────
@@ -22527,6 +22663,10 @@ function computeHorizonVerdicts(analysis) {
   }
   if (a.surveillance && a.surveillance.qualifies != null && !a.surveillance.error) {
     record(st, 'Tradeable (no surveillance)', a.surveillance.qualifies, a.surveillance.reason);
+  }
+  // 🛡 v2.1 Sprint 5B — F&O smart-money positioning
+  if (a.fnoPositioning && a.fnoPositioning.qualifies != null && !a.fnoPositioning.error) {
+    record(st, 'F&O positioning bullish', a.fnoPositioning.qualifies, a.fnoPositioning.reason);
   }
 
   // Compute tier per horizon. Need at least 3 evaluable checks for a real tier.
@@ -22600,6 +22740,12 @@ function applyPlaybookOverlay(f, candles) {
   const beneish        = computeBeneishMScore(f);
   const sloanAccruals  = computeSloanAccruals(f);
   const earningsCtx    = computeEarningsContext(f, candles);
+  // 🛡 v2.1 Sprint 5B — three additional signals from data we already cache:
+  // F&O OI positioning (smart-money tracker), sector breadth (Industry RS
+  // confirmation), delivery quality (Indian institutional accumulation proxy).
+  const fnoPositioning = computeFnoPositioning(f);
+  const sectorBreadth  = computeSectorBreadth(f);
+  const deliveryQuality = computeDeliveryQuality(f);
 
   // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
   let playbookScore = 0;
@@ -22633,12 +22779,16 @@ function applyPlaybookOverlay(f, candles) {
     magicFormula,
     vcp,
     cupHandle,
-    // 🛡 v2.1 Sprint 5 — new hard-exclude signals
+    // 🛡 v2.1 Sprint 5 — new hard-exclude + alpha signals
     pledgeRisk,
     surveillance,
     beneish,
     sloanAccruals,
     earningsCtx,
+    // 🛡 v2.1 Sprint 5B — additions
+    fnoPositioning,
+    sectorBreadth,
+    deliveryQuality,
   });
 
   // 🛡 v2.1 Sprint 4F (2026-05-11) — Per-horizon tallies (Long term / Momentum
@@ -22661,6 +22811,9 @@ function applyPlaybookOverlay(f, candles) {
     beneish,
     sloanAccruals,
     earningsCtx,
+    fnoPositioning,
+    sectorBreadth,
+    deliveryQuality,
   });
 
   // Final verdict — composite is authoritative.
@@ -22707,6 +22860,8 @@ function applyPlaybookOverlay(f, candles) {
       horizons,
       // 🛡 v2.1 Sprint 5 additions (top-trader alpha signals):
       pledgeRisk, surveillance, beneish, sloanAccruals, earningsCtx,
+      // 🛡 v2.1 Sprint 5B additions:
+      fnoPositioning, sectorBreadth, deliveryQuality,
       playbookScore, stageMultiplier,
       verdict, verdictColor,
       hardExclude: composite.hardExclude || false,
