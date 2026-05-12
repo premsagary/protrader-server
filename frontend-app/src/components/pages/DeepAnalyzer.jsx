@@ -727,7 +727,15 @@ const FRAMEWORK_LABELS = {
 };
 
 function _statusFromCheck(pb, key) {
-  const x = pb[key];
+  // 🛡 v2.1 Sprint 5E (2026-05-11) — fix key-name mismatch. Backend stores
+  // Minervini Trend Template as playbook.trendTemplate and Weinstein as
+  // playbook.stage, but this function was looking them up as 'minervini'
+  // and 'weinstein' → always returned "no data". The proof was the verdict
+  // reason text saying "BUY zone per Weinstein (EARLY)" while the per-check
+  // row for Weinstein said no data. Map the labels to the real keys.
+  const KEY_MAP = { minervini: 'trendTemplate', weinstein: 'stage' };
+  const realKey = KEY_MAP[key] || key;
+  const x = pb[realKey];
   if (!x) return { state: 'unknown', metric: 'no data' };
   if (x.error) return { state: 'unknown', metric: 'no data' };
   switch (key) {
@@ -779,7 +787,10 @@ function _statusFromCheck(pb, key) {
 }
 
 function _plainReason(pb, key) {
-  const x = pb[key];
+  // 🛡 v2.1 Sprint 5E — same key-mapping fix as _statusFromCheck
+  const KEY_MAP = { minervini: 'trendTemplate', weinstein: 'stage' };
+  const realKey = KEY_MAP[key] || key;
+  const x = pb[realKey];
   if (!x || x.error) return 'data not available';
   switch (key) {
     case 'minervini': return `${x.passed || 0} of 8 trend criteria passing${x.confidence ? ` · ${x.confidence} confidence` : ''}`;
@@ -819,14 +830,19 @@ function DeepAnalyzerPlaybook({ playbook }) {
   const checks = [
     'minervini', 'weinstein', 'canslim', 'vcp', 'cupHandle',
     'piotroski', 'altman', 'industryRS', 'magicFormula', 'accumulation',
-  ].map(key => ({
-    key,
-    label: FRAMEWORK_LABELS[key].title,
-    deepLabel: FRAMEWORK_LABELS[key].deep,
-    status: _statusFromCheck(pb, key),
-    reason: _plainReason(pb, key),
-    raw: pb[key],
-  }));
+  ].map(key => {
+    // 🛡 v2.1 Sprint 5E — same key-mapping fix as _statusFromCheck/_plainReason
+    const KEY_MAP = { minervini: 'trendTemplate', weinstein: 'stage' };
+    const realKey = KEY_MAP[key] || key;
+    return {
+      key,
+      label: FRAMEWORK_LABELS[key].title,
+      deepLabel: FRAMEWORK_LABELS[key].deep,
+      status: _statusFromCheck(pb, key),
+      reason: _plainReason(pb, key),
+      raw: pb[realKey],
+    };
+  });
   // Sort fails first → partial → pass → unknown (fails drive the decision)
   const order = { fail: 0, partial: 1, pass: 2, unknown: 3 };
   const sortedChecks = [...checks].sort((a, b) => order[a.status.state] - order[b.status.state]);
