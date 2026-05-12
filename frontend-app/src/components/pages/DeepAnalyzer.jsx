@@ -2253,6 +2253,11 @@ function UniverseTable({ onPickStock }) {
   const [verdictFilter, setVerdictFilter] = useState('ALL');
   const [sectorFilter, setSectorFilter] = useState('ALL');
   const [searchQ, setSearchQ] = useState('');
+  // 🛡 v2.1 Sprint 5F (2026-05-11) — view mode: 'all' (default sortable
+  // table), 'losers' (filtered to dayChangePct < -1%, sorted asc), 'gainers'
+  // (filtered to dayChangePct > +1%, sorted desc). Lets the user spot
+  // "quality on sale" (big loss + Strong Buy verdict = buy-on-dip).
+  const [viewMode, setViewMode] = useState('all');
 
   const load = (force) => {
     setLoading(true); setErr(null);
@@ -2284,6 +2289,9 @@ function UniverseTable({ onPickStock }) {
   // Filter
   const q = searchQ.trim().toUpperCase();
   const filtered = rows.filter(r => {
+    // 🛡 Sprint 5F — view-mode filter
+    if (viewMode === 'losers'  && !(r.dayChangePct != null && r.dayChangePct <= -1)) return false;
+    if (viewMode === 'gainers' && !(r.dayChangePct != null && r.dayChangePct >= 1))  return false;
     if (verdictFilter !== 'ALL' && !(r.verdict || '').includes(verdictFilter)) return false;
     if (sectorFilter !== 'ALL' && r.sector !== sectorFilter) return false;
     if (q && !(r.sym || '').toUpperCase().includes(q) && !(r.name || '').toUpperCase().includes(q)) return false;
@@ -2313,6 +2321,7 @@ function UniverseTable({ onPickStock }) {
       case 'playbookScore': return row.playbookScore || 0;
       case 'pledgePct': return row.pledgePct ?? -1;
       case 'deliveryPct': return row.deliveryPct ?? -1;
+      case 'dayChangePct': return row.dayChangePct ?? 0;  // 🛡 Sprint 5F
       default: return 0;
     }
   };
@@ -2341,6 +2350,20 @@ function UniverseTable({ onPickStock }) {
 
   return (
     <div>
+      {/* 🛡 Sprint 5F — View mode toggle (All / Top Losers / Top Gainers) */}
+      <div className="card" style={{ padding: 12, marginBottom: 10 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <ViewModeChip label="All stocks"   active={viewMode === 'all'}     onClick={() => { setViewMode('all'); setSortKey('passCount'); setSortDir('desc'); }} />
+          <ViewModeChip label="Top losers today"  active={viewMode === 'losers'}  onClick={() => { setViewMode('losers'); setSortKey('dayChangePct'); setSortDir('asc'); }} />
+          <ViewModeChip label="Top gainers today" active={viewMode === 'gainers'} onClick={() => { setViewMode('gainers'); setSortKey('dayChangePct'); setSortDir('desc'); }} />
+          <div style={{ alignSelf: 'center', fontSize: 11, color: 'var(--text4)', marginLeft: 'auto' }}>
+            {viewMode === 'losers'  && 'Down >1% today — check verdict for buy-on-dip candidates'}
+            {viewMode === 'gainers' && 'Up >1% today — check verdict for breakout follow-through'}
+            {viewMode === 'all'     && '576+ stocks ranked by composite verdict'}
+          </div>
+        </div>
+      </div>
+
       {/* Summary + filters */}
       <div className="card" style={{ padding: 16, marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -2382,6 +2405,7 @@ function UniverseTable({ onPickStock }) {
               <SortableHdr label="Symbol"      keyName="sym"        sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
               <SortableHdr label="Sector"      keyName="sector"     sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
               <SortableHdr label="Price"       keyName="price"      sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+              <SortableHdr label="Today"       keyName="dayChangePct" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
               <SortableHdr label="Verdict"     keyName="verdict"    sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
               <SortableHdr label="Checks"      keyName="passCount"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
               <SortableHdr label="Long term"   keyName="longTerm"   sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
@@ -2408,6 +2432,9 @@ function UniverseTable({ onPickStock }) {
                 <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--text)' }}>{r.sym}</td>
                 <td style={{ padding: '8px 10px', color: 'var(--text3)', fontSize: 11 }}>{r.sector}</td>
                 <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{r.price ? `₹${Number(r.price).toFixed(1)}` : '—'}</td>
+                <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: r.dayChangePct == null ? 'var(--text4)' : r.dayChangePct > 0 ? 'var(--green-text)' : r.dayChangePct < 0 ? 'var(--red-text)' : 'var(--text3)' }}>
+                  {r.dayChangePct == null ? '—' : `${r.dayChangePct > 0 ? '+' : ''}${r.dayChangePct.toFixed(2)}%`}
+                </td>
                 <td style={{ padding: '8px 10px', textAlign: 'center' }}><VerdictPill verdict={r.verdict} /></td>
                 <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'center', color: 'var(--text2)' }}>{r.passCount}/{r.total}</td>
                 <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.longTerm?.tier} count={r.longTerm} /></td>
@@ -2457,6 +2484,18 @@ function SortableHdr({ label, keyName, sortKey, sortDir, onClick, align = 'left'
     >
       {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
+  );
+}
+
+function ViewModeChip({ label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: '8px 16px', borderRadius: 10,
+      border: active ? '1px solid var(--brand-border)' : '1px solid var(--border)',
+      background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
+      color: active ? 'var(--brand-text)' : 'var(--text3)',
+      fontSize: 13, fontWeight: active ? 700 : 500, cursor: 'pointer',
+    }}>{label}</button>
   );
 }
 

@@ -26309,21 +26309,49 @@ cron.schedule('30 7 * * *', async () => {
       ...Object.keys((global.FUND_EXT) || {}),
     ]);
     const results = [];
+    // 🛡 Sprint 5F — bulk OHLC for syms missing from WebSocket tick cache
+    const symsArr = Array.from(allSyms);
+    const symsMissingFromTicker = symsArr.filter(s => !(livePrices[s] && livePrices[s].change != null));
+    const bulkOHLC = symsMissingFromTicker.length > 0
+      ? await _fetchBulkOHLC(symsMissingFromTicker)
+      : {};
+    console.log(`📊 Warm-up bulk OHLC: ${Object.keys(bulkOHLC).length}/${symsMissingFromTicker.length} ticker-missing syms`);
+
     for (const sym of allSyms) {
       const u = universeByKey.get(sym) || { sym, n: sym, grp: '' };
       const fund = stockFundamentals[sym] || (typeof FUND !== 'undefined' ? FUND[sym] : null) || {};
       const ext  = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
       const sector = SECTOR_MAP[sym] || fund.sector || ext.sector || 'Other';
-      const px = livePrices[sym]?.price || fund.price || ext.price || ext.currentPrice || null;
+      const px = livePrices[sym]?.price || (bulkOHLC[sym]?.lastPrice) || fund.price || ext.price || ext.currentPrice || null;
+      // 🛡 Sprint 5F — day change % with full priority chain
+      let dayChangePct = null, prevClose = null;
+      const lp = livePrices[sym];
+      if (lp && lp.change != null) {
+        dayChangePct = +(+lp.change).toFixed(2);
+        if (lp.ohlc && lp.ohlc.close) prevClose = +lp.ohlc.close;
+      } else if (bulkOHLC[sym]) {
+        dayChangePct = bulkOHLC[sym].dayChangePct;
+        prevClose    = bulkOHLC[sym].prevClose;
+      } else {
+        const delRec = (_marketDataCache && _marketDataCache.deliveryData) ? _marketDataCache.deliveryData[sym] : null;
+        if (delRec && delRec.prevClose && (delRec.lastPrice || px)) {
+          prevClose = +delRec.prevClose;
+          const last = +(delRec.lastPrice || px);
+          if (prevClose > 0) dayChangePct = +(((last - prevClose) / prevClose) * 100).toFixed(2);
+        } else if (fund.dayChangePct != null) {
+          dayChangePct = +fund.dayChangePct;
+        }
+      }
       const f = { ...fund, ...ext, sym, name: u.n, sector, price: px, grp: u.grp, group: u.grp };
       let pb = null;
       try { pb = applyPlaybookOverlay(f, null).playbook; } catch (e) {
-        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message }); continue;
+        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message, dayChangePct }); continue;
       }
       const composite = pb?.composite || {};
       const h = pb?.horizons || {};
       results.push({
         sym, name: u.n, sector, price: px, grp: u.grp,
+        dayChangePct, prevClose,  // 🛡 Sprint 5F
         verdict: composite.verdict || 'NEUTRAL',
         passCount: composite.passCount ?? 0, total: composite.total ?? 0,
         hardExclude: !!composite.hardExclude,
@@ -29333,6 +29361,39 @@ let _universeVerdictCache = { computedAt: 0, results: null };
 // below forces a recompute right after the daily Screener refresh lands.
 const _UNIVERSE_CACHE_MS = 6 * 60 * 60 * 1000;  // 6 hours
 
+// 🛡 v2.1 Sprint 5F (2026-05-11) — Bulk OHLC fetcher.
+// Kite WebSocket only ticks for SUBSCRIBED symbols (and the subscription is
+// bound to UNIVERSE which may be sparse at first request). For Top Losers
+// view to work across ALL 572+ stocks we need previousClose + lastPrice
+// for every symbol. kite.getOHLC accepts an array of NSE:SYM strings and
+// returns { 'NSE:SYM': { last_price, ohlc: { open, high, low, close }, ... } }
+// where ohlc.close is the PREVIOUS DAY's close (Kite convention).
+// Bulk API limit is 500 syms per call; we batch.
+async function _fetchBulkOHLC(syms) {
+  if (!kite || !Array.isArray(syms) || syms.length === 0) return {};
+  const out = {};
+  const BATCH = 200;  // conservative batch size
+  for (let i = 0; i < syms.length; i += BATCH) {
+    const slice = syms.slice(i, i + BATCH);
+    try {
+      const keys = slice.map(s => `NSE:${s}`);
+      const r = await kite.getOHLC(keys);
+      for (const s of slice) {
+        const entry = r?.[`NSE:${s}`];
+        if (entry && entry.last_price && entry.ohlc?.close) {
+          const last = +entry.last_price;
+          const prev = +entry.ohlc.close;
+          const change = prev > 0 ? +(((last - prev) / prev) * 100).toFixed(2) : null;
+          out[s] = { lastPrice: last, prevClose: prev, dayChangePct: change };
+        }
+      }
+    } catch (e) {
+      console.warn(`[bulkOHLC] batch ${i} failed: ${e.message}`);
+    }
+  }
+  return out;
+}
+
 app.get('/api/stocks/universe-verdict', async (req, res) => {
   try {
     const now = Date.now();
@@ -29365,12 +29426,48 @@ app.get('/api/stocks/universe-verdict', async (req, res) => {
     ]);
     const results = [];
 
+    // 🛡 v2.1 Sprint 5F — Bulk OHLC fetch for every sym so dayChangePct works
+    // across the FULL universe, not just WebSocket-subscribed ones.
+    const symsArr = Array.from(allSyms);
+    const symsMissingFromTicker = symsArr.filter(s => !(livePrices[s] && livePrices[s].change != null));
+    const bulkOHLC = symsMissingFromTicker.length > 0
+      ? await _fetchBulkOHLC(symsMissingFromTicker)
+      : {};
+    if (Object.keys(bulkOHLC).length > 0) {
+      console.log(`📊 Bulk OHLC fetched for ${Object.keys(bulkOHLC).length}/${symsMissingFromTicker.length} ticker-missing syms`);
+    }
+
     for (const sym of allSyms) {
       const u = universeByKey.get(sym) || { sym, n: sym, grp: '' };
       const fund = stockFundamentals[sym] || (typeof FUND !== 'undefined' ? FUND[sym] : null) || {};
       const ext  = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
       const sector = SECTOR_MAP[sym] || fund.sector || ext.sector || 'Other';
       const px = livePrices[sym]?.price || fund.price || ext.price || ext.currentPrice || null;
+
+      // 🛡 v2.1 Sprint 5F (2026-05-11) — today's % change. Source priority:
+      //   1. livePrices[sym].change — Kite WebSocket tick (real-time)
+      //   2. bulkOHLC[sym]          — Kite REST getOHLC bulk fetch (fallback
+      //                                for non-subscribed syms, covers full universe)
+      //   3. NSE deliveryData       — third fallback
+      //   4. fund.dayChangePct      — last resort
+      let dayChangePct = null, prevClose = null;
+      const lp = livePrices[sym];
+      if (lp && lp.change != null) {
+        dayChangePct = +(+lp.change).toFixed(2);
+        if (lp.ohlc && lp.ohlc.close) prevClose = +lp.ohlc.close;
+      } else if (bulkOHLC[sym]) {
+        dayChangePct = bulkOHLC[sym].dayChangePct;
+        prevClose    = bulkOHLC[sym].prevClose;
+      } else {
+        const delRec = (_marketDataCache && _marketDataCache.deliveryData) ? _marketDataCache.deliveryData[sym] : null;
+        if (delRec && delRec.prevClose && (delRec.lastPrice || px)) {
+          prevClose = +delRec.prevClose;
+          const last = +(delRec.lastPrice || px);
+          if (prevClose > 0) dayChangePct = +(((last - prevClose) / prevClose) * 100).toFixed(2);
+        } else if (fund.dayChangePct != null) {
+          dayChangePct = +fund.dayChangePct;
+        }
+      }
 
       // Compose the merged fundamentals object the overlay wants
       const f = { ...fund, ...ext, sym, name: u.n, sector, price: px, grp: u.grp, group: u.grp };
@@ -29380,7 +29477,7 @@ app.get('/api/stocks/universe-verdict', async (req, res) => {
         pb = applyPlaybookOverlay(f, null).playbook;  // null candles → Tier-B VCP, A/D skipped
       } catch (e) {
         // Skip stocks that throw; record the failure but don't crash the universe scan
-        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message });
+        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message, dayChangePct });
         continue;
       }
 
@@ -29389,6 +29486,7 @@ app.get('/api/stocks/universe-verdict', async (req, res) => {
 
       results.push({
         sym, name: u.n, sector, price: px, grp: u.grp,
+        dayChangePct, prevClose,  // 🛡 Sprint 5F — for Top Losers / Top Gainers
         verdict: composite.verdict || 'NEUTRAL',
         passCount: composite.passCount ?? 0,
         total: composite.total ?? 0,
