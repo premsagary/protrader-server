@@ -26259,6 +26259,69 @@ cron.schedule('0 7 * * *', () => {
   fetchAllScreenerData().catch(e => console.error('Screener cron error:', e.message));
 }, { timezone: 'Asia/Kolkata' });
 
+// 🛡 v2.1 Sprint 5C (2026-05-11) — Universe Verdict daily warm-up.
+// 30 minutes after the 07:00 Screener cron lands fresh fundamentals,
+// invalidate + recompute the universe-verdict cache so it's hot for the
+// first user request of the day. Computes synchronously by calling the
+// same logic as the endpoint (HTTP roundtrip avoided).
+cron.schedule('30 7 * * *', async () => {
+  try {
+    const hour = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+    console.log(`📊 ${hour}: Universe-verdict daily warm-up starting...`);
+    _universeVerdictCache = { computedAt: 0, results: null };  // invalidate
+
+    const t0 = Date.now();
+    const universeArr = Array.isArray(UNIVERSE) ? UNIVERSE : [];
+    const universeByKey = new Map(universeArr.map(u => [u.sym, u]));
+    const allSyms = new Set([
+      ...universeArr.map(u => u.sym),
+      ...Object.keys(stockFundamentals || {}),
+      ...Object.keys((typeof FUND !== 'undefined' && FUND) || {}),
+      ...Object.keys((global.FUND_EXT) || {}),
+    ]);
+    const results = [];
+    for (const sym of allSyms) {
+      const u = universeByKey.get(sym) || { sym, n: sym, grp: '' };
+      const fund = stockFundamentals[sym] || (typeof FUND !== 'undefined' ? FUND[sym] : null) || {};
+      const ext  = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
+      const sector = SECTOR_MAP[sym] || fund.sector || ext.sector || 'Other';
+      const px = livePrices[sym]?.price || fund.price || ext.price || ext.currentPrice || null;
+      const f = { ...fund, ...ext, sym, name: u.n, sector, price: px, grp: u.grp, group: u.grp };
+      let pb = null;
+      try { pb = applyPlaybookOverlay(f, null).playbook; } catch (e) {
+        results.push({ sym, name: u.n, sector, price: px, verdict: 'ERROR', error: e.message }); continue;
+      }
+      const composite = pb?.composite || {};
+      const h = pb?.horizons || {};
+      results.push({
+        sym, name: u.n, sector, price: px, grp: u.grp,
+        verdict: composite.verdict || 'NEUTRAL',
+        passCount: composite.passCount ?? 0, total: composite.total ?? 0,
+        hardExclude: !!composite.hardExclude,
+        hardExcludeReason: composite.hardExclude ? composite.reason : null,
+        stage: pb?.stage?.stage || null, subStage: pb?.stage?.subStage || null,
+        longTerm:   h.longTerm  ? { tier: h.longTerm.tier,  passCount: h.longTerm.passCount,  total: h.longTerm.total }  : null,
+        momentum:   h.momentum  ? { tier: h.momentum.tier,  passCount: h.momentum.passCount,  total: h.momentum.total }  : null,
+        shortTerm:  h.shortTerm ? { tier: h.shortTerm.tier, passCount: h.shortTerm.passCount, total: h.shortTerm.total } : null,
+        playbookScore: pb?.playbookScore ?? null,
+        pledgeTier:      pb?.pledgeRisk?.tier      || null,
+        pledgePct:       pb?.pledgeRisk?.pledgePct ?? null,
+        beneishTier:     pb?.beneish?.tier         || null,
+        deliveryTier:    pb?.deliveryQuality?.tier || null,
+        deliveryPct:     pb?.deliveryQuality?.deliveryPct ?? null,
+        fnoPositioning:  pb?.fnoPositioning?.tier  || null,
+        sectorBreadth:   pb?.sectorBreadth?.tier   || null,
+      });
+    }
+    _universeVerdictCache = { computedAt: Date.now(), results };
+    const dtMs = Date.now() - t0;
+    const verdictCounts = results.reduce((acc, r) => { acc[r.verdict] = (acc[r.verdict] || 0) + 1; return acc; }, {});
+    console.log(`📊 Universe-verdict warm-up: ${results.length} stocks in ${dtMs}ms · ${JSON.stringify(verdictCounts).slice(0, 200)}`);
+  } catch (e) {
+    console.error('Universe-verdict warm-up error:', e.message);
+  }
+}, { timezone: 'Asia/Kolkata' });
+
 // =============================================================================
 // SCORE V2 DAILY SNAPSHOT WRITER
 // After the 8PM Screener refresh lands fresh fundamentals, snapshot the entire
@@ -29235,7 +29298,11 @@ app.get('/api/screener/status', async (req, res) => {
 // tiers still compute from fundamentals alone.
 // ══════════════════════════════════════════════════════════════════════════
 let _universeVerdictCache = { computedAt: 0, results: null };
-const _UNIVERSE_CACHE_MS = 5 * 60 * 1000;  // 5 minutes
+// 🛡 v2.1 Sprint 5C (2026-05-11) — Fundamentals refresh once daily at 07:00
+// IST via Screener cron. No point recomputing the universe-verdict every 5
+// minutes when underlying data is static for 24h. Cache for 6 hours; cron
+// below forces a recompute right after the daily Screener refresh lands.
+const _UNIVERSE_CACHE_MS = 6 * 60 * 60 * 1000;  // 6 hours
 
 app.get('/api/stocks/universe-verdict', async (req, res) => {
   try {
