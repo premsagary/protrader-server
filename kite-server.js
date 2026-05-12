@@ -21784,29 +21784,55 @@ function computeCompositeVerdict(analysis) {
   const passCount = evaluable.filter(v => v).length;
   const total = evaluable.length;
 
-  // 🛡 v2.1 Sprint 4E (2026-05-11) — Cascade with stage-aware DOWNGRADE.
-  // Sprint 4A required 8+ passes for non-clean-Stage-2 stocks → almost
-  // everything fell into AVOID. Now we use the same thresholds (7/5/3) for
-  // all stages but DOWNGRADE the resulting tier by one step when the stock
-  // isn't in a clean uptrend. This preserves the safety intuition (don't
-  // chase a transitional / Stage 1 stock as hard as a clean Stage 2) without
-  // making non-clean stocks unbuyable.
+  // 🛡 v2.1 Sprint 5D (2026-05-11) — Verdict is now HORIZON-AWARE FIRST.
+  // User reported: stocks with Long-term STRONG + Momentum STRONG were
+  // showing Avoid because the absolute pass count (2 of 9 evaluable) is low.
+  // That's the wrong signal — the horizon tiers ALREADY factor in pass-rate
+  // PER timeframe. If 2 horizons are STRONG, the stock is a Strong Buy
+  // regardless of how many of the 13+ individual checks pass overall.
+  // Pass-count cascade is now the FALLBACK when horizons have insufficient
+  // data (< 2 evaluable horizons).
   const cleanStage2 = analysis.weinstein
     && (analysis.weinstein.stage === 'STAGE_2' || analysis.weinstein.stage === 'STAGE_2_PROVISIONAL');
 
-  // Base tier from pass count (used universally)
-  let baseTier;
-  if (passCount >= 7) baseTier = 'STRONG_BUY';
-  else if (passCount >= 5) baseTier = 'BUY';
-  else if (passCount >= 3) baseTier = 'WATCH';
-  else baseTier = 'AVOID';
+  const h = analysis.horizons || {};
+  const lt = h.longTerm?.tier;
+  const mo = h.momentum?.tier;
+  const st = h.shortTerm?.tier;
+  const strongCount = [lt, mo, st].filter(t => t === 'STRONG').length;
+  const okCount     = [lt, mo, st].filter(t => t === 'OK').length;
+  const weakCount   = [lt, mo, st].filter(t => t === 'WEAK').length;
+  const evaluableHorizons = strongCount + okCount + weakCount;
 
-  // Non-clean Stage 2 → step down one tier (Strong Buy → Buy, Buy → Watch,
-  // Watch → Avoid). Same data, less conviction.
-  let finalTier = baseTier;
-  if (!cleanStage2) {
-    const step = { STRONG_BUY: 'BUY', BUY: 'WATCH', WATCH: 'AVOID', AVOID: 'AVOID' };
-    finalTier = step[baseTier];
+  let finalTier;
+  let verdictSource;
+  if (evaluableHorizons >= 2) {
+    // Primary path: horizon-driven verdict (the intuitive logic)
+    verdictSource = 'horizons';
+    if (strongCount >= 2)                              finalTier = 'STRONG_BUY';
+    else if (strongCount === 1 && okCount >= 1)        finalTier = 'BUY';
+    else if (strongCount === 1)                        finalTier = 'WATCH';      // 1 strong + rest weak/unknown
+    else if (okCount >= 2)                             finalTier = 'BUY';
+    else if (okCount === 1 && weakCount <= 1)          finalTier = 'WATCH';
+    else                                               finalTier = 'AVOID';
+
+    // Non-clean-Stage-2 mild safety check: only downgrade STRONG_BUY → BUY
+    // when Momentum is not in the STRONG horizon (because clean Stage 2 is
+    // already a precondition of Momentum=STRONG). Other tiers untouched.
+    if (!cleanStage2 && finalTier === 'STRONG_BUY' && mo !== 'STRONG') {
+      finalTier = 'BUY';
+    }
+  } else {
+    // Fallback path: pass-count cascade (when horizons have < 2 evaluable)
+    verdictSource = 'passCount';
+    if (passCount >= 7) finalTier = 'STRONG_BUY';
+    else if (passCount >= 5) finalTier = 'BUY';
+    else if (passCount >= 3) finalTier = 'WATCH';
+    else finalTier = 'AVOID';
+    if (!cleanStage2) {
+      const step = { STRONG_BUY: 'BUY', BUY: 'WATCH', WATCH: 'AVOID', AVOID: 'AVOID' };
+      finalTier = step[finalTier];
+    }
   }
 
   const tierToVerdict = {
@@ -21823,6 +21849,8 @@ function computeCompositeVerdict(analysis) {
     total,
     passes,
     cleanStage2,
+    verdictSource,  // 🛡 Sprint 5D — 'horizons' or 'passCount' so UI can show how decision was made
+    horizonCounts: { strong: strongCount, ok: okCount, weak: weakCount, evaluable: evaluableHorizons },
     rsDoubleCountFlag: industryRSEvaluable && passes.canslim && passes.industryRS,
     pctPass: total > 0 ? +(passCount / total * 100).toFixed(0) : 0,
   };
@@ -22768,32 +22796,11 @@ function applyPlaybookOverlay(f, candles) {
   const _raw = (_ttScore * 0.4 + _csScore * 0.4 + _vcpBoost * 0.1 + _cupBoost * 0.1) * stageMultiplier;
   playbookScore = Number.isFinite(_raw) ? +_raw.toFixed(1) : 0;
 
-  // Composite verdict using ALL frameworks + Sprint 5 hard-exclude signals
-  const composite = computeCompositeVerdict({
-    minervini: trendTemplate,
-    weinstein: stage,
-    canslim,
-    piotroski,
-    altman,
-    industryRS,
-    magicFormula,
-    vcp,
-    cupHandle,
-    // 🛡 v2.1 Sprint 5 — new hard-exclude + alpha signals
-    pledgeRisk,
-    surveillance,
-    beneish,
-    sloanAccruals,
-    earningsCtx,
-    // 🛡 v2.1 Sprint 5B — additions
-    fnoPositioning,
-    sectorBreadth,
-    deliveryQuality,
-  });
-
-  // 🛡 v2.1 Sprint 4F (2026-05-11) — Per-horizon tallies (Long term / Momentum
-  // / Short term). Stocks can be strong on one horizon and weak on another;
-  // the overall composite is the roll-up answer, but the user sees the WHY.
+  // 🛡 v2.1 Sprint 5D (2026-05-11) — Compute HORIZONS FIRST so composite
+  // verdict can use timeframe-aware logic. Previously composite ran before
+  // horizons and could only see absolute pass count, leading to "Avoid"
+  // verdicts for stocks where 2 of 3 horizons were STRONG but total passes
+  // were low because many frameworks return UNKNOWN for sparse data.
   const horizons = computeHorizonVerdicts({
     minervini: trendTemplate,
     weinstein: stage,
@@ -22805,7 +22812,6 @@ function applyPlaybookOverlay(f, candles) {
     vcp,
     cupHandle,
     accumulation,
-    // 🛡 v2.1 Sprint 5 — feed new alpha signals into horizon tallies
     pledgeRisk,
     surveillance,
     beneish,
@@ -22814,6 +22820,29 @@ function applyPlaybookOverlay(f, candles) {
     fnoPositioning,
     sectorBreadth,
     deliveryQuality,
+  });
+
+  // Composite verdict — horizons-aware (uses per-timeframe tiers as primary
+  // signal; falls back to raw pass count when horizons have < 2 evaluable).
+  const composite = computeCompositeVerdict({
+    minervini: trendTemplate,
+    weinstein: stage,
+    canslim,
+    piotroski,
+    altman,
+    industryRS,
+    magicFormula,
+    vcp,
+    cupHandle,
+    pledgeRisk,
+    surveillance,
+    beneish,
+    sloanAccruals,
+    earningsCtx,
+    fnoPositioning,
+    sectorBreadth,
+    deliveryQuality,
+    horizons,  // 🛡 Sprint 5D — feed horizons in for timeframe-aware verdict
   });
 
   // Final verdict — composite is authoritative.
