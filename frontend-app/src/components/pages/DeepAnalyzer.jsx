@@ -2322,6 +2322,9 @@ function UniverseTable({ onPickStock }) {
       case 'pledgePct': return row.pledgePct ?? -1;
       case 'deliveryPct': return row.deliveryPct ?? -1;
       case 'dayChangePct': return row.dayChangePct ?? 0;  // 🛡 Sprint 5F
+      // 🛡 Sprint 7 — Fair Value sort by upside %, undervalued at top
+      case 'fairValueUpside': return row.fairValueUpside ?? -999;
+      case 'fairValue': return row.fairValue ?? 0;
       default: return 0;
     }
   };
@@ -2412,6 +2415,7 @@ function UniverseTable({ onPickStock }) {
               <SortableHdr label="Momentum"    keyName="momentum"   sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
               <SortableHdr label="Short term"  keyName="shortTerm"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="center" />
               <SortableHdr label="Score"       keyName="playbookScore" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+              <SortableHdr label="Fair Value"  keyName="fairValueUpside" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
               <SortableHdr label="Pledge"      keyName="pledgePct"  sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
               <SortableHdr label="Delivery"    keyName="deliveryPct" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
             </tr>
@@ -2441,6 +2445,24 @@ function UniverseTable({ onPickStock }) {
                 <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.momentum?.tier} count={r.momentum} /></td>
                 <td style={{ padding: '8px 10px', textAlign: 'center' }}><TierPill tier={r.shortTerm?.tier} count={r.shortTerm} /></td>
                 <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text3)' }}>{r.playbookScore != null ? r.playbookScore.toFixed(0) : '—'}</td>
+                {/* 🛡 Sprint 7 — Fair Value column. Green if undervalued (positive upside), red if overpriced */}
+                <td className="tabular-nums" style={{
+                  padding: '8px 10px', textAlign: 'right',
+                  color: r.fairValueUpside == null ? 'var(--text4)'
+                       : r.fairValueUpside >= 20  ? 'var(--green-text)'
+                       : r.fairValueUpside >= -10 ? 'var(--amber-text)'
+                                                  : 'var(--red-text)',
+                  fontWeight: 600,
+                }}>
+                  {r.fairValue == null ? '—' : (
+                    <span title={`Fair value ₹${r.fairValue} (${r.valuationTier})`}>
+                      ₹{Number(r.fairValue).toFixed(0)}
+                      <span style={{ fontSize: 10, opacity: 0.8, marginLeft: 4 }}>
+                        {r.fairValueUpside != null ? `(${r.fairValueUpside > 0 ? '+' : ''}${r.fairValueUpside.toFixed(0)}%)` : ''}
+                      </span>
+                    </span>
+                  )}
+                </td>
                 <td className="tabular-nums" style={{ padding: '8px 10px', textAlign: 'right', color: r.pledgePct > 20 ? 'var(--red-text)' : r.pledgePct > 10 ? 'var(--amber-text)' : 'var(--text3)' }}>
                   {r.pledgePct != null ? `${r.pledgePct.toFixed(1)}%` : '—'}
                 </td>

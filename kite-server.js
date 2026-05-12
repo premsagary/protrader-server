@@ -22516,6 +22516,240 @@ function computeDeliveryQuality(f) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 🛡 v2.1 Sprint 7 (2026-05-12) — PURE-COMPUTE IMPROVEMENTS (no AI calls)
+//
+// Three new deterministic frameworks the analyzer was missing:
+//   • computeDCFFairValue       — intrinsic value via 5-yr DCF (Indian inputs)
+//   • computeSectorComps        — peer-relative P/E, P/B, ROE, D/E vs sector median
+//   • classifyFnoOIBuildup      — long buildup / short covering / short buildup / long unwinding
+// All defensive — return UNKNOWN when data missing rather than crashing.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── DCF Fair Value (Indian-tuned 5-year DCF) ──
+// Single biggest gap in the analyzer — no intrinsic-value anchor. A stock
+// can be Strong Buy on momentum AND 40% overvalued on fundamentals. The
+// DCF says "is this expensive or cheap by cash-flow math".
+//
+// Indian Cost of Equity baseline:
+//   Risk-free rate  = ~7%  (RBI repo / 10Y G-Sec)
+//   Equity premium  = ~6%  (Indian historical equity risk premium)
+//   Cost of Equity  = ~13% (default discount rate)
+//
+// Terminal growth   = 4%  (long-run Indian nominal GDP)
+// Growth cap        = 20% (avoid extrapolating short-term parabolic growth)
+//
+// Formula:
+//   PV of explicit 5 years of FCF + PV of terminal value
+//   FairValuePerShare = Total PV / sharesOutstanding
+//                    OR (if no share count) FairMcap / currentMcap × currentPrice
+function computeDCFFairValue(f) {
+  if (!f) return { error: 'no_fundamentals', tier: 'UNKNOWN' };
+
+  // Proxy for free cash flow: OCF first, then net income, then EBIT × (1 - 0.25 tax)
+  let fcf = null, fcfSource = null;
+  if (f.operatingCashFlow != null && f.operatingCashFlow > 0) {
+    fcf = f.operatingCashFlow; fcfSource = 'operatingCashFlow';
+  } else if (f.netIncome != null && f.netIncome > 0) {
+    fcf = f.netIncome; fcfSource = 'netIncome';
+  } else if (f.ebit != null && f.ebit > 0) {
+    fcf = f.ebit * 0.75; fcfSource = 'ebit_x_after_tax';
+  }
+  if (fcf == null || fcf <= 0) {
+    return { error: 'no_positive_fcf', tier: 'UNKNOWN', note: 'Company has no positive free cash flow — DCF not applicable' };
+  }
+
+  // Growth assumption: capped + floor
+  const rawGrowth = f.epsGrowth3y != null ? f.epsGrowth3y / 100
+                  : f.earGrowth   != null ? f.earGrowth   / 100
+                  : 0.10;  // default 10% if unknown
+  const growth = Math.max(-0.05, Math.min(0.20, rawGrowth));
+  const terminalGrowth = 0.04;
+  const discountRate = 0.13;
+
+  // 5-year explicit forecast
+  let pv = 0;
+  let yearFCF = fcf;
+  const projection = [];
+  for (let year = 1; year <= 5; year++) {
+    yearFCF = yearFCF * (1 + growth);
+    const discountedFCF = yearFCF / Math.pow(1 + discountRate, year);
+    pv += discountedFCF;
+    projection.push({ year, fcf: Math.round(yearFCF), pv: Math.round(discountedFCF) });
+  }
+
+  // Terminal value (Gordon Growth)
+  const terminalFCF = yearFCF * (1 + terminalGrowth);
+  const terminalValue = terminalFCF / (discountRate - terminalGrowth);
+  const pvTerminal = terminalValue / Math.pow(1 + discountRate, 5);
+  pv += pvTerminal;
+
+  // Convert total firm PV to per-share fair value
+  const shares = f.sharesOutstanding;
+  let fairValuePerShare = null, fairValueMcap = null;
+  if (shares && shares > 0) {
+    fairValuePerShare = pv / shares;
+    fairValueMcap = pv;
+  } else if (f.mktCap && f.mktCap > 0 && f.price && f.price > 0) {
+    // Treat pv as fair market cap, scale back to per-share via current price ratio
+    fairValueMcap = pv;
+    const currentMcap = f.mktCap * 1e7;  // mktCap is in Cr (Crores); convert to absolute
+    fairValuePerShare = f.price * (pv / currentMcap);
+  } else {
+    return { error: 'no_share_count', tier: 'UNKNOWN', note: 'Cannot convert firm value to per-share' };
+  }
+
+  const currentPrice = f.price;
+  const upsidePct = currentPrice > 0 ? ((fairValuePerShare - currentPrice) / currentPrice) * 100 : null;
+
+  // Tier classification — Indian retail-friendly bands
+  let tier, label;
+  if (upsidePct >= 50)       { tier = 'VERY_CHEAP'; label = '⭐ Deep value — significant margin of safety'; }
+  else if (upsidePct >= 20)  { tier = 'CHEAP';      label = '✅ Undervalued by DCF'; }
+  else if (upsidePct >= -10) { tier = 'FAIR';       label = '➖ Around fair value'; }
+  else if (upsidePct >= -30) { tier = 'EXPENSIVE';  label = '⚠ Trading above intrinsic'; }
+  else                       { tier = 'OVERPRICED'; label = '🚨 Significantly overpriced'; }
+
+  return {
+    fairValue:    +fairValuePerShare.toFixed(2),
+    currentPrice: +currentPrice?.toFixed(2),
+    upsidePct:    upsidePct != null ? +upsidePct.toFixed(1) : null,
+    tier,
+    label,
+    assumptions: {
+      fcfSource,
+      currentFCF: Math.round(fcf),
+      growth5yPct: +(growth * 100).toFixed(1),
+      terminalGrowthPct: +(terminalGrowth * 100).toFixed(1),
+      discountRatePct: +(discountRate * 100).toFixed(1),
+    },
+    projection,
+    qualifies: tier === 'VERY_CHEAP' || tier === 'CHEAP',
+    hardExclude: false,
+  };
+}
+
+// ── Sector Comps (peer-relative valuation) ──
+// For each stock, compute sector-median P/E, P/B, ROE, D/E, sales-growth.
+// Show how the stock compares to its sector. Answers "cheap or expensive
+// vs peers" question that DCF alone can't.
+function computeSectorComps(symbol, fund) {
+  if (!fund || !symbol) return { error: 'missing_inputs', tier: 'UNKNOWN' };
+  try {
+    const sector = (typeof SECTOR_MAP !== 'undefined' && SECTOR_MAP[symbol]) || fund.sector || 'Other';
+    if (typeof FUND === 'undefined') return { error: 'no_universe', tier: 'UNKNOWN' };
+
+    // Collect sector peers (exclude self)
+    const peers = [];
+    for (const [sym, f] of Object.entries(FUND || {})) {
+      if (sym === symbol) continue;
+      if (SECTOR_MAP[sym] !== sector) continue;
+      if (!f) continue;
+      peers.push(f);
+    }
+
+    if (peers.length < 3) {
+      return { error: 'too_few_peers', sector, peerCount: peers.length, tier: 'UNKNOWN' };
+    }
+
+    // Median helper
+    const median = (arr) => {
+      const valid = arr.filter(v => v != null && Number.isFinite(v)).sort((a, b) => a - b);
+      if (valid.length === 0) return null;
+      const mid = Math.floor(valid.length / 2);
+      return valid.length % 2 === 0 ? (valid[mid - 1] + valid[mid]) / 2 : valid[mid];
+    };
+
+    const metrics = {
+      pe:          { self: fund.pe,         median: median(peers.map(p => p.pe))           },
+      pb:          { self: fund.pb,         median: median(peers.map(p => p.pb))           },
+      roe:         { self: fund.roe,        median: median(peers.map(p => p.roe))          },
+      de:          { self: fund.de,         median: median(peers.map(p => p.de))           },
+      salesGrowth: { self: fund.salesGrowth || fund.earGrowth, median: median(peers.map(p => p.salesGrowth || p.earGrowth)) },
+    };
+
+    // Score deltas — for each metric, calc "vs median" diff. Direction-aware:
+    // P/E lower=better, P/B lower=better, ROE higher=better, D/E lower=better, growth higher=better
+    const directionBetter = { pe: -1, pb: -1, roe: 1, de: -1, salesGrowth: 1 };
+    let beatCount = 0, evalCount = 0;
+    for (const [key, vals] of Object.entries(metrics)) {
+      if (vals.self != null && vals.median != null) {
+        evalCount++;
+        const diff = vals.self - vals.median;
+        vals.diffPct = vals.median !== 0 ? +((diff / Math.abs(vals.median)) * 100).toFixed(1) : 0;
+        vals.beatsMedian = (directionBetter[key] === 1 ? diff > 0 : diff < 0);
+        if (vals.beatsMedian) beatCount++;
+      }
+    }
+
+    let tier, label;
+    const beatRate = evalCount > 0 ? beatCount / evalCount : 0;
+    if (beatRate >= 0.8)      { tier = 'BEST_IN_SECTOR'; label = '⭐ Beats sector on most metrics'; }
+    else if (beatRate >= 0.6) { tier = 'ABOVE_PEERS';    label = '✅ Above-average vs peers'; }
+    else if (beatRate >= 0.4) { tier = 'IN_LINE';        label = '➖ In line with sector'; }
+    else                      { tier = 'BELOW_PEERS';    label = '⚠ Below-average vs peers'; }
+
+    return {
+      sector,
+      peerCount: peers.length,
+      metrics,
+      beatCount, evalCount, beatRate: +beatRate.toFixed(2),
+      tier, label,
+      qualifies: tier === 'BEST_IN_SECTOR' || tier === 'ABOVE_PEERS',
+      hardExclude: false,
+    };
+  } catch (e) {
+    return { error: e.message, tier: 'UNKNOWN' };
+  }
+}
+
+// ── F&O OI Buildup classification ──
+// Standard derivatives-desk vocabulary. Combines today's price direction
+// with the change in open interest. Requires yesterday's OI cached.
+//
+//   Price ↑ + OI ↑ → LONG BUILDUP    (new longs entering, bullish confirmation)
+//   Price ↑ + OI ↓ → SHORT COVERING  (shorts giving up, bullish but weakening)
+//   Price ↓ + OI ↑ → SHORT BUILDUP   (new shorts entering, bearish confirmation)
+//   Price ↓ + OI ↓ → LONG UNWINDING  (longs giving up, bearish but weakening)
+function classifyFnoOIBuildup(f) {
+  if (!f) return { tier: 'UNKNOWN', error: 'no_fundamentals' };
+  const sym = f.sym;
+  const od = (typeof _marketDataCache !== 'undefined' && _marketDataCache && _marketDataCache.optionData)
+    ? _marketDataCache.optionData[sym] : null;
+  if (!od) return { tier: 'UNKNOWN', error: 'no_fno_data' };
+
+  // Need yesterday's total OI for buildup classification
+  const yesterdayOI = od.prevDayTotalOI || null;
+  const todayOI = (od.totalCEOI || 0) + (od.totalPEOI || 0);
+  const priceChange = f.dayChangePct || (typeof livePrices !== 'undefined' && livePrices[sym]?.change) || null;
+
+  if (yesterdayOI == null || todayOI == null || priceChange == null) {
+    return { tier: 'UNKNOWN', error: 'insufficient_history', note: 'Need yesterday OI + today price change' };
+  }
+
+  const oiChange = ((todayOI - yesterdayOI) / yesterdayOI) * 100;
+  const priceUp = priceChange > 0.2;
+  const priceDown = priceChange < -0.2;
+  const oiUp = oiChange > 1.5;
+  const oiDown = oiChange < -1.5;
+
+  let tier, label, bullish;
+  if (priceUp && oiUp)        { tier = 'LONG_BUILDUP';    label = '🚀 Long buildup — new longs confirming uptrend'; bullish = true; }
+  else if (priceUp && oiDown) { tier = 'SHORT_COVERING';  label = '↗ Short covering — shorts giving up'; bullish = true; }
+  else if (priceDown && oiUp) { tier = 'SHORT_BUILDUP';   label = '⬇ Short buildup — new shorts confirming downtrend'; bullish = false; }
+  else if (priceDown && oiDown){ tier = 'LONG_UNWINDING'; label = '↘ Long unwinding — longs giving up'; bullish = false; }
+  else                        { tier = 'NEUTRAL';         label = '➖ No clear positioning'; bullish = null; }
+
+  return {
+    tier, label, bullish,
+    priceChangePct: +priceChange?.toFixed(2),
+    oiChangePct: +oiChange.toFixed(1),
+    todayOI, yesterdayOI,
+    qualifies: tier === 'LONG_BUILDUP' || tier === 'SHORT_COVERING',
+    hardExclude: false,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // 🛡 v2.1 Sprint 4F (2026-05-11) — Multi-horizon verdicts.
 // Splits the composite into THREE horizon-specific tallies so a stock can
 // show "Strong long-term · Strong momentum · Wait short-term" instead of
@@ -22774,6 +23008,10 @@ function applyPlaybookOverlay(f, candles) {
   const fnoPositioning = computeFnoPositioning(f);
   const sectorBreadth  = computeSectorBreadth(f);
   const deliveryQuality = computeDeliveryQuality(f);
+  // 🛡 Sprint 7 — pure-compute additions (no AI calls)
+  const dcfFairValue   = computeDCFFairValue(f);
+  const sectorComps    = (f && f.sym) ? computeSectorComps(f.sym, f) : { error: 'no_symbol', tier: 'UNKNOWN' };
+  const fnoOIBuildup   = classifyFnoOIBuildup(f);
 
   // Composite playbook score: average of Trend Template + CANSLIM weighted by stage
   let playbookScore = 0;
@@ -22891,6 +23129,8 @@ function applyPlaybookOverlay(f, candles) {
       pledgeRisk, surveillance, beneish, sloanAccruals, earningsCtx,
       // 🛡 v2.1 Sprint 5B additions:
       fnoPositioning, sectorBreadth, deliveryQuality,
+      // 🛡 v2.1 Sprint 7 additions (pure compute, no AI):
+      dcfFairValue, sectorComps, fnoOIBuildup,
       playbookScore, stageMultiplier,
       verdict, verdictColor,
       hardExclude: composite.hardExclude || false,
@@ -26368,6 +26608,12 @@ cron.schedule('30 7 * * *', async () => {
         deliveryPct:     pb?.deliveryQuality?.deliveryPct ?? null,
         fnoPositioning:  pb?.fnoPositioning?.tier  || null,
         sectorBreadth:   pb?.sectorBreadth?.tier   || null,
+        // 🛡 Sprint 7 — Fair Value + Sector Comps surfaced for universe table
+        fairValue:       pb?.dcfFairValue?.fairValue ?? null,
+        fairValueUpside: pb?.dcfFairValue?.upsidePct ?? null,
+        valuationTier:   pb?.dcfFairValue?.tier      || null,
+        sectorCompsTier: pb?.sectorComps?.tier       || null,
+        oiBuildupTier:   pb?.fnoOIBuildup?.tier      || null,
       });
     }
     _universeVerdictCache = { computedAt: Date.now(), results };
@@ -29506,6 +29752,12 @@ app.get('/api/stocks/universe-verdict', async (req, res) => {
         deliveryPct:     pb?.deliveryQuality?.deliveryPct ?? null,
         fnoPositioning:  pb?.fnoPositioning?.tier  || null,
         sectorBreadth:   pb?.sectorBreadth?.tier   || null,
+        // 🛡 Sprint 7 — Fair Value + Sector Comps surfaced for universe table
+        fairValue:       pb?.dcfFairValue?.fairValue ?? null,
+        fairValueUpside: pb?.dcfFairValue?.upsidePct ?? null,
+        valuationTier:   pb?.dcfFairValue?.tier      || null,
+        sectorCompsTier: pb?.sectorComps?.tier       || null,
+        oiBuildupTier:   pb?.fnoOIBuildup?.tier      || null,
       });
     }
 
