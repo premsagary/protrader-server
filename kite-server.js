@@ -32227,11 +32227,18 @@ const AI_MODELS = [
 // rock-solid JSON output, ~6s latency. Fast, careful with hedged financial
 // language, and isolated from the council so there's no correlation with
 // any council voice. Override the model slug with AI_JUDGE_MODEL.
+// 🛡 v2.1 Sprint 6B (2026-05-12) — Upgrade judge from Sonnet 4.6 to Opus 4.6.
+// The judge is the one place where capability matters most (synthesise 5
+// dual-lens reviews into one decisive verdict). Opus 4.6 is stronger at
+// long-context synthesis and at faithfully grounding claims in the
+// council transcript. Cost impact: ~₹15/review → ~₹75/review (still
+// trivial for retail). Env override preserved for hot-swap. To use
+// Sonnet again, set AI_JUDGE_MODEL=anthropic/claude-sonnet-4.6.
 const AI_JUDGE_MODEL = {
   id: 'ai-judge',
-  name: 'Claude Sonnet 4.6 (Judge)',
+  name: 'Claude Opus 4.6 (Judge)',
   provider: 'openrouter',
-  model: process.env.AI_JUDGE_MODEL || 'anthropic/claude-sonnet-4.6',
+  model: process.env.AI_JUDGE_MODEL || 'anthropic/claude-opus-4.6',
 };
 
 // One-shot startup visibility: show which AI provider keys are actually loaded
@@ -32861,6 +32868,15 @@ Your job:
 4. Produce ONE final verdict + a 0-100 score that represents your independent judgment, informed by but not bound to the council's majority.
 5. If the two lenses fundamentally disagree, lean toward the more conservative call unless the data is overwhelming.
 
+🛡 Sprint 6B (2026-05-12) — CITATION REQUIREMENT:
+Every claim in your reasoning must be traceable to either:
+  • A specific council model (e.g. "GPT-4.1 varsity: bullish on margin expansion")
+  • A specific data point from the original stock data ("RSI 28 from technicals",
+    "P/E 18 vs sector median 22", "Stage 2 from Weinstein")
+  • A specific framework verdict ("Minervini Trend Template 7/8", "Piotroski 8/9")
+Do NOT make claims you cannot trace. If unsupported, say so explicitly.
+This is what separates a defensible verdict from "AI said buy."
+
 You speak in short, decisive language. Overrule the council when the data warrants it.`;
 
   const judgeUserPrompt = `════════════════════════════════════════
@@ -32896,8 +32912,19 @@ JUDGE TASK — return EXACTLY this JSON:
   "varsity_reasoning": "1-2 sentences synthesising the Varsity lens",
   "pure_reasoning":    "1-2 sentences synthesising the pure lens",
   "final_reasoning":   "1-2 sentences — why this final verdict + score",
-  "risk_flag": "short red-flag tag or empty string"
+  "risk_flag": "short red-flag tag or empty string",
+  "citations": [
+    { "claim": "<short claim text>", "source": "<council model / data point / framework name>" }
+  ]
 }
+
+The "citations" array MUST contain at least 3 entries — every load-bearing claim
+in your reasoning needs a traceable source. Examples of valid sources:
+  • "GPT-4.1 varsity lens"          (a council model)
+  • "Minervini Trend Template 7/8"  (a framework verdict)
+  • "RSI 28 / Stage 2 from techs"   (a raw data point)
+  • "Piotroski F-Score 8/9"         (a quality signal)
+This is the difference between a defensible verdict and 'AI said buy'.
 
 Return ONLY the JSON object, no prose.`;
 
