@@ -29253,14 +29253,27 @@ app.get('/api/stocks/universe-verdict', async (req, res) => {
     }
 
     const t0 = Date.now();
-    const universe = Array.isArray(UNIVERSE) ? UNIVERSE : [];
+    // 🛡 v2.1 Sprint 5C fix (2026-05-11) — user reported seeing only 107
+    // stocks out of the 572 in the universe. Root cause: we iterated only
+    // UNIVERSE (in-memory list), but stockFundamentals / FUND_EXT may hold
+    // more symbols that arrived via the /api/stocks/score path but weren't
+    // back-populated to UNIVERSE. Fix: union UNIVERSE symbols with
+    // stockFundamentals keys with FUND keys to cover every loaded symbol.
+    const universeArr = Array.isArray(UNIVERSE) ? UNIVERSE : [];
+    const universeByKey = new Map(universeArr.map(u => [u.sym, u]));
+    const allSyms = new Set([
+      ...universeArr.map(u => u.sym),
+      ...Object.keys(stockFundamentals || {}),
+      ...Object.keys((typeof FUND !== 'undefined' && FUND) || {}),
+      ...Object.keys((global.FUND_EXT) || {}),
+    ]);
     const results = [];
 
-    for (const u of universe) {
-      const sym = u.sym;
-      const fund = stockFundamentals[sym] || {};
+    for (const sym of allSyms) {
+      const u = universeByKey.get(sym) || { sym, n: sym, grp: '' };
+      const fund = stockFundamentals[sym] || (typeof FUND !== 'undefined' ? FUND[sym] : null) || {};
       const ext  = (global.FUND_EXT && global.FUND_EXT[sym]) || {};
-      const sector = SECTOR_MAP[sym] || 'Other';
+      const sector = SECTOR_MAP[sym] || fund.sector || ext.sector || 'Other';
       const px = livePrices[sym]?.price || fund.price || ext.price || ext.currentPrice || null;
 
       // Compose the merged fundamentals object the overlay wants
